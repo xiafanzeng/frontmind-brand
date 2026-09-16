@@ -1,3 +1,4 @@
+import {knowledgeBaseBuildSkillPinSupported} from "./knowledge-base-tree-policy-rollout.js";
 import {findRetainedKnowledgeBaseLocalAsset,resumeKnowledgeBaseDeferredTurnAttachments} from './knowledge-base-deferred-upload-recovery.js';
 import {inspectKnowledgeBaseDeferredAttachmentStagePolicy,knowledgeBaseTurnLogoPolicy,requireKnowledgeBaseDeferredAttachmentStageBuild} from './knowledge-base-deferred-attachment-stage-policy.js';
 import {assertKnowledgeBaseExpectedGeneration} from './knowledge-base-turn-coordinates.js';
@@ -888,8 +889,7 @@ async function requireMaterializedKnowledgeBaseBuild(input: {
   if (
     build.executionMode !== MATERIALIZED_KNOWLEDGE_BASE_EXECUTION_MODE ||
     build.skillVersion !== "5" ||
-    build.skillContentHash !==
-      KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+    !knowledgeBaseBuildSkillPinSupported(build) ||
     build.providerProtocol !== "manus_v2" ||
     build.contentVersion === null ||
     knowledgeBaseMaterializedRecoveryContractVersion(build) !== 1 ||
@@ -2501,8 +2501,7 @@ async function ensureKnowledgeBaseRecoveryDispatch(input: {
   if (
     pinnedBuild.executionMode !== MATERIALIZED_KNOWLEDGE_BASE_EXECUTION_MODE ||
     pinnedBuild.skillVersion !== "5" ||
-    pinnedBuild.skillContentHash !==
-      KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+    !knowledgeBaseBuildSkillPinSupported(pinnedBuild) ||
     pinnedBuild.providerProtocol !== "manus_v2" ||
     pinnedBuild.contentVersion === null ||
     knowledgeBaseMaterializedRecoveryContractVersion(pinnedBuild) !== 1 ||
@@ -3696,7 +3695,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
     );
   }
   if (
-    build.skillContentHash !== KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH
+    !knowledgeBaseBuildSkillPinSupported(build)
   ) {
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",

@@ -1,3 +1,4 @@
+import {knowledgeBaseBuildSkillPinSupported} from "./knowledge-base-tree-policy-rollout.js";
 import type {KnowledgeBaseBuild,KnowledgeBaseBuildNode} from "@frontmind/module-brand/schema";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -307,8 +308,7 @@ function materializedBuild(
   if (
     build.executionMode !== MATERIALIZED_KNOWLEDGE_BASE_EXECUTION_MODE ||
     build.skillVersion !== "5" ||
-    build.skillContentHash !==
-      KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+    !knowledgeBaseBuildSkillPinSupported(build) ||
     build.providerProtocol !== "manus_v2" ||
     build.contentVersion === null
   ) {

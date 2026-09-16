@@ -1,7 +1,4 @@
-// Generated from modules/brand/workflows/socratic-kb-builder/references/working-set-policy.json.
-// Run `node scripts/generate-knowledge-base-working-set-policy.mjs` after changing the source.
-// prettier-ignore
-export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
+{
   "schemaVersion": 1,
   "archive": {
     "maxCompressedBytes": 125829120,
@@ -12,15 +9,8 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
     "patchWarningLimit": 50
   },
   "evidence": {
-    "textExtensions": [
-      ".md",
-      ".markdown",
-      ".txt"
-    ],
-    "textMimeTypes": [
-      "text/markdown",
-      "text/plain"
-    ],
+    "textExtensions": [".md", ".markdown", ".txt"],
+    "textMimeTypes": ["text/markdown", "text/plain"],
     "optionalBinary": {
       "disposition": "drop",
       "warning": {
@@ -38,11 +28,7 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
   },
   "authority": {
     "initial": {
-      "hard": [
-        "operationId",
-        "archiveSafety",
-        "manifestMultiplicity"
-      ],
+      "hard": ["operationId", "archiveSafety", "manifestMultiplicity"],
       "serverOwned": [
         "buildId",
         "generation",
@@ -62,11 +48,7 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
         "removalOwnership",
         "frozenUploadBytes"
       ],
-      "serverOwned": [
-        "buildId",
-        "generation",
-        "baseContentVersion"
-      ]
+      "serverOwned": ["buildId", "generation", "baseContentVersion"]
     }
   },
   "warnings": {
@@ -93,4 +75,4 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
       "code": "PRESENTATION_NORMALIZED"
     }
   }
-} as const;
+}
