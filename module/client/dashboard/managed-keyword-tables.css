@@ -51,6 +51,9 @@
   color: var(--ink, #171321);
   font-size: 17px;
 }
+:where(.brand-keyword-workspace) .global-keyword-panel {
+  min-width: 0;
+}
 :where(.brand-keyword-workspace) .global-keyword-panel .panel-head {
   margin-bottom: 12px;
 }
