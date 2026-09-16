@@ -25,7 +25,7 @@ function setup(records: Conversation[]) {
   const client: BrandConversationClient = {
     list: vi.fn(async () => records), sync: vi.fn(async () => {}),
     // Keep the read pending to inspect wake requests without provider effects.
-    observe: vi.fn(() => new Promise(() => {})),
+    observe: vi.fn(() => new Promise<never>(() => {})),
   };
   const runtime = createBrandConversationRuntime(client, 'knowledge', 'stability');
   runtimes.push(runtime);
@@ -61,6 +61,19 @@ describe('brand conversation runtime stability', () => {
     await act(() => result.current.flushConversation('draft'));
     for (const [name, action] of actions) expect(result.current[name as keyof typeof result.current]).toBe(action);
     expect(selectionEffect).toHaveBeenCalledTimes(2);
+  });
+
+  it('hydrates once across consumers and remounts while allowing an explicit refresh', async () => {
+    const { runtime, client } = setup([draft()]);
+    const first = renderHook(() => runtime.useConversation());
+    await waitFor(() => expect(first.result.current.hydrated).toBe(true));
+    const second = renderHook(() => runtime.useConversation());
+    second.unmount();
+    const remounted = renderHook(() => runtime.useConversation());
+    expect(remounted.result.current.loading).toBe(false);
+    expect(client.list).toHaveBeenCalledTimes(1);
+    await act(() => remounted.result.current.refreshConversations());
+    expect(client.list).toHaveBeenCalledTimes(2);
   });
 
   it('never reconciles an empty named draft during hydration, refresh, focus or reconnect', async () => {
