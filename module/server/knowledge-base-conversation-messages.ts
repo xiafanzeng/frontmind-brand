@@ -1,0 +1,401 @@
+import type { MessageMetadata } from "@frontmind/module-brand/contracts/core-records";
+import { and, desc, eq } from "drizzle-orm";
+import {
+  KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT,
+  knowledgeBaseCompletionMessagePublicId,
+  knowledgeBasePresentationMessagePublicId,
+  knowledgeBaseUserMessagePublicId,
+} from "../contracts/knowledge-base-message.js";
+import { knowledgeBaseMarkdownSha256 } from "./knowledge-base-package-validation.js";
+import type {CoreSqlTable} from "../contracts/sql-table.js";
+import type {Conversation,Message} from "../contracts/core-records.js";
+import type {SQL} from "drizzle-orm";
+
+
+export type KnowledgeBaseServerOwnedMessageMetadata = {
+  schemaVersion: 1;
+  serverOwned: true;
+  kind: "pending_user" | "presentation" | "completion";
+  buildId: string;
+  generation: number;
+  turnId: string;
+  operationKey: string;
+  clientRequestId?: string;
+  presentationKey?: string;
+  contentSha256?: string;
+  revision: number;
+  leafId: string | null;
+};
+export interface KnowledgeConversationCore { conversations:CoreSqlTable<Conversation>; messages:CoreSqlTable<Message>; enterpriseOwnerPredicate(table:any,userId:number):SQL; enterpriseConversationStoragePrefix(userId:number):string; }
+export function createKnowledgeBaseConversationMessages(core: KnowledgeConversationCore) {
+const { conversations, messages, enterpriseOwnerPredicate, enterpriseConversationStoragePrefix } = core;
+
+
+function persistedMessageId(userId: number, publicMessageId: string) {
+  const value = `${enterpriseConversationStoragePrefix(userId)}${publicMessageId}`;
+  if (value.length > 191) {
+    throw new TypeError("Knowledge-base message id exceeds database capacity");
+  }
+  return value;
+}
+
+async function lockedConversation(
+  tx: any,
+  input: { userId: number; conversationId: string },
+) {
+  const conversation = (
+    await tx
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, input.conversationId),
+          enterpriseOwnerPredicate(conversations, input.userId),
+        ),
+      )
+      .limit(1)
+      .for("update")
+  )[0];
+  if (
+    !conversation ||
+    conversation.projectAssignmentId !== null ||
+    conversation.deletedAt
+  ) {
+    throw new Error("Knowledge-base conversation is missing or unavailable");
+  }
+  return conversation;
+}
+
+async function insertImmutableServerMessage(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  turnId: string;
+  publicMessageId: string;
+  role: "user" | "assistant";
+  content: string;
+  metadata: KnowledgeBaseServerOwnedMessageMetadata;
+  sentAt: Date;
+}) {
+  const id = persistedMessageId(input.userId, input.publicMessageId);
+  const existing = (
+    await input.tx
+      .select()
+      .from(messages)
+      .where(eq(messages.id, id))
+      .limit(1)
+      .for("update")
+  )[0] as typeof messages.$inferSelect | undefined;
+  const metadata = {
+    knowledgeBase: input.metadata,
+  } satisfies MessageMetadata;
+
+  if (existing) {
+    const existingKnowledgeBase = (existing.metadata as MessageMetadata | null)
+      ?.knowledgeBase;
+    if (
+      existing.userId !== input.userId ||
+      existing.conversationId !== input.conversationId ||
+      existing.turnId !== input.turnId ||
+      existing.role !== input.role ||
+      existing.content !== input.content ||
+      JSON.stringify(existingKnowledgeBase) !== JSON.stringify(input.metadata)
+    ) {
+      throw new Error("Knowledge-base server message identity was reused");
+    }
+    return { inserted: false, id };
+  }
+
+  const last = (
+    await input.tx
+      .select({ sequence: messages.sequence })
+      .from(messages)
+      .where(eq(messages.conversationId, input.conversationId))
+      .orderBy(desc(messages.sequence))
+      .limit(1)
+  )[0];
+  const sequence = (last?.sequence ?? -1) + 1;
+  await input.tx.insert(messages).values({
+    id,
+    conversationId: input.conversationId,
+    turnId: input.turnId,
+    userId: input.userId,
+    role: input.role,
+    content: input.content,
+    sequence,
+    metadata,
+    sentAt: input.sentAt,
+    createdAt: input.sentAt,
+    updatedAt: input.sentAt,
+  });
+  return { inserted: true, id };
+}
+
+async function persistKnowledgeBaseUserMessageInTransaction(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  turnId: string;
+  buildId: string;
+  generation: number;
+  operationKey: string;
+  clientRequestId: string;
+  revision: number;
+  leafId: string | null;
+  content: string;
+  sentAt: Date;
+}) {
+  const conversation = await lockedConversation(input.tx, input);
+  const publicMessageId = knowledgeBaseUserMessagePublicId(input.turnId);
+  const result = await insertImmutableServerMessage({
+    ...input,
+    publicMessageId,
+    role: "user",
+    content: String(input.content || "").slice(0, 2_000_000),
+    metadata: {
+      schemaVersion: 1,
+      serverOwned: true,
+      kind: "pending_user",
+      buildId: input.buildId,
+      generation: input.generation,
+      turnId: input.turnId,
+      operationKey: input.operationKey,
+      clientRequestId: input.clientRequestId,
+      revision: input.revision,
+      leafId: input.leafId,
+    },
+  });
+  if (result.inserted) {
+    await input.tx
+      .update(conversations)
+      .set({
+        status: "running",
+        deletedMessageIds: (conversation.deletedMessageIds || []).filter(
+          (id: string) => id !== publicMessageId,
+        ),
+        version: conversation.version + 1,
+        completedAt: null,
+        updatedAt: input.sentAt,
+      })
+      .where(
+        and(
+          eq(conversations.id, input.conversationId),
+          enterpriseOwnerPredicate(conversations, input.userId),
+          eq(conversations.version, conversation.version),
+        ),
+      );
+  }
+  return { ...result, publicMessageId };
+}
+
+async function persistKnowledgeBasePresentationInTransaction(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  turnId: string;
+  buildId: string;
+  generation: number;
+  operationKey: string;
+  presentationKey: string;
+  revision: number;
+  leafId: string;
+  content: string;
+  authoritativeTaskId: string | null;
+  sentAt: Date;
+}) {
+  const conversation = await lockedConversation(input.tx, input);
+  const publicMessageId = knowledgeBasePresentationMessagePublicId(
+    input.presentationKey,
+  );
+  const content = String(input.content || "").trim();
+  if (!content)
+    throw new Error("Approved knowledge-base presentation is empty");
+  const result = await insertImmutableServerMessage({
+    ...input,
+    publicMessageId,
+    role: "assistant",
+    content,
+    metadata: {
+      schemaVersion: 1,
+      serverOwned: true,
+      kind: "presentation",
+      buildId: input.buildId,
+      generation: input.generation,
+      turnId: input.turnId,
+      operationKey: input.operationKey,
+      presentationKey: input.presentationKey,
+      contentSha256: knowledgeBaseMarkdownSha256(content),
+      revision: input.revision,
+      leafId: input.leafId,
+    },
+  });
+  if (result.inserted) {
+    await input.tx
+      .update(conversations)
+      .set({
+        status: "awaiting_input",
+        upstreamTaskId: input.authoritativeTaskId,
+        previousResponseId: input.authoritativeTaskId,
+        deletedMessageIds: (conversation.deletedMessageIds || []).filter(
+          (id: string) => id !== publicMessageId,
+        ),
+        version: conversation.version + 1,
+        completedAt: null,
+        updatedAt: input.sentAt,
+      })
+      .where(
+        and(
+          eq(conversations.id, input.conversationId),
+          enterpriseOwnerPredicate(conversations, input.userId),
+          eq(conversations.version, conversation.version),
+        ),
+      );
+  }
+  return { ...result, publicMessageId };
+}
+
+async function markKnowledgeBaseConversationCompletedInTransaction(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  authoritativeTaskId: string | null;
+  completedAt: Date;
+}) {
+  const conversation = await lockedConversation(input.tx, input);
+  await input.tx
+    .update(conversations)
+    .set({
+      status: "completed",
+      upstreamTaskId: input.authoritativeTaskId,
+      previousResponseId: input.authoritativeTaskId,
+      version: conversation.version + 1,
+      completedAt: input.completedAt,
+      updatedAt: input.completedAt,
+    })
+    .where(
+      and(
+        eq(conversations.id, input.conversationId),
+        enterpriseOwnerPredicate(conversations, input.userId),
+        eq(conversations.version, conversation.version),
+      ),
+    );
+}
+
+/**
+ * Persist the customer-visible content-completion receipt before package
+ * preparation.  This is deliberately stored in the same immutable message
+ * ledger as accepted presentations so package retries can never make a
+ * completed build disappear from another browser.
+ */
+async function persistKnowledgeBaseCompletionInTransaction(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  turnId: string;
+  buildId: string;
+  generation: number;
+  operationKey: string;
+  revision: number;
+  authoritativeTaskId: string | null;
+  sentAt: Date;
+}) {
+  const conversation = await lockedConversation(input.tx, input);
+  const publicMessageId = knowledgeBaseCompletionMessagePublicId(input);
+  const content = KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT;
+  const result = await insertImmutableServerMessage({
+    ...input,
+    publicMessageId,
+    role: "assistant",
+    content,
+    metadata: {
+      schemaVersion: 1,
+      serverOwned: true,
+      kind: "completion",
+      buildId: input.buildId,
+      generation: input.generation,
+      turnId: input.turnId,
+      operationKey: input.operationKey,
+      revision: input.revision,
+      leafId: null,
+    },
+  });
+  if (result.inserted) {
+    await input.tx
+      .update(conversations)
+      .set({
+        status: "completed",
+        upstreamTaskId: input.authoritativeTaskId,
+        previousResponseId: input.authoritativeTaskId,
+        deletedMessageIds: (conversation.deletedMessageIds || []).filter(
+          (id: string) => id !== publicMessageId,
+        ),
+        version: conversation.version + 1,
+        completedAt: input.sentAt,
+        updatedAt: input.sentAt,
+      })
+      .where(
+        and(
+          eq(conversations.id, input.conversationId),
+          enterpriseOwnerPredicate(conversations, input.userId),
+          eq(conversations.version, conversation.version),
+        ),
+      );
+  }
+  return { ...result, publicMessageId };
+}
+
+async function markKnowledgeBaseConversationFailedInTransaction(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  authoritativeTaskId: string | null;
+  failedAt: Date;
+}) {
+  const conversation = await lockedConversation(input.tx, input);
+  await input.tx
+    .update(conversations)
+    .set({
+      status: "failed",
+      upstreamTaskId: input.authoritativeTaskId,
+      previousResponseId: input.authoritativeTaskId,
+      version: conversation.version + 1,
+      completedAt: input.failedAt,
+      updatedAt: input.failedAt,
+    })
+    .where(
+      and(
+        eq(conversations.id, input.conversationId),
+        enterpriseOwnerPredicate(conversations, input.userId),
+        eq(conversations.version, conversation.version),
+      ),
+    );
+}
+
+async function markKnowledgeBaseConversationAwaitingInputInTransaction(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  authoritativeTaskId: string | null;
+  updatedAt: Date;
+}) {
+  const conversation = await lockedConversation(input.tx, input);
+  await input.tx
+    .update(conversations)
+    .set({
+      status: "awaiting_input",
+      upstreamTaskId: input.authoritativeTaskId,
+      previousResponseId: input.authoritativeTaskId,
+      version: conversation.version + 1,
+      completedAt: null,
+      updatedAt: input.updatedAt,
+    })
+    .where(
+      and(
+        eq(conversations.id, input.conversationId),
+        enterpriseOwnerPredicate(conversations, input.userId),
+        eq(conversations.version, conversation.version),
+      ),
+    );
+}
+return { persistKnowledgeBaseUserMessageInTransaction, persistKnowledgeBasePresentationInTransaction, markKnowledgeBaseConversationCompletedInTransaction, persistKnowledgeBaseCompletionInTransaction, markKnowledgeBaseConversationFailedInTransaction, markKnowledgeBaseConversationAwaitingInputInTransaction };
+}

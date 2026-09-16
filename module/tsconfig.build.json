@@ -8,5 +8,10 @@
     "declarationMap": false,
     "sourceMap": true
   },
-  "include": ["contracts/**/*.ts", "server/**/*.ts"]
+  "include": [
+    "contracts/**/*.ts",
+    "server/**/*.ts",
+    "schema/**/*.ts",
+    "worker/**/*.ts"
+  ]
 }
