@@ -1,3 +1,4 @@
+import "./knowledge-conversation.css";
 import {useEffect,useRef,useState} from 'react';
 import {toast} from 'sonner';
 import {Button} from '@frontmind/module-ui/components/ui/button';
