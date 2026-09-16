@@ -6,8 +6,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && pnpm build:workflows",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
-    "build:workflows": "node workflows/build-keyword-workflow.mjs --output dist/workflows/generate-brand-question-universe",
-    "test": "vitest run --config vitest.config.ts"
+    "build:workflows": "node workflows/build-keyword-workflow.mjs --output dist/workflows/generate-brand-question-universe && node workflows/build-knowledge-base-workflow.mjs && node workflows/build-siteops-workflows.mjs",
+    "test": "node --test tests/workflow-version.test.mjs && vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@frontmind/module-contracts": "workspace:*",

@@ -1,3 +1,4 @@
+import {knowledgeBaseBuildSkillPinSupported} from "./knowledge-base-tree-policy-rollout.js";
 import { uploadMetadataVersion, projectKnowledgeBaseUploadStatus } from "./knowledge-base-upload-state.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 
@@ -4382,8 +4383,7 @@ export async function reserveKnowledgeBaseStartBuild(
     if (
       build.executionMode !== "materialized_bundle_v1" ||
       build.skillVersion !== "5" ||
-      build.skillContentHash !==
-        KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+      !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       knowledgeBaseMaterializedRecoveryContractVersion(build) !== 1 ||
       knowledgeBaseMaterializedCompletionContractVersion(build) !==
@@ -8055,8 +8055,7 @@ export async function settleKnowledgeBaseManusV2ExplicitRejection(
     if (
       build.executionMode !== "materialized_bundle_v1" ||
       build.skillVersion !== "5" ||
-      build.skillContentHash !==
-        KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+      !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       metadata.providerProtocol !== "manus_v2" ||
       metadata.providerMethod !== "task.create" ||
@@ -8190,8 +8189,7 @@ export async function beginKnowledgeBaseManusV2Dispatch(
     if (
       build.executionMode !== "materialized_bundle_v1" ||
       build.skillVersion !== "5" ||
-      build.skillContentHash !==
-        KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+      !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       metadata.attachmentsFrozen !== true ||
       build.generation !== turn.buildGeneration ||
@@ -8297,8 +8295,7 @@ export async function bindKnowledgeBaseManusV2Submission(
     if (
       build.executionMode !== "materialized_bundle_v1" ||
       build.skillVersion !== "5" ||
-      build.skillContentHash !==
-        KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+      !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       metadata.providerProtocol !== "manus_v2" ||
       metadata.providerMethod !== "task.create" ||
@@ -11176,8 +11173,7 @@ export async function settleKnowledgeBasePreCreateFailureForApprovedReset(
     if (
       build.executionMode !== "materialized_bundle_v1" ||
       build.skillVersion !== "5" ||
-      build.skillContentHash !==
-        KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+      !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       metadata.materializedRecoveryContractVersion !== 1 ||
       metadata.materializedCompletionContractVersion !==
@@ -11476,10 +11472,7 @@ export async function findRecoverableKnowledgeBaseTurnIds(
       and(
         eq(knowledgeBaseBuilds.executionMode, "materialized_bundle_v1"),
         eq(knowledgeBaseBuilds.skillVersion, "5"),
-        eq(
-          knowledgeBaseBuilds.skillContentHash,
-          KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH,
-        ),
+        sql`${knowledgeBaseBuilds.skillContentHash} REGEXP '^[a-f0-9]{64}$'`,
         eq(knowledgeBaseBuilds.providerProtocol, "manus_v2"),
         isNotNull(knowledgeBaseBuilds.contentVersion),
         inArray(knowledgeBaseBuilds.status, ["researching", "confirming"]),
@@ -11655,8 +11648,7 @@ export async function claimKnowledgeBaseTurnForRecovery(
     if (
       build.executionMode !== "materialized_bundle_v1" ||
       build.skillVersion !== "5" ||
-      build.skillContentHash !==
-        KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+      !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       build.contentVersion === null ||
       currentMetadata.materializedRecoveryContractVersion !== 1 ||

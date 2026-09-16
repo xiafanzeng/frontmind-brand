@@ -1,3 +1,6 @@
+import {readFileSync} from "node:fs";
+import {fileURLToPath} from "node:url";
+import path from "node:path";
 import {
   KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
   KNOWLEDGE_BASE_TREE_POLICY_VERSION_LEGACY,
@@ -16,8 +19,22 @@ export const KNOWLEDGE_BASE_TREE_POLICY_V2_SKILL_CONTENT_HASH =
   "5e0487004c604c0b95feae0c19ee9544a7e82b10ca923ca6c779ed240f333f56";
 
 /** Immutable materialized v5 archive used by every new build. */
-export const KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH =
-  "eab3455859623078239c32232109e4445a93b8ba7906f785495c2df86fd2182f";
+function currentKnowledgeWorkflowHash(): string {
+  const directory = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [path.resolve(directory,"../workflows/knowledge-base/manifest.json"), path.resolve(directory,"../dist/workflows/knowledge-base/manifest.json")];
+  for (const candidate of candidates) {
+    let manifest;
+    try { manifest = JSON.parse(readFileSync(candidate, "utf8")); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+    if (manifest.formatVersion !== 1 || manifest.version !== "5" || !isKnowledgeBaseSkillContentHash(manifest.contentHash)) throw new Error("KNOWLEDGE_WORKFLOW_MANIFEST_INVALID");
+    return manifest.contentHash;
+  }
+  throw new Error("KNOWLEDGE_WORKFLOW_BUILD_REQUIRED");
+}
+export function isKnowledgeBaseSkillContentHash(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+export const KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH = currentKnowledgeWorkflowHash();
 
 export function knowledgeBaseSkillContentHashForTreePolicy(
   treePolicyVersion: KnowledgeBaseTreePolicyVersion,
@@ -74,4 +91,13 @@ export function knowledgeBaseNewBuildPolicyBinding(
     skillVersion: "5" as const,
     skillContentHash: KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH,
   };
+}
+
+/** Old tasks may retain an earlier exact archive; verify its bytes at load time. */
+export function knowledgeBaseBuildSkillPinSupported(build: {skillContentHash: string | null; skillArchiveSha256?: string | null; skillArchiveBytes?: number | null; skillArchiveStorageKey?: string | null}) {
+  if (build.skillContentHash === KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH) return true;
+  return isKnowledgeBaseSkillContentHash(build.skillContentHash) &&
+    isKnowledgeBaseSkillContentHash(build.skillArchiveSha256) &&
+    Number.isSafeInteger(build.skillArchiveBytes) && Number(build.skillArchiveBytes) > 0 &&
+    build.skillArchiveStorageKey === `knowledge-base/skill-archives/${build.skillArchiveSha256}.skill.zip`;
 }

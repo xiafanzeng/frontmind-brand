@@ -1,3 +1,4 @@
+import {isKnowledgeBaseSkillContentHash} from "./knowledge-base-tree-policy-rollout.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -92,10 +93,10 @@ async function loadKnowledgeBaseSkillArchiveInternal(
     .toLowerCase();
   if (
     requestedContentHash &&
-    requestedContentHash !== KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH
+    !isKnowledgeBaseSkillContentHash(requestedContentHash)
   ) {
     throw new Error(
-      "RESET_REQUIRED: knowledge-base Skill v5 pin is not the current exact runtime archive",
+      "Knowledge-base Skill v5 pin must be an exact content hash",
     );
   }
   const version = "5" as const;
