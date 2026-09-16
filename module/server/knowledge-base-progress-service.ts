@@ -1,3 +1,4 @@
+import {knowledgeBaseBuildSkillPinSupported} from "./knowledge-base-tree-policy-rollout.js";
 import type {ConversationTurn} from "@frontmind/module-brand/contracts/core-records";
 import type {KnowledgeBaseBuild,KnowledgeBaseBuildNode} from "@frontmind/module-brand/schema";
 import { knowledgeBaseRunPhase, knowledgeBaseHasNormalizingResult } from "../contracts/knowledge-base-upload-state.js";
@@ -1632,8 +1633,7 @@ export function knowledgeBaseBuildRequiresApprovedReset(
   return (
     build.executionMode !== "materialized_bundle_v1" ||
     build.skillVersion !== "5" ||
-    build.skillContentHash !==
-      KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+    !knowledgeBaseBuildSkillPinSupported(build) ||
     build.providerProtocol !== "manus_v2" ||
     build.contentVersion === null ||
     knowledgeBaseMaterializedRecoveryContractVersion(build) !== 1 ||

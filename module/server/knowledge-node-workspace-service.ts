@@ -1,3 +1,4 @@
+import {knowledgeBaseBuildSkillPinSupported} from "./knowledge-base-tree-policy-rollout.js";
 import type { BrandSchema } from "../schema/index.js";
 import type { CoreSqlTable } from "../contracts/sql-table.js";
 import type { ConversationTurn, LocalAsset } from "../contracts/core-records.js";
@@ -141,8 +142,7 @@ function assertCurrentBuild(build: KnowledgeBaseBuild) {
     build.executionMode !== "materialized_bundle_v1" ||
     build.providerProtocol !== "manus_v2" ||
     build.skillVersion !== "5" ||
-    build.skillContentHash !==
-      KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+    !knowledgeBaseBuildSkillPinSupported(build) ||
     knowledgeBaseMaterializedRecoveryContractVersion(build) !== 1 ||
     knowledgeBaseMaterializedCompletionContractVersion(build) !==
       KNOWLEDGE_BASE_MATERIALIZED_COMPLETION_CONTRACT_VERSION
