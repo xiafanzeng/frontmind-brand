@@ -1,0 +1,81 @@
+{
+  "name": "@frontmind/module-brand",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@frontmind/module-contracts": "workspace:*",
+    "jszip": "^3.10.1",
+    "sharp": "0.35.3"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "24.7.0"
+  },
+  "exports": {
+    "./contracts/knowledge-base-progress": {
+      "types": "./contracts/knowledge-base-progress.ts",
+      "import": "./dist/contracts/knowledge-base-progress.js"
+    },
+    "./contracts/knowledge-base-materialized-contract": {
+      "types": "./contracts/knowledge-base-materialized-contract.ts",
+      "import": "./dist/contracts/knowledge-base-materialized-contract.js"
+    },
+    "./contracts/knowledge-node-edit-contract": {
+      "types": "./contracts/knowledge-node-edit-contract.ts",
+      "import": "./dist/contracts/knowledge-node-edit-contract.js"
+    },
+    "./contracts/knowledge-base-upload-state": {
+      "types": "./contracts/knowledge-base-upload-state.ts",
+      "import": "./dist/contracts/knowledge-base-upload-state.js"
+    },
+    "./contracts/knowledge-base-upload-status": {
+      "types": "./contracts/knowledge-base-upload-status.ts",
+      "import": "./dist/contracts/knowledge-base-upload-status.js"
+    },
+    "./server/model-output-repair": {
+      "types": "./server/model-output-repair.ts",
+      "import": "./dist/server/model-output-repair.js"
+    },
+    "./server/knowledge-base-public-artifacts": {
+      "types": "./server/knowledge-base-public-artifacts.ts",
+      "import": "./dist/server/knowledge-base-public-artifacts.js"
+    },
+    "./server/knowledge-base-working-set-policy": {
+      "types": "./server/knowledge-base-working-set-policy.ts",
+      "import": "./dist/server/knowledge-base-working-set-policy.js"
+    },
+    "./server/knowledge-base-working-set-policy.generated": {
+      "types": "./server/knowledge-base-working-set-policy.generated.ts",
+      "import": "./dist/server/knowledge-base-working-set-policy.generated.js"
+    },
+    "./server/frontmind-public-brand": {
+      "types": "./server/frontmind-public-brand.ts",
+      "import": "./dist/server/frontmind-public-brand.js"
+    },
+    "./server/knowledge-base-company-identity": {
+      "types": "./server/knowledge-base-company-identity.ts",
+      "import": "./dist/server/knowledge-base-company-identity.js"
+    },
+    "./server/knowledge-base-package-validation": {
+      "types": "./server/knowledge-base-package-validation.ts",
+      "import": "./dist/server/knowledge-base-package-validation.js"
+    },
+    "./contracts/knowledge-base-public-progress": {
+      "types": "./contracts/knowledge-base-public-progress.ts",
+      "import": "./dist/contracts/knowledge-base-public-progress.js"
+    },
+    ".": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    }
+  }
+}
