@@ -1,3 +1,4 @@
+import {knowledgeBaseBuildSkillPinSupported} from "./knowledge-base-tree-policy-rollout.js";
 import type { KnowledgeBaseBuild } from "@frontmind/module-brand/schema";
 import type {
   KnowledgeBaseResultQualityDto,
@@ -198,8 +199,7 @@ export function isMaterializedBuildPublishable(
     build.executionMode !== MATERIALIZED_EXECUTION_MODE ||
     build.providerProtocol !== "manus_v2" ||
     build.skillVersion !== "5" ||
-    build.skillContentHash !==
-      KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH ||
+    !knowledgeBaseBuildSkillPinSupported(build) ||
     !build.activeWorkingSetId ||
     !Number.isSafeInteger(build.contentVersion) ||
     Number(build.contentVersion) < 1
