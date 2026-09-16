@@ -12,8 +12,8 @@ export interface ModuleContext {module:'brand';workspace:{id:string;ownerUserId:
 export default function ModuleWorkspace({context,page='knowledge',keywordData,preview=false,previewKnowledge,previewQa,previewSiteOps}:{context:ModuleContext;page?:BrandPage;keywordData:{tables:ManagedKeywordTable[];revision:number|null;loading?:boolean;error?:unknown;knowledgePublished?:boolean};preview?:boolean;previewKnowledge?:{progress:KnowledgeBaseProgressDto;snapshot:KnowledgeSnapshotView};previewQa?:ReactNode;previewSiteOps?:ReactNode}){
  const [knowledgePage,setKnowledgePage]=useState<'build'|'display'>('build');
  if(page==='keywords')return <ManagedKeywordTables tables={keywordData.tables} dashboardRevision={keywordData.revision} loading={keywordData.loading} error={keywordData.error} generationEnabled={!preview} knowledgePublished={keywordData.knowledgePublished}/>;
- if(page==='enterprise-qa')return preview&&previewQa?previewQa:<EnterpriseQaWorkspace/>;
+ if(page==='enterprise-qa')return preview&&previewQa?previewQa:<EnterpriseQaWorkspace workbench projectId={context.workspace.id}/>;
  if(page==='website')return preview&&previewSiteOps?previewSiteOps:<ConnectedSiteOpsConversationPanel/>;
  if(page==='website-settings')return <KnowledgeFrontendSettings ownerId={context.workspace.ownerUserId} projectId={context.workspace.id} demo={preview}/>;
- return <EmbeddedKnowledgeBasePanel page={knowledgePage} onPageChange={setKnowledgePage} mode="workspace" projectId={context.workspace.id} preview={preview} previewData={previewKnowledge}/>;
+ return <EmbeddedKnowledgeBasePanel page={knowledgePage} onPageChange={setKnowledgePage} mode="workspace" workbench projectId={context.workspace.id} preview={preview} previewData={previewKnowledge}/>;
 }
