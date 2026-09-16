@@ -1,15 +1,18 @@
 import { useReducer, useRef, type Dispatch, type SetStateAction } from "react";
-import { useBusinessWorkspace } from "./BusinessWorkspaceContext";
+import { useBusinessWorkspace, type BusinessWorkspaceValue } from "./BusinessWorkspaceContext";
 
 /** UI drafts stay separate from model messages and domain facts. Optimistic
  * drafts survive task switches and the first empty task receiving its server ID. */
-export function useBusinessFlowState<T>(
+/** Hosts supply their existing workspace context without loading another
+ * business module just to install its runtime. */
+export function createUseBusinessFlowState(useWorkspace: () => BusinessWorkspaceValue) {
+  return function useBusinessFlowState<T>(
   key: string,
   initial: T,
   parse: (value: unknown) => T | undefined,
   serialize: (value: T) => unknown = (value) => value,
 ): [T, Dispatch<SetStateAction<T>>, (value: T) => void] {
-  const workspace = useBusinessWorkspace();
+  const workspace = useWorkspace();
   const scopePrefix = `${workspace.task?.scopeKey ?? workspace.agentId}:`;
   const scope = `${scopePrefix}${workspace.taskId ?? "new"}`;
   const drafts = useRef(new Map<string, T>());
@@ -60,7 +63,9 @@ export function useBusinessFlowState<T>(
     updateRender();
   };
   return [value, update, acceptSaved];
+  };
 }
+export const useBusinessFlowState = createUseBusinessFlowState(useBusinessWorkspace);
 export const readFlowString = (value: unknown) =>
   typeof value === "string" ? value : undefined;
 export const readFlowBoolean = (value: unknown) =>
