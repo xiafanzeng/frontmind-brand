@@ -12,6 +12,7 @@ import {
   useBusinessWorkspaceSummary,
 } from "./BusinessWorkspaceContext";
 import "./business-module-flows.css";
+import "./managed-keyword-tables.css";
 import {
   KEYWORD_CATEGORY_OPTIONS,
   isKeywordCategoryColumn,
@@ -683,7 +684,7 @@ export default function ManagedKeywordTables({
   });
   return (
     <section
-      className={`page-shell brand-deep-page ${isWorkbench ? "keyword-conversation-flow" : ""}`}
+      className={`page-shell brand-deep-page brand-keyword-workspace ${isWorkbench ? "keyword-conversation-flow" : ""}`}
     >
       {!isWorkbench && (
         <KeywordPageHeader
