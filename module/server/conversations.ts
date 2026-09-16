@@ -21,6 +21,13 @@ export function brandConversationPurpose(snapshot: BrandConversationSnapshot): B
   })) return "knowledge";
   return null;
 }
+/** Only Core's saved workbench marker may supply an unstarted draft purpose. */
+function normalizeSavedBrandConversation(snapshot: BrandConversationSnapshot): BrandConversationSnapshot {
+  if (snapshot.purpose || snapshot.workbenchAgentId !== "enterprise-qa" ||
+      snapshot.taskId || snapshot.previousResponseId || snapshot.execution || snapshot.executionKind ||
+      snapshot.messages.some(message => message.generalChat || message.generalChatDispatch || message.knowledgeBase)) return snapshot;
+  return {...snapshot, purpose: "enterprise_qa"};
+}
 export function assertBrandConversationPurpose(purpose: BrandConversationPurpose, snapshot: BrandConversationSnapshot, existing?: BrandConversationSnapshot) {
   if (brandConversationPurpose(snapshot) !== purpose || (existing && brandConversationPurpose(existing) !== purpose))
     throw new BrandConversationAccessError("BRAND_CONVERSATION_PURPOSE_MISMATCH");
@@ -37,7 +44,7 @@ export function createBrandConversationRouter(store: BrandConversationStore): Ro
   const router = Router();
   router.get("/conversations", async (req, res) => {
     if (!isPurpose(req.query.purpose)) return void res.status(400).json({error: "BRAND_PURPOSE_REQUIRED"});
-    try { res.json({conversations: (await store.list(req)).filter(item => brandConversationPurpose(item) === req.query.purpose)}); }
+    try { res.json({conversations: (await store.list(req)).map(normalizeSavedBrandConversation).filter(item => brandConversationPurpose(item) === req.query.purpose)}); }
     catch { res.status(503).json({error: "BRAND_CONVERSATIONS_UNAVAILABLE"}); }
   });
   router.post("/conversations/sync", async (req, res) => {
@@ -45,7 +52,7 @@ export function createBrandConversationRouter(store: BrandConversationStore): Ro
     if (!isPurpose(purpose) || !Array.isArray(conversations) || conversations.length > 200 || !Array.isArray(deletedIds) || deletedIds.length > 200 || deletedIds.some(id => typeof id !== "string" || !id || id.length > 128))
       return void res.status(400).json({error: "BRAND_SNAPSHOT_INVALID"});
     try {
-      const saved = new Map((await store.list(req)).map(item => [item.id, item]));
+      const saved = new Map((await store.list(req)).map(normalizeSavedBrandConversation).map(item => [item.id, item]));
       const seen = new Set<string>();
       // Reject the whole incoming batch before writing any record.
       for (const snapshot of conversations) {
