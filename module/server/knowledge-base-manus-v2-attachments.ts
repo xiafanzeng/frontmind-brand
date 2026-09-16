@@ -1,0 +1,1431 @@
+import { createHash } from "node:crypto";
+
+import type {KnowledgeCredential as DecryptedCredential} from "./knowledge-http-ports.js";
+import type {DashboardAgentClientOptions,ProviderError} from "./siteops/provider-ports.js";
+import {classifyManusV2ProviderFileMime,isManusV2ProviderFileMimeUsable,type ManusV2Attachment,type ManusV2CreatedFile,type ManusV2ProviderFileDetail} from "@frontmind/module-contracts/provider-files";
+import {
+  KnowledgeBaseAttachmentsProcessingError,
+  KnowledgeBaseLocalPreparationError,
+} from "./knowledge-base-api-errors.js";
+import {
+  finalizeKnowledgeBaseManusV2AttachmentMappings,
+  loadKnowledgeBaseManusV2AttachmentLedger,
+  persistKnowledgeBaseManusV2AttachmentAttempt,
+  persistKnowledgeBaseManusV2AttachmentMapping,
+  renewKnowledgeBaseTurnLease,
+  type KnowledgeBaseGeneratedAttachmentReservation,
+  type KnowledgeBaseManusV2AttachmentAttempt,
+  type KnowledgeBaseManusV2AttachmentMimeEvidence,
+  type KnowledgeBaseManusV2AttachmentMapping,
+  type KnowledgeBaseRecoveryClaim,
+} from "./knowledge-base-turn-service.js";
+import type {Readable} from "node:stream";
+export interface DashboardAgentClient {fileDetail(id:string):Promise<ManusV2ProviderFileDetail>;uploadFile(input:{filename:string;bytes:Buffer;contentType:string;minimumUsableSeconds:number;confirmationPolicy:"strict"|"kb_frozen_source_advisory"}):Promise<ManusV2CreatedFile & {detail:ManusV2ProviderFileDetail}>;}
+import type {createKnowledgeBaseLocalSourceStore} from "./knowledge-base-local-source-store.js";
+import type {createKnowledgeBaseSkillRuntime} from "./knowledge-base-skill-runtime.js";
+
+export interface KnowledgeAttachmentProviderCore extends Pick<ReturnType<typeof createKnowledgeBaseLocalSourceStore>, "persistKnowledgeBaseBuildSource"|"readKnowledgeBaseLocalSource">,Pick<ReturnType<typeof createKnowledgeBaseSkillRuntime>, "readKnowledgeBasePinnedSkillArchiveAttachment"> {
+ ManusV2ApiError:new(...args:any[])=>ProviderError;
+ createDashboardAgentClient(input:DashboardAgentClientOptions):DashboardAgentClient;
+ readStoredPresalesFile(id:string):Promise<{filename:string;mimeType:string;sizeBytes:number;sha256:string|null;createReadStream():Readable}|null>;
+}
+let persistKnowledgeBaseBuildSource: KnowledgeAttachmentProviderCore["persistKnowledgeBaseBuildSource"];
+let readKnowledgeBaseLocalSource: KnowledgeAttachmentProviderCore["readKnowledgeBaseLocalSource"];
+let readKnowledgeBasePinnedSkillArchiveAttachment: KnowledgeAttachmentProviderCore["readKnowledgeBasePinnedSkillArchiveAttachment"];
+let ManusV2ApiError: KnowledgeAttachmentProviderCore["ManusV2ApiError"];
+let createDashboardAgentClient: KnowledgeAttachmentProviderCore["createDashboardAgentClient"];
+let readStoredPresalesFile: KnowledgeAttachmentProviderCore["readStoredPresalesFile"];
+export function configureKnowledgeBaseAttachmentProvider(core: KnowledgeAttachmentProviderCore) { ({ persistKnowledgeBaseBuildSource, readKnowledgeBaseLocalSource, readKnowledgeBasePinnedSkillArchiveAttachment, ManusV2ApiError, createDashboardAgentClient, readStoredPresalesFile } = core); }
+
+
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const MAX_SOURCE_BYTES = 100 * 1024 * 1024;
+// Leave a small verification budget after the final provider detail pass.
+const ENSURE_MINIMUM_USABLE_SECONDS = 16 * 60;
+const FINAL_MINIMUM_USABLE_SECONDS = 15 * 60;
+const MAX_EXPLICIT_FILE_REJECTION_RETRIES = 3;
+const MAX_INLINE_GENERATED_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+export type KnowledgeBaseManusV2ResolvedAttachment = ManusV2Attachment;
+
+type LocalAttachmentSource = {
+  sourceFileId: string;
+  localStorageKey: string;
+  contentSha256: string;
+  sizeBytes: number;
+  filename: string;
+  mimeType: string;
+  bytes: Buffer;
+};
+
+function localPreparationError(message: string, cause?: unknown) {
+  return new KnowledgeBaseLocalPreparationError(
+    "KNOWLEDGE_BASE_MANUS_V2_ATTACHMENT_SOURCE_UNAVAILABLE",
+    message,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function attachmentIntegrityError(message: string, cause?: unknown) {
+  return new KnowledgeBaseLocalPreparationError(
+    "KNOWLEDGE_BASE_MANUS_V2_ATTACHMENT_INTEGRITY_CONFLICT",
+    message,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function attachmentLifecycleExhaustedError(message: string, cause?: unknown) {
+  return new KnowledgeBaseLocalPreparationError(
+    "KNOWLEDGE_BASE_MANUS_V2_ATTACHMENT_LIFECYCLE_EXHAUSTED",
+    message,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+export function isKnowledgeBaseManusV2GeneratedFileCreateRejected(
+  error: unknown,
+) {
+  return Boolean(
+    error instanceof KnowledgeBaseLocalPreparationError &&
+      error.code === "KNOWLEDGE_BASE_MANUS_V2_ATTACHMENT_SOURCE_UNAVAILABLE" &&
+      error.cause instanceof ManusV2ApiError &&
+      error.cause.operation === "file.upload" &&
+      !error.cause.retryable &&
+      !error.cause.outcomeUnknown,
+  );
+}
+
+function sha256(bytes: Buffer) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function generatedReservationByIndex(
+  claim: KnowledgeBaseRecoveryClaim,
+  attachmentIndex: number,
+) {
+  const matches = Object.values(
+    claim.turn.generatedAttachmentReservations || {},
+  ).filter((item) => item.attachmentIndex === attachmentIndex);
+  if (matches.length > 1) {
+    throw localPreparationError(
+      "同一附件位置存在多个系统附件来源，已暂停当前构建以避免发送错误文件",
+    );
+  }
+  return matches[0] || null;
+}
+
+function generatedReservationByProviderId(
+  claim: KnowledgeBaseRecoveryClaim,
+  sourceFileId: string,
+) {
+  const reservations = Object.values(
+    claim.turn.generatedAttachmentReservations || {},
+  );
+  const byProviderId = reservations.filter(
+    (item) => item.upstreamFileId === sourceFileId,
+  );
+  if (byProviderId.length === 1) return byProviderId[0]!;
+  if (byProviderId.length > 1) {
+    throw localPreparationError(
+      "同一源文件 ID 对应多个系统附件，已暂停当前构建",
+    );
+  }
+  return null;
+}
+
+async function readStoredBytes(
+  stored: NonNullable<Awaited<ReturnType<typeof readStoredPresalesFile>>>,
+) {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of stored.createReadStream()) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += bytes.length;
+    if (total > MAX_SOURCE_BYTES) {
+      throw localPreparationError("知识库源文件超过本地恢复上限");
+    }
+    chunks.push(bytes);
+  }
+  if (total !== stored.sizeBytes || total < 1) {
+    throw localPreparationError("知识库源文件本地字节长度不一致");
+  }
+  return Buffer.concat(chunks, total);
+}
+
+function recoveryAttachmentDescriptor(
+  claim: KnowledgeBaseRecoveryClaim,
+  sourceFileId: string,
+) {
+  const attachments = Array.isArray(claim.recoveryMetadata.attachments)
+    ? claim.recoveryMetadata.attachments
+    : [];
+  const index = attachments.findIndex(
+    (value) =>
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      String((value as Record<string, unknown>).file_id || "") === sourceFileId,
+  );
+  if (index < 0) return null;
+  const manifest = Array.isArray(claim.recoveryMetadata.attachmentManifest)
+    ? claim.recoveryMetadata.attachmentManifest[index]
+    : undefined;
+  return manifest && typeof manifest === "object" && !Array.isArray(manifest)
+    ? (manifest as Record<string, unknown>)
+    : null;
+}
+
+function recoveryAttachmentSourceProof(
+  claim: KnowledgeBaseRecoveryClaim,
+  sourceFileId: string,
+) {
+  const proofs = Array.isArray(claim.recoveryMetadata.attachmentSourceProofs)
+    ? claim.recoveryMetadata.attachmentSourceProofs
+    : [];
+  const matches = proofs.filter(
+    (value) =>
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      String((value as Record<string, unknown>).fileId || "") === sourceFileId,
+  );
+  if (matches.length > 1) {
+    throw localPreparationError("客户附件的 Dashboard 固定副本证明不唯一");
+  }
+  return matches[0] &&
+    typeof matches[0] === "object" &&
+    !Array.isArray(matches[0])
+    ? (matches[0] as Record<string, unknown>)
+    : null;
+}
+
+async function installBuildOwnedSource(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  bytes: Buffer;
+}) {
+  return persistKnowledgeBaseBuildSource({
+    userId: input.claim.turn.userId,
+    buildId: input.claim.turn.buildId,
+    generation: input.claim.turn.buildGeneration,
+    bytes: input.bytes,
+  });
+}
+
+async function generatedLocalSource(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  attachmentIndex: number;
+  sourceFileId: string;
+  filename: string;
+  reservation: KnowledgeBaseGeneratedAttachmentReservation;
+}): Promise<LocalAttachmentSource> {
+  const { reservation } = input;
+  let bytes: Buffer;
+  if (reservation.localStorageKey) {
+    try {
+      bytes = await readKnowledgeBaseLocalSource({
+        storageKey: reservation.localStorageKey,
+        contentSha256: reservation.contentSha256,
+        sizeBytes: reservation.sizeBytes,
+      });
+    } catch (error) {
+      throw localPreparationError(
+        `系统附件“${input.filename}”的 Dashboard 固定副本不可用`,
+        error,
+      );
+    }
+  } else if (reservation.role === "skill") {
+    // Historical rows may predate generated-source storage. Skill is the one
+    // safe reconstruction: its physical archive is independently pinned.
+    const archive = await readKnowledgeBasePinnedSkillArchiveAttachment({
+      version: String(input.claim.recoveryMetadata.skillVersion || "4"),
+      contentHash:
+        typeof input.claim.recoveryMetadata.skillContentHash === "string"
+          ? input.claim.recoveryMetadata.skillContentHash
+          : undefined,
+      physicalSha256:
+        typeof input.claim.recoveryMetadata.skillArchiveSha256 === "string"
+          ? input.claim.recoveryMetadata.skillArchiveSha256
+          : reservation.contentSha256,
+      archiveBytes: Number.isSafeInteger(
+        input.claim.recoveryMetadata.skillArchiveBytes,
+      )
+        ? Number(input.claim.recoveryMetadata.skillArchiveBytes)
+        : reservation.sizeBytes,
+      storageKey:
+        typeof input.claim.recoveryMetadata.skillArchiveStorageKey === "string"
+          ? input.claim.recoveryMetadata.skillArchiveStorageKey
+          : null,
+    });
+    bytes = archive.bytes;
+  } else {
+    throw localPreparationError(
+      `系统附件“${input.filename}”缺少 Dashboard 固定副本；当前构建已隔离，绝不会回退发送旧 Provider 文件`,
+    );
+  }
+  if (
+    bytes.length !== reservation.sizeBytes ||
+    sha256(bytes) !== reservation.contentSha256 ||
+    reservation.filename !== input.filename
+  ) {
+    throw localPreparationError(
+      `系统附件“${input.filename}”与固定物理哈希不一致`,
+    );
+  }
+  const retained = await installBuildOwnedSource({ claim: input.claim, bytes });
+  return {
+    sourceFileId: input.sourceFileId,
+    localStorageKey: retained.storageKey,
+    contentSha256: retained.contentSha256,
+    sizeBytes: retained.sizeBytes,
+    filename: input.filename,
+    mimeType: reservation.mimeType,
+    bytes,
+  };
+}
+
+async function customerLocalSource(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  sourceFileId: string;
+  filename: string;
+}): Promise<LocalAttachmentSource> {
+  const descriptor = recoveryAttachmentDescriptor(
+    input.claim,
+    input.sourceFileId,
+  );
+  const sourceProof = recoveryAttachmentSourceProof(
+    input.claim,
+    input.sourceFileId,
+  );
+  const expectedSize = Number(sourceProof?.sizeBytes ?? descriptor?.sizeBytes);
+  const expectedSha = String(
+    sourceProof?.contentSha256 ?? descriptor?.sha256 ?? "",
+  )
+    .trim()
+    .toLowerCase();
+  const expectedMimeType = String(
+    sourceProof?.mimeType ?? descriptor?.mimeType ?? "application/octet-stream",
+  ).trim();
+  const localStorageKey = String(sourceProof?.localStorageKey || "").trim();
+  if (
+    !Number.isSafeInteger(expectedSize) ||
+    expectedSize < 1 ||
+    !SHA256_PATTERN.test(expectedSha)
+  ) {
+    throw localPreparationError(
+      `客户附件“${input.filename}”缺少完整的本地 size/SHA 证明`,
+    );
+  }
+  let bytes: Buffer;
+  if (localStorageKey) {
+    try {
+      bytes = await readKnowledgeBaseLocalSource({
+        storageKey: localStorageKey,
+        contentSha256: expectedSha,
+        sizeBytes: expectedSize,
+      });
+    } catch (error) {
+      throw localPreparationError(
+        `客户附件“${input.filename}”的 build 固定副本不可用`,
+        error,
+      );
+    }
+  } else {
+    // Compatibility for reservations created before stage-time build-owned
+    // installation. New turns always use the durable source proof above.
+    const stored = await readStoredPresalesFile(input.sourceFileId);
+    if (
+      !stored ||
+      stored.sizeBytes !== expectedSize ||
+      (stored.sha256 && stored.sha256.toLowerCase() !== expectedSha)
+    ) {
+      throw localPreparationError(
+        `客户附件“${input.filename}”的 Dashboard 原始字节不可用`,
+      );
+    }
+    bytes = await readStoredBytes(stored);
+  }
+  if (bytes.length !== expectedSize || sha256(bytes) !== expectedSha) {
+    throw localPreparationError(
+      `客户附件“${input.filename}”未通过 Dashboard 原始字节校验`,
+    );
+  }
+  const retained = await installBuildOwnedSource({ claim: input.claim, bytes });
+  return {
+    sourceFileId: input.sourceFileId,
+    localStorageKey: retained.storageKey,
+    contentSha256: retained.contentSha256,
+    sizeBytes: retained.sizeBytes,
+    // The frozen prepared filename is the task contract. The local manifest
+    // still proves content/MIME and is never trusted to change the slot.
+    filename: input.filename,
+    mimeType: expectedMimeType || "application/octet-stream",
+    bytes,
+  };
+}
+
+async function resolveLocalSources(claim: KnowledgeBaseRecoveryClaim) {
+  const prepared = claim.preparedDispatch;
+  if (!prepared) {
+    throw localPreparationError(
+      "FrontMind 附件映射缺少冻结的 prepared dispatch",
+    );
+  }
+  const result: LocalAttachmentSource[] = [];
+  for (
+    let attachmentIndex = 0;
+    attachmentIndex < prepared.requestBody.attachments.length;
+    attachmentIndex += 1
+  ) {
+    const attachment = prepared.requestBody.attachments[attachmentIndex]!;
+    const indexedGenerated = generatedReservationByIndex(
+      claim,
+      attachmentIndex,
+    );
+    const generated =
+      indexedGenerated?.filename === attachment.filename
+        ? indexedGenerated
+        : generatedReservationByProviderId(claim, attachment.file_id);
+    result.push(
+      generated
+        ? await generatedLocalSource({
+            claim,
+            attachmentIndex,
+            sourceFileId: attachment.file_id,
+            filename: attachment.filename,
+            reservation: generated,
+          })
+        : await customerLocalSource({
+            claim,
+            sourceFileId: attachment.file_id,
+            filename: attachment.filename,
+          }),
+    );
+  }
+  return result;
+}
+
+function generatedReservationForSource(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  attachmentIndex: number;
+  source: LocalAttachmentSource;
+}) {
+  const indexed = generatedReservationByIndex(
+    input.claim,
+    input.attachmentIndex,
+  );
+  if (
+    indexed &&
+    indexed.filename === input.source.filename &&
+    indexed.contentSha256 === input.source.contentSha256 &&
+    indexed.sizeBytes === input.source.sizeBytes
+  ) {
+    return indexed;
+  }
+  return null;
+}
+
+function eligibleInlineGeneratedSource(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  attachmentIndex: number;
+  source: LocalAttachmentSource;
+}) {
+  const reservation = generatedReservationForSource(input);
+  return Boolean(
+    reservation &&
+      (reservation.role === "skill" || reservation.role === "instructions") &&
+      input.source.sizeBytes > 0 &&
+      input.source.sizeBytes <= MAX_INLINE_GENERATED_ATTACHMENT_BYTES,
+  );
+}
+
+function inlineGeneratedAttachment(input: {
+  source: LocalAttachmentSource;
+  attachmentIndex: number;
+}): KnowledgeBaseManusV2ResolvedAttachment {
+  return {
+    file_data: `data:${input.source.mimeType};base64,${input.source.bytes.toString("base64")}`,
+    filename: input.source.filename,
+    mime_type: input.source.mimeType,
+  };
+}
+
+function mappingKey(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  attachmentIndex: number;
+  source: LocalAttachmentSource;
+}) {
+  return `g${input.claim.turn.buildGeneration}:${input.attachmentIndex}:${input.source.contentSha256}:${input.source.sizeBytes}`;
+}
+
+function existingMapping(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  attachmentIndex: number;
+  source: LocalAttachmentSource;
+}) {
+  const key = mappingKey(input);
+  return input.claim.turn.manusV2AttachmentMappings?.[key] || null;
+}
+
+function existingAttempt(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  attachmentIndex: number;
+  source: LocalAttachmentSource;
+}) {
+  const key = mappingKey(input);
+  return input.claim.turn.manusV2AttachmentAttempts?.[key] || null;
+}
+
+function attachmentAttempt(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  attachmentIndex: number;
+  source: LocalAttachmentSource;
+  providerGeneration: number;
+  state: KnowledgeBaseManusV2AttachmentAttempt["state"];
+  file?: ManusV2CreatedFile | null;
+  code?: string | null;
+  rejectionCount?: number;
+  nextRetryAt?: string | null;
+  mimeEvidence?: KnowledgeBaseManusV2AttachmentMimeEvidence;
+}): KnowledgeBaseManusV2AttachmentAttempt {
+  return {
+    schemaVersion: 1,
+    mappingKey: mappingKey(input),
+    buildGeneration: input.claim.turn.buildGeneration,
+    attachmentIndex: input.attachmentIndex,
+    sourceFileId: input.source.sourceFileId,
+    localStorageKey: input.source.localStorageKey,
+    contentSha256: input.source.contentSha256,
+    sizeBytes: input.source.sizeBytes,
+    filename: input.source.filename,
+    mimeType: input.source.mimeType,
+    providerGeneration: input.providerGeneration,
+    state: input.state,
+    upstreamFileId: input.file?.fileId ?? null,
+    uploadExpiresAt: input.file?.uploadExpiresAt ?? null,
+    code: input.code ?? null,
+    ...(input.rejectionCount === undefined
+      ? {}
+      : { rejectionCount: input.rejectionCount }),
+    ...(input.nextRetryAt === undefined
+      ? {}
+      : { nextRetryAt: input.nextRetryAt }),
+    ...(input.mimeEvidence === undefined
+      ? {}
+      : { mimeEvidence: input.mimeEvidence }),
+    recordedAt: new Date().toISOString(),
+  };
+}
+
+function providerMimeEvidence(input: {
+  filename: string;
+  expectedContentType: string;
+  detail: ManusV2ProviderFileDetail;
+}): KnowledgeBaseManusV2AttachmentMimeEvidence {
+  const expectedContentType = input.expectedContentType
+    .split(";", 1)[0]!
+    .trim()
+    .toLowerCase();
+  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(expectedContentType)) {
+    throw localPreparationError(
+      "FrontMind 冻结附件的 canonical MIME 无效，无法建立 Provider 文件证明",
+    );
+  }
+  const disposition = classifyManusV2ProviderFileMime({
+    filename: input.filename,
+    expectedContentType,
+    providerContentType: input.detail.contentType,
+    providerContentTypeParseStatus: input.detail.contentTypeParseStatus,
+  });
+  return {
+    expectedContentType,
+    providerContentType: input.detail.contentType,
+    disposition,
+    observedAt: new Date().toISOString(),
+  };
+}
+
+function safeFilenameExtension(filename: string) {
+  const basename = filename.replace(/^.*[\\/]/u, "").toLowerCase();
+  const lastDot = basename.lastIndexOf(".");
+  if (lastDot <= 0 || lastDot === basename.length - 1) return null;
+  const extension = basename.slice(lastDot, lastDot + 17);
+  return /^\.[a-z0-9]{1,15}$/u.test(extension) ? extension : null;
+}
+
+function logProviderMimeDecision(input: {
+  attempt: KnowledgeBaseManusV2AttachmentAttempt;
+  evidence: KnowledgeBaseManusV2AttachmentMimeEvidence;
+  decision: "ready" | "replaceable_unusable" | "integrity_conflict";
+}) {
+  if (input.evidence.disposition === "exact") return;
+  console.info("[Knowledge base] provider attachment MIME advisory", {
+    diagnosticCode: "KB_ATTACHMENT_PROVIDER_MIME_ADVISORY",
+    stage: "provider_file_registration",
+    buildGeneration: input.attempt.buildGeneration,
+    attachmentIndex: input.attempt.attachmentIndex,
+    filenameExtension: safeFilenameExtension(input.attempt.filename),
+    providerGeneration: input.attempt.providerGeneration,
+    expectedContentType: input.evidence.expectedContentType,
+    providerContentType: input.evidence.providerContentType,
+    mimeDisposition: input.evidence.disposition,
+    identityDecision: input.decision,
+  });
+}
+
+async function persistAttempt(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  attempt: KnowledgeBaseManusV2AttachmentAttempt;
+}) {
+  await persistKnowledgeBaseManusV2AttachmentAttempt({
+    userId: input.claim.turn.userId,
+    turnId: input.claim.turn.id,
+    leaseToken: input.claim.leaseToken,
+    attempt: input.attempt,
+  });
+  input.claim.turn.manusV2AttachmentAttempts = {
+    ...(input.claim.turn.manusV2AttachmentAttempts || {}),
+    [input.attempt.mappingKey]: input.attempt,
+  };
+}
+
+function exactProviderProof(input: {
+  mapping: KnowledgeBaseManusV2AttachmentMapping;
+  detail: Awaited<ReturnType<DashboardAgentClient["fileDetail"]>>;
+  minimumExpirySeconds: number;
+}) {
+  return (
+    input.detail.fileId === input.mapping.upstreamFileId &&
+    input.detail.filename === input.mapping.filename &&
+    input.detail.status === "uploaded" &&
+    input.detail.bytes === input.mapping.sizeBytes &&
+    isManusV2ProviderFileMimeUsable({
+      filename: input.mapping.filename,
+      expectedContentType: input.mapping.mimeType,
+      providerContentType: input.detail.contentType,
+      providerContentTypeParseStatus: input.detail.contentTypeParseStatus,
+      confirmationPolicy: "kb_frozen_source_advisory",
+    }) &&
+    Number.isSafeInteger(input.detail.expiresAt) &&
+    input.detail.expiresAt >= input.minimumExpirySeconds
+  );
+}
+
+export async function validateReusableKnowledgeBaseManusV2Attachment(input: {
+  client: DashboardAgentClient;
+  mapping: KnowledgeBaseManusV2AttachmentMapping;
+  minimumExpirySeconds: number;
+}) {
+  try {
+    const detail = await input.client.fileDetail(input.mapping.upstreamFileId);
+    return exactProviderProof({ ...input, detail }) ? detail : null;
+  } catch (error) {
+    // A transport/5xx result cannot prove the old file unusable. Replacing it
+    // would turn response loss into unbounded provider files.
+    if (
+      error instanceof ManusV2ApiError &&
+      !error.retryable &&
+      !error.outcomeUnknown &&
+      (error.status === 404 || error.status === 410)
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function inspectKnowledgeBaseManusV2AttachmentAttempt(input: {
+  client: DashboardAgentClient;
+  attempt: KnowledgeBaseManusV2AttachmentAttempt;
+  minimumExpirySeconds: number;
+}) {
+  return inspectCandidate(input);
+}
+
+type CandidateInspection =
+  | {
+      state: "ready";
+      detail: Awaited<ReturnType<DashboardAgentClient["fileDetail"]>>;
+      mimeEvidence: KnowledgeBaseManusV2AttachmentMimeEvidence;
+    }
+  | {
+      state: "replaceable_unusable";
+      code: string;
+      mimeEvidence?: KnowledgeBaseManusV2AttachmentMimeEvidence;
+    }
+  | {
+      state: "integrity_conflict";
+      code: string;
+      mimeEvidence?: KnowledgeBaseManusV2AttachmentMimeEvidence;
+    }
+  | { state: "unresolved"; code: string };
+
+export function finalKnowledgeBaseManusV2AttachmentInspectionAction(input: {
+  inspection: CandidateInspection;
+  providerGeneration: number;
+}) {
+  if (input.inspection.state === "ready") return "refresh" as const;
+  if (input.inspection.state === "unresolved") return "wait" as const;
+  if (input.inspection.state === "integrity_conflict") {
+    return "reject" as const;
+  }
+  return input.providerGeneration < 2
+    ? ("replace" as const)
+    : ("isolate" as const);
+}
+
+export function shouldInspectReadyMappingBeforeAttachmentAttempt(input: {
+  mappingProviderGeneration: number;
+  attemptProviderGeneration: number | null;
+}) {
+  // A crash may leave a generation-1 ready mapping next to the already
+  // journaled generation-2 candidate. The newer attempt is the only remaining
+  // writer authority; inspecting the stale id first could otherwise try to
+  // move the monotonic attempt ledger backwards.
+  return (
+    input.attemptProviderGeneration === null ||
+    input.attemptProviderGeneration <= input.mappingProviderGeneration
+  );
+}
+
+async function inspectCandidate(input: {
+  client: DashboardAgentClient;
+  attempt: KnowledgeBaseManusV2AttachmentAttempt;
+  minimumExpirySeconds: number;
+}): Promise<CandidateInspection> {
+  if (!input.attempt.upstreamFileId) {
+    return {
+      state: "unresolved",
+      code: "MANUS_V2_FILE_CREATE_OUTCOME_UNKNOWN",
+    };
+  }
+  try {
+    const detail = await input.client.fileDetail(input.attempt.upstreamFileId);
+    const mimeEvidence = providerMimeEvidence({
+      filename: input.attempt.filename,
+      expectedContentType: input.attempt.mimeType,
+      detail,
+    });
+    if (detail.fileId !== input.attempt.upstreamFileId) {
+      return {
+        state: "integrity_conflict",
+        code: "KB_ATTACHMENT_IDENTITY_CONFLICT",
+        mimeEvidence,
+      };
+    }
+    if (detail.filename !== input.attempt.filename) {
+      return {
+        state: "integrity_conflict",
+        code: "KB_ATTACHMENT_IDENTITY_CONFLICT",
+        mimeEvidence,
+      };
+    }
+    if (detail.status === "deleted" || detail.status === "error") {
+      return {
+        state: "replaceable_unusable",
+        code: "KB_ATTACHMENT_LIFECYCLE_UNUSABLE",
+        mimeEvidence,
+      };
+    }
+    if (
+      detail.status === "uploaded" &&
+      detail.bytes !== input.attempt.sizeBytes
+    ) {
+      return {
+        state: "integrity_conflict",
+        code: "KB_ATTACHMENT_BYTES_CONFLICT",
+        mimeEvidence,
+      };
+    }
+    if (
+      detail.status === "uploaded" &&
+      detail.bytes === input.attempt.sizeBytes &&
+      Number.isSafeInteger(detail.expiresAt) &&
+      detail.expiresAt >= input.minimumExpirySeconds
+    ) {
+      const inspection = { state: "ready", detail, mimeEvidence } as const;
+      logProviderMimeDecision({
+        attempt: input.attempt,
+        evidence: mimeEvidence,
+        decision: "ready",
+      });
+      return inspection;
+    }
+    if (
+      detail.status === "uploaded" &&
+      Number.isSafeInteger(detail.expiresAt) &&
+      detail.expiresAt < input.minimumExpirySeconds
+    ) {
+      return {
+        state: "replaceable_unusable",
+        code: "KB_ATTACHMENT_LIFECYCLE_UNUSABLE",
+        mimeEvidence,
+      };
+    }
+    if (
+      detail.status === "pending" &&
+      input.attempt.uploadExpiresAt !== null &&
+      input.attempt.uploadExpiresAt * 1_000 - 5_000 <= Date.now()
+    ) {
+      // Once the provider's own signed-upload deadline has passed, a still
+      // pending record can no longer become uploaded from this attempt.
+      return {
+        state: "replaceable_unusable",
+        code: "KB_ATTACHMENT_LIFECYCLE_UNUSABLE",
+        mimeEvidence,
+      };
+    }
+    // A known pending file is not proof of failure. It remains the only
+    // candidate and a later recovery details this same id again.
+    return { state: "unresolved", code: "KB_ATTACHMENT_PENDING" };
+  } catch (error) {
+    if (
+      error instanceof ManusV2ApiError &&
+      !error.outcomeUnknown &&
+      !error.retryable &&
+      (error.status === 404 || error.status === 410)
+    ) {
+      return {
+        state: "replaceable_unusable",
+        code: "KB_ATTACHMENT_LIFECYCLE_UNUSABLE",
+      };
+    }
+    if (
+      error instanceof ManusV2ApiError &&
+      ["FILE_ID_CONFLICT", "FILE_IDENTITY_CONFLICT"].includes(error.code)
+    ) {
+      return {
+        state: "integrity_conflict",
+        code: "KB_ATTACHMENT_IDENTITY_CONFLICT",
+      };
+    }
+    if (
+      error instanceof ManusV2ApiError &&
+      error.code === "FILE_BYTES_CONFLICT"
+    ) {
+      return {
+        state: "integrity_conflict",
+        code: "KB_ATTACHMENT_BYTES_CONFLICT",
+      };
+    }
+    return {
+      state: "unresolved",
+      code:
+        error instanceof ManusV2ApiError
+          ? `MANUS_V2_FILE_DETAIL_${error.code}`.slice(0, 128)
+          : "MANUS_V2_FILE_DETAIL_UNRESOLVED",
+    };
+  }
+}
+
+function mappingFromCandidate(input: {
+  attempt: KnowledgeBaseManusV2AttachmentAttempt;
+  detail: Awaited<ReturnType<DashboardAgentClient["fileDetail"]>>;
+  mimeEvidence: KnowledgeBaseManusV2AttachmentMimeEvidence;
+}): KnowledgeBaseManusV2AttachmentMapping {
+  if (!input.attempt.upstreamFileId) {
+    throw localPreparationError("FrontMind 附件 candidate 缺少 Provider ID");
+  }
+  return {
+    schemaVersion: 1,
+    providerProtocol: "manus_v2",
+    mappingKey: input.attempt.mappingKey,
+    buildGeneration: input.attempt.buildGeneration,
+    attachmentIndex: input.attempt.attachmentIndex,
+    sourceFileId: input.attempt.sourceFileId,
+    localStorageKey: input.attempt.localStorageKey,
+    contentSha256: input.attempt.contentSha256,
+    sizeBytes: input.attempt.sizeBytes,
+    filename: input.attempt.filename,
+    mimeType: input.attempt.mimeType,
+    upstreamFileId: input.attempt.upstreamFileId,
+    status: "ready",
+    expiresAt: input.detail.expiresAt,
+    providerGeneration: input.attempt.providerGeneration,
+    verifiedAt: new Date().toISOString(),
+    mimeEvidence: input.mimeEvidence,
+  };
+}
+
+function unresolvedCandidateError(input: { filename: string; code: string }) {
+  return new KnowledgeBaseAttachmentsProcessingError(0, 1, 30_000, input.code);
+}
+
+export function nextKnowledgeBaseManusV2FileCreateGeneration(
+  attempt: KnowledgeBaseManusV2AttachmentAttempt | null,
+) {
+  if (!attempt) return 1;
+  if (
+    attempt.state === "unusable" &&
+    [
+      "KB_ATTACHMENT_IDENTITY_CONFLICT",
+      "KB_ATTACHMENT_BYTES_CONFLICT",
+    ].includes(String(attempt.code || ""))
+  ) {
+    return null;
+  }
+  if (
+    attempt.state !== "unusable" &&
+    attempt.state !== "create_outcome_unknown" &&
+    attempt.state !== "creating"
+  ) {
+    return null;
+  }
+  return attempt.providerGeneration < 2 ? attempt.providerGeneration + 1 : null;
+}
+
+export function knowledgeBaseManusV2FileRejectionRetryDelay(input: {
+  mappingKey: string;
+  rejectionCount: number;
+  providerRetryAfterMs: number | null;
+}) {
+  if (input.providerRetryAfterMs !== null) {
+    return Math.min(60 * 60_000, Math.max(0, input.providerRetryAfterMs));
+  }
+  const base = Math.min(
+    30_000,
+    1_000 * 2 ** Math.min(input.rejectionCount - 1, 5),
+  );
+  const seed =
+    createHash("sha256")
+      .update(`${input.mappingKey}:${input.rejectionCount}`, "utf8")
+      .digest()[0] ?? 0;
+  return base + Math.floor((base * (seed % 21)) / 100);
+}
+
+async function persistReadyMapping(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  mapping: KnowledgeBaseManusV2AttachmentMapping;
+}) {
+  await persistKnowledgeBaseManusV2AttachmentMapping({
+    userId: input.claim.turn.userId,
+    turnId: input.claim.turn.id,
+    leaseToken: input.claim.leaseToken,
+    mapping: input.mapping,
+  });
+  input.claim.turn.manusV2AttachmentMappings = {
+    ...(input.claim.turn.manusV2AttachmentMappings || {}),
+    [input.mapping.mappingKey]: input.mapping,
+  };
+}
+
+/** Complete-byte uploads have their own durable ledger states. The transport
+ * journal fences response loss; recovery may observe the same upload but never
+ * allocates a replacement merely because its response was lost. */
+export async function ensureKnowledgeBaseZhipuMapping(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  clientForGeneration: (generation: number) => DashboardAgentClient;
+  source: LocalAttachmentSource;
+  attachmentIndex: number;
+}) {
+  await renewKnowledgeBaseTurnLease({
+    userId: input.claim.turn.userId,
+    turnId: input.claim.turn.id,
+    leaseToken: input.claim.leaseToken,
+  });
+  let attempt = existingAttempt(input);
+  const mapping = existingMapping(input);
+  const minimumExpirySeconds =
+    Math.floor(Date.now() / 1000) + ENSURE_MINIMUM_USABLE_SECONDS;
+  if (
+    attempt?.state === "complete_upload_accepted" ||
+    (mapping &&
+      (!attempt || attempt.providerGeneration <= mapping.providerGeneration))
+  ) {
+    const known =
+      attempt ??
+      attachmentAttempt({
+        ...input,
+        providerGeneration: mapping!.providerGeneration,
+        state: "complete_upload_accepted",
+        file: {
+          fileId: mapping!.upstreamFileId,
+          filename: mapping!.filename,
+          uploadUrl: "",
+          uploadExpiresAt: mapping!.expiresAt,
+          requestId: null,
+        },
+      });
+    const inspection = await inspectCandidate({
+      client: input.clientForGeneration(known.providerGeneration),
+      attempt: known,
+      minimumExpirySeconds,
+    });
+    if (inspection.state === "ready") {
+      const ready = mappingFromCandidate({
+        attempt: known,
+        detail: inspection.detail,
+        mimeEvidence: inspection.mimeEvidence,
+      });
+      await persistReadyMapping({ claim: input.claim, mapping: ready });
+      return ready;
+    }
+    if (inspection.state === "unresolved")
+      throw unresolvedCandidateError({
+        filename: input.source.filename,
+        code: inspection.code,
+      });
+    if (inspection.state === "integrity_conflict")
+      throw attachmentIntegrityError(
+        `FrontMind 附件身份与冻结源不一致（${inspection.code}）`,
+      );
+    attempt = {
+      ...known,
+      state: "unusable",
+      code: inspection.code,
+      recordedAt: new Date().toISOString(),
+    };
+    await persistAttempt({ claim: input.claim, attempt });
+  }
+  if (attempt?.state === "create_rejected")
+    throw localPreparationError("FrontMind 附件完整上传已被明确拒绝");
+  if (attempt?.state === "create_retry_wait") {
+    const wait = Date.parse(attempt.nextRetryAt ?? "") - Date.now();
+    if (!Number.isFinite(wait))
+      throw localPreparationError("FrontMind 附件重试时间无效");
+    if (wait > 0)
+      throw new KnowledgeBaseAttachmentsProcessingError(
+        0,
+        1,
+        Math.max(250, Math.min(60_000, wait)),
+        attempt.code ?? undefined,
+      );
+    attempt = {
+      ...attempt,
+      state: "creating",
+      nextRetryAt: null,
+      recordedAt: new Date().toISOString(),
+    };
+    await persistAttempt({ claim: input.claim, attempt });
+  }
+  const generation =
+    attempt?.state === "unusable"
+      ? attempt.providerGeneration + 1
+      : (attempt?.providerGeneration ?? 1);
+  if (generation > 2)
+    throw attachmentLifecycleExhaustedError(
+      "FrontMind 附件两次失效，当前构建已局部隔离",
+    );
+  if (!attempt || attempt.state === "unusable") {
+    attempt = attachmentAttempt({
+      ...input,
+      providerGeneration: generation,
+      state: "creating",
+    });
+    await persistAttempt({ claim: input.claim, attempt });
+  }
+  if (!["creating", "complete_upload_outcome_unknown"].includes(attempt.state))
+    throw localPreparationError("FrontMind 完整上传状态不兼容冻结提供方");
+  try {
+    const uploaded = await input.clientForGeneration(generation).uploadFile({
+      filename: input.source.filename,
+      bytes: input.source.bytes,
+      contentType: input.source.mimeType,
+      minimumUsableSeconds: ENSURE_MINIMUM_USABLE_SECONDS,
+      confirmationPolicy: "kb_frozen_source_advisory",
+    });
+    if (uploaded.uploadUrl)
+      throw attachmentIntegrityError("完整字节上传不能包含签名 PUT 地址");
+    const accepted = attachmentAttempt({
+      ...input,
+      providerGeneration: generation,
+      state: "complete_upload_accepted",
+      file: uploaded,
+      mimeEvidence: providerMimeEvidence({
+        filename: input.source.filename,
+        expectedContentType: input.source.mimeType,
+        detail: uploaded.detail,
+      }),
+    });
+    await persistAttempt({ claim: input.claim, attempt: accepted });
+    const inspection = await inspectCandidate({
+      client: input.clientForGeneration(generation),
+      attempt: accepted,
+      minimumExpirySeconds,
+    });
+    if (inspection.state !== "ready") {
+      if (inspection.state === "integrity_conflict")
+        throw attachmentIntegrityError(
+          `FrontMind 附件身份与冻结源不一致（${inspection.code}）`,
+        );
+      throw unresolvedCandidateError({
+        filename: input.source.filename,
+        code: inspection.code,
+      });
+    }
+    const ready = mappingFromCandidate({
+      attempt: accepted,
+      detail: inspection.detail,
+      mimeEvidence: inspection.mimeEvidence,
+    });
+    await persistReadyMapping({ claim: input.claim, mapping: ready });
+    return ready;
+  } catch (error) {
+    // Metadata or mapping persistence can fail after complete_upload_accepted;
+    // retain that acknowledged id for the next authoritative inspection.
+    const current = existingAttempt(input);
+    if (current?.state === "complete_upload_accepted") throw error;
+    if (error instanceof ManusV2ApiError && error.outcomeUnknown) {
+      if (attempt.state !== "complete_upload_outcome_unknown")
+        await persistAttempt({
+          claim: input.claim,
+          attempt: {
+            ...attempt,
+            state: "complete_upload_outcome_unknown",
+            code: error.code,
+            recordedAt: new Date().toISOString(),
+          },
+        });
+      throw unresolvedCandidateError({
+        filename: input.source.filename,
+        code: error.code,
+      });
+    }
+    if (
+      error instanceof ManusV2ApiError &&
+      error.operation === "file.upload" &&
+      !error.outcomeUnknown
+    ) {
+      const count = (attempt.rejectionCount ?? 0) + 1;
+      const retry =
+        error.retryable &&
+        error.status === 429 &&
+        count <= MAX_EXPLICIT_FILE_REJECTION_RETRIES;
+      const delay = knowledgeBaseManusV2FileRejectionRetryDelay({
+        mappingKey: attempt.mappingKey,
+        rejectionCount: count,
+        providerRetryAfterMs: error.retryAfterMs,
+      });
+      await persistAttempt({
+        claim: input.claim,
+        attempt: {
+          ...attempt,
+          state: retry ? "create_retry_wait" : "create_rejected",
+          code: error.code,
+          rejectionCount: count,
+          ...(retry
+            ? { nextRetryAt: new Date(Date.now() + delay).toISOString() }
+            : {}),
+          recordedAt: new Date().toISOString(),
+        },
+      });
+      if (retry)
+        throw new KnowledgeBaseAttachmentsProcessingError(
+          0,
+          1,
+          delay,
+          error.code,
+        );
+      throw localPreparationError("FrontMind 附件完整上传已被明确拒绝", error);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Materialize a frozen operation's original attachment bytes for Zhipu. Small
+ * server-owned Skill/Instructions bytes remain inline until the managed client
+ * uploads them; customer files retain tenant-owned durable mappings.
+ */
+export async function ensureKnowledgeBaseManusV2Attachments(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  credential: Pick<
+    DecryptedCredential,
+    | "id"
+    | "userId"
+    | "credentialRef"
+    | "version"
+    | "provider"
+    | "upstreamModel"
+    | "upstreamEffort"
+  >;
+  baseUrl: string;
+}): Promise<KnowledgeBaseManusV2ResolvedAttachment[]> {
+  const { claim } = input;
+  const durable = await loadKnowledgeBaseManusV2AttachmentLedger({
+    userId: claim.turn.userId,
+    turnId: claim.turn.id,
+    leaseToken: claim.leaseToken,
+  });
+  claim.turn = durable.turn;
+  claim.preparedDispatch = durable.preparedDispatch;
+  if (
+    claim.turn.providerProtocol !== "manus_v2" ||
+    claim.turn.apiCredentialId !== input.credential.id ||
+    claim.turn.userId !== input.credential.userId ||
+    !claim.turn.attachmentsFrozen ||
+    !claim.preparedDispatch
+  ) {
+    throw localPreparationError(
+      "FrontMind 附件映射的用户、credential 或 frozen turn 所有权不一致",
+    );
+  }
+  if (input.credential.provider !== "zhipu") {
+    throw new KnowledgeBaseLocalPreparationError(
+      "RESET_REQUIRED",
+      "请联系管理员完成智能服务配置，重置后重新上传资料并开始新构建",
+    );
+  }
+  const client = createDashboardAgentClient({
+    provider: "zhipu",
+    credentialRef: input.credential.credentialRef,
+    credentialId: input.credential.id,
+    credentialVersion: input.credential.version,
+    accountUserId: claim.turn.userId,
+    credentialOwnerUserId: input.credential.userId,
+    intentId: claim.turn.id,
+    upstreamModel: input.credential.upstreamModel,
+    upstreamEffort: input.credential.upstreamEffort,
+    baseUrl: input.baseUrl,
+  });
+  const ensureMapping = (entry: {
+    claim: KnowledgeBaseRecoveryClaim;
+    client: DashboardAgentClient;
+    source: LocalAttachmentSource;
+    attachmentIndex: number;
+  }) =>
+    ensureKnowledgeBaseZhipuMapping({
+      ...entry,
+      clientForGeneration: (generation) =>
+        createDashboardAgentClient({
+          provider: "zhipu",
+          credentialRef: input.credential.credentialRef,
+          credentialId: input.credential.id,
+          credentialVersion: input.credential.version,
+          accountUserId: claim.turn.userId,
+          credentialOwnerUserId: input.credential.userId,
+          intentId: `${claim.turn.id}:attachment:${entry.attachmentIndex}:generation:${generation}`,
+          upstreamModel: input.credential.upstreamModel,
+          upstreamEffort: input.credential.upstreamEffort,
+        }),
+    });
+  const sources = await resolveLocalSources(claim);
+  const mappings: Array<KnowledgeBaseManusV2AttachmentMapping | null> = [];
+  const inlineAttachments = new Map<
+    number,
+    KnowledgeBaseManusV2ResolvedAttachment
+  >();
+  for (
+    let attachmentIndex = 0;
+    attachmentIndex < sources.length;
+    attachmentIndex += 1
+  ) {
+    const source = sources[attachmentIndex]!;
+    if (eligibleInlineGeneratedSource({ claim, attachmentIndex, source })) {
+      inlineAttachments.set(
+        attachmentIndex,
+        inlineGeneratedAttachment({ source, attachmentIndex }),
+      );
+      mappings.push(null);
+      continue;
+    }
+    mappings.push(
+      await ensureMapping({
+        claim,
+        client,
+        source,
+        attachmentIndex,
+      }),
+    );
+  }
+
+  // Revalidate every mapping after the last upload. This prevents a long
+  // multi-file operation from finalizing an early file whose expiry crossed
+  // the 15-minute dispatch boundary while later files were being uploaded.
+  const finalMinimumExpiry =
+    Math.floor(Date.now() / 1_000) + FINAL_MINIMUM_USABLE_SECONDS;
+  let finalMappings: KnowledgeBaseManusV2AttachmentMapping[] = [];
+  let replacementCount = 0;
+  // A final pass can discover that an early file expired while a later file
+  // uploaded. Consume that slot's single bounded replacement and restart the
+  // complete proof; transport-ambiguous detail never creates another file.
+  for (;;) {
+    finalMappings = [];
+    let replaced = false;
+    for (
+      let attachmentIndex = 0;
+      attachmentIndex < mappings.length;
+      attachmentIndex += 1
+    ) {
+      const mapping = mappings[attachmentIndex];
+      if (!mapping) continue;
+      const source = sources[attachmentIndex]!;
+      const durableAttempt = existingAttempt({
+        claim,
+        attachmentIndex,
+        source,
+      });
+      const inspectionAttempt =
+        durableAttempt &&
+        durableAttempt.providerGeneration === mapping.providerGeneration &&
+        durableAttempt.upstreamFileId === mapping.upstreamFileId
+          ? durableAttempt
+          : attachmentAttempt({
+              claim,
+              attachmentIndex,
+              source,
+              providerGeneration: mapping.providerGeneration,
+              state: "complete_upload_accepted",
+              file: {
+                fileId: mapping.upstreamFileId,
+                filename: mapping.filename,
+                uploadUrl: "",
+                uploadExpiresAt: mapping.expiresAt,
+                requestId: null,
+              },
+            });
+      const inspection = await inspectCandidate({
+        client,
+        attempt: inspectionAttempt,
+        minimumExpirySeconds: finalMinimumExpiry,
+      });
+      const action = finalKnowledgeBaseManusV2AttachmentInspectionAction({
+        inspection,
+        providerGeneration: mapping.providerGeneration,
+      });
+      if (action === "wait") {
+        throw unresolvedCandidateError({
+          filename: mapping.filename,
+          code:
+            inspection.state === "unresolved"
+              ? inspection.code
+              : "MANUS_V2_FILE_DETAIL_UNRESOLVED",
+        });
+      }
+      if (action === "isolate") {
+        throw attachmentLifecycleExhaustedError(
+          `FrontMind 附件“${mapping.filename}”两次失效，当前构建已局部隔离`,
+        );
+      }
+      if (action === "reject") {
+        if (
+          inspection.state === "integrity_conflict" &&
+          durableAttempt?.state !== "unusable"
+        ) {
+          await persistAttempt({
+            claim,
+            attempt: attachmentAttempt({
+              claim,
+              attachmentIndex,
+              source,
+              providerGeneration: mapping.providerGeneration,
+              state: "unusable",
+              file: {
+                fileId: mapping.upstreamFileId,
+                filename: mapping.filename,
+                uploadUrl: "",
+                uploadExpiresAt: mapping.expiresAt,
+                requestId: null,
+              },
+              code: inspection.code,
+              mimeEvidence: inspection.mimeEvidence,
+            }),
+          });
+        }
+        throw attachmentIntegrityError(
+          `FrontMind 附件“${mapping.filename}”的 Provider 身份证明与冻结源不一致（${
+            inspection.state === "integrity_conflict"
+              ? inspection.code
+              : "KB_ATTACHMENT_IDENTITY_CONFLICT"
+          }）`,
+        );
+      }
+      if (action === "replace") {
+        if (inspection.state !== "replaceable_unusable") {
+          throw localPreparationError("FrontMind 附件最终复核状态无效");
+        }
+        if (durableAttempt?.state !== "unusable") {
+          await persistAttempt({
+            claim,
+            attempt: attachmentAttempt({
+              claim,
+              attachmentIndex,
+              source,
+              providerGeneration: mapping.providerGeneration,
+              state: "unusable",
+              file: {
+                fileId: mapping.upstreamFileId,
+                filename: mapping.filename,
+                uploadUrl: "",
+                uploadExpiresAt: mapping.expiresAt,
+                requestId: null,
+              },
+              code: inspection.code,
+              mimeEvidence: inspection.mimeEvidence,
+            }),
+          });
+        }
+        replacementCount += 1;
+        if (replacementCount > sources.length) {
+          throw attachmentLifecycleExhaustedError(
+            "FrontMind 附件最终复核超出有界替换次数",
+          );
+        }
+        mappings[attachmentIndex] = await ensureMapping({
+          claim,
+          client,
+          source,
+          attachmentIndex,
+        });
+        replaced = true;
+        break;
+      }
+      if (inspection.state !== "ready") {
+        throw localPreparationError("FrontMind 附件最终复核状态无效");
+      }
+      const refreshed = {
+        ...mapping,
+        expiresAt: inspection.detail.expiresAt,
+        verifiedAt: new Date().toISOString(),
+        mimeEvidence: inspection.mimeEvidence,
+      };
+      await persistReadyMapping({ claim, mapping: refreshed });
+      mappings[attachmentIndex] = refreshed;
+      finalMappings.push(refreshed);
+    }
+    if (!replaced) break;
+  }
+  await renewKnowledgeBaseTurnLease({
+    userId: claim.turn.userId,
+    turnId: claim.turn.id,
+    leaseToken: claim.leaseToken,
+  });
+  if (inlineAttachments.size === 0) {
+    const finalized = await finalizeKnowledgeBaseManusV2AttachmentMappings({
+      userId: claim.turn.userId,
+      turnId: claim.turn.id,
+      leaseToken: claim.leaseToken,
+      mappings: finalMappings,
+      minimumUsableSeconds: FINAL_MINIMUM_USABLE_SECONDS,
+    });
+    claim.turn.attachmentFileIds = [...finalized.attachmentFileIds];
+    claim.turn.manusV2AttachmentMappings = {
+      ...finalized.manusV2AttachmentMappings,
+    };
+  } else {
+    // Inline delivery is a provider request representation, not a rewrite of
+    // the frozen Dashboard source ledger. Every non-inline slot still has the
+    // same ready mapping proof; the create/send at-most-once fence is consumed
+    // only after the complete mixed body hash is computed by the caller.
+    const expectedReady = sources.length - inlineAttachments.size;
+    if (finalMappings.length !== expectedReady) {
+      throw localPreparationError(
+        "FrontMind 内联系统附件混排缺少其余附件的完整可用性证明",
+      );
+    }
+  }
+  const readyByIndex = new Map(
+    finalMappings.map((mapping) => [mapping.attachmentIndex, mapping]),
+  );
+  return sources.map((source, attachmentIndex) => {
+    const inline = inlineAttachments.get(attachmentIndex);
+    if (inline) return inline;
+    const mapping = readyByIndex.get(attachmentIndex);
+    if (!mapping) {
+      throw localPreparationError("FrontMind 附件最终映射缺失");
+    }
+    return {
+      file_id: mapping.upstreamFileId,
+      filename: mapping.filename,
+    };
+  });
+}

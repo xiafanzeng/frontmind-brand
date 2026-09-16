@@ -9,6 +9,8 @@
   },
   "include": [
     "contracts/**/*.ts",
-    "server/**/*.ts"
+    "server/**/*.ts",
+    "schema/**/*.ts",
+    "worker/**/*.ts"
   ]
 }
