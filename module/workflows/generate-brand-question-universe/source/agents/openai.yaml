@@ -1,0 +1,4 @@
+interface:
+  display_name: "品牌问题宇宙生成器"
+  short_description: "从客户知识库与联网调研生成160条四分类搜索表达Excel"
+  default_prompt: "使用 $generate-brand-question-universe 读取这个客户知识库ZIP，联网调研后生成含搜索短语与完整问句的五列160条四分类Excel。"

@@ -1,0 +1,13 @@
+{
+  "name": "@frontmind/brand-standalone",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "react": "19.2.1",
+    "wouter": "3.7.1",
+    "sonner": "2.0.7",
+    "superjson": "1.13.3",
+    "@frontmind/module-brand": "workspace:*",
+    "@frontmind/module-ui": "workspace:*"
+  }
+}

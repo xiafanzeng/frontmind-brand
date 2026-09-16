@@ -1,0 +1,4203 @@
+import type {Request,Response} from 'express';
+import type {BrandSchema} from '../schema/index.js';
+import type {CoreSqlTable} from '../contracts/sql-table.js';
+import type {ConversationTurn,Conversation,Message,UpstreamResource} from '../contracts/core-records.js';
+import type {MySql2Database} from 'drizzle-orm/mysql2';
+import type {SQL} from 'drizzle-orm';
+import type {KnowledgeCredential,KnowledgeAgentClient,KnowledgeRequest} from './knowledge-http-ports.js';
+type Port=(...args:any[])=>any;
+import {knowledgeArchiveFileIdFromUrl,type KnowledgeArchiveDescriptor} from './knowledge-base-artifact.js';
+import {KnowledgeArchiveDownloadError} from './knowledge-archive-download-error.js';
+import {assertKnowledgeBasePublishable,assertKnowledgeBaseReadyForUpdate} from './knowledge-base-progress-service.js';
+import {knowledgeBaseTreePolicy} from '../contracts/knowledge-base-progress.js';
+import {knowledgeBaseArchiveReadContractVersions,knowledgeBaseArchiveRequiresV4UploadEvidence} from './knowledge-base-archive-contract.js';
+import {assertKnowledgeBasePackageMatchesBuild} from './knowledge-base-package-validation.js';
+import {assertKnowledgeBaseCustomerUploadVisualBindings,verifiedKnowledgeBasePackageUploadEvidenceForBuild} from './knowledge-base-customer-upload.js';
+import {knowledgeBasePackageWriterTaskId,knowledgeBasePublicationBindingHash} from './knowledge-base-publication-binding.js';
+import {generateKnowledgeBasePackageForUpdate,isDashboardOwnedKnowledgePackageBuild,readDashboardOwnedKnowledgePackage} from './knowledge-base-local-package.js';
+import {basicRasterImageDimensions,decodedRasterImageDimensions,hasSupportedImageSignature,imageMimeByExtension} from './knowledge-archive-image-validation.js';
+import {effectiveKnowledgeArchiveCharacterCount as effectiveCharacterCount,knowledgeArchiveContainsSourceInventoryHeading,knowledgeArchiveContainsSourceInventoryTable,knowledgeArchiveFormalText as formalKnowledgeText,knowledgeArchiveHeadingIsSourceInventory,knowledgeArchiveTitleFromPath as titleFromPath,markedKnowledgeArchiveFormalContent as markedFormalContent,normalizeKnowledgeArchiveTextDocument as normalizeTextDocument,safeKnowledgeArchivePath as safeArchivePath,stripLeadingKnowledgeArchiveFrontmatter as stripLeadingMarkdownFrontmatter,validateKnowledgeArchiveEntryPath as validateArchiveEntryPath} from './knowledge-archive-text-utils.js';
+type DecryptedCredential=KnowledgeCredential;
+import type {KnowledgeAsset} from "../contracts/dashboard-types.js";
+import type {KnowledgeDocument} from "../contracts/dashboard-types.js";
+export interface DashboardKnowledgeServiceCore {
+ tables:BrandSchema;
+enterpriseOwnerPredicate:(...args:any[])=>SQL;
+createCredentialAgentClient:(credential:KnowledgeCredential,options?:any)=>KnowledgeAgentClient;
+safeErrorForLog:(...args:any[])=>Record<string,unknown>;
+assertSafeExternalUrl:Port;
+ExternalUrlRejectedError:new(...args:any[])=>Error;
+createKnowledgeSnapshot:Port;
+getDashboardWorkspace:Port;
+getKnowledgeSnapshotById:Port;
+assertKnowledgeBaseWritable:Port;
+assertServiceCapability:Port;
+getDb:()=>Promise<MySql2Database<any>|null>;
+readStoredPresalesFile:(...args:any[])=>Promise<{filename:string;sizeBytes:number;sha256:string|null;createReadStream():import("node:stream").Readable}|null>;
+persistKnowledgeSnapshotArchive:Port;
+removeKnowledgeSnapshotArchive:Port;
+readKnowledgeBuildArtifact:Port;
+knowledgeAssetRoot():string;assertAssetStorageConfigured():void;downloadArchiveStream(url:string,options:any):Promise<Pick<AxiosResponse,"status"|"headers"|"data">>;}
+let knowledgeBaseBuildNodes:BrandSchema['knowledgeBaseBuildNodes'];
+let knowledgeBaseBuilds:BrandSchema['knowledgeBaseBuilds'];
+let enterpriseOwnerPredicate:DashboardKnowledgeServiceCore['enterpriseOwnerPredicate'];
+let createCredentialAgentClient:DashboardKnowledgeServiceCore['createCredentialAgentClient'];
+let safeErrorForLog:DashboardKnowledgeServiceCore['safeErrorForLog'];
+let assertSafeExternalUrl:DashboardKnowledgeServiceCore['assertSafeExternalUrl'];
+let ExternalUrlRejectedError:DashboardKnowledgeServiceCore['ExternalUrlRejectedError'];
+let createKnowledgeSnapshot:DashboardKnowledgeServiceCore['createKnowledgeSnapshot'];
+let getDashboardWorkspace:DashboardKnowledgeServiceCore['getDashboardWorkspace'];
+let getKnowledgeSnapshotById:DashboardKnowledgeServiceCore['getKnowledgeSnapshotById'];
+let assertKnowledgeBaseWritable:DashboardKnowledgeServiceCore['assertKnowledgeBaseWritable'];
+let assertServiceCapability:DashboardKnowledgeServiceCore['assertServiceCapability'];
+let getDb:DashboardKnowledgeServiceCore['getDb'];
+let readStoredPresalesFile:DashboardKnowledgeServiceCore['readStoredPresalesFile'];
+let persistKnowledgeSnapshotArchive:DashboardKnowledgeServiceCore['persistKnowledgeSnapshotArchive'];
+let removeKnowledgeSnapshotArchive:DashboardKnowledgeServiceCore['removeKnowledgeSnapshotArchive'];
+let readKnowledgeBuildArtifact:DashboardKnowledgeServiceCore['readKnowledgeBuildArtifact'];
+let knowledgeAssetRoot:()=>string;let assertAssetStorageConfigured:()=>void;let downloadArchiveStream:(url:string,options:any)=>Promise<Pick<AxiosResponse,"status"|"headers"|"data">>;
+export function configureDashboardKnowledgeServiceCore(core:DashboardKnowledgeServiceCore) {
+({knowledgeBaseBuildNodes,knowledgeBaseBuilds}=core.tables);
+({enterpriseOwnerPredicate,createCredentialAgentClient,safeErrorForLog,assertSafeExternalUrl,ExternalUrlRejectedError,createKnowledgeSnapshot,getDashboardWorkspace,getKnowledgeSnapshotById,assertKnowledgeBaseWritable,assertServiceCapability,getDb,readStoredPresalesFile,persistKnowledgeSnapshotArchive,removeKnowledgeSnapshotArchive,readKnowledgeBuildArtifact, knowledgeAssetRoot,assertAssetStorageConfigured,downloadArchiveStream}=core);
+}
+
+
+
+
+
+
+
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
+import axios, { type AxiosResponse } from "axios";
+import { and, eq, inArray, isNull } from "drizzle-orm";
+import ExcelJS from "exceljs";
+import express from "express";
+import JSZip from "jszip";
+import { z } from "zod";
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+export const MAX_ARCHIVE_ENTRIES = 2_000;
+
+export const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024;
+
+export const MAX_UNPACKED_BYTES = 220 * 1024 * 1024;
+
+export const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024;
+
+export const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
+
+export const CUSTOMER_UPLOAD_PACKAGE_MAX_IMAGE_BYTES = 30 * 1024 * 1024;
+
+export const MAX_COMPRESSION_RATIO = 200;
+
+export const ENTERPRISE_PRODUCT_MAX_UNPACKED_BYTES = 200 * 1024 * 1024;
+
+export const ENTERPRISE_PRODUCT_MAX_IMAGE_BYTES = 160 * 1024 * 1024;
+
+export type KnowledgeBaseValidationProfile =
+  | "website-lead-v1"
+  | "dashboard-enterprise-v1"
+  | "historical";
+
+export type KnowledgeArchiveValidationCategory =
+  | "structure"
+  | "media"
+  | "content"
+  | "unsafe";
+
+export class KnowledgeArchiveValidationError extends Error {
+  constructor(
+    public readonly category: KnowledgeArchiveValidationCategory,
+    message: string,
+  ) {
+    super(message);
+    this.name = "KnowledgeArchiveValidationError";
+  }
+}
+
+export function classifyKnowledgeArchiveError(
+  message: string,
+): KnowledgeArchiveValidationCategory {
+  if (
+    /(?:不安全|路径|符号链接|压缩比|解压后|文件过多|文件过大|有效的 ZIP|CRC|corrupt|unsafe)/i.test(
+      message,
+    )
+  ) {
+    return "unsafe";
+  }
+  if (/(?:图片|图像|MIME|asset|image|packagedImages|哈希)/i.test(message)) {
+    return "media";
+  }
+  if (
+    /(?:正文|知识叶子|重复模板|customer-visible|evidence-bearing|原始快照|页面摘录)/i.test(
+      message,
+    )
+  ) {
+    return "content";
+  }
+  return "structure";
+}
+
+export const requiredKnowledgeFiles = [
+  "README.md",
+  "00_knowledge_tree.md",
+  "00_crawl_coverage_report.md",
+  "00_web_intelligence_report.md",
+  "00_source_index.md",
+  "09_media_assets/asset_inventory.md",
+  "10_reference_assets/reference_asset_inventory.md",
+] as const;
+
+export const packageManifestPath = "00_package_manifest.json";
+
+export const completenessPath = "00_completeness.json";
+
+export const websiteLeadDisplayBranchByDirectory = new Map([
+  ["01_company_overview", "company-identity"],
+  ["02_team", "team"],
+  ["03_products", "products-services"],
+  ["04_technology", "core-capabilities"],
+  ["05_manufacturing", "core-capabilities"],
+  ["06_industries", "customers-industries"],
+  ["07_service", "cooperation"],
+  ["08_competitive_advantages", "why-frontmind"],
+]);
+
+export const packageDocumentKindSchema = z.enum([
+  "overview",
+  "leaf",
+  "evidence",
+  "report",
+  "index",
+]);
+
+export const packageEvidenceStatusSchema = z.enum([
+  "verified_first_party",
+  "verified_authoritative",
+  "supported_third_party",
+  "inferred",
+  "needs_verification",
+  "not_applicable",
+]);
+
+export const packageAssetOwnershipSchema = z.literal("first_party");
+
+export const packageContentStatusSchema = z.enum([
+  "complete",
+  "limited_evidence",
+  "needs_verification",
+]);
+
+export const packageImageSelectionStatusSchema = z.enum([
+  "target_met",
+  "source_limited",
+  "budget_limited",
+]);
+
+export const packageAssetTypeSchema = z.enum([
+  "brand_identity",
+  "product_ui",
+  "product_diagram",
+  "case_photo",
+  "team_photo",
+  "environment_photo",
+  "certificate_badge",
+  "document_figure",
+  "customer_supplied",
+  "other",
+]);
+
+export const packageAssetDisplayRoleSchema = z.enum(["hero", "inline", "badge"]);
+
+export const requiredImageDiscoveryMethods = new Set([
+  "img",
+  "srcset",
+  "lazy_load",
+  "picture",
+  "css_background",
+  "open_graph",
+  "gallery",
+  "official_document",
+]);
+
+export const packageSourceUrlSchema = z
+  .string()
+  .trim()
+  .url()
+  .max(4_000)
+  .refine((value) => {
+    const parsed = new URL(value);
+    return (
+      ["http:", "https:"].includes(parsed.protocol) &&
+      !parsed.username &&
+      !parsed.password
+    );
+  }, "source URL must be credential-free HTTP(S)");
+
+export const websiteV2ImageDiscoveryMethodSchema = z.enum([
+  "img",
+  "srcset_or_lazy",
+  "picture",
+  "css_background",
+  "open_graph",
+  "gallery",
+  "official_document",
+]);
+
+export const websiteV2PackageManifestSchema = z
+  .object({
+    schemaVersion: z.union([z.literal(2), z.literal(3)]),
+    profile: z.literal("website-lead-v1"),
+    documents: z
+      .array(
+        z
+          .object({
+            id: z.string().trim().min(1).max(191),
+            path: z.string().trim().min(1).max(600),
+            kind: packageDocumentKindSchema,
+            title: z.string().trim().min(1).max(512),
+            branchId: z.string().trim().min(1).max(191).optional(),
+            order: z.number().int().min(0).max(10_000).optional(),
+            evidenceStatus: packageEvidenceStatusSchema.optional(),
+            sourceIds: z
+              .array(z.string().trim().min(1).max(191))
+              .max(500)
+              .optional(),
+            assetIds: z
+              .array(z.string().trim().min(1).max(191))
+              .max(500)
+              .optional(),
+            customerVisible: z.boolean(),
+            evidenceCharacters: z.number().int().nonnegative().optional(),
+            dynamicMinimumCharacters: z.number().int().nonnegative().optional(),
+            evidenceDocumentIds: z
+              .array(z.string().trim().min(1).max(191))
+              .max(500)
+              .optional(),
+            productFamilyIds: z
+              .array(z.string().trim().min(1).max(191))
+              .max(120)
+              .optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(1_500),
+    assets: z
+      .array(
+        z
+          .object({
+            id: z.string().trim().min(1).max(191),
+            path: z.string().trim().min(1).max(600),
+            sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+            mimeType: z.enum([
+              "image/avif",
+              "image/gif",
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+            ]),
+            bytes: z.number().int().positive().max(MAX_IMAGE_BYTES),
+            width: z.number().int().positive().max(100_000),
+            height: z.number().int().positive().max(100_000),
+            caption: z.string().trim().min(1).max(2_000),
+            alt: z.string().trim().max(1_000).optional(),
+            branchId: z.string().trim().min(1).max(191),
+            documentIds: z
+              .array(z.string().trim().min(1).max(191))
+              .min(1)
+              .max(500),
+            sourcePageUrl: packageSourceUrlSchema.optional(),
+            sourceAssetUrl: packageSourceUrlSchema.optional(),
+            sourceDocumentPath: z.string().trim().min(1).max(600).optional(),
+            sourceKind: z
+              .enum(["official_web", "official_document", "user_upload"])
+              .optional(),
+            ownership: packageAssetOwnershipSchema,
+            assetType: packageAssetTypeSchema,
+            displayRole: packageAssetDisplayRoleSchema,
+          })
+          .strict(),
+      )
+      .max(48),
+    counts: z
+      .object({
+        totalFiles: z.number().int().nonnegative().max(2_000),
+        customerVisibleCharacters: z.number().int().nonnegative().max(40_000),
+        evidenceCharacters: z.number().int().nonnegative().max(300_000),
+        packagedImages: z.number().int().nonnegative().max(48),
+      })
+      .strict(),
+    branchEvidence: z
+      .array(
+        z
+          .object({
+            branchId: z.enum([
+              "company-identity",
+              "team",
+              "products-services",
+              "core-capabilities",
+              "customers-industries",
+              "cooperation",
+              "why-frontmind",
+            ]),
+            overviewDocumentId: z.string().trim().min(1).max(191),
+            contentStatus: packageContentStatusSchema,
+            deduplicatedEvidenceCharacters: z.number().int().nonnegative(),
+            dynamicOverviewMinimum: z.number().int().nonnegative().max(5_000),
+            checkedSourceCount: z.number().int().positive(),
+          })
+          .strict(),
+      )
+      .length(7),
+    imageSelection: z
+      .object({
+        status: packageImageSelectionStatusSchema,
+        discoveredCandidateImages: z.number().int().nonnegative(),
+        inspectedCandidateImages: z.number().int().nonnegative(),
+        eligibleFirstPartyImages: z.number().int().nonnegative().max(48),
+        rejectedCandidateImages: z.number().int().nonnegative(),
+        scannedSourcePages: z.number().int().nonnegative(),
+        discoveryMethods: z.array(websiteV2ImageDiscoveryMethodSchema).max(7),
+        candidates: z
+          .array(
+            z
+              .object({
+                url: packageSourceUrlSchema.optional(),
+                sourcePageUrl: packageSourceUrlSchema.optional(),
+                sourceDocumentPath: z
+                  .string()
+                  .trim()
+                  .min(1)
+                  .max(600)
+                  .optional(),
+                sourceKind: z
+                  .enum(["official_web", "official_document", "user_upload"])
+                  .optional(),
+                method: websiteV2ImageDiscoveryMethodSchema,
+                status: z.enum(["eligible", "rejected", "uninspected"]),
+                assetId: z.string().trim().min(1).max(191).optional(),
+                rejectionReason: z.string().trim().min(8).max(500).optional(),
+              })
+              .strict(),
+          )
+          .max(1_000),
+        productFamilies: z
+          .array(
+            z
+              .object({
+                id: z.string().trim().min(1).max(191),
+                name: z.string().trim().min(1).max(500),
+                officialVisualFound: z.boolean(),
+                checkedSources: z.number().int().nonnegative(),
+                assetIds: z.array(z.string().trim().min(1).max(191)).max(48),
+                gapReason: z.string().trim().min(8).max(2_000).optional(),
+              })
+              .strict(),
+          )
+          .max(120),
+        shortfallReason: z.string().trim().min(8).max(2_000).optional(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      new Set(value.branchEvidence.map((branch) => branch.branchId)).size !== 7
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["branchEvidence"],
+        message: "website v2 branchEvidence must cover seven unique branches",
+      });
+    }
+    const candidates = value.imageSelection.candidates;
+    const eligible = candidates.filter(
+      (candidate) => candidate.status === "eligible",
+    );
+    const rejected = candidates.filter(
+      (candidate) => candidate.status === "rejected",
+    );
+    const uninspected = candidates.filter(
+      (candidate) => candidate.status === "uninspected",
+    );
+    if (
+      new Set(
+        candidates.map(
+          (candidate) =>
+            candidate.url || `document:${candidate.sourceDocumentPath || ""}`,
+        ),
+      ).size !== candidates.length ||
+      value.imageSelection.discoveredCandidateImages !== candidates.length ||
+      value.imageSelection.inspectedCandidateImages !==
+        eligible.length + rejected.length ||
+      value.imageSelection.eligibleFirstPartyImages !== eligible.length ||
+      value.imageSelection.rejectedCandidateImages !== rejected.length ||
+      value.imageSelection.discoveredCandidateImages !==
+        value.imageSelection.inspectedCandidateImages + uninspected.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["imageSelection", "candidates"],
+        message: "website v2 candidate ledger arithmetic is inconsistent",
+      });
+    }
+    candidates.forEach((candidate, index) => {
+      const valid =
+        (candidate.status === "eligible" &&
+          Boolean(candidate.assetId) &&
+          candidate.rejectionReason === undefined) ||
+        (candidate.status === "rejected" &&
+          candidate.assetId === undefined &&
+          Boolean(candidate.rejectionReason)) ||
+        (candidate.status === "uninspected" &&
+          candidate.assetId === undefined &&
+          candidate.rejectionReason === undefined);
+      if (!valid) {
+        context.addIssue({
+          code: "custom",
+          path: ["imageSelection", "candidates", index],
+          message:
+            "website v2 candidate fields must match its eligibility status",
+        });
+      }
+    });
+    const assetsById = new Map(value.assets.map((asset) => [asset.id, asset]));
+    eligible.forEach((candidate, index) => {
+      const asset = candidate.assetId
+        ? assetsById.get(candidate.assetId)
+        : undefined;
+      if (
+        !asset ||
+        asset.sourceAssetUrl !== candidate.url ||
+        asset.sourcePageUrl !== candidate.sourcePageUrl ||
+        asset.sourceDocumentPath !== candidate.sourceDocumentPath
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["imageSelection", "candidates", index],
+          message:
+            "website v2 eligible candidate must match its packaged asset URLs",
+        });
+      }
+    });
+    value.assets.forEach((asset, index) => {
+      if (
+        eligible.filter((candidate) => candidate.assetId === asset.id)
+          .length !== 1
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["assets", index],
+          message:
+            "website v2 packaged asset must appear exactly once in eligible candidates",
+        });
+      }
+    });
+    const status = value.imageSelection.status;
+    const invalidStatus =
+      (status === "target_met" &&
+        (uninspected.length > 0 ||
+          value.imageSelection.shortfallReason !== undefined ||
+          !value.assets.some(
+            (asset) => asset.assetType === "brand_identity",
+          ))) ||
+      (status === "source_limited" &&
+        (uninspected.length > 0 || !value.imageSelection.shortfallReason)) ||
+      (status === "budget_limited" &&
+        (uninspected.length === 0 || !value.imageSelection.shortfallReason));
+    if (invalidStatus) {
+      context.addIssue({
+        code: "custom",
+        path: ["imageSelection", "status"],
+        message:
+          "website v2 image-selection status does not match coverage-first rules",
+      });
+    }
+  });
+
+export const internalPackageManifestSchema = z
+  .object({
+    schemaVersion: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+    ]),
+    profile: z.enum(["website-lead-v1", "dashboard-enterprise-v1"]),
+    // Required by builder v4 at bind time. Optional here preserves historical
+    // schema-v3 archives created before the server-authoritative build epoch.
+    buildRevision: z.number().int().nonnegative().optional(),
+    websiteV2Normalized: z.literal(true).optional(),
+    documents: z
+      .array(
+        z
+          .object({
+            id: z.string().trim().min(1).max(191),
+            path: z.string().trim().min(1).max(600),
+            kind: packageDocumentKindSchema,
+            title: z.string().trim().min(1).max(512),
+            branchId: z.string().trim().min(1).max(191).optional(),
+            branchTitle: z.string().trim().min(1).max(255).optional(),
+            order: z.number().int().min(0).max(10_000).optional(),
+            evidenceStatus: packageEvidenceStatusSchema.optional(),
+            sourceIds: z
+              .array(z.string().trim().min(1).max(191))
+              .max(500)
+              .default([]),
+            evidenceDocumentIds: z
+              .array(z.string().trim().min(1).max(191))
+              .max(500)
+              .optional(),
+            assetIds: z
+              .array(z.string().trim().min(1).max(191))
+              .max(500)
+              .default([]),
+            customerVisible: z.boolean(),
+            evidenceCharacters: z.number().int().nonnegative().optional(),
+            requiredFormalCharacters: z.number().int().nonnegative().optional(),
+            contentStatus: packageContentStatusSchema.optional(),
+            productFamilyId: z.string().trim().min(1).max(191).optional(),
+            productFamilyIds: z
+              .array(z.string().trim().min(1).max(191))
+              .max(120)
+              .optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(1_500),
+    assets: z
+      .array(
+        z
+          .object({
+            id: z.string().trim().min(1).max(191),
+            path: z.string().trim().min(1).max(600),
+            sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+            mimeType: z.enum([
+              "image/avif",
+              "image/gif",
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+            ]),
+            bytes: z.number().int().positive().max(MAX_IMAGE_BYTES),
+            width: z.number().int().positive().max(100_000),
+            height: z.number().int().positive().max(100_000),
+            caption: z.string().trim().min(1).max(2_000),
+            alt: z.string().trim().max(1_000).optional(),
+            branchId: z.string().trim().min(1).max(191),
+            documentIds: z
+              .array(z.string().trim().min(1).max(191))
+              .min(1)
+              .max(500),
+            sourcePageUrl: packageSourceUrlSchema.optional(),
+            sourceAssetUrl: packageSourceUrlSchema.optional(),
+            sourceDocumentPath: z.string().trim().min(1).max(600).optional(),
+            sourceKind: z
+              .enum([
+                "official_web",
+                "official_document",
+                "official_logo_upload",
+                "user_upload",
+              ])
+              .optional(),
+            sourceUploadIndex: z.number().int().min(0).max(99).optional(),
+            sourceUploadFileId: z
+              .string()
+              .trim()
+              .min(1)
+              .max(512)
+              .refine(
+                (value) => !/[\u0000-\u001f\u007f]/u.test(value),
+                "source upload file ID must not contain control characters",
+              )
+              .optional(),
+            sourceUploadSha256: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/u)
+              .optional(),
+            sourceUploadFilename: z
+              .string()
+              .trim()
+              .min(1)
+              .max(255)
+              .refine(
+                (value) =>
+                  value !== "." &&
+                  value !== ".." &&
+                  !/[\\/\u0000-\u001f\u007f]/u.test(value),
+                "source upload filename must be a safe basename",
+              )
+              .optional(),
+            sourceUploadMimeType: z
+              .enum([
+                "image/avif",
+                "image/bmp",
+                "image/gif",
+                "image/heic",
+                "image/heif",
+                "image/jpeg",
+                "image/png",
+                "image/svg+xml",
+                "image/tiff",
+                "image/vnd.microsoft.icon",
+                "image/webp",
+                "image/x-icon",
+              ])
+              .optional(),
+            sourceUploadSizeBytes: z
+              .number()
+              .int()
+              .positive()
+              .max(MAX_IMAGE_BYTES)
+              .optional(),
+            ownership: packageAssetOwnershipSchema,
+            assetType: packageAssetTypeSchema.optional(),
+            displayRole: packageAssetDisplayRoleSchema.optional(),
+          })
+          .strict(),
+      )
+      .max(480),
+    counts: z
+      .object({
+        totalFiles: z.number().int().nonnegative().max(2_000),
+        customerVisibleCharacters: z.number().int().nonnegative().max(180_000),
+        evidenceCharacters: z.number().int().nonnegative().max(3_000_000),
+        packagedImages: z.number().int().nonnegative().max(480),
+      })
+      .strict(),
+    branchEvidence: z
+      .array(
+        z
+          .object({
+            branchId: z.enum([
+              "company-identity",
+              "team",
+              "products-services",
+              "core-capabilities",
+              "customers-industries",
+              "cooperation",
+              "why-frontmind",
+            ]),
+            overviewDocumentId: z.string().trim().min(1).max(191),
+            contentStatus: packageContentStatusSchema,
+            deduplicatedEvidenceCharacters: z.number().int().nonnegative(),
+            dynamicOverviewMinimum: z.number().int().nonnegative().max(5_000),
+            checkedSourceCount: z.number().int().positive(),
+          })
+          .strict(),
+      )
+      .length(7)
+      .optional(),
+    imageSelection: z
+      .object({
+        status: packageImageSelectionStatusSchema.optional(),
+        discoveredCandidateImages: z.number().int().nonnegative().optional(),
+        inspectedCandidateImages: z.number().int().nonnegative().optional(),
+        eligibleFirstPartyImages: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(10_000_000),
+        rejectedCandidateImages: z.number().int().nonnegative().optional(),
+        scannedSourcePages: z.number().int().nonnegative().optional(),
+        discoveryMethods: z
+          .array(z.string().trim().min(1).max(100))
+          .max(100)
+          .optional(),
+        rejectionReasons: z
+          .array(
+            z
+              .object({
+                reason: z.string().trim().min(1).max(500),
+                count: z.number().int().nonnegative(),
+              })
+              .strict(),
+          )
+          .max(500)
+          .optional(),
+        stopReason: z.string().trim().min(1).max(2_000).optional(),
+        productFamilyCoverage: z
+          .array(
+            z
+              .object({
+                familyId: z.string().trim().min(1).max(191),
+                familyName: z.string().trim().min(1).max(500),
+                officialImageAvailable: z.boolean(),
+                assetIds: z.array(z.string().trim().min(1).max(191)).max(500),
+                checkedSources: z.array(packageSourceUrlSchema).max(500),
+                checkedSourceCount: z.number().int().positive().optional(),
+                gapReason: z.string().trim().min(1).max(2_000).optional(),
+              })
+              .strict(),
+          )
+          .max(500)
+          .optional(),
+        candidates: z
+          .array(
+            z
+              .object({
+                url: packageSourceUrlSchema.optional(),
+                sourcePageUrl: packageSourceUrlSchema.optional(),
+                sourceDocumentPath: z
+                  .string()
+                  .trim()
+                  .min(1)
+                  .max(600)
+                  .optional(),
+                sourceKind: z
+                  .enum([
+                    "official_web",
+                    "official_document",
+                    "official_logo_upload",
+                    "user_upload",
+                  ])
+                  .optional(),
+                method: z.string().trim().min(1).max(100),
+                status: z.enum(["eligible", "rejected", "uninspected"]),
+                assetId: z.string().trim().min(1).max(191).optional(),
+                rejectionReason: z.string().trim().min(1).max(500).optional(),
+              })
+              .strict(),
+          )
+          .max(1_800)
+          .optional(),
+        shortfallReason: z.string().trim().min(1).max(2_000).optional(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.profile === "dashboard-enterprise-v1" &&
+      value.schemaVersion === 4 &&
+      value.buildRevision === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["buildRevision"],
+        message: "Dashboard v4 requires buildRevision",
+      });
+    }
+    if (
+      value.profile === "dashboard-enterprise-v1" &&
+      (value.schemaVersion === 3 || value.schemaVersion === 4) &&
+      value.buildRevision !== undefined
+    ) {
+      const leaves = value.documents.filter(
+        (document) => document.kind === "leaf",
+      );
+      const orders: number[] = [];
+      leaves.forEach((leaf, index) => {
+        for (const key of ["branchId", "branchTitle", "order"] as const) {
+          if (leaf[key] === undefined) {
+            context.addIssue({
+              code: "custom",
+              path: ["documents", value.documents.indexOf(leaf), key],
+              message: `builder v4 leaf requires ${key}`,
+            });
+          }
+        }
+        if (typeof leaf.order === "number") orders.push(leaf.order);
+      });
+      const expectedOrders = Array.from(
+        { length: leaves.length },
+        (_, index) => index,
+      );
+      if (
+        orders.length !== expectedOrders.length ||
+        [...orders]
+          .sort((left, right) => left - right)
+          .some((order, index) => order !== expectedOrders[index])
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["documents"],
+          message:
+            "builder v4 leaf order must be the complete zero-based sequence",
+        });
+      }
+    }
+    const documentById = new Map(
+      value.documents.map((document) => [document.id, document]),
+    );
+    const assetById = new Map(value.assets.map((asset) => [asset.id, asset]));
+    const documentIds = new Set(value.documents.map((document) => document.id));
+    const documentPaths = new Set(
+      value.documents.map((document) =>
+        document.path.normalize("NFKC").toLowerCase(),
+      ),
+    );
+    const assetIds = new Set(value.assets.map((asset) => asset.id));
+    const assetPaths = new Set(
+      value.assets.map((asset) => asset.path.normalize("NFKC").toLowerCase()),
+    );
+    if (value.schemaVersion !== 1) {
+      if (
+        value.profile === "website-lead-v1" &&
+        value.websiteV2Normalized !== true
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["profile"],
+          message: "website v2 must use the Website-specific manifest contract",
+        });
+      }
+      value.documents.forEach((document, index) => {
+        if (!["overview", "leaf"].includes(document.kind)) return;
+        for (const key of [
+          "evidenceCharacters",
+          "evidenceDocumentIds",
+          "requiredFormalCharacters",
+          "contentStatus",
+        ] as const) {
+          if (document[key] === undefined) {
+            context.addIssue({
+              code: "custom",
+              path: ["documents", index, key],
+              message: `schemaVersion 2 customer content requires ${key}`,
+            });
+          }
+        }
+      });
+      const selection = value.imageSelection;
+      const requiredImageSelectionKeys = [
+        "status",
+        "discoveredCandidateImages",
+        "inspectedCandidateImages",
+        "rejectedCandidateImages",
+        "scannedSourcePages",
+        "discoveryMethods",
+        "rejectionReasons",
+        "stopReason",
+        "candidates",
+      ] as const;
+      for (const key of requiredImageSelectionKeys) {
+        if (selection[key] === undefined) {
+          context.addIssue({
+            code: "custom",
+            path: ["imageSelection", key],
+            message: `schemaVersion 2 image selection requires ${key}`,
+          });
+        }
+      }
+      if (
+        !(
+          value.profile === "dashboard-enterprise-v1" &&
+          (value.schemaVersion === 3 || value.schemaVersion === 4)
+        ) &&
+        selection.productFamilyCoverage === undefined
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["imageSelection", "productFamilyCoverage"],
+          message:
+            "schemaVersion 2 image selection requires productFamilyCoverage",
+        });
+      }
+      if (value.profile === "dashboard-enterprise-v1") {
+        if (
+          (value.schemaVersion === 3 || value.schemaVersion === 4) &&
+          selection.productFamilyCoverage !== undefined
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["imageSelection", "productFamilyCoverage"],
+            message:
+              "dashboard enterprise v3 packages only one Logo and must omit productFamilyCoverage",
+          });
+        }
+        if (value.websiteV2Normalized !== undefined) {
+          context.addIssue({
+            code: "custom",
+            path: ["websiteV2Normalized"],
+            message: "dashboard enterprise v2 cannot use Website markers",
+          });
+        }
+        if (value.branchEvidence !== undefined) {
+          context.addIssue({
+            code: "custom",
+            path: ["branchEvidence"],
+            message: "dashboard enterprise v2 does not use branchEvidence",
+          });
+        }
+        value.documents.forEach((document, index) => {
+          if (
+            document.productFamilyIds !== undefined ||
+            document.path.length > 512
+          ) {
+            context.addIssue({
+              code: "custom",
+              path: ["documents", index],
+              message:
+                "dashboard enterprise v2 uses productFamilyId and 512-character document paths",
+            });
+          }
+        });
+        value.assets.forEach((asset, index) => {
+          if (
+            asset.path.length > 512 ||
+            (asset.sourcePageUrl?.length || 0) > 4_000 ||
+            (asset.sourceAssetUrl?.length || 0) > 4_000 ||
+            asset.assetType === undefined ||
+            asset.displayRole === undefined
+          ) {
+            context.addIssue({
+              code: "custom",
+              path: ["assets", index],
+              message:
+                "dashboard enterprise v2 requires image roles, 512-character paths and 4,000-character source URLs",
+            });
+          }
+          if (value.schemaVersion !== 4) return;
+          const customerUploadProvenanceFields = [
+            asset.sourceUploadSha256,
+            asset.sourceUploadFilename,
+            asset.sourceUploadMimeType,
+          ];
+          const officialLogoUploadProvenanceFields = [
+            asset.sourceUploadIndex,
+            asset.sourceUploadFileId,
+            ...customerUploadProvenanceFields,
+            asset.sourceUploadSizeBytes,
+          ];
+          if (asset.sourceKind === "user_upload") {
+            if (
+              customerUploadProvenanceFields.some((field) => !field) ||
+              asset.sourceUploadIndex !== undefined ||
+              asset.sourceUploadFileId !== undefined ||
+              asset.sourceUploadSizeBytes !== undefined ||
+              asset.sourcePageUrl !== undefined ||
+              asset.sourceAssetUrl !== undefined ||
+              asset.sourceDocumentPath !== undefined ||
+              asset.assetType !== "customer_supplied" ||
+              asset.displayRole !== "inline"
+            ) {
+              context.addIssue({
+                code: "custom",
+                path: ["assets", index],
+                message:
+                  "Dashboard v4 customer upload requires exact upload provenance and customer_supplied/inline without discovered sources",
+              });
+            }
+          } else if (asset.sourceKind === "official_logo_upload") {
+            if (
+              officialLogoUploadProvenanceFields.some(
+                (field) => field === undefined,
+              ) ||
+              asset.sourceUploadIndex !== 0 ||
+              asset.sourcePageUrl !== undefined ||
+              asset.sourceAssetUrl !== undefined ||
+              asset.sourceDocumentPath !== undefined ||
+              asset.sourceUploadSha256 !== asset.sha256.toLowerCase() ||
+              asset.sourceUploadSizeBytes !== asset.bytes ||
+              asset.ownership !== "first_party" ||
+              asset.assetType !== "brand_identity" ||
+              asset.displayRole !== "badge"
+            ) {
+              context.addIssue({
+                code: "custom",
+                path: ["assets", index],
+                message:
+                  "Dashboard v4 official Logo upload requires all six upload provenance fields and first_party/brand_identity/badge without discovered sources",
+              });
+            }
+          } else if (
+            !["official_web", "official_document"].includes(
+              asset.sourceKind || "",
+            ) ||
+            officialLogoUploadProvenanceFields.some(
+              (field) => field !== undefined,
+            ) ||
+            asset.assetType !== "brand_identity" ||
+            asset.displayRole !== "badge"
+          ) {
+            context.addIssue({
+              code: "custom",
+              path: ["assets", index],
+              message:
+                "Dashboard v4 non-upload asset must be the official brand_identity/badge Logo",
+            });
+          }
+        });
+        (selection.productFamilyCoverage || []).forEach((family, index) => {
+          if (
+            family.checkedSources.length === 0 ||
+            family.checkedSourceCount !== undefined
+          ) {
+            context.addIssue({
+              code: "custom",
+              path: ["imageSelection", "productFamilyCoverage", index],
+              message:
+                "dashboard enterprise v2 product families require checkedSources URLs",
+            });
+          }
+        });
+      }
+    }
+    if (
+      documentIds.size !== value.documents.length ||
+      documentPaths.size !== value.documents.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["documents"],
+        message: "package manifest document IDs and paths must be unique",
+      });
+    }
+    if (
+      assetIds.size !== value.assets.length ||
+      assetPaths.size !== value.assets.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["assets"],
+        message: "package manifest asset IDs and paths must be unique",
+      });
+    }
+    value.documents.forEach((document, index) => {
+      if (document.assetIds.some((assetId) => !assetIds.has(assetId))) {
+        context.addIssue({
+          code: "custom",
+          path: ["documents", index, "assetIds"],
+          message: "document references an unknown packaged asset",
+        });
+      }
+      if (
+        document.assetIds.some(
+          (assetId) =>
+            !assetById.get(assetId)?.documentIds.includes(document.id),
+        )
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["documents", index, "assetIds"],
+          message: "document and asset links must be bidirectional",
+        });
+      }
+    });
+    value.assets.forEach((asset, index) => {
+      if (
+        asset.documentIds.some((documentId) => !documentIds.has(documentId))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["assets", index, "documentIds"],
+          message: "asset references an unknown packaged document",
+        });
+      }
+      if (
+        asset.documentIds.some((documentId) => {
+          const document = documentById.get(documentId);
+          return (
+            !document?.customerVisible || !document.assetIds.includes(asset.id)
+          );
+        })
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["assets", index, "documentIds"],
+          message:
+            "asset links must reference customer-visible documents bidirectionally",
+        });
+      }
+      if (
+        !asset.documentIds.some(
+          (documentId) =>
+            documentById.get(documentId)?.branchId === asset.branchId,
+        )
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["assets", index, "branchId"],
+          message: "asset branch must match at least one linked document",
+        });
+      }
+    });
+  });
+
+export const packageManifestSchema = z.preprocess((input) => {
+  const isWebsiteV2 =
+    typeof input === "object" &&
+    input !== null &&
+    "profile" in input &&
+    input.profile === "website-lead-v1" &&
+    "schemaVersion" in input &&
+    (input.schemaVersion === 2 || input.schemaVersion === 3);
+  if (!isWebsiteV2) return input;
+  const value = websiteV2PackageManifestSchema.parse(input);
+  const statusByDisplayBranch = new Map<
+    string,
+    "complete" | "limited_evidence" | "needs_verification"
+  >(
+    value.branchEvidence.map((branch) => [
+      branch.branchId,
+      branch.contentStatus,
+    ]),
+  );
+  const rejectionCounts = new Map<string, number>();
+  for (const candidate of value.imageSelection.candidates) {
+    if (candidate.status !== "rejected") continue;
+    const reason = candidate.rejectionReason || "未提供拒绝原因";
+    rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
+  }
+  return {
+    schemaVersion: value.schemaVersion,
+    profile: value.profile,
+    websiteV2Normalized: true,
+    documents: value.documents.map((document) => {
+      const displayBranch = document.branchId
+        ? websiteLeadDisplayBranchByDirectory.get(document.branchId)
+        : undefined;
+      return {
+        id: document.id,
+        path: document.path,
+        kind: document.kind,
+        title: document.title,
+        branchId: document.branchId,
+        order: document.order,
+        evidenceStatus: document.evidenceStatus,
+        sourceIds: document.sourceIds || [],
+        evidenceDocumentIds: document.evidenceDocumentIds,
+        assetIds: document.assetIds || [],
+        customerVisible: document.customerVisible,
+        evidenceCharacters: document.evidenceCharacters,
+        requiredFormalCharacters: document.dynamicMinimumCharacters,
+        contentStatus: displayBranch
+          ? statusByDisplayBranch.get(displayBranch)
+          : undefined,
+        productFamilyIds: document.productFamilyIds,
+      };
+    }),
+    assets: value.assets,
+    counts: value.counts,
+    branchEvidence: value.branchEvidence,
+    imageSelection: {
+      status: value.imageSelection.status,
+      discoveredCandidateImages: value.imageSelection.discoveredCandidateImages,
+      inspectedCandidateImages: value.imageSelection.inspectedCandidateImages,
+      eligibleFirstPartyImages: value.imageSelection.eligibleFirstPartyImages,
+      rejectedCandidateImages: value.imageSelection.rejectedCandidateImages,
+      scannedSourcePages: value.imageSelection.scannedSourcePages,
+      discoveryMethods: value.imageSelection.discoveryMethods.flatMap(
+        (method) =>
+          method === "srcset_or_lazy" ? ["srcset", "lazy_load"] : [method],
+      ),
+      rejectionReasons: [...rejectionCounts].map(([reason, count]) => ({
+        reason,
+        count,
+      })),
+      stopReason:
+        value.imageSelection.shortfallReason || "Website v2 图片候选台账已完成",
+      productFamilyCoverage: value.imageSelection.productFamilies.map(
+        (family) => ({
+          familyId: family.id,
+          familyName: family.name,
+          officialImageAvailable: family.officialVisualFound,
+          assetIds: family.assetIds,
+          checkedSources: [],
+          checkedSourceCount: family.checkedSources,
+          gapReason: family.gapReason,
+        }),
+      ),
+      candidates: value.imageSelection.candidates.map((candidate) => ({
+        ...candidate,
+        method: candidate.method,
+      })),
+      shortfallReason: value.imageSelection.shortfallReason,
+    },
+  };
+}, internalPackageManifestSchema);
+
+export const completenessAcquisitionCountSchema = z
+  .object({
+    completed: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.completed > value.total) {
+      context.addIssue({
+        code: "custom",
+        path: ["completed"],
+        message: "completed acquisition count cannot exceed total",
+      });
+    }
+  });
+
+export const completenessAcquisitionSchema = z
+  .object({
+    counts: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    acquisition: z
+      .object({
+        officialPages: completenessAcquisitionCountSchema.optional(),
+        images: completenessAcquisitionCountSchema.optional(),
+        documents: completenessAcquisitionCountSchema.optional(),
+        webQueries: completenessAcquisitionCountSchema.optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+export function assertDashboardAssetStorageConfigured() { assertAssetStorageConfigured(); }
+
+export async function removeStoredKnowledgeAssets(keys: string[]) {
+  await Promise.all(
+    keys.map((key) =>
+      unlink(path.join(knowledgeAssetRoot(), key)).catch(() => undefined),
+    ),
+  );
+}
+
+export async function readStoredKnowledgeAssetBytes(key: string) {
+  const normalized = String(key || "").trim();
+  if (!normalized || normalized !== path.basename(normalized)) {
+    throw new Error("知识库临时资源标识无效");
+  }
+  return readFile(path.join(knowledgeAssetRoot(), normalized));
+}
+
+export async function removeUncommittedStoredKnowledgeAssets(input: {
+  snapshotCommitted: boolean;
+  storedAssetKeys: string[];
+  removeAssets?: (keys: string[]) => Promise<void>;
+}) {
+  if (input.snapshotCommitted) return;
+  await (input.removeAssets ?? removeStoredKnowledgeAssets)(
+    input.storedAssetKeys,
+  );
+}
+
+export async function runCommittedKnowledgeSnapshotSideEffects(
+  effects: Array<{ name: string; run: () => Promise<unknown> }>,
+  warn: (message: string, error: unknown) => void = (message, error) =>
+    console.warn(message, error),
+) {
+  const warnings: string[] = [];
+  for (const effect of effects) {
+    try {
+      await effect.run();
+    } catch (error) {
+      warnings.push(effect.name);
+      warn(
+        `[Dashboard] Knowledge snapshot committed; ${effect.name} will be retried independently`,
+        error,
+      );
+    }
+  }
+  return warnings;
+}
+
+export const textExtensions = new Set([
+  ".md",
+  ".markdown",
+  ".txt",
+  ".json",
+  ".csv",
+  ".html",
+  ".htm",
+]);
+
+export const versionedArchiveAllowedExtensions = new Set([
+  ".avif",
+  ".csv",
+  ".doc",
+  ".docx",
+  ".gif",
+  ".jpeg",
+  ".jpg",
+  ".json",
+  ".md",
+  ".pdf",
+  ".png",
+  ".ppt",
+  ".pptx",
+  ".sha256",
+  ".webp",
+  ".xls",
+  ".xlsx",
+]);
+
+export const executableArchiveExtensions = new Set([
+  ".bat",
+  ".cmd",
+  ".com",
+  ".dll",
+  ".dylib",
+  ".exe",
+  ".js",
+  ".mjs",
+  ".py",
+  ".sh",
+  ".so",
+]);
+
+export function packageRelativePath(value: string) {
+  return validateArchiveEntryPath(value.normalize("NFKC"));
+}
+
+export function customerDisplayMarkdown(markdown: string) {
+  const retainedLines: string[] = [];
+  const lines = stripLeadingMarkdownFrontmatter(markdown).split(/\r?\n/);
+  let excludedSectionDepth: number | undefined;
+  for (const line of lines) {
+    const heading = line.match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (heading) {
+      const depth = heading[1]!.length;
+      if (excludedSectionDepth !== undefined && depth <= excludedSectionDepth) {
+        excludedSectionDepth = undefined;
+      }
+      if (knowledgeArchiveHeadingIsSourceInventory(heading[2] || "")) {
+        excludedSectionDepth = depth;
+        continue;
+      }
+    }
+    if (excludedSectionDepth !== undefined) continue;
+    if (
+      /^\s*>\s*.*(?:状态|status)\s*[:：].*(?:来源|source)\s*[:：]/i.test(
+        line,
+      ) ||
+      /^\s*[-*]\s+(?:node_id|path|evidence_status|source_ids|status)\s*[:：]/i.test(
+        line,
+      )
+    ) {
+      continue;
+    }
+    retainedLines.push(line);
+  }
+  return retainedLines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function profileFormalKnowledgeText(
+  content: string,
+  profile: Exclude<KnowledgeBaseValidationProfile, "historical">,
+) {
+  return formalKnowledgeText(
+    profile === "dashboard-enterprise-v1"
+      ? markedFormalContent(content) || ""
+      : content,
+  );
+}
+
+export function evidenceProportionalFormalRequirement(input: {
+  kind: "overview" | "leaf";
+  isProductBranch: boolean;
+  evidenceCharacters: number;
+}) {
+  if (input.evidenceCharacters === 0) {
+    return {
+      required: input.kind === "overview" ? 60 : 40,
+      status: "needs_verification" as const,
+    };
+  }
+  if (input.kind === "overview") {
+    const target = input.isProductBranch ? 5_000 : 2_500;
+    const proportional = Math.floor(input.evidenceCharacters * 0.25);
+    return {
+      required: Math.max(120, Math.min(target, proportional)),
+      status:
+        proportional >= target
+          ? ("complete" as const)
+          : ("limited_evidence" as const),
+    };
+  }
+  const proportional = Math.floor(input.evidenceCharacters * 0.2);
+  return {
+    required: Math.max(80, Math.min(500, proportional)),
+    status:
+      proportional >= 500
+        ? ("complete" as const)
+        : ("limited_evidence" as const),
+  };
+}
+
+export function websiteV2OverviewRequirement(
+  evidenceCharacters: number,
+  displayBranchId: string,
+) {
+  if (evidenceCharacters === 0) return 40;
+  const target = displayBranchId === "products-services" ? 3_000 : 1_500;
+  return Math.min(target, Math.max(120, Math.ceil(evidenceCharacters * 0.25)));
+}
+
+export function websiteV2LeafRequirement(evidenceCharacters: number) {
+  if (evidenceCharacters === 0) return 40;
+  return Math.min(200, Math.max(60, Math.ceil(evidenceCharacters * 0.2)));
+}
+
+export function duplicateFormalParagraphs(
+  documents: Array<{ path: string; content: string }>,
+  profile: Exclude<KnowledgeBaseValidationProfile, "historical">,
+) {
+  const pathsByFingerprint = new Map<string, string[]>();
+  const duplicates: Array<{ first: string; second: string }> = [];
+  const samples: Array<{ path: string; text: string }> = [];
+  for (const document of documents) {
+    const narrative = profileFormalKnowledgeText(document.content, profile);
+    if (effectiveCharacterCount(narrative) >= 80) {
+      samples.push({ path: document.path, text: narrative });
+    }
+    if (effectiveCharacterCount(narrative) < 120) continue;
+    const fingerprints = new Set(
+      [narrative, ...narrative.split(/\n\s*\n/)]
+        .map((paragraph) =>
+          paragraph.replace(/\d+/g, "#").replace(/\s+/g, "").trim(),
+        )
+        .filter((paragraph) => effectiveCharacterCount(paragraph) >= 120),
+    );
+    for (const fingerprint of fingerprints) {
+      const paths = pathsByFingerprint.get(fingerprint) || [];
+      paths.push(document.path);
+      pathsByFingerprint.set(fingerprint, paths);
+    }
+  }
+  for (const paths of pathsByFingerprint.values()) {
+    if (paths.length >= 3) {
+      duplicates.push({ first: paths[0]!, second: paths[2]! });
+    }
+  }
+  for (let leftIndex = 0; leftIndex < samples.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < samples.length;
+      rightIndex += 1
+    ) {
+      const left = samples[leftIndex]!;
+      const right = samples[rightIndex]!;
+      if (normalizedFormalSimilarity(left.text, right.text) >= 0.82) {
+        duplicates.push({ first: left.path, second: right.path });
+      }
+    }
+  }
+  return duplicates;
+}
+
+export function normalizedFormalSimilarity(left: string, right: string) {
+  const shingles = (value: string) => {
+    const normalized = value
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/\d+/g, "#")
+      .replace(/\s+/g, "")
+      .replace(
+        /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：“”‘’（）【】《》…—·]/g,
+        "",
+      );
+    const values = new Set<string>();
+    for (let index = 0; index <= normalized.length - 5; index += 1) {
+      values.add(normalized.slice(index, index + 5));
+    }
+    return values;
+  };
+  const leftShingles = shingles(left);
+  const rightShingles = shingles(right);
+  if (!leftShingles.size || !rightShingles.size) return 0;
+  let intersection = 0;
+  leftShingles.forEach((value) => {
+    if (rightShingles.has(value)) intersection += 1;
+  });
+  return intersection / (leftShingles.size + rightShingles.size - intersection);
+}
+
+export function packagedEvidenceCharacters(
+  documents: Array<{
+    content: string;
+    customerVisible?: boolean;
+  }>,
+) {
+  return documents
+    .filter((document) => document.customerVisible === false)
+    .reduce(
+      (total, document) => total + packagedEvidenceDocumentCharacters(document),
+      0,
+    );
+}
+
+export function packagedEvidenceDocumentCharacters(document: { content: string }) {
+  return effectiveCharacterCount(packagedEvidenceDocumentText(document));
+}
+
+export function packagedEvidenceDocumentText(document: { content: string }) {
+  return stripLeadingMarkdownFrontmatter(document.content)
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/[^\s)>\]]+/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/^#{1,6}\s+/gm, "");
+}
+
+export function packagedEvidenceDocumentFingerprint(document: { content: string }) {
+  const normalized = packagedEvidenceDocumentText(document)
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s/g, "")
+    .replace(
+      /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：“”‘’（）【】《》…—·]/g,
+      "",
+    );
+  return normalized
+    ? createHash("sha256").update(normalized).digest("hex")
+    : undefined;
+}
+
+export function reportedPackagedImageCount(markdown: string) {
+  for (const pattern of [
+    /(?:成功下载|已下载|已保存|保存并打包|downloaded|packaged|saved)[^\n|]{0,30}(?:图片|图像|images?|assets?)[^\d]{0,12}([\d,]+)/i,
+    /(?:图片|图像|images?|assets?)[^\n|]{0,30}(?:成功下载|已下载|已保存|保存并打包|downloaded|packaged|saved)[^\d]{0,12}([\d,]+)/i,
+    /第一方图片资源[^\d\n|]{0,20}([\d,]+)/i,
+  ]) {
+    const matched = markdown.match(pattern)?.[1];
+    if (matched) return Number.parseInt(matched.replaceAll(",", ""), 10);
+  }
+  return undefined;
+}
+
+export function parsePackageJson<T>(
+  rawTextByRelativePath: Map<string, string>,
+  relativePath: string,
+  schema: z.ZodType<T>,
+  label: string,
+) {
+  const raw = rawTextByRelativePath.get(relativePath);
+  if (!raw) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      `知识库 ZIP 缺少 ${relativePath}`,
+    );
+  }
+  try {
+    return schema.parse(JSON.parse(raw.replace(/^\uFEFF/u, "")));
+  } catch (error) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      `${label} 不是有效的机器清单：${
+        error instanceof Error ? error.message : "格式错误"
+      }`,
+    );
+  }
+}
+
+export function validateProfilePackage(input: {
+  profile: Exclude<KnowledgeBaseValidationProfile, "historical">;
+  archiveContractVersion?: 1 | 2 | 3 | 4;
+  archiveContractVersions?: readonly (1 | 2 | 3 | 4)[];
+  /**
+   * The v4 final-package binder can repair this one manifest field from the
+   * already validated formal document bytes, then immediately run the full
+   * validator again on the rewritten archive. No other validation is relaxed.
+   */
+  allowV4CustomerVisibleCharacterCountRepair?: boolean;
+  dashboardEnterpriseMinLeaves?: number;
+  requireDashboardAdaptiveFormalGate?: boolean;
+  packagePaths: string[];
+  unpackedBytes: number;
+  rawTextByRelativePath: Map<string, string>;
+  documents: KnowledgeDocument[];
+  assets: KnowledgeAsset[];
+}) {
+  const manifest = parsePackageJson(
+    input.rawTextByRelativePath,
+    packageManifestPath,
+    packageManifestSchema,
+    "00_package_manifest.json",
+  );
+  if (
+    input.archiveContractVersion !== undefined &&
+    manifest.schemaVersion !== input.archiveContractVersion
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      "知识库归档合同版本与 package manifest 不一致",
+    );
+  }
+  if (
+    input.archiveContractVersions !== undefined &&
+    !input.archiveContractVersions.includes(manifest.schemaVersion)
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      "知识库归档合同版本不在当前任务允许的兼容范围内",
+    );
+  }
+  if (manifest.profile !== input.profile) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      "知识库归档档位与服务端任务档位不一致",
+    );
+  }
+  const completeness = parsePackageJson(
+    input.rawTextByRelativePath,
+    completenessPath,
+    completenessAcquisitionSchema,
+    "00_completeness.json",
+  );
+  const limits =
+    input.profile === "website-lead-v1"
+      ? {
+          files: 150,
+          images: 48,
+          targetImages: 36,
+          minCharacters: 8_000,
+          maxCharacters: manifest.schemaVersion !== 1 ? 40_000 : 18_000,
+          maxEvidenceCharacters: 300_000,
+          maxOfficialPages: 120,
+          maxOfficialPageAttempts: 120,
+          maxDocuments: 22,
+          maxWebQueries: 12,
+        }
+      : manifest.schemaVersion === 4
+        ? {
+            files: 1_500,
+            images: 480,
+            targetImages: 360,
+            minCharacters: 80_000,
+            maxCharacters: 180_000,
+            maxEvidenceCharacters: 3_000_000,
+            maxOfficialPages: 120,
+            maxOfficialPageAttempts: 200,
+            // Up to 30 official documents plus 100 customer uploads.
+            maxDocuments: 130,
+            maxWebQueries: 30,
+          }
+        : {
+            files: 1_500,
+            images: 480,
+            targetImages: 360,
+            minCharacters: 80_000,
+            maxCharacters: 180_000,
+            maxEvidenceCharacters: 3_000_000,
+            maxOfficialPages: 1_200,
+            maxOfficialPageAttempts: 1_200,
+            maxDocuments: 220,
+            maxWebQueries: 120,
+          };
+  const isSingleLogoDashboardV3 =
+    input.profile === "dashboard-enterprise-v1" && manifest.schemaVersion === 3;
+  const isCustomerUploadDashboardV4 =
+    input.profile === "dashboard-enterprise-v1" && manifest.schemaVersion === 4;
+  const isDashboardLogoContract =
+    isSingleLogoDashboardV3 || isCustomerUploadDashboardV4;
+  if (input.packagePaths.length > limits.files) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      `知识库 ZIP 超过 ${limits.files} 个产品文件上限`,
+    );
+  }
+  if (
+    input.profile === "dashboard-enterprise-v1" &&
+    input.unpackedBytes > ENTERPRISE_PRODUCT_MAX_UNPACKED_BYTES
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      "企业知识库解压后超过 200 MB 产品上限",
+    );
+  }
+  if (manifest.counts.totalFiles !== input.packagePaths.length) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      "package manifest 文件总数与 ZIP 实际文件数不一致",
+    );
+  }
+
+  const documentByRelativePath = new Map(
+    input.documents.map((document) => [
+      document.path.split("/").slice(1).join("/"),
+      document,
+    ]),
+  );
+  const assetByRelativePath = new Map(
+    input.assets.map((asset) => [
+      asset.path.split("/").slice(1).join("/"),
+      asset,
+    ]),
+  );
+  const allowedUnlistedText = new Set([
+    packageManifestPath,
+    completenessPath,
+    "MANIFEST.sha256",
+    "VALIDATION.md",
+  ]);
+  const manifestDocumentPaths = new Set(
+    manifest.documents.map((document) => packageRelativePath(document.path)),
+  );
+  for (const relativePath of input.rawTextByRelativePath.keys()) {
+    if (
+      path.posix.extname(relativePath).toLowerCase() === ".md" &&
+      !allowedUnlistedText.has(relativePath) &&
+      !manifestDocumentPaths.has(relativePath)
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "structure",
+        `package manifest 未登记文本文件：${relativePath}`,
+      );
+    }
+  }
+
+  const enrichedDocuments = manifest.documents.map((metadata) => {
+    const relativePath = packageRelativePath(metadata.path);
+    const document = documentByRelativePath.get(relativePath);
+    if (!document) {
+      throw new KnowledgeArchiveValidationError(
+        "structure",
+        `package manifest 文档不存在：${relativePath}`,
+      );
+    }
+    return {
+      ...document,
+      id: metadata.id,
+      title: metadata.title,
+      kind: metadata.kind,
+      branchId: metadata.branchId,
+      branchTitle: metadata.branchTitle,
+      order: metadata.order,
+      evidenceStatus: metadata.evidenceStatus,
+      sourceIds: metadata.sourceIds,
+      evidenceDocumentIds: metadata.evidenceDocumentIds,
+      assetIds: metadata.assetIds,
+      customerVisible: metadata.customerVisible,
+      evidenceCharacters: metadata.evidenceCharacters,
+      requiredFormalCharacters: metadata.requiredFormalCharacters,
+      contentStatus: metadata.contentStatus,
+      productFamilyId: metadata.productFamilyId,
+      productFamilyIds: metadata.productFamilyIds,
+    };
+  });
+
+  const manifestAssetPaths = new Set(
+    manifest.assets.map((asset) => packageRelativePath(asset.path)),
+  );
+  if (
+    manifest.assets.length !== input.assets.length ||
+    manifestAssetPaths.size !== input.assets.length
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      "package manifest 图片数量与 ZIP 实际图片数量不一致",
+    );
+  }
+  let imageBytes = 0;
+  const enrichedAssets = manifest.assets.map((metadata) => {
+    const relativePath = packageRelativePath(metadata.path);
+    const asset = assetByRelativePath.get(relativePath);
+    if (!asset) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        `package manifest 图片不存在：${relativePath}`,
+      );
+    }
+    if (
+      asset.mimeType !== metadata.mimeType ||
+      asset.size !== metadata.bytes ||
+      asset.sha256?.toLowerCase() !== metadata.sha256.toLowerCase()
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        `图片字节、类型或哈希与 package manifest 不一致：${relativePath}`,
+      );
+    }
+    if (asset.width === undefined || asset.height === undefined) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        `无法复算图片尺寸：${relativePath}`,
+      );
+    }
+    if (metadata.width !== asset.width || metadata.height !== asset.height) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        `图片尺寸与 package manifest 不一致：${relativePath}`,
+      );
+    }
+    if (metadata.ownership !== "first_party") {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        `打包图片必须是第一方素材：${relativePath}`,
+      );
+    }
+    if (manifest.schemaVersion !== 1) {
+      const isBadgeType = ["brand_identity", "certificate_badge"].includes(
+        metadata.assetType || "",
+      );
+      if (
+        !metadata.assetType ||
+        !metadata.displayRole ||
+        (metadata.displayRole === "badge" && !isBadgeType) ||
+        (metadata.assetType === "certificate_badge" &&
+          metadata.displayRole !== "badge")
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          `图片缺少有效的 assetType/displayRole：${relativePath}`,
+        );
+      }
+      const meetsMinimum =
+        isCustomerUploadDashboardV4 && metadata.sourceKind === "user_upload"
+          ? asset.width > 0 && asset.height > 0
+          : metadata.displayRole === "hero"
+            ? asset.width >= 1_200 && asset.height >= 600
+            : metadata.displayRole === "badge"
+              ? asset.width >= 256 && asset.height >= 256
+              : asset.width >= 800 && asset.height >= 450;
+      if (!meetsMinimum) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          `图片未达到 ${metadata.displayRole} 质量门槛：${relativePath}`,
+        );
+      }
+    }
+    imageBytes += asset.size;
+    return {
+      ...asset,
+      id: metadata.id,
+      width: metadata.width,
+      height: metadata.height,
+      caption: metadata.caption,
+      alt: metadata.alt,
+      branchId: metadata.branchId,
+      documentIds: metadata.documentIds,
+      sourcePageUrl: metadata.sourcePageUrl,
+      sourceAssetUrl: metadata.sourceAssetUrl,
+      sourceDocumentPath: metadata.sourceDocumentPath,
+      sourceKind: metadata.sourceKind,
+      sourceUploadIndex: metadata.sourceUploadIndex,
+      sourceUploadFileId: metadata.sourceUploadFileId,
+      sourceUploadSha256: metadata.sourceUploadSha256,
+      sourceUploadFilename: metadata.sourceUploadFilename,
+      sourceUploadMimeType: metadata.sourceUploadMimeType,
+      sourceUploadSizeBytes: metadata.sourceUploadSizeBytes,
+      ownership: metadata.ownership,
+      assetType: metadata.assetType,
+      displayRole: metadata.displayRole,
+    } satisfies KnowledgeAsset;
+  });
+  const officialLogoAssets = isDashboardLogoContract
+    ? enrichedAssets.filter((asset) => asset.sourceKind !== "user_upload")
+    : enrichedAssets;
+  const customerUploadAssets = isCustomerUploadDashboardV4
+    ? enrichedAssets.filter((asset) => asset.sourceKind === "user_upload")
+    : [];
+  if (
+    isCustomerUploadDashboardV4 &&
+    new Set(
+      customerUploadAssets.map((asset) =>
+        String(asset.sourceUploadSha256 || "").toLowerCase(),
+      ),
+    ).size !== customerUploadAssets.length
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      "Dashboard v4 客户上传图片必须按原始上传 SHA-256 去重",
+    );
+  }
+  if (enrichedAssets.length > limits.images) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      `知识库 ZIP 超过 ${limits.images} 张图片上限`,
+    );
+  }
+  if (isCustomerUploadDashboardV4 && enrichedAssets.length > 100) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      "Dashboard v4 最多包含一张官方 Logo 和 99 张客户上传图片",
+    );
+  }
+  if (
+    new Set(enrichedAssets.map((asset) => asset.sha256?.toLowerCase())).size !==
+    enrichedAssets.length
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      "知识库图片必须按 SHA-256 去重后再打包",
+    );
+  }
+  if (
+    input.profile === "dashboard-enterprise-v1" &&
+    imageBytes >
+      (isCustomerUploadDashboardV4
+        ? CUSTOMER_UPLOAD_PACKAGE_MAX_IMAGE_BYTES
+        : ENTERPRISE_PRODUCT_MAX_IMAGE_BYTES)
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      "企业知识库图片总量超过 160 MB",
+    );
+  }
+  if (
+    input.profile === "dashboard-enterprise-v1" &&
+    !isCustomerUploadDashboardV4
+  ) {
+    const packagedDocumentPaths = new Set(
+      input.documents.map((document) => packageRelativePath(document.path)),
+    );
+    for (const asset of enrichedAssets) {
+      if (
+        asset.sourceKind !== "user_upload" &&
+        asset.sourceKind !== "official_logo_upload" &&
+        !asset.sourcePageUrl &&
+        !asset.sourceDocumentPath
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          `图片缺少可追溯的官网页面或打包来源文档：${asset.path}`,
+        );
+      }
+      if (
+        asset.sourceDocumentPath &&
+        !packagedDocumentPaths.has(
+          packageRelativePath(asset.sourceDocumentPath),
+        )
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          `图片来源文档未打包：${asset.sourceDocumentPath}`,
+        );
+      }
+      if (
+        ["product_ui", "product_diagram", "case_photo"].includes(
+          asset.assetType || "",
+        ) &&
+        /(?:sprite|icon(?:s|font)?|favicon|logo[\s_-]*(?:wall|sheet|grid|collage)|装饰|背景图|图标集|标志墙|logo墙)/i.test(
+          `${asset.path} ${asset.caption || ""} ${asset.alt || ""}`,
+        )
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          `装饰图、图标集或 Logo 拼贴不得作为产品视觉：${asset.path}`,
+        );
+      }
+    }
+  }
+  if (manifest.counts.packagedImages !== enrichedAssets.length) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      "package manifest 图片计数与 ZIP 实际图片数不一致",
+    );
+  }
+  if (
+    completeness.acquisition.images?.completed !==
+      (isDashboardLogoContract
+        ? officialLogoAssets.length
+        : enrichedAssets.length) ||
+    (completeness.acquisition.images &&
+      completeness.acquisition.images.completed >
+        completeness.acquisition.images.total)
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      "00_completeness.json 的已保存图片数与实际打包图片数不一致",
+    );
+  }
+  const crawlReportImageCount = reportedPackagedImageCount(
+    input.rawTextByRelativePath.get("00_crawl_coverage_report.md") || "",
+  );
+  if (
+    crawlReportImageCount !== undefined &&
+    crawlReportImageCount !==
+      (isDashboardLogoContract
+        ? officialLogoAssets.length
+        : enrichedAssets.length)
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      "官网采集报告的已保存图片数与实际打包图片数不一致",
+    );
+  }
+  if (manifest.schemaVersion === 1) {
+    if (
+      enrichedAssets.length < limits.targetImages &&
+      !manifest.imageSelection.shortfallReason
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        `图片少于 ${limits.targetImages} 张时必须说明第一方素材不足原因`,
+      );
+    }
+    if (
+      enrichedAssets.length >= limits.targetImages &&
+      manifest.imageSelection.shortfallReason &&
+      input.profile !== "website-lead-v1"
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        `达到 ${limits.targetImages} 张图片目标时不得填写素材不足原因`,
+      );
+    }
+    if (
+      manifest.imageSelection.eligibleFirstPartyImages >= limits.targetImages &&
+      enrichedAssets.length < limits.targetImages
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        `已有至少 ${limits.targetImages} 张合格第一方素材时必须达到目标图片数`,
+      );
+    }
+    if (
+      manifest.imageSelection.eligibleFirstPartyImages < limits.targetImages &&
+      enrichedAssets.length !== manifest.imageSelection.eligibleFirstPartyImages
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        "合格第一方素材不足目标数量时，必须打包全部合格图片",
+      );
+    }
+  } else {
+    const selection = manifest.imageSelection;
+    const discovered = selection.discoveredCandidateImages!;
+    const inspected = selection.inspectedCandidateImages!;
+    const rejected = selection.rejectedCandidateImages!;
+    const candidates = selection.candidates || [];
+    const methods = new Set(selection.discoveryMethods || []);
+    const rejectionTotal = (selection.rejectionReasons || []).reduce(
+      (sum, reason) => sum + reason.count,
+      0,
+    );
+    if (
+      inspected > discovered ||
+      inspected !== selection.eligibleFirstPartyImages + rejected ||
+      rejectionTotal !== rejected
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        "图片发现、检查、合格和拒绝候选数不满足可审计算术关系",
+      );
+    }
+    const eligibleCandidates = candidates.filter(
+      (candidate) => candidate.status === "eligible",
+    );
+    const rejectedCandidates = candidates.filter(
+      (candidate) => candidate.status === "rejected",
+    );
+    const uninspectedCandidates = candidates.filter(
+      (candidate) => candidate.status === "uninspected",
+    );
+    const enrichedAssetsById = new Map(
+      enrichedAssets.flatMap((asset) => (asset.id ? [[asset.id, asset]] : [])),
+    );
+    if (
+      candidates.length !== discovered ||
+      new Set(
+        candidates.map(
+          (candidate) =>
+            candidate.url ||
+            `${candidate.sourceDocumentPath || "unknown"}:${candidate.assetId || candidate.rejectionReason || candidate.status}`,
+        ),
+      ).size !== candidates.length ||
+      candidates.some((candidate) => {
+        const isOfficialLogoUploadCandidate =
+          isCustomerUploadDashboardV4 &&
+          candidate.sourceKind === "official_logo_upload";
+        if (isOfficialLogoUploadCandidate) {
+          return (
+            candidate.method !== "customer_upload" ||
+            candidate.url !== undefined ||
+            candidate.sourcePageUrl !== undefined ||
+            candidate.sourceDocumentPath !== undefined
+          );
+        }
+        return (
+          (!candidate.url && !candidate.sourceDocumentPath) ||
+          (!candidate.sourcePageUrl && !candidate.sourceDocumentPath) ||
+          (isDashboardLogoContract &&
+            (candidate.sourceKind === "user_upload" ||
+              candidate.method === "customer_upload"))
+        );
+      }) ||
+      eligibleCandidates.length !== selection.eligibleFirstPartyImages ||
+      rejectedCandidates.length !== rejected ||
+      eligibleCandidates.length + rejectedCandidates.length !== inspected ||
+      inspected + uninspectedCandidates.length !== discovered ||
+      eligibleCandidates.some((candidate) => {
+        const asset = candidate.assetId
+          ? enrichedAssetsById.get(candidate.assetId)
+          : undefined;
+        return (
+          !asset ||
+          (isDashboardLogoContract && asset.sourceKind === "user_upload") ||
+          ((asset?.sourceKind === "official_logo_upload" ||
+            candidate.sourceKind === "official_logo_upload") &&
+            (asset?.sourceKind !== "official_logo_upload" ||
+              candidate.sourceKind !== "official_logo_upload" ||
+              candidate.method !== "customer_upload")) ||
+          candidate.rejectionReason !== undefined ||
+          asset.sourceAssetUrl !== candidate.url ||
+          asset.sourcePageUrl !== candidate.sourcePageUrl ||
+          asset.sourceDocumentPath !== candidate.sourceDocumentPath
+        );
+      }) ||
+      rejectedCandidates.some(
+        (candidate) =>
+          candidate.assetId !== undefined || !candidate.rejectionReason,
+      ) ||
+      uninspectedCandidates.some(
+        (candidate) =>
+          candidate.assetId !== undefined ||
+          candidate.rejectionReason !== undefined,
+      ) ||
+      officialLogoAssets.some(
+        (asset) =>
+          !asset.id ||
+          !eligibleCandidates.some(
+            (candidate) => candidate.assetId === asset.id,
+          ),
+      )
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        "图片候选逐项台账与发现、检查、打包结果不一致",
+      );
+    }
+    if (
+      (isDashboardLogoContract && methods.size === 0) ||
+      (!isDashboardLogoContract &&
+        [...requiredImageDiscoveryMethods].some(
+          (method) => !methods.has(method),
+        ))
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        isDashboardLogoContract
+          ? "Logo 发现台账必须记录实际使用的发现方式"
+          : "图片发现台账未覆盖全部要求的第一方图片发现方式",
+      );
+    }
+    if (
+      completeness.acquisition.images?.total !== discovered ||
+      (isDashboardLogoContract
+        ? officialLogoAssets.length
+        : enrichedAssets.length) > selection.eligibleFirstPartyImages
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        "图片发现台账与完整度统计或实际打包数量不一致",
+      );
+    }
+    const completedOfficialPages =
+      completeness.acquisition.officialPages?.completed;
+    if (
+      completedOfficialPages === undefined ||
+      (isDashboardLogoContract
+        ? selection.scannedSourcePages! > completedOfficialPages
+        : selection.scannedSourcePages !== completedOfficialPages)
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "media",
+        isDashboardLogoContract
+          ? "Logo 扫描页数不能超过成功解析的官网页面数"
+          : "图片扫描页数必须覆盖所有成功解析的官网页面",
+      );
+    }
+    if (selection.status === "target_met") {
+      if (
+        uninspectedCandidates.length > 0 ||
+        selection.shortfallReason ||
+        !officialLogoAssets.some(
+          (asset) => asset.assetType === "brand_identity",
+        )
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          "target_met 必须完成候选检查、包含品牌视觉且不存在覆盖缺口",
+        );
+      }
+    } else {
+      if (
+        (isDashboardLogoContract
+          ? officialLogoAssets.length
+          : enrichedAssets.length) !== selection.eligibleFirstPartyImages ||
+        !selection.shortfallReason
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          "图片目标未达成时必须打包全部合格图片并提供真实缺口原因",
+        );
+      }
+      if (selection.status === "source_limited" && inspected !== discovered) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          "source_limited 必须检查全部已发现候选图片",
+        );
+      }
+      if (selection.status === "budget_limited" && inspected >= discovered) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          "budget_limited 必须存在因预算未检查的已发现候选图片",
+        );
+      }
+    }
+    if (isDashboardLogoContract) {
+      const firstLeaf = enrichedDocuments.find(
+        (document) => document.kind === "leaf",
+      );
+      const logo = officialLogoAssets[0];
+      if (
+        selection.status !== "target_met" ||
+        selection.eligibleFirstPartyImages !== 1 ||
+        officialLogoAssets.length !== 1 ||
+        !logo ||
+        logo.assetType !== "brand_identity" ||
+        logo.displayRole !== "badge" ||
+        !firstLeaf?.id ||
+        logo.documentIds.length !== 1 ||
+        logo.documentIds[0] !== firstLeaf.id ||
+        selection.productFamilyCoverage !== undefined
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          "Dashboard 必须只自动打包一张企业官方 Logo，并且只关联首个知识叶子",
+        );
+      }
+      if (isSingleLogoDashboardV3 && customerUploadAssets.length !== 0) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          "Dashboard v3 不允许客户上传图片资产",
+        );
+      }
+      if (
+        isCustomerUploadDashboardV4 &&
+        (customerUploadAssets.length > 99 ||
+          customerUploadAssets.some(
+            (asset) =>
+              asset.sourceKind !== "user_upload" ||
+              asset.assetType !== "customer_supplied" ||
+              asset.displayRole !== "inline" ||
+              !asset.sourceUploadSha256 ||
+              !asset.sourceUploadFilename ||
+              !asset.sourceUploadMimeType ||
+              !asset.documentIds?.length,
+          ))
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          "Dashboard v4 客户上传图片缺少节点绑定或原始上传来源证明",
+        );
+      }
+    }
+    const productFamilyIdsForDocument = (
+      document: (typeof enrichedDocuments)[number],
+    ) => {
+      if (
+        input.profile === "website-lead-v1" &&
+        document.branchId !== "03_products"
+      ) {
+        return [];
+      }
+      return document.productFamilyIds?.length
+        ? document.productFamilyIds
+        : document.productFamilyId
+          ? [document.productFamilyId]
+          : [];
+    };
+    const productLeafDocuments = enrichedDocuments.filter(
+      (document) =>
+        document.kind === "leaf" &&
+        productFamilyIdsForDocument(document).length > 0,
+    );
+    const productBranchIds = new Set(
+      productLeafDocuments.map((document) => document.branchId || ""),
+    );
+    const productLeafFamilyIds = new Set(
+      productLeafDocuments.flatMap(productFamilyIdsForDocument),
+    );
+    if (
+      productLeafFamilyIds.size === 0 ||
+      productBranchIds.has("") ||
+      enrichedDocuments.some(
+        (document) =>
+          document.productFamilyIds !== undefined &&
+          new Set(document.productFamilyIds).size !==
+            document.productFamilyIds.length,
+      ) ||
+      enrichedDocuments.some(
+        (document) =>
+          productFamilyIdsForDocument(document).length > 0 &&
+          document.kind !== "leaf",
+      ) ||
+      enrichedDocuments.some(
+        (document) =>
+          document.kind === "leaf" &&
+          productBranchIds.has(document.branchId || "") &&
+          productFamilyIdsForDocument(document).length === 0,
+      )
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "structure",
+        "v2 必须至少声明一个产品或服务族，且产品分支的每个叶子都必须声明 productFamilyId",
+      );
+    }
+    if (!isDashboardLogoContract) {
+      const coverageIds = new Set(
+        (selection.productFamilyCoverage || []).map(
+          (family) => family.familyId,
+        ),
+      );
+      if (
+        coverageIds.size !== (selection.productFamilyCoverage || []).length ||
+        coverageIds.size !== productLeafFamilyIds.size ||
+        [...coverageIds].some((familyId) => !productLeafFamilyIds.has(familyId))
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          "产品族图片覆盖清单必须与产品或服务叶子中的产品族完全一致",
+        );
+      }
+      const enrichedAssetIds = new Set(
+        enrichedAssets.map((asset) => asset.id).filter(Boolean),
+      );
+      for (const family of selection.productFamilyCoverage || []) {
+        if (
+          family.assetIds.some((assetId) => !enrichedAssetIds.has(assetId)) ||
+          (family.officialImageAvailable &&
+            family.assetIds.some((assetId) => {
+              const asset = enrichedAssetsById.get(assetId);
+              return !["product_ui", "product_diagram", "case_photo"].includes(
+                asset?.assetType || "",
+              );
+            })) ||
+          (family.officialImageAvailable && family.assetIds.length === 0) ||
+          (!family.officialImageAvailable && !family.gapReason) ||
+          (input.profile === "dashboard-enterprise-v1" &&
+            family.checkedSources.length === 0)
+        ) {
+          throw new KnowledgeArchiveValidationError(
+            "media",
+            `产品族图片覆盖记录不完整：${family.familyName}`,
+          );
+        }
+      }
+    }
+  }
+  if (
+    (isDashboardLogoContract
+      ? officialLogoAssets.length
+      : enrichedAssets.length) >
+    Math.min(manifest.imageSelection.eligibleFirstPartyImages, limits.images)
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "media",
+      "实际打包图片数不能超过合格第一方素材数或档位上限",
+    );
+  }
+
+  const customerDocuments = enrichedDocuments.filter(
+    (document) => document.customerVisible,
+  );
+  const customerOverviewDocuments = customerDocuments.filter(
+    (document) => document.kind === "overview",
+  );
+  const customerLeafDocuments = customerDocuments.filter(
+    (document) => document.kind === "leaf",
+  );
+  if (
+    customerDocuments.length === 0 ||
+    customerOverviewDocuments.length === 0 ||
+    customerLeafDocuments.length === 0
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "content",
+      "知识库必须同时包含正式分支综述和知识叶子",
+    );
+  }
+  if (
+    input.profile === "website-lead-v1" &&
+    ((manifest.schemaVersion === 1 &&
+      (customerDocuments.length < 40 || customerDocuments.length > 56)) ||
+      (manifest.schemaVersion !== 1 &&
+        (customerOverviewDocuments.length !== 7 ||
+          customerLeafDocuments.length < 8 ||
+          customerLeafDocuments.length > 56)))
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "content",
+      manifest.schemaVersion === 1
+        ? "历史官网轻量知识库必须包含 40–56 个客户可见内容文档"
+        : "官网轻量知识库 v2 必须包含 7 篇分支综述和 8–56 个知识叶子",
+    );
+  }
+  if (input.profile === "website-lead-v1") {
+    const manifestDocumentById = new Map(
+      manifest.documents.map((document) => [document.id, document]),
+    );
+    const hiddenContentDocument = manifest.documents.find(
+      (document) =>
+        websiteLeadDisplayBranchByDirectory.has(
+          document.path.split("/")[0] || "",
+        ) && !document.customerVisible,
+    );
+    if (hiddenContentDocument) {
+      throw new KnowledgeArchiveValidationError(
+        "structure",
+        `官网轻量 01–08 内容文档必须标为客户可见：${hiddenContentDocument.path}`,
+      );
+    }
+    const overviewCounts = new Map<string, number>();
+    for (const document of customerDocuments) {
+      const manifestDocument = document.id
+        ? manifestDocumentById.get(document.id)
+        : undefined;
+      const directory = manifestDocument?.path.split("/")[0] || "";
+      const displayBranch = websiteLeadDisplayBranchByDirectory.get(directory);
+      if (
+        !displayBranch ||
+        document.branchId !== directory ||
+        !["overview", "leaf"].includes(document.kind) ||
+        !document.evidenceStatus
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "structure",
+          `官网轻量知识文档的目录、分支、类型或证据状态无效：${manifestDocument?.path || document.path}`,
+        );
+      }
+      const declaredStatus = document.content
+        .slice(0, 1_600)
+        .match(
+          /(?:证据\s*)?(?:状态|status)\s*[:：]\s*(?:\*\*|__)?\s*`?\s*(verified_first_party|verified_authoritative|supported_third_party|inferred|needs_verification|not_applicable)\b/i,
+        )?.[1]
+        ?.toLowerCase();
+      if (declaredStatus !== document.evidenceStatus) {
+        throw new KnowledgeArchiveValidationError(
+          "structure",
+          `官网轻量知识文档的证据状态与正文不一致：${manifestDocument?.path || document.path}`,
+        );
+      }
+      if (document.kind === "overview") {
+        overviewCounts.set(
+          displayBranch,
+          (overviewCounts.get(displayBranch) || 0) + 1,
+        );
+      }
+    }
+    for (const displayBranch of new Set(
+      websiteLeadDisplayBranchByDirectory.values(),
+    )) {
+      if (overviewCounts.get(displayBranch) !== 1) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `官网轻量知识分支 ${displayBranch} 必须有且只有一篇正式综述`,
+        );
+      }
+    }
+    const completenessCounts = completeness.counts;
+    // v1 historically counted every customer-visible document as a "leaf".
+    // Contract v2 corrects that legacy ambiguity: overviews are separate and
+    // completeness counts describe true knowledge leaves only.
+    const completenessDocuments =
+      manifest.schemaVersion === 1 ? customerDocuments : customerLeafDocuments;
+    const statusCountKeys = {
+      verified_first_party: "verifiedFirstParty",
+      verified_authoritative: "verifiedAuthoritative",
+      supported_third_party: "supportedThirdParty",
+      inferred: "inferred",
+      needs_verification: "needsVerification",
+      not_applicable: "notApplicable",
+    } as const;
+    if (
+      !completenessCounts ||
+      completenessCounts.totalLeaves !== completenessDocuments.length
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "structure",
+        "00_completeness.json 的知识内容总数与实际 01–08 文档数不一致",
+      );
+    }
+    const actualStatusCounts = Object.fromEntries(
+      Object.keys(statusCountKeys).map((status) => [status, 0]),
+    ) as Record<keyof typeof statusCountKeys, number>;
+    for (const document of completenessDocuments) {
+      actualStatusCounts[
+        document.evidenceStatus as keyof typeof statusCountKeys
+      ] += 1;
+    }
+    for (const [status, countKey] of Object.entries(statusCountKeys) as Array<
+      [
+        keyof typeof statusCountKeys,
+        (typeof statusCountKeys)[keyof typeof statusCountKeys],
+      ]
+    >) {
+      if (completenessCounts[countKey] !== actualStatusCounts[status]) {
+        throw new KnowledgeArchiveValidationError(
+          "structure",
+          `00_completeness.json 的 ${countKey} 与实际证据状态不一致`,
+        );
+      }
+    }
+    if (
+      manifest.schemaVersion === 1 &&
+      (actualStatusCounts.not_applicable >= completenessDocuments.length ||
+        actualStatusCounts.verified_first_party +
+          actualStatusCounts.verified_authoritative +
+          actualStatusCounts.supported_third_party ===
+          0)
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "content",
+        "官网轻量知识库必须至少包含一个有证据支持的适用内容文档",
+      );
+    }
+  }
+  if (input.profile === "dashboard-enterprise-v1") {
+    for (const document of customerDocuments) {
+      if (
+        !["overview", "leaf"].includes(document.kind || "") ||
+        !document.branchId ||
+        !document.evidenceStatus
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "structure",
+          `企业深度知识文档缺少分支、类型或证据状态：${document.path}`,
+        );
+      }
+      if (
+        !["needs_verification", "not_applicable"].includes(
+          document.evidenceStatus,
+        ) &&
+        (document.sourceIds?.length || 0) === 0
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "structure",
+          `有证据的企业深度知识文档必须关联来源：${document.path}`,
+        );
+      }
+    }
+    const leafDocuments = customerDocuments.filter(
+      (document) => document.kind === "leaf",
+    );
+    const minimumLeaves = input.dashboardEnterpriseMinLeaves ?? 8;
+    if (leafDocuments.length < minimumLeaves || leafDocuments.length > 115) {
+      throw new KnowledgeArchiveValidationError(
+        "content",
+        `企业深度知识库必须包含 ${minimumLeaves}–115 个知识叶子`,
+      );
+    }
+    const leafBranches = new Set(
+      leafDocuments.map((document) => document.branchId).filter(Boolean),
+    );
+    for (const branchId of leafBranches) {
+      const overviewCount = customerDocuments.filter(
+        (document) =>
+          document.kind === "overview" && document.branchId === branchId,
+      ).length;
+      if (overviewCount !== 1) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `企业深度知识库分支 ${branchId} 必须有且只有一篇正式综述`,
+        );
+      }
+    }
+    const overviewBranches = new Set(
+      customerDocuments
+        .filter((document) => document.kind === "overview")
+        .map((document) => document.branchId)
+        .filter(Boolean),
+    );
+    for (const branchId of overviewBranches) {
+      if (!leafBranches.has(branchId)) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `企业深度知识库分支 ${branchId} 有综述但没有知识叶子`,
+        );
+      }
+    }
+    const completenessCounts = completeness.counts;
+    const statusCountKeys = {
+      verified_first_party: "verifiedFirstParty",
+      verified_authoritative: "verifiedAuthoritative",
+      supported_third_party: "supportedThirdParty",
+      inferred: "inferred",
+      needs_verification: "needsVerification",
+      not_applicable: "notApplicable",
+    } as const;
+    if (
+      !completenessCounts ||
+      completenessCounts.totalLeaves !== leafDocuments.length
+    ) {
+      throw new KnowledgeArchiveValidationError(
+        "structure",
+        "00_completeness.json 的叶子总数与企业深度知识叶子不一致",
+      );
+    }
+    const actualStatusCounts = Object.fromEntries(
+      Object.keys(statusCountKeys).map((status) => [status, 0]),
+    ) as Record<keyof typeof statusCountKeys, number>;
+    for (const document of leafDocuments) {
+      actualStatusCounts[
+        document.evidenceStatus as keyof typeof statusCountKeys
+      ] += 1;
+    }
+    for (const [status, countKey] of Object.entries(statusCountKeys) as Array<
+      [
+        keyof typeof statusCountKeys,
+        (typeof statusCountKeys)[keyof typeof statusCountKeys],
+      ]
+    >) {
+      if (completenessCounts[countKey] !== actualStatusCounts[status]) {
+        throw new KnowledgeArchiveValidationError(
+          "structure",
+          `00_completeness.json 的 ${countKey} 与企业深度知识叶子不一致`,
+        );
+      }
+    }
+  }
+  const packageDocumentById = new Map(
+    enrichedDocuments
+      .filter((document) => document.id)
+      .map((document) => [document.id!, document]),
+  );
+  const evidenceCharacterByDocumentId = new Map(
+    enrichedDocuments
+      .filter(
+        (document) =>
+          document.id &&
+          document.kind === "evidence" &&
+          document.customerVisible === false,
+      )
+      .map((document) => [
+        document.id!,
+        packagedEvidenceDocumentCharacters(document),
+      ]),
+  );
+  if (input.profile === "website-lead-v1" && manifest.schemaVersion !== 1) {
+    const branchEvidence = manifest.branchEvidence || [];
+    const overviewById = new Map(
+      customerOverviewDocuments
+        .filter((document) => document.id)
+        .map((document) => [document.id!, document]),
+    );
+    for (const branch of branchEvidence) {
+      const overview = overviewById.get(branch.overviewDocumentId);
+      const overviewDisplayBranch = overview?.branchId
+        ? websiteLeadDisplayBranchByDirectory.get(overview.branchId)
+        : undefined;
+      if (!overview || overviewDisplayBranch !== branch.branchId) {
+        throw new KnowledgeArchiveValidationError(
+          "structure",
+          `Website v2 branchEvidence 关联了无效综述：${branch.branchId}`,
+        );
+      }
+      const linkedEvidenceIds = new Set(
+        customerDocuments
+          .filter(
+            (document) =>
+              Boolean(document.branchId) &&
+              websiteLeadDisplayBranchByDirectory.get(document.branchId!) ===
+                branch.branchId,
+          )
+          .flatMap((document) => document.evidenceDocumentIds || []),
+      );
+      const actualEvidenceCharacters = [...linkedEvidenceIds].reduce(
+        (total, evidenceId) =>
+          total + (evidenceCharacterByDocumentId.get(evidenceId) || 0),
+        0,
+      );
+      const expectedMinimum = websiteV2OverviewRequirement(
+        actualEvidenceCharacters,
+        branch.branchId,
+      );
+      if (
+        branch.deduplicatedEvidenceCharacters !== actualEvidenceCharacters ||
+        branch.dynamicOverviewMinimum !== expectedMinimum ||
+        overview.requiredFormalCharacters !== expectedMinimum ||
+        overview.contentStatus !== branch.contentStatus ||
+        (actualEvidenceCharacters === 0) !==
+          (branch.contentStatus === "needs_verification")
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `Website v2 branchEvidence 动态要求不正确：${branch.branchId}`,
+        );
+      }
+    }
+  }
+  const evidencePathByFingerprint = new Map<string, string>();
+  const evidenceDocuments = enrichedDocuments.filter(
+    (document) => document.kind === "evidence",
+  );
+  const referencedEvidenceDocumentIds = new Set(
+    customerDocuments.flatMap((document) => document.evidenceDocumentIds || []),
+  );
+  for (const evidenceDocument of evidenceDocuments) {
+    const fingerprint = packagedEvidenceDocumentFingerprint(evidenceDocument);
+    if (!fingerprint) continue;
+    const duplicatePath = evidencePathByFingerprint.get(fingerprint);
+    if (duplicatePath) {
+      throw new KnowledgeArchiveValidationError(
+        "content",
+        `证据文档规范化后内容重复：${duplicatePath} / ${evidenceDocument.path}`,
+      );
+    }
+    evidencePathByFingerprint.set(fingerprint, evidenceDocument.path);
+  }
+  if (manifest.schemaVersion !== 1) {
+    const unreferencedEvidence = evidenceDocuments.find(
+      (document) =>
+        !document.id ||
+        document.customerVisible !== false ||
+        !referencedEvidenceDocumentIds.has(document.id),
+    );
+    if (unreferencedEvidence) {
+      throw new KnowledgeArchiveValidationError(
+        "structure",
+        `v2 的每份 evidence 文档都必须被至少一篇正式文档引用：${unreferencedEvidence.path}`,
+      );
+    }
+  }
+  const productBranchIds = new Set(
+    enrichedDocuments
+      .filter(
+        (document) =>
+          document.kind === "leaf" &&
+          (input.profile !== "website-lead-v1" ||
+            document.branchId === "03_products") &&
+          ((document.productFamilyIds?.length || 0) > 0 ||
+            Boolean(document.productFamilyId)),
+      )
+      .map((document) => document.branchId || ""),
+  );
+  for (const document of customerDocuments) {
+    if (input.profile === "dashboard-enterprise-v1") {
+      const markedContent = markedFormalContent(document.content);
+      if (markedContent === undefined) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `正式文档缺少唯一且有序的正文标记：${document.path}`,
+        );
+      }
+      if (
+        knowledgeArchiveContainsSourceInventoryHeading(markedContent) ||
+        knowledgeArchiveContainsSourceInventoryTable(markedContent) ||
+        /^\s*>\s*.*(?:状态|status)\s*[:：].*(?:来源|source)\s*[:：]/im.test(
+          markedContent,
+        )
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `正式正文块不得包含来源、状态、素材或证据区：${document.path}`,
+        );
+      }
+    }
+    const formal = profileFormalKnowledgeText(document.content, input.profile);
+    if (
+      manifest.schemaVersion !== 1 &&
+      (document.kind === "overview" || document.kind === "leaf")
+    ) {
+      const evidenceDocumentIds = document.evidenceDocumentIds || [];
+      if (new Set(evidenceDocumentIds).size !== evidenceDocumentIds.length) {
+        throw new KnowledgeArchiveValidationError(
+          "structure",
+          `证据文档关联不得重复：${document.path}`,
+        );
+      }
+      let actualEvidenceCharacters = 0;
+      for (const evidenceDocumentId of evidenceDocumentIds) {
+        const evidenceDocument = packageDocumentById.get(evidenceDocumentId);
+        if (
+          !evidenceDocument ||
+          evidenceDocument.kind !== "evidence" ||
+          evidenceDocument.customerVisible !== false
+        ) {
+          throw new KnowledgeArchiveValidationError(
+            "structure",
+            `正式文档关联了无效证据文档：${document.path} / ${evidenceDocumentId}`,
+          );
+        }
+        if (
+          !evidenceDocument.branchId ||
+          evidenceDocument.branchId !== document.branchId
+        ) {
+          throw new KnowledgeArchiveValidationError(
+            "structure",
+            `正式文档只能关联显式属于同一分支的证据文档：${document.path} / ${evidenceDocumentId}`,
+          );
+        }
+        if (
+          !(document.sourceIds || []).some((sourceId) =>
+            (evidenceDocument.sourceIds || []).includes(sourceId),
+          )
+        ) {
+          throw new KnowledgeArchiveValidationError(
+            "structure",
+            `正式文档与证据文档没有共同来源：${document.path} / ${evidenceDocumentId}`,
+          );
+        }
+        actualEvidenceCharacters +=
+          evidenceCharacterByDocumentId.get(evidenceDocumentId) || 0;
+      }
+      if (document.evidenceCharacters !== actualEvidenceCharacters) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `证据字符数与服务端复算结果不一致：${document.path}`,
+        );
+      }
+      const expected = evidenceProportionalFormalRequirement({
+        kind: document.kind,
+        isProductBranch: productBranchIds.has(document.branchId || ""),
+        evidenceCharacters: actualEvidenceCharacters,
+      });
+      const requiredFormalCharacters =
+        input.profile === "website-lead-v1"
+          ? document.kind === "leaf"
+            ? websiteV2LeafRequirement(actualEvidenceCharacters)
+            : document.requiredFormalCharacters!
+          : document.requiredFormalCharacters!;
+      if (
+        input.profile === "website-lead-v1" &&
+        document.kind === "leaf" &&
+        document.requiredFormalCharacters !== requiredFormalCharacters
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `Website v2 叶子动态要求不正确：${document.path}`,
+        );
+      }
+      if (
+        input.profile === "dashboard-enterprise-v1" &&
+        ((input.requireDashboardAdaptiveFormalGate
+          ? document.requiredFormalCharacters !== expected.required
+          : !new Set([0, expected.required]).has(
+              document.requiredFormalCharacters!,
+            )) ||
+          document.contentStatus !== expected.status)
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `正文要求或内容状态不正确：${document.path}`,
+        );
+      }
+      if (
+        actualEvidenceCharacters === 0 &&
+        !["needs_verification", "not_applicable"].includes(
+          document.evidenceStatus || "",
+        )
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `无证据文档必须明确标记待核验或不适用：${document.path}`,
+        );
+      }
+      if (effectiveCharacterCount(formal) < requiredFormalCharacters) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `正式正文未达到证据自适应要求 ${requiredFormalCharacters} 个有效字符：${document.path}`,
+        );
+      }
+    } else {
+      const evidenceBacked =
+        document.kind === "leaf" &&
+        document.evidenceStatus !== "needs_verification" &&
+        document.evidenceStatus !== "not_applicable";
+      if (evidenceBacked && effectiveCharacterCount(formal) < 120) {
+        throw new KnowledgeArchiveValidationError(
+          "content",
+          `有证据知识叶子的正式正文少于 120 个有效字符：${document.path}`,
+        );
+      }
+    }
+  }
+  const formalCharacters = customerDocuments.reduce(
+    (total, document) =>
+      total +
+      effectiveCharacterCount(
+        profileFormalKnowledgeText(document.content, input.profile),
+      ),
+    0,
+  );
+  if (
+    (manifest.schemaVersion === 1 && formalCharacters < limits.minCharacters) ||
+    formalCharacters > limits.maxCharacters
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "content",
+      manifest.schemaVersion === 1
+        ? `正式正文必须在 ${limits.minCharacters}–${limits.maxCharacters} 个有效字符之间`
+        : `正式正文不得超过 ${limits.maxCharacters} 个有效字符`,
+    );
+  }
+  if (
+    manifest.counts.customerVisibleCharacters !== formalCharacters &&
+    !(
+      input.allowV4CustomerVisibleCharacterCountRepair === true &&
+      manifest.schemaVersion === 4 &&
+      input.profile === "dashboard-enterprise-v1"
+    )
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "content",
+      "package manifest 正式正文字数与服务端复算结果不一致",
+    );
+  }
+  const evidenceCharacters = packagedEvidenceCharacters(enrichedDocuments);
+  if (evidenceCharacters > limits.maxEvidenceCharacters) {
+    throw new KnowledgeArchiveValidationError(
+      "content",
+      `证据文字超过 ${limits.maxEvidenceCharacters} 个有效字符上限`,
+    );
+  }
+  if (manifest.counts.evidenceCharacters !== evidenceCharacters) {
+    throw new KnowledgeArchiveValidationError(
+      "content",
+      "package manifest 证据文字数与服务端复算结果不一致",
+    );
+  }
+  if (
+    (completeness.acquisition.officialPages?.completed ?? 0) >
+    limits.maxOfficialPages
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      `成功采集官网页面超过 ${limits.maxOfficialPages} 页档位上限`,
+    );
+  }
+  if (
+    (completeness.acquisition.officialPages?.total ?? 0) >
+    limits.maxOfficialPageAttempts
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      `尝试访问官网链接超过 ${limits.maxOfficialPageAttempts} 条档位上限`,
+    );
+  }
+  if (
+    (completeness.acquisition.documents?.completed ?? 0) > limits.maxDocuments
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      `解析文档超过 ${limits.maxDocuments} 份档位上限`,
+    );
+  }
+  if (
+    (completeness.acquisition.webQueries?.completed ?? 0) >
+      limits.maxWebQueries ||
+    (completeness.acquisition.webQueries?.total ?? 0) > limits.maxWebQueries
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      `公开查询超过 ${limits.maxWebQueries} 次档位上限`,
+    );
+  }
+  const duplicates = duplicateFormalParagraphs(
+    customerDocuments,
+    input.profile,
+  );
+  if (duplicates.length > 0) {
+    throw new KnowledgeArchiveValidationError(
+      "content",
+      `正式正文包含跨叶子重复模板：${duplicates[0]!.first} / ${duplicates[0]!.second}`,
+    );
+  }
+
+  return {
+    documents: enrichedDocuments
+      .map((document) =>
+        document.customerVisible
+          ? {
+              ...document,
+              content: customerDisplayMarkdown(
+                input.profile === "dashboard-enterprise-v1"
+                  ? markedFormalContent(document.content) || ""
+                  : document.content,
+              ),
+            }
+          : document,
+      )
+      .sort((left, right) => (left.order ?? 10_000) - (right.order ?? 10_000)),
+    assets: enrichedAssets,
+    manifest,
+  };
+}
+
+export async function readKnowledgeArchive(
+  buffer: Buffer,
+  sourceFileName: string,
+  snapshotId: string,
+  options: {
+    validationProfile?: KnowledgeBaseValidationProfile;
+    archiveContractVersion?: 1 | 2 | 3 | 4;
+    archiveContractVersions?: readonly (1 | 2 | 3 | 4)[];
+    allowV4CustomerVisibleCharacterCountRepair?: boolean;
+    dashboardEnterpriseMinLeaves?: number;
+    requireDashboardAdaptiveFormalGate?: boolean;
+  } = {},
+) {
+  const validationProfile = options.validationProfile ?? "historical";
+  const extension = path.extname(sourceFileName).toLowerCase();
+  if (extension !== ".zip") {
+    if (validationProfile !== "historical") {
+      throw new KnowledgeArchiveValidationError(
+        "structure",
+        "新版知识库必须交付 ZIP 归档",
+      );
+    }
+    if (!textExtensions.has(extension)) {
+      throw new Error("知识库文件仅支持 ZIP、Markdown、TXT、JSON 或 CSV");
+    }
+    return {
+      documents: [
+        {
+          path: safeArchivePath(sourceFileName),
+          title: titleFromPath(sourceFileName),
+          content: normalizeTextDocument(
+            sourceFileName,
+            buffer.toString("utf8"),
+          ),
+        },
+      ] as KnowledgeDocument[],
+      assets: [] as KnowledgeAsset[],
+      storedAssetKeys: [] as string[],
+    };
+  }
+
+  if (
+    buffer.length < 4 ||
+    (buffer.subarray(0, 4).toString("binary") !== "PK\u0003\u0004" &&
+      buffer.subarray(0, 4).toString("binary") !== "PK\u0005\u0006" &&
+      buffer.subarray(0, 4).toString("binary") !== "PK\u0007\u0008")
+  ) {
+    const error = new Error("知识库文件不是有效的 ZIP 压缩包");
+    if (validationProfile !== "historical") {
+      throw new KnowledgeArchiveValidationError("unsafe", error.message);
+    }
+    throw error;
+  }
+  let archive: JSZip;
+  try {
+    archive = await JSZip.loadAsync(buffer, { checkCRC32: true });
+  } catch (error) {
+    if (validationProfile !== "historical") {
+      throw new KnowledgeArchiveValidationError(
+        "unsafe",
+        error instanceof Error ? error.message : "知识库 ZIP 无法安全解压",
+      );
+    }
+    throw error;
+  }
+  const entries = Object.values(archive.files).filter((entry) => !entry.dir);
+  if (entries.length > MAX_ARCHIVE_ENTRIES) {
+    const message = `知识库压缩包文件过多，最多支持 ${MAX_ARCHIVE_ENTRIES} 个文件`;
+    if (validationProfile !== "historical") {
+      throw new KnowledgeArchiveValidationError("unsafe", message);
+    }
+    throw new Error(message);
+  }
+  const documents: KnowledgeDocument[] = [];
+  const assets: KnowledgeAsset[] = [];
+  const storedAssetKeys: string[] = [];
+  const rawTextByArchivePath = new Map<string, string>();
+  let unpackedBytes = 0;
+  let declaredUnpackedBytes = 0;
+  await mkdir(knowledgeAssetRoot(), { recursive: true });
+
+  try {
+    const normalizedPaths = new Set<string>();
+    const packagePaths: string[] = [];
+    for (const entry of entries) {
+      const rawPath =
+        (entry as typeof entry & { unsafeOriginalName?: string })
+          .unsafeOriginalName || entry.name;
+      if (
+        rawPath.startsWith("__MACOSX/") ||
+        rawPath === ".DS_Store" ||
+        rawPath.endsWith("/.DS_Store")
+      ) {
+        continue;
+      }
+      const archivePath = validateArchiveEntryPath(rawPath);
+      const normalizedKey = archivePath.normalize("NFKC").toLowerCase();
+      if (normalizedPaths.has(normalizedKey)) {
+        throw new Error(`知识库 ZIP 包含重复文件：${archivePath}`);
+      }
+      normalizedPaths.add(normalizedKey);
+      packagePaths.push(archivePath);
+      const fileExtension = path.extname(archivePath).toLowerCase();
+      if (
+        validationProfile !== "historical" &&
+        [".bmp", ".heic", ".heif", ".ico", ".svg", ".tif", ".tiff"].includes(
+          fileExtension,
+        )
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          "media",
+          `知识库图片必须转为 AVIF、WebP、PNG、JPEG 或 GIF：${archivePath}`,
+        );
+      }
+      if (
+        validationProfile !== "historical" &&
+        !versionedArchiveAllowedExtensions.has(fileExtension)
+      ) {
+        throw new KnowledgeArchiveValidationError(
+          executableArchiveExtensions.has(fileExtension)
+            ? "unsafe"
+            : "structure",
+          `新版知识库 ZIP 包含不支持的文件类型：${archivePath}`,
+        );
+      }
+      if (fileExtension === ".html" || fileExtension === ".htm") {
+        throw new Error("知识库 ZIP 不允许包含 HTML 或交互式网页文件");
+      }
+      const unixPermissions =
+        typeof entry.unixPermissions === "number"
+          ? entry.unixPermissions
+          : Number.parseInt(String(entry.unixPermissions || ""), 8);
+      if (
+        Number.isFinite(unixPermissions) &&
+        (unixPermissions & 0o170000) === 0o120000
+      ) {
+        throw new Error("知识库 ZIP 不允许包含符号链接");
+      }
+      const declaredCompressed = Number(
+        (
+          entry as typeof entry & {
+            _data?: { compressedSize?: number; uncompressedSize?: number };
+          }
+        )._data?.compressedSize || 0,
+      );
+      const declaredUncompressed = Number(
+        (
+          entry as typeof entry & {
+            _data?: { compressedSize?: number; uncompressedSize?: number };
+          }
+        )._data?.uncompressedSize || 0,
+      );
+      const declaredLimit = imageMimeByExtension[fileExtension]
+        ? MAX_IMAGE_BYTES
+        : MAX_DOCUMENT_BYTES;
+      if (declaredUncompressed > declaredLimit) {
+        throw new Error(`知识库文件过大：${archivePath}`);
+      }
+      declaredUnpackedBytes += Math.max(0, declaredUncompressed);
+      if (declaredUnpackedBytes > MAX_UNPACKED_BYTES) {
+        throw new Error("知识库解压后内容过大，最多支持 220 MB");
+      }
+      if (
+        declaredUncompressed > 1024 * 1024 &&
+        declaredCompressed > 0 &&
+        declaredUncompressed / declaredCompressed > MAX_COMPRESSION_RATIO
+      ) {
+        throw new Error(`知识库 ZIP 中的文件压缩比异常：${archivePath}`);
+      }
+      const mimeType = imageMimeByExtension[fileExtension];
+      if (!textExtensions.has(fileExtension) && !mimeType) continue;
+      const bytes = await entry.async("nodebuffer");
+      unpackedBytes += bytes.length;
+      if (unpackedBytes > MAX_UNPACKED_BYTES) {
+        throw new Error("知识库解压后内容过大，最多支持 220 MB");
+      }
+      if (mimeType) {
+        if (bytes.length > MAX_IMAGE_BYTES) {
+          throw new Error(`知识库图片过大：${archivePath}`);
+        }
+        const dimensions =
+          validationProfile === "historical"
+            ? basicRasterImageDimensions(fileExtension, bytes)
+            : await decodedRasterImageDimensions(fileExtension, bytes);
+        const imageIsValid =
+          validationProfile === "historical"
+            ? hasSupportedImageSignature(fileExtension, bytes)
+            : Boolean(dimensions);
+        if (!imageIsValid) {
+          throw new Error(`知识库图片格式与内容不匹配：${archivePath}`);
+        }
+        const key = `${randomUUID()}${fileExtension}`;
+        await writeFile(path.join(knowledgeAssetRoot(), key), bytes, { flag: "wx" });
+        storedAssetKeys.push(key);
+        assets.push({
+          key,
+          path: archivePath,
+          mimeType,
+          size: bytes.length,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          ...dimensions,
+        });
+      } else {
+        if (bytes.length > MAX_DOCUMENT_BYTES) {
+          throw new Error(`知识库文档过大：${archivePath}`);
+        }
+        const rawText = bytes.toString("utf8").replace(/^\uFEFF/, "");
+        rawTextByArchivePath.set(archivePath, rawText);
+        documents.push({
+          path: archivePath,
+          title: titleFromPath(archivePath),
+          content: normalizeTextDocument(archivePath, rawText),
+        });
+      }
+    }
+
+    const roots = new Set(
+      packagePaths.map((entryPath) => entryPath.split("/")[0]),
+    );
+    if (
+      roots.size !== 1 ||
+      packagePaths.some((entryPath) => !entryPath.includes("/"))
+    ) {
+      throw new Error("知识库 ZIP 必须只包含一个企业知识库根目录");
+    }
+    const root = [...roots][0]!;
+    const lowerPaths = new Set(
+      packagePaths.map((entryPath) => entryPath.toLowerCase()),
+    );
+    const missingRequired = requiredKnowledgeFiles.filter(
+      (requiredPath) =>
+        !lowerPaths.has(`${root}/${requiredPath}`.toLowerCase()),
+    );
+    if (missingRequired.length > 0) {
+      throw new Error(`知识库 ZIP 缺少标准文件：${missingRequired.join("、")}`);
+    }
+    if (validationProfile !== "historical") {
+      for (const requiredPath of [packageManifestPath, completenessPath]) {
+        if (!lowerPaths.has(`${root}/${requiredPath}`.toLowerCase())) {
+          throw new KnowledgeArchiveValidationError(
+            "structure",
+            `知识库 ZIP 缺少 ${requiredPath}`,
+          );
+        }
+      }
+    }
+    if (documents.length === 0) {
+      throw new Error("压缩包中没有可展示的 Markdown、TXT、JSON 或 CSV 文档");
+    }
+    const rawTextByRelativePath = new Map(
+      [...rawTextByArchivePath.entries()].map(([archivePath, rawText]) => [
+        archivePath.slice(root.length + 1),
+        rawText,
+      ]),
+    );
+    const validated =
+      validationProfile === "historical"
+        ? { documents, assets }
+        : validateProfilePackage({
+            profile: validationProfile,
+            archiveContractVersion: options.archiveContractVersion,
+            archiveContractVersions: options.archiveContractVersions,
+            allowV4CustomerVisibleCharacterCountRepair:
+              options.allowV4CustomerVisibleCharacterCountRepair,
+            dashboardEnterpriseMinLeaves: options.dashboardEnterpriseMinLeaves,
+            requireDashboardAdaptiveFormalGate:
+              options.requireDashboardAdaptiveFormalGate,
+            packagePaths,
+            unpackedBytes,
+            rawTextByRelativePath,
+            documents,
+            assets,
+          });
+    const linkedDocuments = validated.documents.map((document) => {
+      let content = document.content;
+      validated.assets.forEach((asset, index) => {
+        const url = asset.id
+          ? `/api/dashboard/knowledge/assets/${snapshotId}/by-id/${encodeURIComponent(asset.id)}`
+          : `/api/dashboard/knowledge/assets/${snapshotId}/${index}`;
+        const relativePath = path.posix.relative(
+          path.posix.dirname(document.path),
+          asset.path,
+        );
+        const candidates = [
+          asset.path,
+          encodeURI(asset.path),
+          relativePath,
+          encodeURI(relativePath),
+          path.basename(asset.path),
+        ];
+        for (const candidate of candidates) {
+          content = content.replaceAll(`(${candidate})`, `(${url})`);
+          content = content.replaceAll(`(./${candidate})`, `(${url})`);
+        }
+      });
+      return { ...document, content };
+    });
+    const packageBuildRevision =
+      "manifest" in validated ? validated.manifest.buildRevision : undefined;
+    const packageSchemaVersion =
+      "manifest" in validated ? validated.manifest.schemaVersion : undefined;
+    return {
+      documents: linkedDocuments,
+      assets: validated.assets,
+      storedAssetKeys,
+      validationProfile,
+      packageBuildRevision,
+      packageSchemaVersion,
+      packageManifestSha256: rawTextByRelativePath.has(packageManifestPath)
+        ? createHash("sha256")
+            .update(
+              Buffer.from(
+                rawTextByRelativePath.get(packageManifestPath)!,
+                "utf8",
+              ),
+            )
+            .digest("hex")
+        : undefined,
+    };
+  } catch (error) {
+    await Promise.all(
+      storedAssetKeys.map((key) =>
+        unlink(path.join(knowledgeAssetRoot(), key)).catch(() => undefined),
+      ),
+    );
+    if (
+      validationProfile !== "historical" &&
+      !(error instanceof KnowledgeArchiveValidationError)
+    ) {
+      const message =
+        error instanceof Error ? error.message : "知识库归档校验失败";
+      throw new KnowledgeArchiveValidationError(
+        classifyKnowledgeArchiveError(message),
+        message,
+      );
+    }
+    throw error;
+  }
+}
+
+export function assertKnowledgeArchiveDownloadIntegrity(input: {
+  buffer: Buffer;
+  expectedSha256: string;
+  expectedBytes: number;
+}) {
+  const actualSha256 = createHash("sha256").update(input.buffer).digest("hex");
+  if (
+    !Number.isInteger(input.expectedBytes) ||
+    input.expectedBytes <= 0 ||
+    input.buffer.length !== input.expectedBytes ||
+    !/^[a-f0-9]{64}$/iu.test(input.expectedSha256) ||
+    actualSha256 !== input.expectedSha256.toLowerCase()
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "unsafe",
+      "知识库 ZIP 下载字节数或 SHA-256 与持久化版本不一致",
+    );
+  }
+}
+
+export async function validateKnowledgeArchiveForDownload(input: {
+  buffer: Buffer;
+  sourceFileName: string;
+  expectedSha256: string;
+  expectedBytes: number;
+  validationProfile?: KnowledgeBaseValidationProfile;
+  archiveContractVersions?: readonly (1 | 2 | 3 | 4)[];
+  dashboardEnterpriseMinLeaves?: number;
+  requireDashboardAdaptiveFormalGate?: boolean;
+  validateParsed?: (
+    parsed: Awaited<ReturnType<typeof readKnowledgeArchive>>,
+  ) => void | Promise<void>;
+}) {
+  assertKnowledgeArchiveDownloadIntegrity(input);
+  let parsed: Awaited<ReturnType<typeof readKnowledgeArchive>>;
+  try {
+    parsed = await readKnowledgeArchive(
+      input.buffer,
+      input.sourceFileName,
+      randomUUID(),
+      {
+        validationProfile: input.validationProfile,
+        archiveContractVersions: input.archiveContractVersions,
+        dashboardEnterpriseMinLeaves: input.dashboardEnterpriseMinLeaves,
+        requireDashboardAdaptiveFormalGate:
+          input.requireDashboardAdaptiveFormalGate,
+      },
+    );
+  } catch (error) {
+    if (error instanceof KnowledgeArchiveValidationError) throw error;
+    const message =
+      error instanceof Error ? error.message : "知识库 ZIP 下载复核失败";
+    throw new KnowledgeArchiveValidationError(
+      classifyKnowledgeArchiveError(message),
+      message,
+    );
+  }
+  try {
+    await input.validateParsed?.(parsed);
+  } finally {
+    await removeStoredKnowledgeAssets(parsed.storedAssetKeys);
+  }
+  // Parsing and the caller's semantic validation must not substitute for the
+  // exact durable byte contract used in Content-Length/ETag/download records.
+  assertKnowledgeArchiveDownloadIntegrity(input);
+}
+
+export function normalizedEnterpriseEvidence(value: string) {
+  return value.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+}
+
+export function assertKnowledgeArchiveEnterpriseIdentity(input: {
+  enterpriseIdentityConfirmed: boolean;
+  brandName: string;
+  documents: KnowledgeDocument[];
+}) {
+  const brandName = normalizedEnterpriseEvidence(input.brandName);
+  if (!brandName) {
+    throw new Error("请先由管理员配置当前账号的企业名称");
+  }
+  const identityDocuments = input.documents.filter((document) => {
+    const basename = path.posix.basename(document.path).toLowerCase();
+    return (
+      basename === "readme.md" ||
+      basename === "00_knowledge_tree.md" ||
+      basename === "00_source_index.md"
+    );
+  });
+  const candidates =
+    identityDocuments.length > 0 ? identityDocuments : input.documents;
+  const matches = candidates.some((document) =>
+    normalizedEnterpriseEvidence(
+      `${document.title}\n${document.content}`,
+    ).includes(brandName),
+  );
+  if (!matches) {
+    throw new Error(
+      `知识库包未声明当前账号绑定企业“${input.brandName}”，请核对目标用户后重新上传`,
+    );
+  }
+}
+
+export function assertDashboardOwnedKnowledgePackageEnterpriseIdentity(input: {
+  brandName: string;
+  buildCompanyName: string;
+  manifestCompanyName: string;
+}) {
+  const brandName = normalizedEnterpriseEvidence(input.brandName);
+  const buildCompanyName = normalizedEnterpriseEvidence(input.buildCompanyName);
+  const manifestCompanyName = normalizedEnterpriseEvidence(
+    input.manifestCompanyName,
+  );
+  if (!brandName) {
+    throw new Error("请先由管理员配置当前账号的企业名称");
+  }
+  if (
+    !buildCompanyName ||
+    !manifestCompanyName ||
+    buildCompanyName !== brandName ||
+    manifestCompanyName !== brandName
+  ) {
+    throw new Error(
+      `知识库包绑定企业与当前账号“${input.brandName}”不一致，请核对目标用户后重新生成`,
+    );
+  }
+}
+
+
+export function dashboardKnowledgePublishErrorForLog(
+  error: unknown,
+  secrets: Iterable<unknown> = [],
+) {
+  return safeErrorForLog(error, { secrets });
+}
+
+export function knowledgeArchiveDownloadFailureCode(error: unknown) {
+  const code = String(
+    (error as { code?: unknown } | null)?.code || "",
+  ).toUpperCase();
+  if (code) return code;
+  const message = String(
+    (error as { message?: unknown } | null)?.message || "",
+  ).toUpperCase();
+  return /^[A-Z0-9_]{1,100}$/u.test(message) ? message : "";
+}
+
+export function isKnowledgeArchiveUnsafeUrlFailure(error: unknown) {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current instanceof ExternalUrlRejectedError) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+export function knowledgeArchiveTransportFailure(
+  error: unknown,
+  abortedForStall = false,
+) {
+  if (isKnowledgeArchiveUnsafeUrlFailure(error)) {
+    return new KnowledgeArchiveDownloadError(
+      "unsafe_url",
+      "知识库 ZIP 下载地址不安全",
+    );
+  }
+  const code = knowledgeArchiveDownloadFailureCode(error);
+  if (
+    abortedForStall ||
+    code === "ECONNABORTED" ||
+    code === "ETIMEDOUT" ||
+    code === "ESOCKETTIMEDOUT"
+  ) {
+    return new KnowledgeArchiveDownloadError("timeout", "知识库 ZIP 下载超时");
+  }
+  return new KnowledgeArchiveDownloadError(
+    "transport",
+    "知识库 ZIP 下载连接失败",
+  );
+}
+
+export function knowledgeArchiveLocalReadFailure(error: unknown) {
+  const code = knowledgeArchiveDownloadFailureCode(error);
+  if (code === "LOCAL_FILE_CONTENT_SIZE_MISMATCH") {
+    return new KnowledgeArchiveDownloadError(
+      "local_size_mismatch",
+      "知识库 ZIP 本地持久副本不完整",
+    );
+  }
+  if (
+    code === "LOCAL_FILE_CONTENT_INVALID" ||
+    code === "PRESALES_FILE_RETENTION_INVALID"
+  ) {
+    return new KnowledgeArchiveDownloadError(
+      "local_copy_invalid",
+      "知识库 ZIP 本地持久副本无效",
+    );
+  }
+  return knowledgeArchiveTransportFailure(error);
+}
+
+export async function downloadArchiveBytes(input: {
+  descriptor: KnowledgeArchiveDescriptor;
+  credential?: DecryptedCredential;
+  accountUserId?: number;
+  credentialRef: string;
+  baseUrl: string;
+  allowProviderFileIdFallback?: boolean;
+}) {
+  let filename = input.descriptor.filename;
+  let downloadUrl: string | undefined;
+  let authenticated = false;
+  let providerResponse:
+    | {
+        status: number;
+        headers: Record<string, string>;
+        data: import("node:stream").Readable;
+      }
+    | undefined;
+  const fileId =
+    input.descriptor.fileId ||
+    (input.descriptor.url
+      ? knowledgeArchiveFileIdFromUrl(input.descriptor.url)
+      : undefined);
+
+  if (input.credential?.provider === "zhipu") {
+    const descriptorId = input.descriptor.url?.startsWith("zhipu-file:")
+      ? input.descriptor.url.slice("zhipu-file:".length)
+      : fileId;
+    if (!descriptorId || (fileId && fileId !== descriptorId)) {
+      throw new KnowledgeArchiveDownloadError(
+        "missing_url",
+        "知识库产物缺少一致的供应商文件标识",
+      );
+    }
+    try {
+      const client = createCredentialAgentClient(input.credential, {
+        accountUserId: input.accountUserId,
+      });
+      providerResponse = await client.downloadArtifact!(descriptorId);
+    } catch (error) {
+      throw knowledgeArchiveTransportFailure(error);
+    }
+  }
+
+  if (!providerResponse && fileId) {
+    let stored: Awaited<ReturnType<typeof readStoredPresalesFile>>;
+    try {
+      stored = await readStoredPresalesFile(fileId);
+    } catch (error) {
+      throw knowledgeArchiveLocalReadFailure(error);
+    }
+    if (stored) {
+      if (stored.sizeBytes > MAX_ARCHIVE_BYTES) {
+        throw new KnowledgeArchiveDownloadError(
+          "too_large",
+          "知识库 ZIP 超过 250 MB",
+        );
+      }
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      const hash = createHash("sha256");
+      try {
+        for await (const rawChunk of stored.createReadStream()) {
+          const chunk = Buffer.isBuffer(rawChunk)
+            ? rawChunk
+            : Buffer.from(rawChunk);
+          totalBytes += chunk.length;
+          if (totalBytes > MAX_ARCHIVE_BYTES) {
+            throw new KnowledgeArchiveDownloadError(
+              "too_large",
+              "知识库 ZIP 超过 250 MB",
+            );
+          }
+          chunks.push(chunk);
+          hash.update(chunk);
+        }
+      } catch (error) {
+        if (error instanceof KnowledgeArchiveDownloadError) throw error;
+        throw knowledgeArchiveLocalReadFailure(error);
+      }
+      if (totalBytes === 0 || totalBytes !== stored.sizeBytes) {
+        throw new KnowledgeArchiveDownloadError(
+          totalBytes === 0 ? "empty" : "local_size_mismatch",
+          "知识库 ZIP 本地持久副本不完整",
+        );
+      }
+      if (stored.sha256 && hash.digest("hex") !== stored.sha256) {
+        throw new KnowledgeArchiveDownloadError(
+          "local_sha256_mismatch",
+          "知识库 ZIP 本地持久副本校验失败",
+        );
+      }
+      const buffer = Buffer.concat(chunks, totalBytes);
+      filename = stored.filename || filename;
+      if (!filename.toLowerCase().endsWith(".zip")) {
+        filename = `${path.basename(filename, path.extname(filename)) || "knowledge-base"}.zip`;
+      }
+      return { buffer, filename };
+    }
+    if (!input.descriptor.url && input.allowProviderFileIdFallback === true) {
+      try {
+        downloadUrl = assertSafeExternalUrl(
+          new URL(
+            `v1/files/${encodeURIComponent(fileId)}/content`,
+            `${input.baseUrl.replace(/\/+$/u, "")}/`,
+          ).toString(),
+        );
+        authenticated = true;
+      } catch {
+        throw new KnowledgeArchiveDownloadError(
+          "local_copy_missing",
+          "知识库 ZIP 没有可读取的本地副本或 Provider 文件地址",
+        );
+      }
+    }
+    if (!input.descriptor.url && !downloadUrl) {
+      throw new KnowledgeArchiveDownloadError(
+        "local_copy_missing",
+        "知识库 ZIP 没有可读取的本地副本或 Provider 文件地址",
+      );
+    }
+  }
+  if (!providerResponse && !downloadUrl && input.descriptor.url) {
+    try {
+      downloadUrl = assertSafeExternalUrl(input.descriptor.url);
+    } catch {
+      throw new KnowledgeArchiveDownloadError(
+        "unsafe_url",
+        "知识库 ZIP 下载地址不安全",
+      );
+    }
+  }
+
+  if (!providerResponse && !downloadUrl) {
+    throw new KnowledgeArchiveDownloadError(
+      "missing_url",
+      "知识库文件没有可验证的下载地址",
+    );
+  }
+  const controller = new AbortController();
+  let response: Pick<AxiosResponse, "status" | "headers" | "data">;
+  try {
+    response =
+      providerResponse ??
+      (await downloadArchiveStream(downloadUrl!, {
+        ...(authenticated ? {credentialRef: input.credentialRef} : {}),
+        responseType: "stream",
+        timeout: 120_000,
+        maxContentLength: MAX_ARCHIVE_BYTES,
+        signal: controller.signal,
+        validateStatus: () => true,
+      }));
+  } catch (error) {
+    throw knowledgeArchiveTransportFailure(error);
+  }
+  if (
+    authenticated &&
+    response.status >= 300 &&
+    response.status < 400 &&
+    response.headers.location
+  ) {
+    let redirectUrl: string;
+    try {
+      redirectUrl = assertSafeExternalUrl(
+        new URL(String(response.headers.location), downloadUrl!).toString(),
+      );
+    } catch {
+      response.data?.destroy?.();
+      throw new KnowledgeArchiveDownloadError(
+        "unsafe_url",
+        "知识库 ZIP 下载地址不安全",
+      );
+    }
+    try {
+      response = await downloadArchiveStream(redirectUrl, {
+        responseType: "stream",
+        timeout: 120_000,
+        maxContentLength: MAX_ARCHIVE_BYTES,
+        signal: controller.signal,
+        validateStatus: () => true,
+      });
+    } catch (error) {
+      throw knowledgeArchiveTransportFailure(error);
+    }
+  }
+  if (response.status !== 200) {
+    response.data?.destroy?.();
+    throw new KnowledgeArchiveDownloadError(
+      "http_status",
+      `下载知识库 ZIP 失败 (${response.status})`,
+      response.status,
+    );
+  }
+  const disposition = String(response.headers["content-disposition"] || "");
+  const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plainFilename = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  const responseFilename = encodedFilename || plainFilename;
+  if (responseFilename) {
+    try {
+      filename = path.basename(decodeURIComponent(responseFilename.trim()));
+    } catch {
+      filename = path.basename(responseFilename.trim());
+    }
+  }
+  const declaredLength = Number(response.headers["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_ARCHIVE_BYTES) {
+    response.data?.destroy?.();
+    throw new KnowledgeArchiveDownloadError(
+      "too_large",
+      "知识库 ZIP 超过 250 MB",
+    );
+  }
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  let lastProgressAt = Date.now();
+  let stalled = false;
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastProgressAt >= 120_000) {
+      stalled = true;
+      controller.abort();
+    }
+  }, 10_000);
+  watchdog.unref();
+  try {
+    for await (const rawChunk of response.data as AsyncIterable<
+      Buffer | Uint8Array | string
+    >) {
+      const chunk = Buffer.isBuffer(rawChunk)
+        ? rawChunk
+        : Buffer.from(rawChunk);
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_ARCHIVE_BYTES) {
+        controller.abort();
+        throw new KnowledgeArchiveDownloadError(
+          "too_large",
+          "知识库 ZIP 超过 250 MB",
+        );
+      }
+      chunks.push(chunk);
+      lastProgressAt = Date.now();
+    }
+  } catch (error) {
+    if (error instanceof KnowledgeArchiveDownloadError) throw error;
+    throw knowledgeArchiveTransportFailure(error, stalled);
+  } finally {
+    clearInterval(watchdog);
+  }
+  if (stalled) {
+    throw new KnowledgeArchiveDownloadError("timeout", "知识库 ZIP 下载超时");
+  }
+  const buffer = Buffer.concat(chunks, totalBytes);
+  if (buffer.length === 0) {
+    throw new KnowledgeArchiveDownloadError("empty", "知识库 ZIP 内容为空");
+  }
+  if (buffer.length > MAX_ARCHIVE_BYTES) {
+    throw new KnowledgeArchiveDownloadError(
+      "too_large",
+      "知识库 ZIP 超过 250 MB",
+    );
+  }
+  if (!filename.toLowerCase().endsWith(".zip")) {
+    filename = `${path.basename(filename, path.extname(filename)) || "knowledge-base"}.zip`;
+  }
+  return { buffer, filename };
+}
+
+export type KnowledgeBasePublicationCoordinates = {
+  expectedBuildId?: string;
+  expectedGeneration?: number;
+  expectedRevision?: number;
+  expectedContentVersion?: number;
+};
+
+export async function publishKnowledgeBaseBuild(input: KnowledgeBasePublicationCoordinates & {
+  userId: number;
+  actorUserId: number;
+  conversationId: string;
+  firstPublicationOnly?: boolean;
+  onClaimed?: (coordinates: KnowledgeBasePublicationCoordinates) => void | Promise<void>;
+}) {
+  const targetUserId = input.userId;
+  const conversationId = input.conversationId;
+  const requestedVersion: KnowledgeBasePublicationCoordinates = {
+    expectedBuildId: input.expectedBuildId,
+    expectedGeneration: input.expectedGeneration,
+    expectedRevision: input.expectedRevision,
+    expectedContentVersion: input.expectedContentVersion,
+  };
+  let storedAssetKeys: string[] = [];
+  let snapshotCommitted = false;
+  let storedArchive: { userId: number; snapshotId: string } | undefined;
+  let ownsUpdate = false;
+  try {
+    await assertServiceCapability(targetUserId, "knowledgeBuild");
+    await assertKnowledgeBaseWritable(targetUserId);
+    let build = await assertKnowledgeBaseReadyForUpdate({
+      userId: targetUserId,
+      conversationId,
+      ...requestedVersion,
+    });
+    if (build.status === "published" && build.publishedSnapshotId) {
+      const snapshot = await getKnowledgeSnapshotById({
+        userId: targetUserId,
+        snapshotId: build.publishedSnapshotId,
+      });
+      if (!snapshot) {
+        throw new Error("已发布知识库记录不完整，请联系管理员");
+      }
+      return { kind: "knowledge" as const, snapshot, idempotent: true };
+    }
+    if (input.firstPublicationOnly && (build.publishedAt || build.publishedSnapshotId)) {
+      throw new Error("当前知识库已有发布版本，请手动更新知识库");
+    }
+    // Freeze the accepted draft even for older clients that omit coordinates.
+    // A concurrent edit must never become part of an already-confirmed update.
+    Object.assign(requestedVersion, {
+      expectedBuildId: build.id,
+      expectedGeneration: build.generation,
+      expectedRevision: build.revision,
+      expectedContentVersion: build.contentVersion ?? undefined,
+    });
+    const acknowledgeUpdate = async () => {
+      ownsUpdate = true;
+      await input.onClaimed?.(requestedVersion);
+    };
+    if (
+      !isDashboardOwnedKnowledgePackageBuild(build) ||
+      build.packageRevision !== build.revision ||
+      build.packageStatus !== "ready"
+    ) {
+      await generateKnowledgeBasePackageForUpdate(build, acknowledgeUpdate);
+    } else {
+      await acknowledgeUpdate();
+    }
+    build = await assertKnowledgeBasePublishable({
+      userId: targetUserId,
+      conversationId,
+      ...requestedVersion,
+    });
+    const taskId = knowledgeBasePackageWriterTaskId(build);
+    const hasDurablePackage = Boolean(
+      build.packageStorageKey &&
+        build.packageArchiveSha256 &&
+        build.packageSizeBytes,
+    );
+    let downloaded: { buffer: Buffer; filename: string };
+    let sourceArtifactHash: string;
+
+    if (hasDurablePackage) {
+      // Publication consumes the ZIP built for this explicit update, without
+      // waiting for a provider task to produce another archive.
+      downloaded = {
+        buffer: await readKnowledgeBuildArtifact({
+          userId: targetUserId,
+          buildId: build.id,
+          generation: build.generation,
+          kind: "package",
+          expectedSha256: build.packageArchiveSha256!,
+          expectedBytes: build.packageSizeBytes!,
+          storageKey: build.packageStorageKey!,
+        }),
+        filename: String(
+          build.packageFilename || "frontmind-knowledge-base.zip",
+        ),
+      };
+      sourceArtifactHash = knowledgeBasePublicationBindingHash(build)!;
+    } else {
+      throw new Error("最终 ZIP 尚未生成，请重新点击更新知识库");
+    }
+    const archiveHash = createHash("sha256")
+      .update(downloaded.buffer)
+      .digest("hex");
+    const snapshotId = randomUUID();
+    const dashboardOwnedPackage = isDashboardOwnedKnowledgePackageBuild(build);
+    const packageNodes = dashboardOwnedPackage
+      ? await getDb().then(async (db) => {
+          if (!db) throw new Error("数据库暂不可用，无法校验本地知识库包");
+          return db
+            .select()
+            .from(knowledgeBaseBuildNodes)
+            .where(eq(knowledgeBaseBuildNodes.buildId, build.id));
+        })
+      : undefined;
+    const parsed = dashboardOwnedPackage
+      ? await readDashboardOwnedKnowledgePackage({
+          buffer: downloaded.buffer,
+          expected: {
+            buildId: build.id,
+            generation: build.generation,
+            revision: build.revision,
+            companyName: build.companyName,
+          },
+          nodes: packageNodes,
+          storeAsset: async ({ path: assetPath, mimeType, buffer }) => {
+            const declaredExtension = path.extname(assetPath).toLowerCase();
+            const extension =
+              imageMimeByExtension[declaredExtension] === mimeType
+                ? declaredExtension
+                : Object.entries(imageMimeByExtension).find(
+                    ([, candidateMimeType]) => candidateMimeType === mimeType,
+                  )?.[0];
+            if (!extension) {
+              throw new Error("本地知识库包包含不支持的资源格式");
+            }
+            const key = `${randomUUID()}${extension}`;
+            await mkdir(knowledgeAssetRoot(), { recursive: true });
+            await writeFile(path.join(knowledgeAssetRoot(), key), buffer, {
+              flag: "wx",
+            });
+            return key;
+          },
+        })
+      : await readKnowledgeArchive(
+          downloaded.buffer,
+          downloaded.filename,
+          snapshotId,
+          {
+            validationProfile:
+              build.skillVersion === "1"
+                ? "historical"
+                : "dashboard-enterprise-v1",
+            archiveContractVersions: knowledgeBaseArchiveReadContractVersions(
+              build.skillVersion,
+            ),
+            dashboardEnterpriseMinLeaves: knowledgeBaseTreePolicy(
+              build.treePolicyVersion,
+            ).minLeaves,
+            requireDashboardAdaptiveFormalGate: build.treePolicyVersion === 2,
+          },
+        );
+    storedAssetKeys = parsed.storedAssetKeys;
+    if (
+      !dashboardOwnedPackage &&
+      (build.skillVersion === "3" || build.skillVersion === "4")
+    ) {
+      if (
+        build.skillVersion === "4" &&
+        parsed.packageBuildRevision !== build.revision
+      ) {
+        throw new Error(
+          `最终 ZIP buildRevision 与发布版本不一致：期望 ${build.revision}，实际 ${String(parsed.packageBuildRevision ?? "缺失")}`,
+        );
+      }
+      const db = await getDb();
+      if (!db) throw new Error("数据库暂不可用，无法校验最终知识库节点");
+      const nodes = await db
+        .select()
+        .from(knowledgeBaseBuildNodes)
+        .where(eq(knowledgeBaseBuildNodes.buildId, build.id));
+      const {
+        expectedCustomerUploads,
+        expectedOfficialLogoUpload,
+        expectedOfficialLogoProvenance,
+      } = knowledgeBaseArchiveRequiresV4UploadEvidence(
+        build.skillVersion,
+        parsed.packageSchemaVersion,
+      )
+        ? await verifiedKnowledgeBasePackageUploadEvidenceForBuild({
+            userId: targetUserId,
+            buildId: build.id,
+            generation: build.generation,
+            officialLogoSha256: build.logoSha256,
+            packageArchiveSha256: build.packageArchiveSha256,
+          })
+        : {
+            expectedCustomerUploads: [],
+            expectedOfficialLogoUpload: undefined,
+            expectedOfficialLogoProvenance: undefined,
+          };
+      assertKnowledgeBasePackageMatchesBuild({
+        nodes: nodes.map((node) => ({
+          leafId: node.leafId,
+          title: node.title,
+          branchId: node.branchId,
+          branchTitle: node.branchTitle,
+          ordinal: node.ordinal,
+          status: node.status,
+          contentMarkdown: node.contentMarkdown,
+          contentSha256: node.contentSha256,
+        })),
+        documents: parsed.documents,
+        assets: parsed.assets,
+        expectedLogoSha256: String(build.logoSha256 || ""),
+        packageSchemaVersion: parsed.packageSchemaVersion,
+        expectedCustomerUploads,
+        expectedOfficialLogoUpload,
+        expectedOfficialLogoProvenance,
+        legacyV3Compatibility: build.skillVersion === "3",
+        legacyV4ReadCompatibility: build.skillVersion === "4",
+      });
+      if (parsed.packageSchemaVersion === 4) {
+        await assertKnowledgeBaseCustomerUploadVisualBindings({
+          assets: parsed.assets,
+          expectedUploads: expectedCustomerUploads,
+          readPackagedAssetBytes: readStoredKnowledgeAssetBytes,
+        });
+      }
+    }
+    const workspace = await getDashboardWorkspace(targetUserId);
+    if (dashboardOwnedPackage) {
+      assertDashboardOwnedKnowledgePackageEnterpriseIdentity({
+        brandName: workspace.payload.brandName,
+        buildCompanyName: build.companyName,
+        manifestCompanyName: (
+          parsed as Awaited<
+            ReturnType<typeof readDashboardOwnedKnowledgePackage>
+          >
+        ).manifest.companyName,
+      });
+    } else {
+      assertKnowledgeArchiveEnterpriseIdentity({
+        enterpriseIdentityConfirmed: Boolean(
+          workspace.enterpriseIdentityBoundAt,
+        ),
+        brandName: workspace.payload.brandName,
+        documents: parsed.documents,
+      });
+    }
+    await persistKnowledgeSnapshotArchive({
+      userId: targetUserId,
+      snapshotId,
+      buffer: downloaded.buffer,
+      expectedSha256: archiveHash,
+    });
+    storedArchive = { userId: targetUserId, snapshotId };
+    const snapshot = await createKnowledgeSnapshot({
+      businessSubmission: true,
+      snapshotId,
+      userId: targetUserId,
+      actorUserId: input.actorUserId,
+      sourceFileName: downloaded.filename,
+      sourceConversationId: conversationId,
+      sourceBuildId: build.id,
+      sourceBuildRevision: build.revision,
+      sourceBuildContentVersion: build.contentVersion ?? undefined,
+      sourceTaskId: taskId,
+      sourceArtifactHash,
+      archiveHash,
+      documents: parsed.documents,
+      assets: parsed.assets,
+      totalBytes: downloaded.buffer.length,
+    });
+    snapshotCommitted = true;
+    return { kind: "knowledge" as const, snapshot };
+  } catch (error) {
+    await removeUncommittedStoredKnowledgeAssets({
+      snapshotCommitted,
+      storedAssetKeys,
+    });
+    if (!snapshotCommitted && storedArchive) {
+      await removeKnowledgeSnapshotArchive(storedArchive).catch(
+        () => undefined,
+      );
+    }
+    const publishedBuild = await assertKnowledgeBasePublishable({
+      userId: targetUserId,
+      conversationId,
+      ...requestedVersion,
+    }).catch(() => null);
+    if (
+      publishedBuild?.status === "published" &&
+      publishedBuild.publishedSnapshotId
+    ) {
+      const snapshot = await getKnowledgeSnapshotById({
+        userId: targetUserId,
+        snapshotId: publishedBuild.publishedSnapshotId,
+      }).catch(() => null);
+      if (snapshot) {
+        return { kind: "knowledge" as const, snapshot, idempotent: true };
+      }
+    }
+    // Only the owner of this update may mark its accepted draft as failed.
+    // A competing request must never replace another publication's state.
+    if (ownsUpdate) {
+      const db = await getDb();
+      if (db && requestedVersion.expectedBuildId && requestedVersion.expectedRevision !== undefined) {
+        await db.update(knowledgeBaseBuilds).set({
+          packageStatus: "attention_required", packageNextRetryAt: null,
+          packageLastErrorCode: "KNOWLEDGE_PUBLICATION_FAILED", updatedAt: new Date(),
+        }).where(and(
+          eq(knowledgeBaseBuilds.id, requestedVersion.expectedBuildId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, targetUserId),
+          eq(knowledgeBaseBuilds.revision, requestedVersion.expectedRevision),
+          eq(knowledgeBaseBuilds.generation, requestedVersion.expectedGeneration!),
+          eq(knowledgeBaseBuilds.status, "ready_to_publish"),
+          eq(knowledgeBaseBuilds.packageStatus, "ready"),
+        ));
+      }
+    }
+    if (!ownsUpdate && input.firstPublicationOnly &&
+      requestedVersion.expectedBuildId && requestedVersion.expectedGeneration !== undefined &&
+      requestedVersion.expectedRevision !== undefined && requestedVersion.expectedContentVersion !== undefined) {
+      const db = await getDb();
+      // A preflight failure still needs a visible result after confirmation.
+      // Do not touch another request's claim, a newer draft or reset history.
+      if (db) await db.update(knowledgeBaseBuilds).set({
+        packageStatus: "attention_required", packageNextRetryAt: null,
+        packageLastErrorCode: "KNOWLEDGE_PUBLICATION_FAILED", updatedAt: new Date(),
+      }).where(and(
+        eq(knowledgeBaseBuilds.id, requestedVersion.expectedBuildId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, targetUserId),
+        eq(knowledgeBaseBuilds.generation, requestedVersion.expectedGeneration),
+        eq(knowledgeBaseBuilds.revision, requestedVersion.expectedRevision),
+        eq(knowledgeBaseBuilds.contentVersion, requestedVersion.expectedContentVersion),
+        eq(knowledgeBaseBuilds.status, "ready_to_publish"),
+        eq(knowledgeBaseBuilds.packageStatus, "not_started"),
+        isNull(knowledgeBaseBuilds.activeTurnId),
+        isNull(knowledgeBaseBuilds.publishedAt),
+        isNull(knowledgeBaseBuilds.publishedSnapshotId),
+      ));
+    }
+    throw error;
+  }
+}
+export function knowledgeArchiveErrorCode(error:unknown){return error instanceof KnowledgeArchiveValidationError?`KNOWLEDGE_ARCHIVE_${error.category.toUpperCase()}_INVALID`:undefined;}
