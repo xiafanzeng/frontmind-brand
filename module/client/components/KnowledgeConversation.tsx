@@ -3,7 +3,7 @@ import {useEffect,useRef,useState} from 'react';
 import {toast} from 'sonner';
 import {Button} from '@frontmind/module-ui/components/ui/button';
 import {Textarea} from '@frontmind/module-ui/components/ui/textarea';
-import MarkdownRenderer from '@frontmind/module-ui/components/MarkdownRenderer';
+import BrandConversationMessage from './BrandConversationMessage';
 import {EmptyConversationHint,buildKnowledgeBaseStarterAttachmentManifest} from './KnowledgeStarter';
 import {useKnowledgeBaseStarter} from '../lib/useKnowledgeBaseStarter';
 import {useKnowledgeBaseUploadBatch,useKnowledgeBaseUploadField} from '../lib/knowledge-base-upload-manager';
@@ -73,7 +73,7 @@ export default function KnowledgeConversation(props:BrandHomeProps){
  const scope=`${context.workbenchScopeKey??runtime.workspaceId}:${runtime.accountId}:${conversation?.id??'new'}`;
  const batch=useKnowledgeBaseUploadBatch(`${scope}:${props.knowledgeBaseResetRevision??0}`,`${scope}:`);
  const start=useKnowledgeBaseStarter(batch);
- const messages=sanitizeKnowledgeBaseOutputMessages(conversation?.messages??[]);
+ const messages=sanitizeKnowledgeBaseOutputMessages(conversation?.messages??[]).map(message=>props.messageProjection?.(message)??message);
  const running=Boolean(conversation&&['running','pending'].includes(conversation.status));
  const slots=generalExecutionSlots(messages,conversation?.execution,running);
  const copyable=finalReplyIds(messages,conversation?.execution,running);
@@ -82,7 +82,15 @@ export default function KnowledgeConversation(props:BrandHomeProps){
  return <section className="brand-knowledge-conversation" aria-label="知识库构建与恢复">
   {context.syncError&&<p role="alert">{context.syncError}</p>}
   {!conversation?.knowledgeBase?.initialized&&!props.knowledgeBaseProgress?<EmptyConversationHint uploadScopeKey={scope} resetRevision={props.knowledgeBaseResetRevision??0} eligible={!props.knowledgeEditingBlocked} companyName="" companyConfigured={false} companyLoading={false} inline onDirtyChange={props.onComposerDirtyChange} onStartKnowledgeBase={start} onBatchCancelled={revision=>conversation?props.onKnowledgeBaseBatchCancelled?.(conversation.id,revision):undefined}/>:<>
-   <div className="brand-knowledge-transcript">{messages.map(message=><article key={message.id} className={`brand-knowledge-message brand-knowledge-message--${message.role}`}><GeneralExecutionActivity items={slots.before.get(message.id)}/>{props.inlineBlocks?.filter(block=>block.anchor.messageId===message.id&&block.placement==='before').map(block=><div key={block.id}>{block.content}</div>)}<MarkdownRenderer content={message.content} allowCopy={copyable.has(message.id)}/>{message.attachments?.length?<ul>{message.attachments.map(file=><li key={file.id}>{file.name}</li>)}</ul>:null}<ExecutionDivider timing={timings.get(message.id)}/><GeneralExecutionActivity items={slots.after.get(message.id)} placement="after"/></article>)}{props.conversationFooter}</div>
+   <div className="brand-knowledge-transcript" data-testid="chat-messages-viewport">{messages.map(message=><article key={message.id} data-reading-anchor={message.id} className={`brand-knowledge-message brand-knowledge-message--${message.role}`}>
+    {props.inlineBlocks?.filter(block=>block.anchor.messageId===message.id&&block.placement==='before').map(block=><div key={block.id}>{block.content}</div>)}
+    <GeneralExecutionActivity items={slots.before.get(message.id)}/>
+    <BrandConversationMessage message={message} allowCopy={copyable.has(message.id)}>
+     {props.inlineBlocks?.filter(block=>block.anchor.messageId===message.id&&block.placement==='after').map(block=><div key={block.id}>{block.content}</div>)}
+    </BrandConversationMessage>
+    {message.role==='user'&&<ExecutionDivider timing={timings.get(message.id)}/>}
+    <GeneralExecutionActivity items={slots.after.get(message.id)} placement="after"/>
+   </article>)}{props.conversationFooter}</div>
    {props.knowledgeBaseProgress&&<KnowledgeWorkspaceStatus progress={props.knowledgeBaseProgress}/>}
    <KnowledgeComposer {...props}/>
   </>}
