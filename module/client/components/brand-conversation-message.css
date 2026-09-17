@@ -3,8 +3,8 @@
 .brand-conversation-message__avatar {
   display: flex; flex: 0 0 32px; align-items: center; justify-content: center;
   width: 32px; height: 32px; margin-top: 2px; border-radius: 50%;
-  background: color-mix(in srgb, var(--accent, #727b77) 15%, transparent);
-  color: var(--accent, #727b77);
+  background: #f4f4f5;
+  color: var(--muted-foreground, #6b7280);
 }
 .brand-conversation-message__content { width: 100%; min-width: 0; }
 .brand-conversation-message--user > .brand-conversation-message__content { width: auto; max-width: min(80%, calc(100% - 44px)); }
