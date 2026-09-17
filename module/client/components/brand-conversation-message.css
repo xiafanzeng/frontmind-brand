@@ -1,0 +1,28 @@
+.brand-conversation-message { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.brand-conversation-message--user { flex-direction: row-reverse; }
+.brand-conversation-message__avatar {
+  display: flex; flex: 0 0 32px; align-items: center; justify-content: center;
+  width: 32px; height: 32px; margin-top: 2px; border-radius: 50%;
+  background: color-mix(in srgb, var(--accent, #727b77) 15%, transparent);
+  color: var(--accent, #727b77);
+}
+.brand-conversation-message__content { width: 100%; min-width: 0; }
+.brand-conversation-message--user > .brand-conversation-message__content { width: auto; max-width: min(80%, calc(100% - 44px)); }
+.brand-conversation-message__user-text {
+  margin: 0; padding: 12px 16px; border: 1px solid #e4e4e7;
+  border-radius: 16px 6px 16px 16px; background: #f4f4f5;
+  color: var(--foreground, #252932); font-size: 16px; line-height: 1.625;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.brand-conversation-message__answer { padding-top: 4px; min-width: 0; }
+.brand-conversation-message__attachments { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 0 0 8px; }
+.brand-conversation-message--user .brand-conversation-message__attachments { justify-content: flex-end; }
+.brand-conversation-message__attachments > li {
+  display: flex; align-items: center; gap: 8px; max-width: 100%; padding: 8px 12px;
+  border: 1px solid #e4e4e7; border-radius: 8px; font-size: 13px;
+}
+.brand-conversation-message__attachments svg { flex-shrink: 0; }
+.brand-conversation-message__attachments span { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 639px) {
+  .brand-conversation-message--user > .brand-conversation-message__content { max-width: min(92%, calc(100% - 44px)); }
+}
