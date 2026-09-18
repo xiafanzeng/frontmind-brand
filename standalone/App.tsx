@@ -5,6 +5,7 @@ import {Toaster} from 'sonner';
 import {BRAND_MODULE_LABEL} from '../module/client/module-label';
 import ModuleWorkspace,{type BrandPage,type ModuleContext} from '../module/client/ModuleWorkspace';
 import {configureBrandApiHooks} from '../module/client/api-hooks';
+import {KnowledgeBaseUploadProvider} from '../module/client/lib/knowledge-base-upload-manager';
 import {brandHost} from '../module/client/host';
 import EnterpriseQaConversation from '../module/client/EnterpriseQaConversation';
 import {createBrandApi,liveRpc} from './api';
@@ -27,5 +28,5 @@ function Runtime({context,preview}:{context:ModuleContext;preview:boolean}){
 export default function App({preview=false}:{preview?:boolean}){
  const [context,setContext]=useState<ModuleContext|null>(()=>preview?{module:'brand',workspace:{id:'brand-local-preview',ownerUserId:0},capabilities:['brand'],marketEdition:'cn'}:null);const [error,setError]=useState('');
  useEffect(()=>{if(preview)return;const abort=new AbortController();void fetch('/api/module/context',{credentials:'same-origin',signal:abort.signal}).then(async response=>{if(!response.ok)throw new Error('无法进入品牌工作区，请重新通过开发门禁');return response.json();}).then(value=>{if(value.module!=='brand'||!value.workspace?.id)throw new Error('品牌运行上下文不匹配');setContext(value);}).catch(error=>{if(!abort.signal.aborted)setError(error.message);});return()=>abort.abort();},[preview]);
- return <div className="brand-standalone">{error?<p role="alert">{error}</p>:context?<Runtime context={context} preview={preview}/>:<p role="status">正在进入品牌工作区…</p>}</div>;
+ return <div className="brand-standalone">{error?<p role="alert">{error}</p>:context?<KnowledgeBaseUploadProvider scopeKey={`${context.workspace.id}:${context.workspace.ownerUserId}`}><Runtime context={context} preview={preview}/></KnowledgeBaseUploadProvider>:<p role="status">正在进入品牌工作区…</p>}</div>;
 }

@@ -32,7 +32,8 @@
     ],
     "overrides": {
       "framer-motion@12.23.22>motion-dom": "12.23.21",
-      "framer-motion@12.23.22>motion-utils": "12.23.6"
+      "framer-motion@12.23.22>motion-utils": "12.23.6",
+      "motion-dom@12.23.21>motion-utils": "12.23.6"
     }
   }
 }
