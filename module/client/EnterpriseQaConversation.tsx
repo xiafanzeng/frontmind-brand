@@ -1,4 +1,8 @@
-import {useCallback,useEffect,useRef,useState} from "react";
+import BusinessChatInput from "@frontmind/module-ui/components/BusinessChatInput";
+import type { BusinessComposerRuntime } from "@frontmind/module-ui/components/business-composer-runtime";
+import { currentKnowledgeBaseReplySnapshot } from "./knowledge-conversation-state";
+import { formatKnowledgeBaseUploadBytes } from "./lib/knowledge-base-upload-manager";
+import {useCallback,useEffect,useMemo,useRef,useState} from "react";
 import BrandConversationMessage from "./components/BrandConversationMessage";
 import {brandHost,useConversation,useWorkspaceDraftGuard,type BrandHomeProps} from "./host";
 import type {Conversation,LocalMessage} from "./conversation-types";
@@ -12,8 +16,7 @@ function status(value:string):Conversation["status"]{return value==="cancelled"?
  * private runtime supplies ownership/knowledge; no product login or agent list. */
 export default function EnterpriseQaConversation({preview=false,messageProjection,conversationFooter,knowledgeEditingBlocked,..._props}:BrandHomeProps&{preview?:boolean}) {
  const context=useConversation();const ref=useRef(context);ref.current=context;
- const [prompt,setPrompt]=useState("");const [files,setFiles]=useState<File[]>([]);const [sending,setSending]=useState(false);const [notice,setNotice]=useState("");const lock=useRef(false);
- useWorkspaceDraftGuard({dirty:Boolean(prompt.trim()||files.length),label:"企业问答输入"});
+ const [sending,setSending]=useState(false);const [notice,setNotice]=useState("");const lock=useRef(false);
  const active=context.activeConversation;
  const request=useCallback(async<T,>(path:string,init:RequestInit={}):Promise<T>=>{const rest=brandHost().captureWorkspaceRestOperation();const response=await rest.fetch(path,{credentials:"same-origin",...init});const value=await response.json();rest.assertActive();if(!response.ok)throw new Error(value.error?.message??value.message??value.error??`请求失败 (${response.status})`);return value;},[]);
  useEffect(() => {
@@ -27,8 +30,8 @@ export default function EnterpriseQaConversation({preview=false,messageProjectio
   });
  }, [preview, active?.id, active?.taskId, active?.status, request]);
  const send=useCallback(async(text:string,attachments:File[])=>{
-  const conversation=ref.current.activeConversation;if(lock.current||!conversation)return;
-  if(preview){setNotice("本地预览不调用企业问答供应商；请在开发子域名验证真实回答与引用。");return;}
+  const conversation=ref.current.activeConversation;if(lock.current||!conversation)return false;
+  if(preview){setNotice("本地预览不调用企业问答供应商；请在开发子域名验证真实回答与引用。");return false;}
   if(conversation.purpose!=="enterprise_qa")throw new Error("请先选择企业问答任务");
   lock.current=true;setSending(true);setNotice("");
   try{
@@ -48,9 +51,17 @@ export default function EnterpriseQaConversation({preview=false,messageProjectio
    ref.current.updateStatus(conversation.id,status(result.status),{taskId:result.id,previousResponseId:result.id,executionKind:"general_chat_v2"});
    ref.current.settleGeneralChatDispatch(conversation.id,pending.id);
    if(!await ref.current.flushConversation(conversation.id))throw new Error("回答已开始，任务绑定尚未保存；请刷新恢复原任务。");
-   setPrompt("");setFiles([]);await ref.current.refreshConversations();
-  }catch(error){setNotice(error instanceof Error?error.message:String(error));}finally{lock.current=false;setSending(false);}
+   await ref.current.refreshConversations();return true;
+  }catch(error){setNotice(error instanceof Error?error.message:String(error));return false;}finally{lock.current=false;setSending(false);}
  },[preview,request]);
+ const composerRuntime=useMemo<BusinessComposerRuntime<unknown,unknown,Conversation,unknown>>(()=>({
+  useConversation, currentKnowledgeBaseReplySnapshot,
+  useSendMessage:()=>({sendMessage:send,uploadProgress:null,knowledgeBaseAttachmentAttempt:null,stopKnowledgeBaseAttachmentAttempt(){},continueKnowledgeBaseAttachmentAttempt(){},discardKnowledgeBaseAttachmentAttempt(){}}),
+  useChatSubmission:()=>null,useWorkspaceDraftGuard,
+  captureWorkspaceRestOperation:()=>brandHost().captureWorkspaceRestOperation(),
+  consumePendingFrontMindBuildDraft:()=>"",GeneralAgentRuntimeBadge:()=>null,KnowledgeBaseManagedUploadRecovery:()=>null,generalSuggestions:[],
+  formatKnowledgeBaseUploadBytes,chatAttachmentSizeError:file=>file.size>64*1024*1024?"企业问答附件每份不超过64MB。":null,knowledgeLogoNoticeCode:"unused-qa-logo",
+ }),[send]);
  const busy=sending||knowledgeEditingBlocked||["running","pending"].includes(active?.status??"");
- return <section className="brand-qa-chat" aria-label="企业问答对话">{notice&&<p role="alert" className="brand-qa-notice">{notice}</p>}<div className="brand-qa-messages">{active?.messages.map(original=>{const message=messageProjection?.(original)??original;return <article key={message.id} className={`brand-qa-message brand-qa-message--${message.role}`}><BrandConversationMessage message={message} allowCopy={!busy}>{message.generalChatDispatch&&<button type="button" disabled={sending} onClick={()=>void send(message.content,[])}>重试本次提交</button>}</BrandConversationMessage></article>})}</div>{conversationFooter}<form onSubmit={event=>{event.preventDefault();if(prompt.trim()&&!busy)void send(prompt,files);}}><textarea aria-label="企业问答问题" value={prompt} onChange={event=>setPrompt(event.target.value)} placeholder="输入关于本企业的问题；回答会依据本工作区已发布的企业知识" disabled={busy||!active}/><input type="file" aria-label="企业问答附件" multiple disabled={busy||!active} onChange={event=>setFiles(Array.from(event.target.files??[]))}/><div><button type="submit" disabled={busy||!active||!prompt.trim()}>发送问题</button>{active?.taskId&&["running","pending"].includes(active.status)&&<button type="button" onClick={()=>void request(`/api/frontmind/v2/tasks/${encodeURIComponent(active.taskId!)}/stop`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}).then(()=>ref.current.refreshConversations()).catch(error=>setNotice(error.message))}>停止当前执行</button>}</div></form></section>;
+ return <section className="brand-qa-chat" aria-label="企业问答对话">{notice&&<p role="alert" className="brand-qa-notice">{notice}</p>}<div className="brand-qa-messages">{active?.messages.map(original=>{const message=messageProjection?.(original)??original;return <article key={message.id} className={`brand-qa-message brand-qa-message--${message.role}`}><BrandConversationMessage message={message} allowCopy={!busy}>{message.generalChatDispatch&&<button className="brand-qa-retry" type="button" disabled={sending} onClick={()=>void send(message.content,[])}>重试本次提交</button>}</BrandConversationMessage></article>})}</div>{conversationFooter}<BusinessChatInput runtime={composerRuntime} purpose="enterprise_qa" welcomeSuggestions="enterprise_qa" operatorWorkspace knowledgeEditingBlocked={Boolean(knowledgeEditingBlocked)||!active}/>{active?.taskId&&["running","pending"].includes(active.status)&&<button className="brand-qa-stop" type="button" onClick={()=>void request(`/api/frontmind/v2/tasks/${encodeURIComponent(active.taskId!)}/stop`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}).then(()=>ref.current.refreshConversations()).catch(error=>setNotice(error.message))}>停止当前执行</button>}</section>;
 }
