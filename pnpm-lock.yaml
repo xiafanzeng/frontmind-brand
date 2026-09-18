@@ -7,6 +7,7 @@ settings:
 overrides:
   framer-motion@12.23.22>motion-dom: 12.23.21
   framer-motion@12.23.22>motion-utils: 12.23.6
+  motion-dom@12.23.21>motion-utils: 12.23.6
 
 importers:
 
@@ -402,6 +403,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      framer-motion:
+        specifier: 12.23.22
+        version: 12.23.22(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       lucide-react:
         specifier: ^0.453.0
         version: 0.453.0(react@19.2.1)
@@ -3927,9 +3931,6 @@ packages:
 
   motion-utils@12.23.6:
     resolution: {integrity: sha512-eAWoPgr4eFEOFfg2WjIsMoqJTW6Z8MTUCgn/GZ3VRpClWBdnbjryiA3ZSNLyxCTmCQx4RmYX6jX1iWHbenUPNQ==}
-
-  motion-utils@12.39.0:
-    resolution: {integrity: sha512-8nadJAJjTtqRkmRF36FoJTrywK9nnFmnPwnSMyxaOCU7GDjN9RTMJIxx9De8ErM+vpPhMccr/6fo5WciyQLnMQ==}
 
   motion-utils@13.3.0:
     resolution: {integrity: sha512-sgSschQp7EseHInIlR7hBbMuvet3RA0bs28KPZAXJcGKGdxHGvh1ogpYDilY3bOMtl73EqPNmp75sAKHYPU5sg==}
@@ -8402,15 +8403,13 @@ snapshots:
 
   motion-dom@12.23.21:
     dependencies:
-      motion-utils: 12.39.0
+      motion-utils: 12.23.6
 
   motion-dom@13.3.0:
     dependencies:
       motion-utils: 13.3.0
 
   motion-utils@12.23.6: {}
-
-  motion-utils@12.39.0: {}
 
   motion-utils@13.3.0: {}
 
