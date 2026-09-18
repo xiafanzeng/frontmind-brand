@@ -27,3 +27,19 @@ describe("Brand conversation presentation", () => {
     expect(container.querySelector(".brand-conversation-message__user-text")).toBeNull();
   });
 });
+
+it("keeps assistant media, artifacts and execution steps when the text is empty", () => {
+  const { container } = render(<BrandConversationMessage message={{ id: "media-only", role: "assistant", timestamp: 3, content: "",
+    attachments: [{ id: "image-reference", type: "image", name: "参考图片.png", base64: "data:image/png;base64,c3ludGhldGlj" }],
+    inlineImages: [{ src: "data:image/png;base64,c3ludGhldGlj", alt: "合成图片" }],
+    outputFiles: [{ fileName: "合成成果.md", fileUrl: "/api/frontmind/v2/artifacts/synthetic/content", mimeType: "text/markdown" }],
+    enterpriseQaAnswer: { schemaVersion: 1, sources: [{ id: "source", kind: "user_attachment", title: "合成参考材料" }] },
+    intermediateSteps: [{ id: "step", type: "function_call", label: "材料整理完成" }],
+  }} />);
+  expect(screen.getByRole("img", { name: "参考图片.png" })).toBeDefined();
+  expect(screen.getByRole("img", { name: "合成图片" })).toBeDefined();
+  expect(screen.getAllByRole("link", { name: "合成成果.md" })).toHaveLength(1);
+  expect(screen.getByLabelText("参考资料").textContent).toContain("合成参考材料");
+  expect(screen.getByText("材料整理完成")).toBeDefined();
+  expect(container.querySelector(".brand-conversation-message__user-text")).toBeNull();
+});
