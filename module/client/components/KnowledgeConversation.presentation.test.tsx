@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
 vi.mock("../host", () => ({
+  ChatInput: () => <div data-testid="shared-knowledge-composer" />,
   useConversation: () => ({ hydrated: true, activeConversation: {
     id: "existing", status: "completed", knowledgeBase: { initialized: true },
     messages: [
@@ -19,6 +20,7 @@ vi.mock("../lib/knowledge-base-upload-manager", () => ({
   useKnowledgeBaseUploadField: (_batch: unknown, _field: unknown, value: unknown) => [value, vi.fn()],
 }));
 vi.mock("../lib/useKnowledgeBaseStarter", () => ({ useKnowledgeBaseStarter: () => vi.fn() }));
+vi.mock("./KnowledgeComposer", () => ({ default: () => null }));
 vi.mock("./KnowledgeStarter", () => ({ EmptyConversationHint: () => null, buildKnowledgeBaseStarterAttachmentManifest: vi.fn() }));
 import KnowledgeConversation from "./KnowledgeConversation";
 
@@ -36,6 +38,7 @@ it("preserves projected text, result blocks on both sides and user-only executio
   expect(screen.getByText("处理前提示")).toBeDefined();
   expect(screen.getByRole("button", { name: "查看已保存的节点" })).toBeDefined();
   expect(screen.getByText("现有知识库成果")).toBeDefined();
+  expect(screen.getByTestId("shared-knowledge-composer")).toBeDefined();
   expect(container.querySelectorAll(".execution-divider")).toHaveLength(1);
   expect(container.querySelector(".brand-knowledge-message--assistant .execution-divider")).toBeNull();
 });
