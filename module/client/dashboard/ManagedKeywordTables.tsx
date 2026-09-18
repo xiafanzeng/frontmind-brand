@@ -61,6 +61,8 @@ export type ManagedKeywordTablesProps = {
   generationEnabled?: boolean;
   dashboardRevision?: number | null;
   knowledgePublished?: boolean;
+  /** A host-owned import dialog can preserve the highlighted source row. */
+  selectedKeyword?: { tableId: string; rowIndex: number } | null;
 };
 
 const KEYWORD_SOURCE_DESCRIPTION =
@@ -545,6 +547,7 @@ export default function ManagedKeywordTables({
   generationEnabled = false,
   dashboardRevision,
   knowledgePublished,
+  selectedKeyword,
 }: ManagedKeywordTablesProps) {
   const { isWorkbench } = useBusinessWorkspace();
   // The confirmation modal is pure ephemeral UI state: it must stay closed on
@@ -868,7 +871,7 @@ export default function ManagedKeywordTables({
                           return (
                             <tr
                               key={`${table.id}-${rowIndex}`}
-
+                              aria-selected={isWorkbench ? selectedKeyword?.tableId === table.id && selectedKeyword.rowIndex === rowIndex : undefined}
                             >
                               {table.displayColumns.map(
                                 ({ column, columnIndex }) => {
