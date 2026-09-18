@@ -1,6 +1,5 @@
 /* Dashboard shell provides all global styles; these rules only arrange brand business content. */
 .brand-page{height:100%;min-height:0}.brand-page--keywords,.brand-page--website-settings{overflow:auto}
-.brand-knowledge-conversation{display:flex;flex-direction:column;height:100%;gap:16px}.brand-knowledge-transcript{flex:1;overflow:auto}.brand-knowledge-message{padding:16px;border-bottom:1px solid #eee}.brand-knowledge-message--user{background:#f6f4fa}.brand-knowledge-composer{border-top:1px solid #e4e7ec;padding:14px;background:#fff}.brand-knowledge-composer textarea{width:100%;min-height:90px;padding:12px;border:1px solid #d9dee7;border-radius:8px}.brand-knowledge-composer>div{display:flex;gap:8px;justify-content:flex-end}
 
 /* Workbench children keep the same flex parent as the integrated Dashboard. */
 .brand-page--knowledge,.brand-page--enterprise-qa{display:contents}
