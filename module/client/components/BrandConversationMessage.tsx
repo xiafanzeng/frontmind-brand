@@ -1,9 +1,44 @@
 import type { ReactNode } from "react";
-import { FileText, User } from "lucide-react";
-import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
+import BusinessMessage, { type BusinessMessageRuntime } from "@frontmind/module-ui/components/BusinessMessage";
+import FilePreview from "@frontmind/module-ui/components/FilePreview";
+import ImagePreview from "@frontmind/module-ui/components/ImagePreview";
 import type { LocalMessage } from "../conversation-types";
 import MessageActions from "./MessageActions";
-import "./brand-conversation-message.css";
+import { sanitizeBrandText } from "../lib/frontmind-api";
+import * as brandHost from "../host";
+
+function buildProxyDownloadUrl(fileUrl: string, fileName?: string, asDownload = false) {
+  try {
+    const parsed = new URL(fileUrl, window.location.origin);
+    if (parsed.pathname.endsWith("/api/frontmind/proxy-download")) {
+      if (fileName) parsed.searchParams.set("filename", sanitizeBrandText(fileName));
+      if (asDownload) parsed.searchParams.set("download", "1");
+      return `${parsed.pathname}${parsed.search}`;
+    }
+    if (/^https?:\/\//i.test(fileUrl)) {
+      const params = new URLSearchParams({ url: fileUrl });
+      if (fileName) params.set("filename", sanitizeBrandText(fileName));
+      if (asDownload) params.set("download", "1");
+      return `/api/frontmind/proxy-download?${params.toString()}`;
+    }
+  } catch { /* malformed URLs are handled by the original source */ }
+  return null;
+}
+
+async function fetchWithAuth(url: string) {
+  const response = await fetch(url, {
+    credentials: "include",
+    headers: typeof brandHost.deliveryProjectHeaders === "function"
+      ? brandHost.deliveryProjectHeaders()
+      : undefined,
+  });
+  if (!response.ok) throw new Error(`文件读取失败（HTTP ${response.status}）`);
+  return URL.createObjectURL(await response.blob());
+}
+
+function nativeDownload(url: string, name: string) {
+  const anchor = document.createElement("a"); anchor.href = url; anchor.download = name; anchor.rel = "noopener"; document.body.appendChild(anchor); anchor.click(); anchor.remove();
+}
 
 /** The original Dashboard message presentation, shared by both Brand hosts. */
 export default function BrandConversationMessage({ message, allowCopy = false, children }: {
@@ -11,30 +46,20 @@ export default function BrandConversationMessage({ message, allowCopy = false, c
   allowCopy?: boolean;
   children?: ReactNode;
 }) {
-  const isUser = message.role === "user";
-  return (
-    <MessageActions message={message} allowCopy={isUser || allowCopy}>
-      <div className={`brand-conversation-message brand-conversation-message--${message.role}`}>
-        {isUser && <div className="brand-conversation-message__avatar" aria-label="用户"><User aria-hidden="true" size={16} /></div>}
-        <div className="brand-conversation-message__content">
-          {!!message.attachments?.length && (
-            <ul className="brand-conversation-message__attachments" aria-label="消息附件">
-              {message.attachments.map(file => <li key={file.id}>{file.base64 || file.blobUrl ? <img src={file.base64 ?? file.blobUrl} alt={file.name} className="brand-conversation-message__attachment-image" /> : <FileText size={16} aria-hidden="true" />}<span>{file.name}</span></li>)}
-            </ul>
-          )}
-          {isUser
-            ? (message.content.trim() ? <p className="brand-conversation-message__user-text">{message.content}</p> : null)
-            : <div className="brand-conversation-message__answer">
-                {message.content.trim() && <MarkdownRenderer content={message.content} allowCopy={allowCopy} generalChatLinks />}
-                {message.inlineImages?.map(image => <img key={image.src} src={image.src} alt={image.alt ?? ""} className="brand-conversation-message__inline-image" />)}
-                {message.enterpriseQaAnswer?.sources?.length ? <ul className="brand-conversation-message__sources" aria-label="参考资料">{message.enterpriseQaAnswer.sources.map(source => <li key={source.id}>{source.title}</li>)}</ul> : null}
-                {message.outputFiles?.map(file => <a className="brand-conversation-message__output" key={file.fileUrl} href={file.fileUrl} target="_blank" rel="noreferrer">{file.fileName}</a>)}
-                {message.stepGroups?.map(group => <details key={group.id} className="brand-conversation-message__steps"><summary>{group.title}</summary>{group.description ? <p>{group.description}</p> : null}<ul>{group.steps.map(step => <li key={step.id}>{step.label}{step.description ? `：${step.description}` : ""}</li>)}</ul></details>)}
-                {!message.stepGroups?.length && message.intermediateSteps?.length ? <details className="brand-conversation-message__steps"><summary>执行过程</summary><ul>{message.intermediateSteps.map(step => <li key={step.id}>{step.label}{step.description ? `：${step.description}` : ""}</li>)}</ul></details> : null}
-              </div>}
-          {children}
-        </div>
-      </div>
-    </MessageActions>
-  );
+  const runtime: BusinessMessageRuntime = {
+    MessageActions: ({ message: candidate, allowCopy: canCopy, onDelete, children: content }) => (
+      <MessageActions message={candidate as LocalMessage} allowCopy={canCopy} onDelete={onDelete}>{content}</MessageActions>
+    ),
+    FilePreview: ({ file }) => <FilePreview file={file} />,
+    ImagePreview,
+    sanitizeText: sanitizeBrandText,
+    deliveryHeaders: () => typeof brandHost.deliveryProjectHeaders === "function"
+      ? brandHost.deliveryProjectHeaders()
+      : {},
+    fetchWithAuth,
+    buildProxyDownloadUrl,
+    nativeDownload,
+    filterWaitingText: content => content.replace(/^等待用户输入[。.…]*$/gm, "").replace(/等待用户输入[。.…]*/g, "").trim(),
+  };
+  return <BusinessMessage message={message} isFinalReply={allowCopy} generalChatLinks inlineContent={children} runtime={runtime} />;
 }
