@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useRef,useState} from "react";
 import BrandConversationMessage from "./components/BrandConversationMessage";
-import {brandHost,useConversation,type BrandHomeProps} from "./host";
+import {brandHost,useConversation,useWorkspaceDraftGuard,type BrandHomeProps} from "./host";
 import type {Conversation,LocalMessage} from "./conversation-types";
 import type {GeneralChatDispatchMetadata} from "@frontmind/module-contracts/chat-dispatch";
 import "./enterprise-qa-conversation.css";
@@ -13,6 +13,7 @@ function status(value:string):Conversation["status"]{return value==="cancelled"?
 export default function EnterpriseQaConversation({preview=false,messageProjection,conversationFooter,knowledgeEditingBlocked,..._props}:BrandHomeProps&{preview?:boolean}) {
  const context=useConversation();const ref=useRef(context);ref.current=context;
  const [prompt,setPrompt]=useState("");const [files,setFiles]=useState<File[]>([]);const [sending,setSending]=useState(false);const [notice,setNotice]=useState("");const lock=useRef(false);
+ useWorkspaceDraftGuard({dirty:Boolean(prompt.trim()||files.length),label:"企业问答输入"});
  const active=context.activeConversation;
  const request=useCallback(async<T,>(path:string,init:RequestInit={}):Promise<T>=>{const rest=brandHost().captureWorkspaceRestOperation();const response=await rest.fetch(path,{credentials:"same-origin",...init});const value=await response.json();rest.assertActive();if(!response.ok)throw new Error(value.error?.message??value.message??value.error??`请求失败 (${response.status})`);return value;},[]);
  useEffect(() => {

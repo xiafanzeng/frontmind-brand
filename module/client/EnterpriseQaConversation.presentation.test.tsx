@@ -4,6 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 
 vi.mock("./host", () => ({
   brandHost: vi.fn(() => { throw new Error("Presentation must not perform business requests"); }),
+  useWorkspaceDraftGuard: vi.fn(),
   useConversation: () => ({ activeConversation: {
     id: "synthetic-qa", purpose: "enterprise_qa", status: "completed",
     messages: [{ id: "answer", role: "assistant", content: "## 已生成企业说明", timestamp: 1,
