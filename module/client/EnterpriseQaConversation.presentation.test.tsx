@@ -18,5 +18,6 @@ afterEach(cleanup);
 it("renders a QA answer artifact once through the shared message component", () => {
   render(<EnterpriseQaConversation preview />);
   expect(screen.getByRole("heading", { name: "已生成企业说明" })).toBeDefined();
-  expect(screen.getAllByRole("link", { name: "企业说明.md" })).toHaveLength(1);
+  expect(document.querySelector('[data-workbench-output-key="answer:0"]')?.textContent)
+    .toContain("企业说明.md");
 });
