@@ -34,12 +34,13 @@ it("keeps assistant media, artifacts and execution steps when the text is empty"
     inlineImages: [{ src: "data:image/png;base64,c3ludGhldGlj", alt: "合成图片" }],
     outputFiles: [{ fileName: "合成成果.md", fileUrl: "/api/frontmind/v2/artifacts/synthetic/content", mimeType: "text/markdown" }],
     enterpriseQaAnswer: { schemaVersion: 1, sources: [{ id: "source", kind: "user_attachment", title: "合成参考材料" }] },
-    intermediateSteps: [{ id: "step", type: "function_call", label: "材料整理完成" }],
+    stepGroups: [{ id: "group", title: "资料处理", steps: [{ id: "step", type: "function_call", label: "读取资料" }] }],
   }} />);
   expect(screen.getByRole("img", { name: "参考图片.png" })).toBeDefined();
   expect(screen.getByRole("img", { name: "合成图片" })).toBeDefined();
-  expect(screen.getAllByRole("link", { name: "合成成果.md" })).toHaveLength(1);
-  expect(screen.getByLabelText("参考资料").textContent).toContain("合成参考材料");
-  expect(screen.getByText("材料整理完成")).toBeDefined();
+  expect(container.querySelector('[data-workbench-output-key="media-only:0"]')?.textContent)
+    .toContain("合成成果.md");
+  expect(container.querySelector("details")?.textContent).toContain("合成参考材料");
+  expect(screen.getByText("读取资料")).toBeDefined();
   expect(container.querySelector(".brand-conversation-message__user-text")).toBeNull();
 });

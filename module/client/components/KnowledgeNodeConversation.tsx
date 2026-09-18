@@ -7,7 +7,8 @@ import {
 import type { KnowledgeBaseProgressDto } from "../../contracts/knowledge-base-public-progress";
 import ChatInput from "./ChatInput";
 import { finalReplyIds } from "../lib/final-reply";
-import BrandConversationMessage from "./BrandConversationMessage";
+import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
+import MessageActions from "./MessageActions";
 import { toast } from "sonner";
 import KnowledgePublicExecution from "./KnowledgePublicExecution";
 import { GeneralExecutionActivity } from "./GeneralExecutionActivity";
@@ -136,11 +137,14 @@ export default function KnowledgeNodeConversation({
         <Fragment key={message.id}>
           <GeneralExecutionActivity items={executionSlots.before.get(message.id)} />
           {!hasTimeline && message.id === assistant?.id && execution}
-          <BrandConversationMessage message={message} allowCopy={copyableIds.has(message.id)}>
-            {copyableIds.has(message.id) && <button type="button" aria-label="复制完整回答" onClick={() => {
-              void navigator.clipboard.writeText(message.content).then(() => toast.success("已复制"), () => toast.error("复制失败，请重试"));
-            }}>复制回答</button>}
-          </BrandConversationMessage>
+          <MessageActions message={message} allowCopy={copyableIds.has(message.id)}>
+            <div className={`knowledge-node-conversation__${message.role}`}>
+              <MarkdownRenderer content={message.content} allowCopy={copyableIds.has(message.id)} />
+              {copyableIds.has(message.id) && <button type="button" aria-label="复制完整回答" onClick={() => {
+                void navigator.clipboard.writeText(message.content).then(() => toast.success("已复制"), () => toast.error("复制失败，请重试"));
+              }}>复制回答</button>}
+            </div>
+          </MessageActions>
           {message.role === "user" && <ExecutionDivider timing={executionTimings.get(message.id)} />}
           <GeneralExecutionActivity items={executionSlots.after.get(message.id)} placement="after" />
         </Fragment>
