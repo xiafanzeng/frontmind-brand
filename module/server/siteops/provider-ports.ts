@@ -7,6 +7,7 @@ export type ProviderError=Error&{code:string;status:number|null;retryable:boolea
 export interface DashboardAgentClientOptions {credentialRef?:string;credentialId:string;credentialVersion:number;accountUserId:number;credentialOwnerUserId?:number;provider:'manus'|'zhipu'|'xty_codex';intentId?:string;upstreamModel?:string;upstreamEffort?:string|null;rateLimitScope?:string;timeoutMs?:number;[key:string]:unknown}
 export interface DashboardAgentClient {
  createTask(input:any):Promise<{taskId:string;taskUrl?:string|null;requestId?:string|null;raw:Record<string,unknown>;[key:string]:unknown}>;
+ recoverMissingCreate?(input:Parameters<DashboardAgentClient["createTask"]>[0]):ReturnType<DashboardAgentClient["createTask"]>;
  sendMessage(input:any):Promise<{taskId:string;taskUrl?:string|null;requestId?:string|null;raw:Record<string,unknown>;[key:string]:unknown}>;
  taskDetail(taskId:string):Promise<any>;
  listAllMessages(input:{taskId:string;order:'asc'|'desc';stopAfterOperationToken?:string}):Promise<ManusV2MessageEvent[]>;

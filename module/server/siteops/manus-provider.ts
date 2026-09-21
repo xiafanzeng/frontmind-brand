@@ -277,12 +277,12 @@ const PROVIDER_MUTABLE_SOCIAL_PACKAGE_STATUSES = [
 const operationInputSchema = z
   .object({
     credentialScope: z.literal("customer"),
-    // Historical source lineage is read-only; the execution handler requires Zhipu.
-    provider: z.enum(["manus", "zhipu"]).optional(),
+    // Each operation freezes its execution provider; historical tasks keep it.
+    provider: z.enum(["manus", "zhipu", "xty_codex"]).optional(),
     upstreamModel: z.string().trim().min(1).max(64).optional(),
-    upstreamEffort: z.enum(["low", "high", "max"]).nullable().optional(),
-    manusCredentialId: z.string().uuid(),
-    manusCredentialVersion: z.number().int().positive(),
+    upstreamEffort: z.enum(["low", "medium", "high", "max"]).nullable().optional(),
+    manusCredentialId: z.union([z.string().uuid(), z.string().regex(/^xty-[a-f0-9]{32}$/)]),
+    manusCredentialVersion: z.number().int().nonnegative(),
     agentProfile: managedAgentProfileSchema.default("frontmind-pro"),
     buildId: z.string().uuid().optional(),
     childBuildId: z.string().uuid().optional(),
@@ -9616,7 +9616,7 @@ export function createSiteOpsAgentClient(
   options: DashboardAgentClientOptions,
   createClient: (input: DashboardAgentClientOptions) => DashboardAgentClient,
 ): DashboardAgentClient {
-  if (options.provider !== "zhipu") {
+  if (options.provider !== "zhipu" && options.provider !== "xty_codex") {
     throw new SiteOpsManusFailure(
       "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
       "请联系管理员更新 FrontMind 服务配置，完成后重置并开始新的建站任务。",
@@ -9695,7 +9695,7 @@ export function createManusSiteOpsProviderHandler(
           "DATABASE_UNAVAILABLE",
           "AI 建站数据库暂时不可用。",
         );
-      if (operation.provider !== "zhipu") {
+      if (operation.provider !== "zhipu" && operation.provider !== "xty_codex") {
         throw new SiteOpsManusFailure(
           "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
           "请联系管理员更新 FrontMind 服务配置，完成后重置并开始新的建站任务。",
@@ -9724,7 +9724,7 @@ export function createManusSiteOpsProviderHandler(
               credentialVersion: credential.version,
               accountUserId: operation.userId,
               credentialOwnerUserId: credential.userId,
-              provider: "zhipu",
+              provider: operation.provider as "zhipu" | "xty_codex",
               intentId: `siteops:${operation.id}`,
               upstreamModel: input.upstreamModel,
               upstreamEffort: input.upstreamEffort,
@@ -12514,9 +12514,11 @@ export function registerManusSiteOpsProvider(
   if (registered) return () => undefined;
   const handler = createManusSiteOpsProviderHandler(dependencies);
   const unregisterZhipu = registerSiteOpsProviderHandler("zhipu", handler);
+  const unregisterAgents = registerSiteOpsProviderHandler("xty_codex", handler);
   registered = true;
   return () => {
     unregisterZhipu();
+    unregisterAgents();
     registered = false;
   };
 }

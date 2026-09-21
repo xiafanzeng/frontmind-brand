@@ -919,8 +919,9 @@ export function knowledgeBaseUpstreamModelForCredential(credential: {
   upstreamModel?: unknown;
 }) {
   if (
-    credential.provider === "zhipu" &&
-    credential.upstreamModel === "glm-5.3"
+    (credential.provider === "zhipu" && credential.upstreamModel === "glm-5.3") ||
+    (credential.provider === "xty_codex" &&
+      (credential.upstreamModel === "gpt-5.6-sol" || credential.upstreamModel === "gpt-6-astra"))
   ) {
     return credential.upstreamModel;
   }
@@ -3668,7 +3669,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   createClient: (input: {
     baseUrl: string;
     credentialRef: string;
-  }) => Pick<ManusV2Client, "createTask" | "listAllMessages" | "stopTask">;
+  }) => Pick<ManusV2Client, "createTask" | "listAllMessages" | "stopTask" | "recoverMissingCreate">;
 }) {
   const { claim, credential, build } = input;
   if (
@@ -3717,6 +3718,11 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
     // the pre-create finalizer again: the finalizer deliberately accepts only
     // `not_sent`, and provider files may also change lifecycle after task
     // create consumes them.
+    if (claim.turn.idempotentCreateRecovery && !client.recoverMissingCreate) {
+      throw new KnowledgeBaseTurnReservationError(
+        "CONFLICT", "The reserved provider cannot recover an exact task create",
+      );
+    }
     const attachments = await input.ensureManusV2Attachments({
       claim,
       credential,
@@ -3771,7 +3777,9 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
       createState: "sending",
     });
     try {
-      const created = await client.createTask({
+      const create = claim.turn.idempotentCreateRecovery
+        ? client.recoverMissingCreate!.bind(client) : client.createTask.bind(client);
+      const created = await create({
         prompt: prepared.requestBody.prompt,
         attachments,
         title,
@@ -4353,7 +4361,7 @@ async function dispatchKnowledgeBaseRecoveryClaim(
     createClient?: (input: {
       baseUrl: string;
       credentialRef: string;
-    }) => Pick<ManusV2Client, "createTask" | "listAllMessages" | "stopTask">;
+    }) => Pick<ManusV2Client, "createTask" | "listAllMessages" | "stopTask" | "recoverMissingCreate">;
     bindSubmission?: typeof bindKnowledgeBaseManusV2Submission;
   } = {},
 ) {
@@ -5609,7 +5617,7 @@ router.post("/start/reserve", async (req: KnowledgeRequest, res) => {
       return;
     }
     const newBuildPolicy = knowledgeBaseNewBuildPolicyBinding();
-    if (!existingBuild) await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
+    if (!existingBuild && credentialForRequest(req)?.provider !== "xty_codex") await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const [prefillKnowledgeSnapshot, latestSkillDescriptor] = await Promise.all(
       [
         getLatestKnowledgeSnapshot(enterpriseWorkspaceUserId(req.frontmindUser.id)),
@@ -5654,6 +5662,11 @@ router.post("/start/reserve", async (req: KnowledgeRequest, res) => {
       },
       recoveryMetadata: {
         traceId: requestTraceId,
+        frozenAgentCredential: {
+          provider: credentialForRequest(req)!.provider,
+          upstreamModel: knowledgeBaseUpstreamModelForCredential(credentialForRequest(req)!),
+          upstreamEffort: credentialForRequest(req)!.upstreamEffort,
+        },
         kind: "start",
         conversationId,
         sourceResetRevision: expectedResetRevision,
@@ -6398,6 +6411,11 @@ router.post("/turn/reserve", async (req: KnowledgeRequest, res) => {
       sourceResetRevision: expectedResetRevision,
       resumeDeferredReservation: body.resumeExisting === true,
       recoveryMetadata: {
+        frozenAgentCredential: {
+          provider: taskCredential.provider,
+          upstreamModel: knowledgeBaseUpstreamModelForCredential(taskCredential),
+          upstreamEffort: taskCredential.upstreamEffort,
+        },
         kind: "turn",
         nodeEditMode: "low_v1",
         removeAssetIds, selectedAssetIds,
@@ -7014,7 +7032,7 @@ router.post("/turn/dispatch", async (req: KnowledgeRequest, res) => {
       });
       return;
     }
-    await assertKnowledgeBaseDispatchFunds(enterpriseWorkspaceUserId(req.frontmindUser.id),turnId);
+    if (taskCredential.provider !== "xty_codex") await assertKnowledgeBaseDispatchFunds(enterpriseWorkspaceUserId(req.frontmindUser.id),turnId);
     acquiredClaim = await claimKnowledgeBaseDeferredTurnDispatch({
       uploadAttemptId: typeof req.body.uploadAttemptId === "string" ? req.body.uploadAttemptId : undefined,
       userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
@@ -7668,7 +7686,7 @@ router.post("/turn", async (req: KnowledgeRequest, res) => {
       });
       return;
     }
-    if (!manualLogoSubmission && turnUserMessage.trim()) await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
+    if (taskCredential.provider !== "xty_codex" && !manualLogoSubmission && turnUserMessage.trim()) await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
     assertKnowledgeBaseAttachmentManifestPresent({
       skillVersion: boundBuild.skillVersion,
       attachmentCount: attachments.length,
@@ -7834,6 +7852,11 @@ router.post("/turn", async (req: KnowledgeRequest, res) => {
       contentHash: boundBuild.skillContentHash,
     };
     const recoveryMetadata = {
+      frozenAgentCredential: {
+        provider: taskCredential.provider,
+        upstreamModel: knowledgeBaseUpstreamModelForCredential(taskCredential),
+        upstreamEffort: taskCredential.upstreamEffort,
+      },
       kind: "turn",
       ...(!manualLogoSubmission ? { nodeEditMode: "low_v1", removeAssetIds, selectedAssetIds } : {}),
       conversationId,
