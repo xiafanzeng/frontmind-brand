@@ -2281,8 +2281,8 @@ export async function readNativeSourceAttachment(input: {
   if (input.attachment.url.startsWith("data:")) {
     return boundedDataUrl(input.attachment.url, maxBytes);
   }
-  const providerPointer = input.attachment.url.trim().startsWith("zhipu-file:");
-  const providerFile = /^zhipu-file:([A-Za-z0-9_-]{1,255})$/u.exec(
+  const providerPointer = /^(?:zhipu|xty)-file:/.test(input.attachment.url.trim());
+  const providerFile = /^(?:zhipu|xty)-file:([A-Za-z0-9_-]{1,255})$/u.exec(
     input.attachment.url,
   );
   if (

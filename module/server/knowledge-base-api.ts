@@ -919,8 +919,8 @@ export function knowledgeBaseUpstreamModelForCredential(credential: {
   upstreamModel?: unknown;
 }) {
   if (
-    credential.provider === "zhipu" &&
-    credential.upstreamModel === "glm-5.3"
+    (credential.provider === "zhipu" && credential.upstreamModel === "glm-5.3") ||
+    (credential.provider === "xty_codex" && credential.upstreamModel === "gpt-6-astra")
   ) {
     return credential.upstreamModel;
   }
@@ -5609,7 +5609,7 @@ router.post("/start/reserve", async (req: KnowledgeRequest, res) => {
       return;
     }
     const newBuildPolicy = knowledgeBaseNewBuildPolicyBinding();
-    if (!existingBuild) await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
+    if (!existingBuild && credentialForRequest(req)?.provider !== "xty_codex") await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const [prefillKnowledgeSnapshot, latestSkillDescriptor] = await Promise.all(
       [
         getLatestKnowledgeSnapshot(enterpriseWorkspaceUserId(req.frontmindUser.id)),
@@ -7014,7 +7014,7 @@ router.post("/turn/dispatch", async (req: KnowledgeRequest, res) => {
       });
       return;
     }
-    await assertKnowledgeBaseDispatchFunds(enterpriseWorkspaceUserId(req.frontmindUser.id),turnId);
+    if (taskCredential.provider !== "xty_codex") await assertKnowledgeBaseDispatchFunds(enterpriseWorkspaceUserId(req.frontmindUser.id),turnId);
     acquiredClaim = await claimKnowledgeBaseDeferredTurnDispatch({
       uploadAttemptId: typeof req.body.uploadAttemptId === "string" ? req.body.uploadAttemptId : undefined,
       userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
@@ -7668,7 +7668,7 @@ router.post("/turn", async (req: KnowledgeRequest, res) => {
       });
       return;
     }
-    if (!manualLogoSubmission && turnUserMessage.trim()) await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
+    if (taskCredential.provider !== "xty_codex" && !manualLogoSubmission && turnUserMessage.trim()) await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
     assertKnowledgeBaseAttachmentManifestPresent({
       skillVersion: boundBuild.skillVersion,
       attachmentCount: attachments.length,

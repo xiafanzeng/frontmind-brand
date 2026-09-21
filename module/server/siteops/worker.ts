@@ -878,7 +878,7 @@ function stagedBuildCheckpointResult(
   operation: Claimed,
 ): SiteOpsProviderResult | null {
   if (
-    !["manus", "zhipu"].includes(operation.provider ?? "") ||
+    !["manus", "zhipu", "xty_codex"].includes(operation.provider ?? "") ||
     !operation.buildId ||
     !["site_build", "build_revision"].includes(operation.kind) ||
     !operation.result ||
