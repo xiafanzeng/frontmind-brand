@@ -1159,14 +1159,14 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
       "FrontMind 附件映射的用户、credential 或 frozen turn 所有权不一致",
     );
   }
-  if (input.credential.provider !== "zhipu") {
+  if (input.credential.provider !== "zhipu" && input.credential.provider !== "xty_codex") {
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",
       "请联系管理员完成智能服务配置，重置后重新上传资料并开始新构建",
     );
   }
   const client = createDashboardAgentClient({
-    provider: "zhipu",
+    provider: input.credential.provider,
     credentialRef: input.credential.credentialRef,
     credentialId: input.credential.id,
     credentialVersion: input.credential.version,
@@ -1187,7 +1187,7 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
       ...entry,
       clientForGeneration: (generation) =>
         createDashboardAgentClient({
-          provider: "zhipu",
+          provider: input.credential.provider,
           credentialRef: input.credential.credentialRef,
           credentialId: input.credential.id,
           credentialVersion: input.credential.version,
