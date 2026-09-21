@@ -25,7 +25,7 @@ import { fetchPinnedPublicHttps } from "./remote-preview.js";
 
 const WIRE_OUTPUT_TIMEOUT_MS = 15_000;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-const PROVIDER_FILE_PATTERN = /^zhipu-file:([A-Za-z0-9_-]{1,255})$/u;
+const PROVIDER_FILE_PATTERN = /^(?:zhipu|xty)-file:([A-Za-z0-9_-]{1,255})$/u;
 
 export const SITEOPS_WIRE_OUTPUT_FILES = Object.freeze({
   design: "frontmind-site-design-wire-v2.json",
@@ -482,7 +482,7 @@ function jsonAttachments(
     if (!isRecord(value)) continue;
     const rawUrl = optionalString(value, ["url", "file_url", "fileUrl"], true);
     // Provider file pointers are opaque identities, never normalized URLs.
-    const url = rawUrl?.trim().startsWith("zhipu-file:")
+    const url = /^(?:zhipu|xty)-file:/.test(rawUrl?.trim() ?? "")
       ? rawUrl
       : rawUrl?.trim();
     if (!url) continue;
@@ -603,7 +603,7 @@ async function downloadAttachment(input: {
   const signal = input.signal
     ? AbortSignal.any([input.signal, timeout])
     : timeout;
-  const providerPointer = input.attachment.url.trim().startsWith("zhipu-file:");
+  const providerPointer = /^(?:zhipu|xty)-file:/.test(input.attachment.url.trim());
   const providerFile = PROVIDER_FILE_PATTERN.exec(input.attachment.url);
   if (
     providerPointer &&
