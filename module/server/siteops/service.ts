@@ -3905,7 +3905,7 @@ export function freezeSiteOpsCustomerAiCredential(input: {
     credentialDefault: input.credential.agentProfile,
   });
   const credential = credentialProfileProjection(input.credential);
-  if (credential.provider !== "zhipu" && credential.provider !== "xty_codex") {
+  if (credential.provider !== "zhipu") {
     throw new SiteOpsServiceError(
       "PROVIDER_NOT_CONFIGURED",
       "当前账号的智能建站服务尚未配置，请联系管理员。",
@@ -3917,14 +3917,12 @@ export function freezeSiteOpsCustomerAiCredential(input: {
     manusCredentialVersion: input.credential.version,
     credentialScope: "customer" as const,
     agentProfile: profile,
-    provider: credential.provider,
+    provider: "zhipu" as const,
     upstreamModel: credential.upstreamModel,
     upstreamEffort:
       profile === credential.agentProfile
         ? credential.upstreamEffort
-        : credential.provider === "xty_codex"
-          ? (profile === "frontmind-base" ? "medium" : "high")
-          : managedAgentProfileEffort(profile),
+        : managedAgentProfileEffort(profile),
   };
 }
 

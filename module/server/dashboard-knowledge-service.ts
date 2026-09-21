@@ -3610,10 +3610,9 @@ export async function downloadArchiveBytes(input: {
       ? knowledgeArchiveFileIdFromUrl(input.descriptor.url)
       : undefined);
 
-  if (input.credential?.provider === "zhipu" || input.credential?.provider === "xty_codex") {
-    const scheme = input.credential.provider === "xty_codex" ? "xty-file:" : "zhipu-file:";
-    const descriptorId = input.descriptor.url?.startsWith(scheme)
-      ? input.descriptor.url.slice(scheme.length)
+  if (input.credential?.provider === "zhipu") {
+    const descriptorId = input.descriptor.url?.startsWith("zhipu-file:")
+      ? input.descriptor.url.slice("zhipu-file:".length)
       : fileId;
     if (!descriptorId || (fileId && fileId !== descriptorId)) {
       throw new KnowledgeArchiveDownloadError(

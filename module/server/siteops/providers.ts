@@ -5,7 +5,6 @@ export type SiteOpsProviderName =
   | "21st"
   | "manus"
   | "zhipu"
-  | "xty_codex"
   | "aliyun_esa"
   | "aliyun_alidns";
 
