@@ -3668,7 +3668,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   createClient: (input: {
     baseUrl: string;
     credentialRef: string;
-  }) => Pick<ManusV2Client, "createTask" | "listAllMessages" | "stopTask">;
+  }) => Pick<ManusV2Client, "createTask" | "listAllMessages" | "stopTask" | "recoverMissingCreate">;
 }) {
   const { claim, credential, build } = input;
   if (
@@ -3717,6 +3717,11 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
     // the pre-create finalizer again: the finalizer deliberately accepts only
     // `not_sent`, and provider files may also change lifecycle after task
     // create consumes them.
+    if (claim.turn.idempotentCreateRecovery && !client.recoverMissingCreate) {
+      throw new KnowledgeBaseTurnReservationError(
+        "CONFLICT", "The reserved provider cannot recover an exact task create",
+      );
+    }
     const attachments = await input.ensureManusV2Attachments({
       claim,
       credential,
@@ -3771,7 +3776,9 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
       createState: "sending",
     });
     try {
-      const created = await client.createTask({
+      const create = claim.turn.idempotentCreateRecovery
+        ? client.recoverMissingCreate!.bind(client) : client.createTask.bind(client);
+      const created = await create({
         prompt: prepared.requestBody.prompt,
         attachments,
         title,
@@ -4353,7 +4360,7 @@ async function dispatchKnowledgeBaseRecoveryClaim(
     createClient?: (input: {
       baseUrl: string;
       credentialRef: string;
-    }) => Pick<ManusV2Client, "createTask" | "listAllMessages" | "stopTask">;
+    }) => Pick<ManusV2Client, "createTask" | "listAllMessages" | "stopTask" | "recoverMissingCreate">;
     bindSubmission?: typeof bindKnowledgeBaseManusV2Submission;
   } = {},
 ) {
