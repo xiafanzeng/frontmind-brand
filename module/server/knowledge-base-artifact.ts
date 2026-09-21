@@ -114,9 +114,9 @@ export function knowledgeBaseArtifactAliasedIdentity(input: {
 }
 
 export function knowledgeArchiveFileIdFromUrl(value: string) {
-  if (/^(?:zhipu|xty)-file:/.test(value)) {
+  if (value.startsWith("zhipu-file:")) {
     return assertKnowledgeBaseArtifactIdentity({
-      value: value.slice(value.indexOf(":") + 1),
+      value: value.slice("zhipu-file:".length),
       label: "上游文件标识",
       maxLength: MAX_FILE_ID_LENGTH,
       required: true,

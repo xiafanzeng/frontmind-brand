@@ -4,7 +4,7 @@ import type { ConversationTurn, LocalAsset, Conversation, UpstreamResource } fro
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { SQL } from "drizzle-orm";
 export type KnowledgeNodeCredential = { id:string; version:number; userId:number; provider:string; credentialRef:string };
-export type KnowledgeNodeProviderIdentity = {provider:"zhipu"|"xty_codex";accountUserId:number;enterpriseProjectId:string|null;enterpriseProjectLegacyDefault?:boolean;credentialId:string;credentialVersion:number;credentialOwnerUserId:number};
+export type KnowledgeNodeProviderIdentity = {provider:"zhipu";accountUserId:number;enterpriseProjectId:string|null;enterpriseProjectLegacyDefault?:boolean;credentialId:string;credentialVersion:number;credentialOwnerUserId:number};
 export interface KnowledgeNodeEditServiceCore {
   createKnowledgeNodeEditPatch:typeof import("../contracts/knowledge-node-edit-contract.js").createKnowledgeNodeEditPatch;
   validateKnowledgeBaseWorkingSetArchive:typeof import("../contracts/knowledge-base-materialized-contract.js").validateKnowledgeBaseWorkingSetArchive;
@@ -206,8 +206,8 @@ export async function dispatchKnowledgeNodeEdit(
     let contentMarkdown = base.files.get(leaf.contentPath)!.toString("utf8");
     let providerTaskId: string | null = null;
     if (instruction) {
-      if (credential.provider !== "zhipu" && credential.provider !== "xty_codex")
-        throw new Error("KNOWLEDGE_NODE_EDIT_PROVIDER_REQUIRED");
+      if (credential.provider !== "zhipu")
+        throw new Error("KNOWLEDGE_NODE_EDIT_ZHIPU_REQUIRED");
       const prompt = knowledgeNodeEditPrompt(contentMarkdown, instruction);
       if (
         !claim.turn.upstreamTaskId &&
@@ -218,8 +218,8 @@ export async function dispatchKnowledgeNodeEdit(
           frozenProviderRequestHash: nodeEditSha256(prompt),
         });
       }
-      const providerIdentity: KnowledgeNodeProviderIdentity = {
-        provider: credential.provider,
+      const providerIdentity = {
+        provider: "zhipu" as const,
         accountUserId: claim.turn.userId,
         enterpriseProjectId:
           scope?.enterpriseProjectId ?? active.build.enterpriseProjectId,
