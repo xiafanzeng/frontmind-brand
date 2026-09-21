@@ -93,7 +93,7 @@ export interface KnowledgeTurnCore extends Pick<ReturnType<typeof createKnowledg
   enterpriseResetStateTable():BrandSchema["knowledgeBaseResetStates"];
   enterpriseResetStateOwnerPredicate(userId:number):SQL;
   readStoredPresalesFile(id:string):Promise<{sizeBytes:number;recordedSizeBytes:number|null;sha256:string|null;createReadStream():Readable}|null>;
-  lockKnowledgeBaseReservationCredential(tx:any,id:string|null):Promise<{id:string;userId:number;status:string;supportsIdempotentCreate?:true}|null|undefined>;
+  lockKnowledgeBaseReservationCredential(tx:any,id:string|null):Promise<{id:string;userId:number;status:string}|null|undefined>;
   readCredentialVersion(tx:any,id:string):Promise<{version:number}|undefined>;
 }
 let lockCustomerProjectBusinessWrite: KnowledgeTurnCore["lockCustomerProjectBusinessWrite"];
@@ -345,8 +345,6 @@ type KnowledgeBaseTurnMetadata = Record<string, unknown> & {
   materializedResultDiagnostics?: KnowledgeBaseMaterializedResultDiagnosticsLedger;
   operationToken?: string;
   frozenProviderRequestHash?: string;
-  /** Private provider supports exact task/intent replay; never ordinary create. */
-  idempotentCreateRecovery?: true;
   /**
    * Explicit, provider-declared rejections of this exact frozen v2 request.
    * This never counts transport loss or a malformed/ambiguous response.
@@ -698,7 +696,6 @@ export interface KnowledgeBaseTurnIdentity {
 }
 
 export interface KnowledgeBaseTurnRecord {
-  idempotentCreateRecovery?: true;
   uploadAttemptId?: string | null;
   uploadStatusVersion?: number;
   id: string;
@@ -2411,7 +2408,6 @@ function turnRecord(row: ConversationTurn): KnowledgeBaseTurnRecord {
     upstreamTaskId: row.upstreamTaskId,
     ...dispatchAuthority,
     createAttemptState: knowledgeBaseCreateAttemptState(row, metadata),
-    ...(metadata.idempotentCreateRecovery === true ? {idempotentCreateRecovery: true as const} : {}),
     traceId: safeKnowledgeBaseTraceId(metadata.traceId),
     materializedRecoveryContractVersion:
       metadata.materializedRecoveryContractVersion === 1 ? 1 : null,
@@ -8159,9 +8155,8 @@ export async function settleKnowledgeBaseManusV2ExplicitRejection(
 }
 
 /**
- * Atomically grants create authority for a materialized operation. Ordinary
- * providers remain at-most-once; an idempotent recovery must preserve the exact
- * frozen body and use the private provider's task/intent reconciliation.
+ * Atomically grants the one task.create permission for a fresh materialized
+ * operation. Existing task identities are never rebound or continued.
  */
 export async function beginKnowledgeBaseManusV2Dispatch(
   input: {
@@ -8215,16 +8210,6 @@ export async function beginKnowledgeBaseManusV2Dispatch(
         "CONFLICT",
         "The materialized turn has no frozen credential",
       );
-    }
-    if (metadata.idempotentCreateRecovery === true) {
-      const credential = await lockKnowledgeBaseReservationCredential(tx, turn.apiCredentialId);
-      if (credential?.id !== turn.apiCredentialId || credential.userId !== turn.userId ||
-          credential.status !== "active" || credential.supportsIdempotentCreate !== true ||
-          metadata.frozenProviderRequestHash !== frozenProviderRequestHash) {
-        throw new KnowledgeBaseTurnReservationError(
-          "CONFLICT", "The exact idempotent knowledge-base create authority changed",
-        );
-      }
     }
     const existingState = knowledgeBaseCreateAttemptState(turn, metadata);
     if (existingState !== "not_sent") {
@@ -11728,27 +11713,7 @@ export async function claimKnowledgeBaseTurnForRecovery(
       turn,
       currentMetadata,
     );
-    // Private idempotent providers can read/replay the exact durable task and
-    // intent. Retain the frozen request hash and mark every later dispatch as
-    // recovery; an ordinary create can never consume this renewed lease.
-    let idempotentCreateRecovery = false;
     if (
-      !turn.upstreamTaskId && !build.canonicalTaskId &&
-      ["queued", "running"].includes(turn.status) &&
-      currentMetadata.providerMethod === "task.create" &&
-      currentMetadata.attachmentsFrozen === true && currentMetadata.preparedDispatch &&
-      /^[a-f0-9]{64}$/.test(currentMetadata.frozenProviderRequestHash || "") &&
-      (currentMetadata.idempotentCreateRecovery === true ||
-        (["unknown", "sending"].includes(createAttemptState) &&
-          ["sending", "outcome_unknown"].includes(currentMetadata.providerAttemptState || "")))
-    ) {
-      const credential = await lockKnowledgeBaseReservationCredential(tx, turn.apiCredentialId);
-      idempotentCreateRecovery = credential?.id === turn.apiCredentialId &&
-        credential?.userId === turn.userId && credential?.status === "active" &&
-        credential?.supportsIdempotentCreate === true;
-    }
-    if (
-      !idempotentCreateRecovery &&
       createAttemptState === "unknown" &&
       currentMetadata.providerProtocol === "manus_v2" &&
       currentMetadata.providerAttemptState === "outcome_unknown" &&
@@ -11773,7 +11738,7 @@ export async function claimKnowledgeBaseTurnForRecovery(
       currentMetadata.awaitingClientAttachments === true ||
       currentMetadata.providerAttemptState === "rejected" ||
       Boolean(currentMetadata.manusV2Lifecycle?.attentionCode) ||
-      (createAttemptState === "unknown" && !idempotentCreateRecovery &&
+      (createAttemptState === "unknown" &&
         !(
           currentMetadata.providerProtocol === "manus_v2" &&
           currentMetadata.providerAttemptState === "outcome_unknown"
@@ -11787,11 +11752,6 @@ export async function claimKnowledgeBaseTurnForRecovery(
     let metadata: KnowledgeBaseTurnMetadata = {
       ...currentMetadata,
       leaseOwnerHash: leaseOwnerHash(leaseToken),
-      ...(idempotentCreateRecovery ? {
-        idempotentCreateRecovery: true as const,
-        createAttemptState: "not_sent" as const,
-        providerAttemptState: "not_sent" as const,
-      } : {}),
     };
     if (
       currentMetadata.providerProtocol === "manus_v2" &&
