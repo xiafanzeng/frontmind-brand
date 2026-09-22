@@ -40,13 +40,9 @@ function nativeDownload(url: string, name: string) {
   const anchor = document.createElement("a"); anchor.href = url; anchor.download = name; anchor.rel = "noopener"; document.body.appendChild(anchor); anchor.click(); anchor.remove();
 }
 
-/** The original Dashboard message presentation, shared by both Brand hosts. */
-export default function BrandConversationMessage({ message, allowCopy = false, children }: {
-  message: LocalMessage;
-  allowCopy?: boolean;
-  children?: ReactNode;
-}) {
-  const runtime: BusinessMessageRuntime = {
+// Stable component identities keep Markdown, selection and previews mounted
+// when an unchanged message is projected by a background observation.
+const runtime: BusinessMessageRuntime = {
     MessageActions: ({ message: candidate, allowCopy: canCopy, onDelete, children: content }) => (
       <MessageActions message={candidate as LocalMessage} allowCopy={canCopy} onDelete={onDelete}>{content}</MessageActions>
     ),
@@ -61,5 +57,12 @@ export default function BrandConversationMessage({ message, allowCopy = false, c
     nativeDownload,
     filterWaitingText: content => content.replace(/^等待用户输入[。.…]*$/gm, "").replace(/等待用户输入[。.…]*/g, "").trim(),
   };
+
+/** The original Dashboard message presentation, shared by both Brand hosts. */
+export default function BrandConversationMessage({ message, allowCopy = false, children }: {
+  message: LocalMessage;
+  allowCopy?: boolean;
+  children?: ReactNode;
+}) {
   return <BusinessMessage message={message} isFinalReply={allowCopy} generalChatLinks inlineContent={children} runtime={runtime} />;
 }
