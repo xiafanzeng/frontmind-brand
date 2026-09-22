@@ -28,7 +28,20 @@ export function createBrandConversationRuntime(client:BrandConversationClient,pu
   const run=saving.catch(()=>{}).then(()=>client.sync(purpose,[snapshot]));saving=run;
   try{await run;const current=value.conversations.find(item=>item.id===id);if(current===record)dirty.delete(id);update({error:null});return true;}catch(error){update({error:error instanceof Error?error.message:'保存失败'});throw error;}
  }
- const coordinator=new KnowledgeBasePollingCoordinator({observe:client.observe,apply(id,observation){modify(id,current=>applyKnowledgeBaseObservation(current,observation),false);},onTransientError(_id,error){update({error:error instanceof Error?error.message:'正在恢复知识库状态'});},onPermanentError(_id,error){update({error:error instanceof Error?error.message:'知识库状态读取失败'});}});
+ let observationError: {id:string;message:string}|null=null;
+ const reportObservationError=(id:string,error:unknown)=>{
+  // A historic build's polling failure must not replace the active workspace.
+  if(id!==value.activeConversationId)return;
+  observationError={id,message:error instanceof Error?error.message:'知识库状态读取失败'};
+  update({error:observationError.message});
+ };
+ const coordinator=new KnowledgeBasePollingCoordinator({observe:client.observe,apply(id,observation){
+  modify(id,current=>applyKnowledgeBaseObservation(current,observation),false);
+  if(observationError?.id===id){
+   if(value.error===observationError.message)update({error:null});
+   observationError=null;
+  }
+ },onTransientError:reportObservationError,onPermanentError:reportObservationError});
  async function refresh(){if(loading)return loading;update({loading:true});loading=(async()=>{try{const remote=await client.list(purpose);const merged=remote.map(record=>purpose==='knowledge'?mergeKnowledgeBaseHydration(value.conversations.find(item=>item.id===record.id),record):dirty.has(record.id)?value.conversations.find(item=>item.id===record.id)??record:record);const ids=new Set(merged.map(item=>item.id));for(const record of value.conversations)if(dirty.has(record.id)&&!ids.has(record.id))merged.push(record);const queryId=new URL(location.href).searchParams.get('workbenchTask');const active=[queryId,value.activeConversationId,merged[0]?.id].find(id=>id&&merged.some(item=>item.id===id))??null;update({conversations:merged,activeConversationId:active,hydrated:true,error:null});if(purpose==='knowledge')for(const record of merged)if(hasKnowledgeBaseExecution(record)){coordinator.register(record.id);coordinator.wake(record.id);}}catch(error){update({error:error instanceof Error?error.message:'历史记录读取失败'});}finally{loading=undefined;update({loading:false});}})();return loading;}
  function createConversation(options?:Parameters<BrandConversationContext['createConversation']>[0]){if(options?.reuseEmpty!==false){const existing=value.conversations.find(record=>!record.messages.length&&!record.knowledgeBase);if(existing){update({activeConversationId:existing.id});return existing.id;}}const now=Date.now();const record:Conversation={id:crypto.randomUUID(),title:options?.title??(purpose==='knowledge'?'企业知识库构建':'企业问答'),...(purpose==='enterprise_qa'?{purpose:'enterprise_qa' as const}:{}),workbenchAgentId:purpose==='knowledge'?'knowledge':'enterprise-qa',messages:[],status:'idle',createdAt:now,updatedAt:now};dirty.add(record.id);update({conversations:[record,...value.conversations],activeConversationId:record.id});void flush(record.id).catch(()=>{});return record.id;}
  // Effects in the business components depend on these actions. Keep their

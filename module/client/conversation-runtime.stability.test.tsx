@@ -114,3 +114,23 @@ describe('brand conversation runtime stability', () => {
     expect(client.observe).toHaveBeenCalledWith('draft', expect.any(AbortSignal));
   });
 });
+
+it('clears a transient observation error when the same active build recovers', async () => {
+  const { runtime, client } = setup([{ ...draft('recovering'), taskId: 'task' }]);
+  vi.mocked(client.observe).mockRejectedValueOnce(new Error('短暂网络错误')).mockResolvedValue({
+    generation: 0, stateEpoch: 1, interaction: { interactionState: 'failed', progress: null },
+  } as any);
+  const { result } = renderHook(() => runtime.useConversation());
+  await waitFor(() => expect(result.current.syncError).toBe('短暂网络错误'));
+  act(() => result.current.wakeKnowledgeBaseConversation('recovering'));
+  await waitFor(() => expect(result.current.syncError).toBeNull());
+});
+
+it('does not surface a historic task failure as the active workspace error', async () => {
+  const { runtime, client } = setup([draft('active'), { ...draft('old'), taskId: 'old-task' }]);
+  vi.mocked(client.observe).mockRejectedValue(Object.assign(new Error('旧任务不可用'), { status: 403 }));
+  const { result } = renderHook(() => runtime.useConversation());
+  await waitFor(() => expect(result.current.hydrated).toBe(true));
+  expect(result.current.activeConversation?.id).toBe('active');
+  expect(result.current.syncError).toBeNull();
+});

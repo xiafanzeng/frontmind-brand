@@ -196,7 +196,11 @@ export default function EmbeddedKnowledgeBasePanel({
   } = useConversation();
   useEffect(() => {
     if (previewMode) return;
-    const refreshResetStatus = () => {
+    const refreshResetStatus = (event: Event) => {
+      // An observation already contains the complete progress. Re-reading reset
+      // status for every observation feeds polling back into the workbench.
+      // Explicit invalidations and the bounded status poll still detect resets.
+      if (readKnowledgeBaseProgressEventDetail((event as CustomEvent).detail)) return;
       void resetQuery.refetch();
     };
     window.addEventListener(
@@ -362,6 +366,14 @@ export default function EmbeddedKnowledgeBasePanel({
           titleRef: workspaceTitleRef,
         }}
       >
+        {resetQuery.isError && resetQuery.data && (
+          <div role="status" className="flex shrink-0 items-center justify-between gap-3 px-6 py-2 text-sm text-muted-foreground">
+            <span>知识库状态暂时无法刷新，已保留当前内容；恢复连接后可继续编辑。</span>
+            <Button type="button" variant="operatorOutline" onClick={() => void resetQuery.refetch()}>
+              重新读取
+            </Button>
+          </div>
+        )}
         {!unified && page === "display" ? (
           <div className="min-h-0 flex-1 overflow-auto">
             <KnowledgeBaseViewer
@@ -379,7 +391,7 @@ export default function EmbeddedKnowledgeBasePanel({
             workbench={workbench}
             projectId={projectId}
           />
-        ) : resetQuery.isError ? (
+        ) : resetQuery.isError && !resetQuery.data ? (
           <div className="flex min-h-0 flex-1 items-center justify-center p-6">
             <div className="max-w-lg rounded-2xl border bg-muted/30 p-7 text-center">
               <p className="font-medium">知识库状态读取失败</p>
@@ -414,7 +426,7 @@ export default function EmbeddedKnowledgeBasePanel({
             accountId={runtime.accountId}
             fallbackSnapshot={displayedSnapshot ?? null}
             onEditingBlockedChange={setEditingBlocked}
-            updating={knowledgeUpdating || standaloneImagesBusy || standaloneImagesDirty}
+            updating={knowledgeUpdating || standaloneImagesBusy || standaloneImagesDirty || resetQuery.isError}
             workbench={workbench}
             projectId={projectId}
           />
@@ -1549,6 +1561,14 @@ function RealBuildFlow({
       </div>
     </>
   );
+  // Progress and conversation hydration arrive independently. The server-owned
+  // workbench coordinate belongs to this exact build; do not wait for a second
+  // response to read its nodes or reuse an older conversation generation.
+  const nodeConversationId = displayedProgress?.build.conversationId ?? conversationId ?? displayedConversation?.id ?? "";
+  const nodeGeneration = displayedProgress?.workbench?.generation ??
+    (displayedConversation?.id === nodeConversationId
+      ? displayedConversation.knowledgeBase?.generation
+      : undefined);
   const knowledge = snapshotOnly ? (
     <div className="knowledge-workspace-history">
       <KnowledgeBaseViewer
@@ -1595,10 +1615,10 @@ function RealBuildFlow({
                 displayedProgress.workbench?.generation,
           ),
       )}
-      key={`${conversationId ?? "empty"}:${displayedProgress?.build.id ?? "empty"}:${displayedConversation?.knowledgeBase?.generation ?? 0}:${resetRevision}`}
+      key={`${nodeConversationId || "empty"}:${displayedProgress?.build.id ?? "empty"}:${nodeGeneration ?? "pending"}:${resetRevision}`}
       progress={displayedProgress}
-      conversationId={conversationId ?? displayedConversation?.id ?? ""}
-      generation={displayedConversation?.knowledgeBase?.generation}
+      conversationId={nodeConversationId}
+      generation={nodeGeneration}
       resetRevision={resetRevision}
       loading={progressRequestPending && !progressTimedOut}
       disabled={updating || mainComposerDirty || missingCurrentConversation || imagesBusy || imagesDirty}

@@ -44,3 +44,15 @@ it("keeps assistant media, artifacts and execution steps when the text is empty"
   expect(screen.getByText("读取资料")).toBeDefined();
   expect(container.querySelector(".brand-conversation-message__user-text")).toBeNull();
 });
+
+it("preserves Markdown nodes and selection across same-message polling updates", () => {
+  const message = { id: "stable", role: "assistant" as const, timestamp: 1, content: "## 保持已读取正文\n这段正文不应闪动。" };
+  const { rerender } = render(<BrandConversationMessage message={message} />);
+  const heading = screen.getByRole("heading", { name: "保持已读取正文" });
+  const range = document.createRange(); range.selectNodeContents(heading);
+  window.getSelection()?.addRange(range);
+  for (let n = 0; n < 5; n++) rerender(<BrandConversationMessage message={{ ...message }} />);
+  expect(screen.getByRole("heading", { name: "保持已读取正文" })).toBe(heading);
+  expect(window.getSelection()?.toString()).toBe("保持已读取正文");
+  window.getSelection()?.removeAllRanges();
+});
