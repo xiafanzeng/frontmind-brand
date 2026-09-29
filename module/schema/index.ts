@@ -1879,7 +1879,219 @@ const enterpriseProjectSiteProfiles = mysqlTable(
     ),
   ],
 );
-return { websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles };
+const jenovaBrandTrackingCredentials = mysqlTable(
+  "jenova_brand_tracking_credentials",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    encryptionVersion: int("encryptionVersion").default(1).notNull(),
+    encryptedKey: text("encryptedKey").notNull(),
+    encryptionIv: varchar("encryptionIv", { length: 32 }).notNull(),
+    encryptionAuthTag: varchar("encryptionAuthTag", { length: 32 }).notNull(),
+    fingerprint: varchar("fingerprint", { length: 32 }).notNull(),
+    status: mysqlEnum("status", ["active", "revoked"])
+      .default("active")
+      .notNull(),
+    validationStatus: mysqlEnum("validationStatus", [
+      "unverified",
+      "verified",
+      "invalid",
+    ])
+      .default("unverified")
+      .notNull(),
+    lastBalance: decimal("lastBalance", {
+      precision: 20,
+      scale: 8,
+      mode: "string",
+    }),
+    validatedAt: timestamp("validatedAt"),
+    balanceSyncedAt: timestamp("balanceSyncedAt"),
+    revokedAt: timestamp("revokedAt"),
+    createdByUserId: int("createdByUserId").references(() => core.users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("jenova_bt_credentials_fingerprint_uq").on(table.fingerprint),
+    index("jenova_bt_credentials_status_idx").on(table.status),
+  ],
+);
+
+/** Exactly one explicit Brand Tracker key assignment per overseas user. */
+const jenovaBrandTrackingAssignments = mysqlTable(
+  "jenova_brand_tracking_assignments",
+  {
+    userId: int("userId")
+      .primaryKey()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    credentialId: varchar("credentialId", { length: 36 }).notNull(),
+    assignedByUserId: int("assignedByUserId").references(() => core.users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    index("jenova_bt_assignments_credential_idx").on(table.credentialId),
+    foreignKey({
+      name: "jenova_bt_assignments_credential_fk",
+      columns: [table.credentialId],
+      foreignColumns: [jenovaBrandTrackingCredentials.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+/** Per-user rolling 30-day spend ceiling. Absence also means the $10 default. */
+const jenovaBrandTrackingPolicies = mysqlTable(
+  "jenova_brand_tracking_policies",
+  {
+    userId: int("userId")
+      .primaryKey()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    rolling30DayLimit: decimal("rolling30DayLimit", {
+      precision: 20,
+      scale: 8,
+      mode: "string",
+    })
+      .default("10.00000000")
+      .notNull(),
+    updatedByUserId: int("updatedByUserId").references(() => core.users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+);
+
+/** Local ownership and lifecycle record for a persistent Jenova session. */
+const jenovaBrandTrackingSessions = mysqlTable(
+  "jenova_brand_tracking_sessions",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    userId: int("userId")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    credentialId: varchar("credentialId", { length: 36 }).notNull(),
+    clientRequestId: varchar("clientRequestId", { length: 36 }).notNull(),
+    upstreamSessionId: varchar("upstreamSessionId", { length: 255 }),
+    title: varchar("title", { length: 255 }).default("品牌追踪会话").notNull(),
+    status: mysqlEnum("status", ["active", "archived"])
+      .default("active")
+      .notNull(),
+    archivedReason: varchar("archivedReason", { length: 64 }),
+    archivedAt: timestamp("archivedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("jenova_bt_sessions_user_request_uq").on(
+      table.userId,
+      table.clientRequestId,
+    ),
+    index("jenova_bt_sessions_user_status_updated_idx").on(
+      table.userId,
+      table.status,
+      table.updatedAt,
+    ),
+    index("jenova_bt_sessions_upstream_idx").on(table.upstreamSessionId),
+    foreignKey({
+      name: "jenova_bt_sessions_credential_fk",
+      columns: [table.credentialId],
+      foreignColumns: [jenovaBrandTrackingCredentials.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+/**
+ * One append-only local turn per browser request. Cost fields use fixed-point
+ * strings; a null usageCost with unknown costState must never be treated as 0.
+ */
+const jenovaBrandTrackingTurns = mysqlTable(
+  "jenova_brand_tracking_turns",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    sessionId: varchar("sessionId", { length: 36 }).notNull(),
+    userId: int("userId")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    credentialId: varchar("credentialId", { length: 36 }).notNull(),
+    clientRequestId: varchar("clientRequestId", { length: 36 }).notNull(),
+    idempotencyKey: varchar("idempotencyKey", { length: 191 }).notNull(),
+    upstreamRunId: varchar("upstreamRunId", { length: 255 }),
+    hiddenKickoff: boolean("hiddenKickoff").default(false).notNull(),
+    userContent: longtext("userContent").notNull(),
+    assistantContent: longtext("assistantContent").notNull(),
+    status: mysqlEnum("status", [
+      "pending",
+      "streaming",
+      "completed",
+      "failed",
+      "recovering",
+    ])
+      .default("pending")
+      .notNull(),
+    costState: mysqlEnum("costState", ["pending", "confirmed", "unknown"])
+      .default("pending")
+      .notNull(),
+    usageCost: decimal("usageCost", {
+      precision: 20,
+      scale: 8,
+      mode: "string",
+    }),
+    sessionFee: decimal("sessionFee", {
+      precision: 20,
+      scale: 8,
+      mode: "string",
+    })
+      .default("0.00000000")
+      .notNull(),
+    progress: json("progress").$type<Record<string, unknown>[]>(),
+    warnings: json("warnings").$type<Record<string, unknown>[]>(),
+    stopReason: varchar("stopReason", { length: 255 }),
+    errorCode: varchar("errorCode", { length: 128 }),
+    errorMessage: text("errorMessage"),
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("jenova_bt_turns_user_request_uq").on(
+      table.userId,
+      table.clientRequestId,
+    ),
+    uniqueIndex("jenova_bt_turns_idempotency_uq").on(table.idempotencyKey),
+    index("jenova_bt_turns_session_created_idx").on(
+      table.sessionId,
+      table.createdAt,
+    ),
+    index("jenova_bt_turns_user_cost_created_idx").on(
+      table.userId,
+      table.costState,
+      table.createdAt,
+    ),
+    index("jenova_bt_turns_credential_cost_idx").on(
+      table.credentialId,
+      table.costState,
+    ),
+    index("jenova_bt_turns_status_updated_idx").on(
+      table.status,
+      table.updatedAt,
+    ),
+    foreignKey({
+      name: "jenova_bt_turns_session_fk",
+      columns: [table.sessionId],
+      foreignColumns: [jenovaBrandTrackingSessions.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "jenova_bt_turns_credential_fk",
+      columns: [table.credentialId],
+      foreignColumns: [jenovaBrandTrackingCredentials.id],
+    }).onDelete("restrict"),
+  ],
+);
+return { jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles };
 }
 export type BrandSchema = ReturnType<typeof createBrandSchema>;
 
@@ -1928,3 +2140,13 @@ export type SocialPackage = BrandSchema["socialPackages"]["$inferSelect"];
 export type SiteProviderConnection = BrandSchema["siteProviderConnections"]["$inferSelect"];
 
 export type SiteDnsRecord = BrandSchema["siteDnsRecords"]["$inferSelect"];
+
+export type JenovaBrandTrackingCredential = BrandSchema["jenovaBrandTrackingCredentials"]["$inferSelect"];
+
+export type JenovaBrandTrackingAssignment = BrandSchema["jenovaBrandTrackingAssignments"]["$inferSelect"];
+
+export type JenovaBrandTrackingPolicy = BrandSchema["jenovaBrandTrackingPolicies"]["$inferSelect"];
+
+export type JenovaBrandTrackingSession = BrandSchema["jenovaBrandTrackingSessions"]["$inferSelect"];
+
+export type JenovaBrandTrackingTurn = BrandSchema["jenovaBrandTrackingTurns"]["$inferSelect"];

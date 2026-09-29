@@ -95,7 +95,12 @@
     "vaul": "1.1.2",
     "vite": "7.1.9",
     "zustand": "5.0.9",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "@alicloud/alidns20150109": "4.6.0",
+    "@alicloud/credentials": "2.4.7",
+    "@alicloud/esa20240910": "3.14.0",
+    "@alicloud/openapi-client": "0.4.15",
+    "@modelcontextprotocol/sdk": "1.30.0"
   },
   "devDependencies": {
     "typescript": "5.9.3",
