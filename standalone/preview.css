@@ -1,0 +1,21 @@
+/* Local design previews use the available desktop canvas instead of the
+   production workbench's reading-width cap. This file only takes effect under
+   the preview wrapper class, so the live bundle keeps its layout contract. */
+.brand-standalone--preview
+  .agent-workbench-shell:is(.module-website-builder,.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-topbar__canvas,
+.brand-standalone--preview
+  .agent-workbench-shell:is(.module-website-builder,.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell__layout,
+.brand-standalone--preview
+  .agent-workbench-shell:is(.module-website-builder,.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell__main-content.is-scrollable
+  >.agent-workspace-frame {
+  max-width: 2400px;
+}
+
+.brand-standalone--preview
+  .agent-workbench-shell:is(.module-website-builder,.module-enterprise-rag,.module-enterprise-qa)
+  :is(.agent-workbench-topbar__canvas,.agent-workspace-frame) {
+  padding-inline: clamp(20px, 2.5vw, 56px);
+}

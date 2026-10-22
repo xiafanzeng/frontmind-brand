@@ -4,29 +4,52 @@ import {useLocation,useSearch} from 'wouter';
 import {Toaster} from 'sonner';
 import {BRAND_MODULE_LABEL,BRAND_MODULE_SIDEBAR_LABEL} from '../module/client/module-label';
 import ModuleWorkspace,{type BrandPage,type ModuleContext} from '../module/client/ModuleWorkspace';
+import {EnterpriseRagPreview} from '../module/client/dashboard/ai-website-preview/EnterpriseRagPreview';
+import {SimplifiedWebsiteBuilderPreview,type BuildStep} from '../module/client/dashboard/ai-website-preview/SimplifiedWebsiteBuilderPreview';
 import {configureBrandApiHooks} from '../module/client/api-hooks';
 import {KnowledgeBaseUploadProvider} from '../module/client/lib/knowledge-base-upload-manager';
 import {brandHost} from '../module/client/host';
-import EnterpriseQaConversation from '../module/client/EnterpriseQaConversation';
 import {createBrandApi,liveRpc} from './api';
-import {installBrandHost,liveConversations,ConversationPurposeProvider} from './host';
-import {previewRpc,previewConversations,SiteOpsPreview} from './preview';
+import {installBrandHost,liveConversations} from './host';
+import {previewRpc,previewConversations} from './preview';
 import {previewKnowledgeProgress,previewKnowledgeSnapshot} from './preview-data';
+import {createIntentPreviewApi} from './intent-preview';
 import './standalone.css';
-const pages:Array<[BrandPage,string]>=[['knowledge','智能知识库'],['keywords','品牌全域词库'],['enterprise-qa','企业问答'],['website','网站管理'],['website-settings','内容分析与 AI 部件']];
+import './preview.css';
+type AppPage=BrandPage|'enterprise-rag'|'website-builder';
+const pages:Array<[AppPage,string]>=[['knowledge','智能知识库'],['keywords','品牌全域词库'],['intent','优化问题'],['enterprise-rag','企业 RAG'],['website-builder','网站建设']];
+const websiteSteps:BuildStep[]=['template','structure','assistant','evaluation'];
+const websiteReturnLabels:Record<BuildStep,string>={template:'模板选择',structure:'结构确认',assistant:'AI 助手',evaluation:'整体评估'};
 const brandModule={id:'brand',label:BRAND_MODULE_LABEL,color:'#16794f'};
+const intentModule={id:'intent',label:'意图优化',color:'#7545a0'};
 const extensionsModule={id:'extensions',label:'AI专用官网',color:'#5e6174'};
+// 侧边栏按产品六大模块完整展示；未实现模块仅作导航占位，点击保持当前页面。
+const progressModule={id:'progress',label:'进度监控',color:'#b45309',views:[]};
+const contentModule={id:'content',label:'内容制作',color:'#0e7490',views:[]};
+const publishModule={id:'publish',label:'媒体发布',color:'#be123c',views:[]};
 function Runtime({context,preview}:{context:ModuleContext;preview:boolean}){
  const runtime=useMemo(()=>{const adapter=createBrandApi(preview?previewRpc:liveRpc);configureBrandApiHooks(adapter.api);installBrandHost(context,preview?previewConversations():liveConversations,preview);return adapter;},[context,preview]);
- const [path,navigate]=useLocation();const search=useSearch();const requested=new URLSearchParams(search).get('view')??(path==='/'?'knowledge':path.slice(1));const page=pages.some(([id])=>id===requested)?requested as BrandPage:'knowledge';
+ const intentApi=useMemo(()=>preview?createIntentPreviewApi(context.workspace.id):undefined,[preview,context.workspace.id]);
+ const [path,navigate]=useLocation();const search=useSearch();const params=new URLSearchParams(search);
+ const requested=params.get('view')??(path==='/'?'knowledge':path.slice(1));
+ const requestedWebsiteStep=params.get('step');const requestedReturnStep=params.get('returnStep');
+ const websiteStep=websiteSteps.includes(requestedWebsiteStep as BuildStep)?(requestedWebsiteStep as BuildStep):'template';
+ const returnStep=websiteSteps.includes(requestedReturnStep as BuildStep)?(requestedReturnStep as BuildStep):null;
+ const page=pages.some(([id])=>id===requested)?requested as AppPage:'knowledge';
  useEffect(()=>{if(!pages.some(([id])=>id===requested))navigate('/',{replace:true});},[requested,navigate]);
- const dashboard=runtime.dashboard.useQuery(undefined,{enabled:page==='keywords',refetchOnWindowFocus:true});const knowledge=runtime.api.workspace.knowledge.useQuery(undefined,{enabled:page==='keywords',refetchOnWindowFocus:true});
- const selectedModule=page==='knowledge'||page==='keywords'?brandModule:extensionsModule;
- const selectedPages=pages.filter(([id])=>(id==='knowledge'||id==='keywords')===(selectedModule.id==='brand'));
- return <ModuleShell module={selectedModule} navigationModules={[{...brandModule,label:BRAND_MODULE_SIDEBAR_LABEL,views:pages.slice(0,2).map(([id,label])=>({id,label}))},{...extensionsModule,views:pages.slice(2).map(([id,label])=>({id,label}))}]} views={selectedPages.map(([id,label])=>({id,label}))} activeView={page} onSelectView={id=>brandHost().requestWorkspaceNavigation(()=>navigate(`/?view=${id}`))} preview={preview} showViewTabs={page==='enterprise-qa'?preview:page!=='knowledge'}><div className={`brand-page brand-page--${page}`}><ModuleWorkspace context={context} page={page} preview={preview} keywordData={{tables:dashboard.data?.payload?.keywordTables??[],revision:dashboard.data?.revision??null,loading:dashboard.isLoading,error:dashboard.error,knowledgePublished:Boolean(knowledge.data?.snapshot)}} previewKnowledge={{progress:previewKnowledgeProgress,snapshot:previewKnowledgeSnapshot}} previewQa={<ConversationPurposeProvider><EnterpriseQaConversation preview/></ConversationPurposeProvider>} previewSiteOps={<SiteOpsPreview/>}/></div><Toaster richColors/></ModuleShell>;
+ useEffect(()=>{if(page==='website-builder'&&requestedWebsiteStep&&!websiteSteps.includes(requestedWebsiteStep as BuildStep))navigate('/?view=website-builder',{replace:true});},[navigate,page,requestedWebsiteStep]);
+ useEffect(()=>{document.querySelector<HTMLElement>('.agent-workbench-shell__main-content')?.scrollTo({top:0,left:0});},[page]);
+ const dashboard=runtime.dashboard.useQuery(undefined,{enabled:page==='keywords'||page==='intent',refetchOnWindowFocus:true});const knowledge=runtime.api.workspace.knowledge.useQuery(undefined,{enabled:page==='keywords'||page==='intent',refetchOnWindowFocus:true});
+ const selectedModule=page==='intent'?intentModule:page==='knowledge'||page==='keywords'?brandModule:extensionsModule;
+ const selectedPages=pages.filter(([id])=>selectedModule.id==='intent'?id==='intent':selectedModule.id==='brand'?id==='knowledge'||id==='keywords':!['knowledge','keywords','intent'].includes(id));
+ return <ModuleShell module={selectedModule} navigationModules={[{...brandModule,label:BRAND_MODULE_SIDEBAR_LABEL,views:pages.slice(0,2).map(([id,label])=>({id,label}))},{...intentModule,views:[{id:'intent',label:'优化问题'}]},progressModule,contentModule,publishModule,{...extensionsModule,views:pages.slice(3).map(([id,label])=>({id,label}))}]} views={selectedPages.map(([id,label])=>({id,label}))} activeView={page} onSelectView={id=>brandHost().requestWorkspaceNavigation(()=>navigate(`/?view=${id}`))} preview={preview} showViewTabs={page!=='knowledge'}><div className={`brand-page brand-page--${page}`}>
+ {page==='website-builder'?<SimplifiedWebsiteBuilderPreview initialStep={websiteStep} onOpenRag={()=>navigate(`/?view=enterprise-rag&returnStep=${websiteStep}`)} onStepChange={step=>navigate(step==='template'?'/?view=website-builder':`/?view=website-builder&step=${step}`,{replace:true})}/>
+ :page==='enterprise-rag'?<EnterpriseRagPreview onOpenWebsite={()=>navigate(returnStep&&returnStep!=='template'?`/?view=website-builder&step=${returnStep}`:'/?view=website-builder')} onOpenWebsiteAssistant={()=>navigate('/?view=website-builder&step=assistant')} websiteEntryLabel={returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}/>
+ :<ModuleWorkspace context={context} page={page as BrandPage} preview={preview} intentApi={intentApi} onIntentSectionChange={section=>navigate(`/?view=${section==='universe'?'keywords':'intent'}`)} keywordData={{tables:dashboard.data?.payload?.keywordTables??[],revision:dashboard.data?.revision??null,loading:dashboard.isLoading,error:dashboard.error,knowledgePublished:Boolean(knowledge.data?.snapshot)}} previewKnowledge={{progress:previewKnowledgeProgress,snapshot:previewKnowledgeSnapshot}}/>}
+ </div><Toaster richColors/></ModuleShell>;
 }
 export default function App({preview=false}:{preview?:boolean}){
  const [context,setContext]=useState<ModuleContext|null>(()=>preview?{module:'brand',workspace:{id:'brand-local-preview',ownerUserId:0},capabilities:['brand'],marketEdition:'cn'}:null);const [error,setError]=useState('');
  useEffect(()=>{if(preview)return;const abort=new AbortController();void fetch('/api/module/context',{credentials:'same-origin',signal:abort.signal}).then(async response=>{if(!response.ok)throw new Error('无法进入品牌工作区，请重新通过开发门禁');return response.json();}).then(value=>{if(value.module!=='brand'||!value.workspace?.id)throw new Error('品牌运行上下文不匹配');setContext(value);}).catch(error=>{if(!abort.signal.aborted)setError(error.message);});return()=>abort.abort();},[preview]);
- return <div className="brand-standalone">{error?<p role="alert">{error}</p>:context?<KnowledgeBaseUploadProvider scopeKey={`${context.workspace.id}:${context.workspace.ownerUserId}`}><Runtime context={context} preview={preview}/></KnowledgeBaseUploadProvider>:<p role="status">正在进入品牌工作区…</p>}</div>;
+ return <div className={`brand-standalone${preview?' brand-standalone--preview':''}`}>{error?<p role="alert">{error}</p>:context?<KnowledgeBaseUploadProvider scopeKey={`${context.workspace.id}:${context.workspace.ownerUserId}`}><Runtime context={context} preview={preview}/></KnowledgeBaseUploadProvider>:<p role="status">正在进入品牌工作区…</p>}</div>;
 }
