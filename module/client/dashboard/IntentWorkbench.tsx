@@ -10,7 +10,7 @@ import KnowledgeChangeComparison from "./KnowledgeChangeComparison";
 import {useWorkspaceDraftGuard, projectWorkspaceUrl, requestWorkspaceNavigation} from "../host";
 import {navigate} from "wouter/use-browser-location";
 import {evaluateIntent} from "../../contracts/intent-workbench";
-import {keywordCategoryLabel} from "@frontmind/module-ui/keyword-categories";
+import IntentQuestionCatalog, {type IntentCatalogIntegration} from "./IntentQuestionCatalog";
 
 type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge";
 type Selection = Parameters<NonNullable<ManagedKeywordTablesProps["onUseQuestion"]>>[0];
@@ -37,9 +37,10 @@ function PlanEditor({plan, question, onChange}: {plan: IntentPlan; question: str
     <p>{item.source}</p><button onClick={() => setActive(item.id)}>查看并编辑</button><button onClick={() => update(item.id, {selected: false})}>不采纳</button>
   </section>)}</div><section className="iw-panel iw-preview"><h3>{action?.kind === "node" ? "知识节点变更预览" : action?.title}<span className="iw-tag">可编辑</span></h3>{action && <div className="iw-preview-body"><p className="iw-evidence">{question} · {action.source}</p>{action.before && <div className="iw-diff remove"><b>修改前</b><pre>{action.before}</pre></div>}<label className="iw-edit-label">修改后<textarea aria-label={`${action.title}修改后`} value={action.after} rows={action.kind === "node" ? 12 : 5} maxLength={action.kind === "question" ? 500 : 300000} onChange={event => update(action.id, {after: event.target.value})}/></label><p className="iw-method">节点正文须人工审核。资料待办不会直接消除知识缺口。</p></div>}</section></div>;
 }
-export default function IntentWorkbench({keywordProps, initialView = "universe", api = liveIntentWorkbenchApi, onSectionChange}: {
+export default function IntentWorkbench({keywordProps, initialView = "universe", api = liveIntentWorkbenchApi, onSectionChange, catalogIntegration}: {
   keywordProps: ManagedKeywordTablesProps; initialView?: "universe" | "list"; api?: IntentWorkbenchApi;
   onSectionChange?: (section: "universe" | "list") => void;
+  catalogIntegration?: IntentCatalogIntegration;
 }) {
   const [workspace, setWorkspace] = useState<IntentWorkspace | null>(null);
   const [view, setView] = useState<View>(initialView);
@@ -52,6 +53,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [singleQueue, setSingleQueue] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
+  const [category, setCategory] = useState("all");
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<IntentPlan[]>([]);
@@ -97,7 +99,9 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const questions = workspace?.state.questions ?? [];
   const evaluations = workspace?.state.evaluations ?? [];
   const receipt = workspace?.state.receipts.find(item => item.id === receiptId) ?? workspace?.state.receipts.at(-1);
-  const filtered = questions.filter(question => question.question.toLowerCase().includes(search.toLowerCase()) && (status === "all" || (status === "unrated" ? !evaluations.some(item => item.questionId === question.id) : (evaluations.find(item => item.questionId === question.id)?.support ?? 100) < 80)));
+  const filtered = questions.filter(question => question.question.toLowerCase().includes(search.toLowerCase()) &&
+    (category === "all" || question.category === category) &&
+    (status === "all" || (catalogIntegration?.answerStatuses?.[question.id] ?? "unknown") === status));
   const pageCount = Math.max(1, Math.ceil(filtered.length / 10));
   const currentPage = Math.min(page, pageCount - 1);
   const visible = filtered.slice(currentPage * 10, (currentPage + 1) * 10);
@@ -162,10 +166,12 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     {view === "universe" && <><header className="iw-header iw-universe-header"><div><h1>品牌全域词库</h1><p>基于多平台数据整理 GEO 优化问题，按分类筛选并加入优化清单。</p></div><button onClick={() => openSection("list")}>优化清单 <span className="iw-tag">{questions.length}</span><ArrowRight size={15}/></button></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => setIntake([selection])} onUseQuestions={items => setIntake(items)}/></>}
     {view !== "universe" && !workspace && !error && <div role="status" className="iw-empty">正在读取优化工作台…</div>}
     {view === "list" && workspace && <>
-      <header className="iw-header iw-list-header"><div><h1>优化问题</h1><p>评估问题价值与知识支撑，审核方案后再执行。</p></div><div className="iw-header-tools"><label className="iw-search"><Search size={17}/><input aria-label="搜索优化问题" placeholder="搜索问题..." value={search} onChange={event => {setSearch(event.target.value); setPage(0);}}/></label><select aria-label="评估状态" value={status} onChange={event => {setStatus(event.target.value); setPage(0);}}><option value="all">全部状态</option><option value="unrated">尚未评估</option><option value="gap">知识待补齐</option></select><button className="iw-primary" disabled={pending || !selected.length} onClick={() => void evaluate(selected)}><Sparkles size={16}/>批量评估并优化{selected.length > 0 && `（${selected.length}）`}</button></div></header>
-      {selected.length > 0 && <div className="iw-selection-bar"><span>已选择 <strong>{selected.length}</strong> 条问题</span><button onClick={() => setSelected([])}>清空选择</button></div>}
-      <section className="iw-panel iw-table-wrap"><table><thead><tr><th><input aria-label="选择当前页问题" type="checkbox" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => setSelected(ids => event.target.checked ? [...new Set([...ids, ...visible.map(item => item.id)])] : ids.filter(id => !visible.some(item => item.id === id)))}/></th><th>候选问题</th><th>问题价值</th><th>知识支撑</th><th>状态</th><th>操作</th></tr></thead><tbody>{visible.map(question => {const evaluation = evaluations.find(item => item.questionId === question.id); return <tr key={question.id} className={selected.includes(question.id) ? "selected" : ""}><td><input aria-label={`选择${question.question}`} type="checkbox" checked={selected.includes(question.id)} onChange={() => toggle(question.id)}/></td><td><b>{question.question}</b><p className="iw-evidence">{keywordCategoryLabel(question.category) || question.category}{question.subdivision && ` · ${question.subdivision}`}</p></td><td>{evaluation ? <Score value={evaluation.value}/> : "—"}</td><td>{evaluation ? <Score value={evaluation.support}/> : "—"}</td><td><span className="iw-tag">{evaluation ? evaluation.support >= 80 ? "可支撑" : "待优化" : "待评估"}</span></td><td><button disabled={pending} onClick={() => void evaluate([question.id])}>查看评估 <ArrowRight size={13}/></button></td></tr>;})}</tbody></table>{!filtered.length && <div className="iw-empty">{questions.length ? "没有匹配问题，请调整筛选条件。" : "先从品牌全域词库选择问题，加入优化清单。"}</div>}</section>
-      <div className="iw-pagination"><span>共 {filtered.length} 条 · 第 {currentPage + 1} / {pageCount} 页</span><button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</button><button disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>下一页</button></div>
+      <IntentQuestionCatalog questions={questions} visible={visible} integration={catalogIntegration}
+        search={search} category={category} status={status} selected={selected} pending={pending}
+        page={currentPage} pageCount={pageCount} total={filtered.length}
+        onSearch={value => {setSearch(value); setPage(0);}} onCategory={value => {setCategory(value); setPage(0);}} onStatus={value => {setStatus(value); setPage(0);}}
+        onToggle={toggle} onClear={() => setSelected([])} onEvaluate={ids => void evaluate(ids)} onPage={setPage}
+        onSelectPage={checked => setSelected(ids => checked ? [...new Set([...ids, ...visible.map(item => item.id)])] : ids.filter(id => !visible.some(item => item.id === id)))}/>
       {workspace.state.plans.length > 0 && <div className="iw-toolbar"><span>已保存 {workspace.state.plans.length} 个方案</span><button disabled={pending} onClick={() => {const saved = workspace.state.plans.filter(item => !selected.length || selected.includes(item.questionId)); setDrafts(structuredClone(saved)); setScope(saved.map(item => item.questionId)); setDraftDirty(false); setView("plan");}}>继续审核已保存方案</button></div>}
       {workspace.state.receipts.length > 0 && <section className="iw-panel iw-todo-list"><h3>执行记录</h3>{[...workspace.state.receipts].reverse().map(item => <div key={item.id}><span>{new Date(item.createdAt).toLocaleString("zh-CN")} · {item.changes.length} 项动作 · {({running: "待确认", completed: "已完成", partial: "部分完成", reverted: "已撤销"})[item.status]}</span> <button onClick={() => {setReceiptId(item.id); setView("result");}}>查看执行记录</button></div>)}</section>}
       {workspace.state.todos.length > 0 && <section className="iw-panel iw-todo-list"><h3>资料待办 <small>补齐资料后需再次评估知识库</small></h3>{workspace.state.todos.map(todo => <div key={todo.id}><b>{todo.title}</b><span className={`iw-tag ${todo.status === "completed" ? "supported" : "partial"}`}>{todo.status === "completed" ? "已记录来源" : "待补资料"}</span>{todo.status === "pending" ? <label><input aria-label="资料来源" placeholder="填写资料来源与核验记录" value={todoSource[todo.id] ?? ""} onChange={event => setTodoSource(values => ({...values, [todo.id]: event.target.value}))}/><button disabled={pending || !todoSource[todo.id]?.trim()} onClick={() => void run(() => command({kind: "todo", todoId: todo.id, source: todoSource[todo.id]}))}>记录完成</button></label> : <p>{todo.source}</p>}</div>)}</section>}
