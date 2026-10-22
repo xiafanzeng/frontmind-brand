@@ -2091,7 +2091,17 @@ const jenovaBrandTrackingTurns = mysqlTable(
     }).onDelete("restrict"),
   ],
 );
-return { jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles };
+
+const brandIntentWorkspaces = mysqlTable("brand_intent_workspaces", {
+  workspaceKey: varchar("workspace_key",{length:64}).primaryKey(),
+  ownerUserId: int("owner_user_id").notNull(),
+  projectId: varchar("project_id",{length:36}),
+  revision: int("revision",{unsigned:true}).notNull().default(0),
+  payload: json("payload").notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
+}, table=>[index("brand_intent_owner_project_idx").on(table.ownerUserId, table.projectId)]);
+
+return { brandIntentWorkspaces, jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles };
 }
 export type BrandSchema = ReturnType<typeof createBrandSchema>;
 
@@ -2150,3 +2160,7 @@ export type JenovaBrandTrackingPolicy = BrandSchema["jenovaBrandTrackingPolicies
 export type JenovaBrandTrackingSession = BrandSchema["jenovaBrandTrackingSessions"]["$inferSelect"];
 
 export type JenovaBrandTrackingTurn = BrandSchema["jenovaBrandTrackingTurns"]["$inferSelect"];
+
+export type BrandIntentWorkspace = BrandSchema["brandIntentWorkspaces"]["$inferSelect"];
+
+export type InsertBrandIntentWorkspace = BrandSchema["brandIntentWorkspaces"]["$inferInsert"];
