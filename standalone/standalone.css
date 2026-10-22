@@ -4,3 +4,6 @@
 
 /* Workbench children keep the same flex parent as the integrated Dashboard. */
 .brand-page--knowledge,.brand-page--enterprise-qa{display:contents}
+
+/* 负责人要求：侧边栏模块选中态统一为灰色，覆盖各模块品牌色。 */
+.operator-sidebar .operator-module-entry.active { --module-accent: #5e6174 !important; }
