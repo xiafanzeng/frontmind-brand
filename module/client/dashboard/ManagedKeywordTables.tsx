@@ -57,6 +57,11 @@ export type ManagedKeywordTablesProps = {
     dashboardRevision?: number;
     workbenchTaskId?: string;
   }) => void;
+  /** Optional batch intake; existing host-owned single selection stays compatible. */
+  onUseQuestions?: (questions: Array<{
+    question: string; category: KeywordCategoryKey; tableId: string;
+    rowIndex: number; dashboardRevision?: number;
+  }>) => void;
   quotaAvailability?: ManagedKeywordQuotaAvailability;
   generationEnabled?: boolean;
   dashboardRevision?: number | null;
@@ -543,6 +548,7 @@ export default function ManagedKeywordTables({
   loading = false,
   error,
   onUseQuestion,
+  onUseQuestions,
   quotaAvailability,
   generationEnabled = false,
   dashboardRevision,
@@ -555,6 +561,12 @@ export default function ManagedKeywordTables({
   // an explicit 选择词条 click. Filters below remain persisted flow state.
   const [initialGenerationSession] = useState(() => tables.length === 0);
   const [pages, setPages] = useState<Record<string, number>>({});
+  const [batchSelection, setBatchSelection] = useState<Record<string, {
+    question: string; category: KeywordCategoryKey; tableId: string;
+    rowIndex: number; dashboardRevision?: number;
+  }>>({});
+  const batchItems = Object.values(batchSelection);
+  useEffect(() => setBatchSelection({}), [dashboardRevision]);
   const [searchTerm, setSearchTerm] = useBusinessFlowState(
     "keywordSearch",
     "",
@@ -853,7 +865,7 @@ export default function ManagedKeywordTables({
                             ),
                           )}
                           {onUseQuestion && (
-                            <th>问题优化</th>
+                            <th>{onUseQuestions ? "选择词条" : "问题优化"}</th>
                           )}
                         </tr>
                       </thead>
@@ -871,6 +883,7 @@ export default function ManagedKeywordTables({
                           return (
                             <tr
                               key={`${table.id}-${rowIndex}`}
+                              className={onUseQuestions && batchSelection[`${table.id}:${rowIndex}`] ? "keyword-row-selected" : undefined}
                               aria-selected={isWorkbench ? selectedKeyword?.tableId === table.id && selectedKeyword.rowIndex === rowIndex : undefined}
                             >
                               {table.displayColumns.map(
@@ -942,13 +955,21 @@ export default function ManagedKeywordTables({
                                         tableId: table.id,
                                         rowIndex,
                                       };
-                                      onUseQuestion?.({...selection, ...(dashboardRevision != null ? {dashboardRevision} : {})});
+                                      const item = {...selection, ...(dashboardRevision != null ? {dashboardRevision} : {})};
+                                      if (onUseQuestions) {
+                                        const key = `${table.id}:${rowIndex}`;
+                                        setBatchSelection(current => {
+                                          const next = {...current};
+                                          if (next[key]) delete next[key]; else next[key] = item;
+                                          return next;
+                                        });
+                                      } else onUseQuestion?.(item);
                                     }}
                                   >
                                     {quotaAccess?.available === false
                                       ? quotaAccess.unavailableLabel ||
                                         "该类额度已满"
-                                      : "选择词条"}
+                                      : onUseQuestions && batchSelection[`${table.id}:${rowIndex}`] ? "已选择 ✓" : "选择词条"}
                                   </button>
                                 </td>
                               )}
@@ -1002,6 +1023,13 @@ export default function ManagedKeywordTables({
               />
             )}
           </div>
+          {onUseQuestions && batchItems.length > 0 && (
+            <div className="iw-sticky">
+              <span>已选择 <strong>{batchItems.length}</strong> 条问题 · 支持跨筛选连续选择</span>
+              <div><button type="button" onClick={() => setBatchSelection({})}>清空选择</button>
+              <button type="button" className="iw-primary" onClick={() => onUseQuestions(batchItems)}>批量加入优化清单（{batchItems.length}）</button></div>
+            </div>
+          )}
         </>
       )}
     </section>
