@@ -1,5 +1,6 @@
 /* Dashboard shell provides all global styles; these rules only arrange brand business content. */
-.brand-page{height:100%;min-height:0}.brand-page--keywords,.brand-page--website-settings{overflow:auto}
+.brand-page{height:100%;min-height:0}.brand-page--website-settings,.brand-page--enterprise-rag,.brand-page--website-builder{overflow:auto}
+.brand-page--keywords,.brand-page--intent{height:auto;overflow:visible}
 
 /* Workbench children keep the same flex parent as the integrated Dashboard. */
 .brand-page--knowledge,.brand-page--enterprise-qa{display:contents}

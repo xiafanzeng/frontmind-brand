@@ -5,7 +5,14 @@ import type {RpcCall} from './api';
 import {previewKnowledgeSnapshot,previewKnowledgeProgress} from './preview-data';
 import SiteOpsConversationPanel from '../module/client/dashboard/siteops/SiteOpsConversationPanel';
 import type {SiteOpsObservationV1} from '../module/contracts/siteops-contract';
-const keywordTables=[{id:'local-brand',title:'品牌问题词库',description:'合成开发样例',columns:['问题','主分类','问题类型'],rows:[['示例企业提供哪些服务？','brand','品牌介绍'],['示例产品适合哪些应用？','product_scenario','应用场景']]}];
+const keywordTables=[{id:'local-brand',title:'品牌全域词库',description:'原型交互合成开发样例',columns:['问题','主分类','问题细分'],rows:[
+ ['隆鼻材料应该怎么选','product_scenario','场景方案'],
+ ['东莞整形美容医院哪家好','industry','采购决策'],
+ ['东莞双眼皮修复医院哪家专业','industry','信任验证'],
+ ['隆鼻术后应该如何护理','product_scenario','售后合作'],
+ ['整形医院的资质怎么核验','reputation','信任验证'],
+ ['不同隆鼻材料的费用有什么区别','product_scenario','采购决策'],
+]}];
 export const previewRpc:RpcCall=async(path,_input,mutation)=>{
  if(mutation)throw new Error('本地预览不执行后台任务；请到开发子域名验收。');
  if(path==='workspace.knowledge')return {snapshot:previewKnowledgeSnapshot};

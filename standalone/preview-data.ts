@@ -1,5 +1,6 @@
 import type { KnowledgeBaseProgressBranchDto, KnowledgeBaseProgressDto, KnowledgeBaseProgressLeafDto } from "../module/contracts/knowledge-base-public-progress";
 import type { KnowledgeSnapshotView } from "../module/client/components/KnowledgeBaseViewer";
+import frontmindWordmarkUrl from "../vendor/module-ui/src/assets/frontmind-wordmark.svg";
 
 export const previewProgressBranches = [
   {
@@ -272,11 +273,11 @@ export const previewKnowledgeSnapshot = {
   ],
   assets: [
     {
-      key: "preview-factory",
-      path: "assets/brand/企业与制造视觉样例.webp",
-      mimeType: "image/webp",
-      size: 1_420_000,
-      url: "/assets/frontmind-login-background.webp",
+      key: "preview-brand-wordmark",
+      path: "assets/brand/FrontMind品牌字标.svg",
+      mimeType: "image/svg+xml",
+      size: 5_620,
+      url: frontmindWordmarkUrl,
     },
   ],
 } satisfies KnowledgeSnapshotView;

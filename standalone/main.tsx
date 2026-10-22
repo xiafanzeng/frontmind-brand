@@ -5,5 +5,6 @@ import './base.css';
 import ModuleWorkspace from './App';
 
 // Local fixtures and live business components share exactly this entry.
+// The static preview build (vite build --mode preview) keeps synthetic data, so it stays on the preview runtime.
 enableModuleFileTransport();
-createRoot(document.getElementById('root')!).render(<React.StrictMode><ModuleWorkspace preview={import.meta.env.DEV} /></React.StrictMode>);
+createRoot(document.getElementById('root')!).render(<React.StrictMode><ModuleWorkspace preview={import.meta.env.DEV || import.meta.env.MODE === 'preview'} /></React.StrictMode>);
