@@ -1,7 +1,8 @@
 import { Router, type Request } from "express";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import {z} from "zod";
-import {createIntentWorkbenchService, IntentWorkbenchError} from "./intent-workbench-service.js";
+// 包名导入保持运行时从模块自身 dist 加载；相对导入会被 Dashboard 构建内联进 bundle，破坏 workflow 清单路径解析。
+import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
 
 /** Supplied by the host after authentication; never derive ownership from request data. */
 export interface ModuleHttpCore {
