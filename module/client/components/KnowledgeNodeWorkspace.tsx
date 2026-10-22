@@ -115,7 +115,10 @@ export default function KnowledgeNodeWorkspace(
     state.conversations.find(
       (conversation) => conversation.id === props.conversationId,
     )?.knowledgeBase?.generation;
-  const previewDetails = import.meta.env.DEV ? props.previewDetails : undefined;
+  const previewDetails =
+    import.meta.env.DEV || import.meta.env.MODE === 'preview'
+      ? props.previewDetails
+      : undefined;
   const effectiveGeneration =
     generation ?? previewDetails?.[0]?.coordinates.generation;
   const sessionKey = `${props.conversationId}:${props.progress?.build.id ?? "empty"}:${effectiveGeneration ?? "unknown"}:${props.resetRevision ?? "unknown"}`;

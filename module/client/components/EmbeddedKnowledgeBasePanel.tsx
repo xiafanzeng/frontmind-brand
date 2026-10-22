@@ -161,7 +161,10 @@ export default function EmbeddedKnowledgeBasePanel({
   workbench?: boolean;
   projectId?: string;
 }) {
-  const previewMode = import.meta.env.DEV && preview && Boolean(previewData);
+  const previewMode =
+    (import.meta.env.DEV || import.meta.env.MODE === 'preview') &&
+    preview &&
+    Boolean(previewData);
   const unified = mode === "workspace";
   const [editingBlocked, setEditingBlocked] = useState(false);
   const [knowledgeUpdating, setKnowledgeUpdating] = useState(false);
