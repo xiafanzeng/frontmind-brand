@@ -21,10 +21,24 @@ type EnterpriseQaWorkspaceProps = {
 
 type SourceState = {
   knowledgeBase: TaskResponse["knowledgeBase"];
+  configured: boolean | null;
+  provider: string | null;
   loaded: boolean;
   failed: boolean;
   refreshFailed?: boolean;
+  failureCode?: string;
 };
+
+type EnterpriseQaRuntimeConfig = Pick<TaskResponse, "knowledgeBase"> & {
+  configured?: unknown;
+  provider?: unknown;
+};
+
+function enterpriseQaProviderLabel(provider: string | null) {
+  if (provider === "zhipu") return "智谱";
+  if (provider === "xty_codex") return "XTY Codex";
+  return provider || "未配置";
+}
 
 function useKnowledgeSource(
   localTaskId?: string | null,
@@ -37,6 +51,8 @@ function useKnowledgeSource(
   const [source, setSource] = useState<SourceState & { requestKey: string }>({
     requestKey: "",
     knowledgeBase: null,
+    configured: null,
+    provider: null,
     loaded: false,
     failed: false,
   });
@@ -66,7 +82,14 @@ function useKnowledgeSource(
       setSource((current) =>
         current.requestKey === requestKey && current.loaded && !current.failed
           ? current
-          : { requestKey, knowledgeBase: null, loaded: false, failed: false },
+          : {
+              requestKey,
+              knowledgeBase: null,
+              configured: null,
+              provider: null,
+              loaded: false,
+              failed: false,
+            },
       );
       try {
         const query = localTaskId
@@ -86,14 +109,29 @@ function useKnowledgeSource(
             response.status >= 500 ||
             response.status === 408 ||
             response.status === 429;
-          throw new Error("知识库来源读取失败");
+          const payload = (await response.json().catch(() => null)) as {
+            error?: { code?: unknown };
+          } | null;
+          const error = new Error("知识库来源读取失败") as Error & {
+            code?: string;
+          };
+          if (typeof payload?.error?.code === "string") {
+            error.code = payload.error.code;
+          }
+          throw error;
         }
         temporaryFailure = false;
-        const result: Pick<TaskResponse, "knowledgeBase"> = await Promise.race([
+        const result = (await Promise.race([
           response.json(),
           deadline,
-        ]);
+        ])) as EnterpriseQaRuntimeConfig;
         const knowledgeBase = result.knowledgeBase ?? null;
+        const configured =
+          typeof result.configured === "boolean" ? result.configured : null;
+        const provider =
+          typeof result.provider === "string" && result.provider.trim()
+            ? result.provider.trim()
+            : null;
         if (
           knowledgeBase &&
           (typeof knowledgeBase.snapshotId !== "string" ||
@@ -107,7 +145,14 @@ function useKnowledgeSource(
           throw new Error("知识库来源无效");
         }
         if (!disposed && version === requestVersion) {
-          setSource({ requestKey, knowledgeBase, loaded: true, failed: false });
+          setSource({
+            requestKey,
+            knowledgeBase,
+            configured,
+            provider,
+            loaded: true,
+            failed: false,
+          });
         }
       } catch (error) {
         // Fetch can reject while reading a successful response body as well as before headers.
@@ -120,7 +165,18 @@ function useKnowledgeSource(
             !current.failed &&
             current.knowledgeBase
               ? { ...current, refreshFailed: true }
-              : { requestKey, knowledgeBase: null, loaded: true, failed: true },
+              : {
+                  requestKey,
+                  knowledgeBase: null,
+                  configured: null,
+                  provider: null,
+                  loaded: true,
+                  failed: true,
+                  failureCode:
+                    typeof (error as { code?: unknown })?.code === "string"
+                      ? (error as { code: string }).code
+                      : undefined,
+                },
           );
         }
       } finally {
@@ -141,7 +197,13 @@ function useKnowledgeSource(
     source:
       source.requestKey === requestKey
         ? source
-        : { knowledgeBase: null, loaded: false, failed: false },
+        : {
+            knowledgeBase: null,
+            configured: null,
+            provider: null,
+            loaded: false,
+            failed: false,
+          },
     retry: () => setAttempt((value) => value + 1),
   };
 }
@@ -180,6 +242,18 @@ export function EnterpriseQaSourceNote({
                 : source.knowledgeBase
                   ? `v${source.knowledgeBase.version}`
                   : "尚未发布"}
+          </dd>
+        </div>
+        <div>
+          <dt>问答模型</dt>
+          <dd>
+            {!source.loaded
+              ? "正在读取…"
+              : source.failed
+                ? "读取失败"
+                : source.configured === false
+                  ? "未配置"
+                  : enterpriseQaProviderLabel(source.provider)}
           </dd>
         </div>
         {currentPublication?.knowledgeBase && (
@@ -294,7 +368,12 @@ function EnterpriseQaPublishedWorkspace({
   // A historical conversation's frozen snapshot cannot unlock a project with no current publication.
   const { source, retry } = useKnowledgeSource();
 
-  if (!source.loaded || source.failed || !source.knowledgeBase) {
+  if (
+    !source.loaded ||
+    source.failed ||
+    source.configured === false ||
+    !source.knowledgeBase
+  ) {
     const unlockFlow = (
       <section className="enterprise-qa-unlock" aria-label="企业问答暂未解锁">
         {!source.loaded ? (
@@ -309,10 +388,43 @@ function EnterpriseQaPublishedWorkspace({
           </div>
         ) : source.failed ? (
           <>
-            <p role="alert">知识库状态读取失败，请重新检查。</p>
+            <p role="alert">
+              知识库状态读取失败
+              {source.failureCode ? `（${source.failureCode}）` : ""}，请重新检查。
+            </p>
             <Button variant="operatorOutline" onClick={retry}>
               重新检查
             </Button>
+          </>
+        ) : source.configured === false ? (
+          <>
+            <BookOpen
+              size={26}
+              className="text-[var(--module-accent,#5e6174)]"
+            />
+            <h2>先配置企业问答模型，即可开始问答</h2>
+            <p role="alert">
+              当前账号没有可用的 AI 模型凭据。请管理员检查智谱 Key 或 XTY
+              服务配置；浏览器不会保存或提交 Key。
+            </p>
+            {!source.knowledgeBase && (
+              <>
+                <p role="status">当前项目也尚无可用的已发布知识库。</p>
+                <KnowledgeUnlockSteps />
+              </>
+            )}
+            <div className="flex flex-wrap gap-3">
+              {!source.knowledgeBase && (
+                <Button variant="operatorOutline" asChild>
+                  <Link href={projectWorkspaceUrl("/?view=knowledge")}>
+                    前往智能知识库
+                  </Link>
+                </Button>
+              )}
+              <Button variant="operatorOutline" onClick={retry}>
+                重新检查模型配置
+              </Button>
+            </div>
           </>
         ) : (
           <>
@@ -365,7 +477,17 @@ function EnterpriseQaPublishedWorkspace({
                     ? "正在读取"
                     : source.failed
                       ? "暂时无法读取"
+                      : source.configured === false
+                        ? "问答模型未配置"
                       : "尚未发布"}
+                </dd>
+              </div>
+              <div>
+                <dt>问答模型</dt>
+                <dd>
+                  {source.configured === false
+                    ? "未配置"
+                    : enterpriseQaProviderLabel(source.provider)}
                 </dd>
               </div>
               <div>
