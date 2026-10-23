@@ -2,6 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnterpriseRagPreview } from "./EnterpriseRagPreview";
 import { SimplifiedWebsiteBuilderPreview } from "./SimplifiedWebsiteBuilderPreview";
+import {
+  listEvaluationReports,
+  listPublishDecisions,
+  saveEvaluationReport,
+} from "./evaluation-report-store";
 
 const draftStorageKey = "frontmind.website-builder.draft";
 
@@ -29,7 +34,7 @@ describe("simplified AI website preview", () => {
     fireEvent.click(screen.getByRole("button", { name: /建设评估/ }));
     expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
     expect(screen.queryByText("上线设置（后续再处理）")).toBeNull();
-    expect(screen.getByText(/权重：网站内容与体验 30 分/)).toBeTruthy();
+    expect(screen.getByText(/权重：网站内容与体验 40 分/)).toBeTruthy();
   });
 
   it("keeps the template URL and enterprise website URL as separate inputs", () => {
@@ -149,7 +154,7 @@ describe("simplified AI website preview", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /建设评估/ }));
     expect(screen.getByRole("button", { name: "确认当前建设草稿" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText(/配置门槛仅确认 0\/4 项/)).toBeTruthy();
+    expect(within(screen.getByLabelText("评估摘要")).getByText("0/4")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /选择模板$/ }));
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
@@ -161,18 +166,20 @@ describe("simplified AI website preview", () => {
     fireEvent.click(confirmButton);
     expect(screen.getAllByText("草稿已确认").length).toBeGreaterThan(0);
     expect(screen.getByRole("status").textContent).toMatch(/不表示质量评估通过或网站已经发布/);
-    expect(screen.getByLabelText(/当前加权评估分/).textContent).toMatch(/0.*\/100.*暂定分/);
+    expect(screen.getByLabelText(/当前加权评估分/).textContent).toMatch(/—.*\/100.*暂定结果/);
   });
 
-  it("calculates a transparent 100-point score without rewarding missing evidence", () => {
+  it("shows an unassessed website-only 40/40/20 score without a RAG scoring group", () => {
     render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
 
     expect(screen.queryByRole("heading", { name: "配置门槛（不计分）" })).toBeNull();
-    expect(screen.getByLabelText(/当前加权评估分/).textContent).toMatch(/0.*\/100.*暂定分/);
+    expect(screen.getByLabelText(/当前加权评估分/).textContent).toMatch(/—.*\/100.*暂定结果/);
     expect(screen.getByText("当前建议：暂不建议发布")).toBeTruthy();
     expect(screen.getByText("无法计算")).toBeTruthy();
-    expect(screen.getByText(/0 \+ 0 \+ 0 \+ 0 = 0 → 0 分/)).toBeTruthy();
-    expect(screen.getByText("权重：网站内容与体验 30 分 · 企业事实与公开边界 30 分 · RAG 回答质量 25 分 · 流程与发布边界 15 分")).toBeTruthy();
+    expect(screen.getByText(/0 \+ 0 \+ 0 = 0 → — 分/)).toBeTruthy();
+    expect(screen.getByText("权重：网站内容与体验 40 分 · 企业事实与公开边界 40 分 · 流程与发布说明 20 分")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "RAG 回答质量" })).toBeNull();
+    expect(within(screen.getByLabelText("关联的企业 RAG 评估")).getByText(/未关联评估快照；不影响网站得分或发布选择/)).toBeTruthy();
     expect(screen.queryByText("只检查是否确认，不计分")).toBeNull();
     expect(screen.queryByText(/个维度已有正式判定/)).toBeNull();
     expect(screen.queryByText("分母仅包含通过与不通过")).toBeNull();
@@ -185,8 +192,88 @@ describe("simplified AI website preview", () => {
     expect(screen.queryByText(/正式验收需逐项留存/)).toBeNull();
     expect(screen.getAllByText("待核实")).toHaveLength(3);
     expect(screen.getAllByText("未执行")).toHaveLength(4);
-    expect(screen.getByText("受阻")).toBeTruthy();
+    expect(screen.getByText("仅作建议，不限制发布")).toBeTruthy();
     expect(screen.queryByText(/0 分只表示尚未获得正式评估分/)).toBeNull();
+  });
+
+  it("keeps publish confirmation available at low coverage and stores a separate risk decision", () => {
+    render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
+
+    expect(screen.getByLabelText(/当前加权评估分/).textContent).toMatch(/—.*\/100/);
+    expect(screen.getByRole("button", { name: "确认当前建设草稿" }).hasAttribute("disabled")).toBe(true);
+    const releaseButton = screen.getByRole("button", { name: "进入发布确认" });
+    expect(releaseButton.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(releaseButton);
+    const dialog = within(screen.getByRole("dialog", { name: "发布确认" }));
+    expect(dialog.getByText(/这些结果只提供质量建议，不会替你决定/)).toBeTruthy();
+    expect(dialog.getByText(/当前原型不会执行真实部署/)).toBeTruthy();
+    expect(listEvaluationReports()).toEqual([]);
+    fireEvent.click(dialog.getByRole("button", { name: "我已了解风险，继续发布" }));
+
+    expect(screen.queryByRole("dialog", { name: "发布确认" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toMatch(/已记录发布决定；当前原型未执行真实部署/);
+    const decisions = listPublishDecisions();
+    expect(decisions).toEqual([
+      expect.objectContaining({
+        action: "publish",
+        mode: "accepted_risk",
+        riskAcknowledged: true,
+        evaluationReportIds: [expect.stringMatching(/^website-report-/)],
+      }),
+    ]);
+    expect(decisions[0].acknowledgedRiskIds.length).toBeGreaterThan(0);
+    expect(listEvaluationReports().map((report) => report.reportId)).toEqual(
+      decisions[0].evaluationReportIds,
+    );
+  });
+
+  it("explicitly links a RAG snapshot without changing the website score", () => {
+    expect(saveEvaluationReport({
+      reportId: "rag-report-linked",
+      createdAt: "2026-10-23T08:00:00.000Z",
+      subject: { kind: "rag-answer", id: "answer-linked", version: "rag-eval-1.2" },
+      result: {
+        skillId: "enterprise-rag-evaluation",
+        version: "1.0.0",
+        status: "completed",
+        score: 12,
+        coverage: 100,
+        recommendation: "not_recommended",
+        summary: "回答质量较低，但结果只提供建议。",
+        dimensions: [],
+        risks: Array.from({ length: 7 }, (_, index) => ({
+          id: `risk-rag-linked-${index + 1}`,
+          severity: "critical" as const,
+          title: `回答关键风险 ${index + 1}`,
+          summary: "该风险不会改变网站建设得分。",
+          evidenceIds: [],
+        })),
+        relatedReportIds: [],
+      },
+    })).toBe(true);
+
+    render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
+    const scoreBefore = screen.getByLabelText(/当前加权评估分/).textContent;
+    const formulaBefore = screen.getByLabelText("加权评估分计算结果").textContent;
+    fireEvent.click(screen.getByRole("button", { name: "关联最新 RAG 评估" }));
+
+    expect(within(screen.getByLabelText("关联的企业 RAG 评估")).getByText(/已关联 12\/100 · 1.0.0/)).toBeTruthy();
+    expect(within(screen.getByLabelText("关联的企业 RAG 评估")).getByText(/报告 ID：rag-report-linked/)).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toMatch(/只作参考，不参与网站建设得分/);
+    expect(screen.getByLabelText(/当前加权评估分/).textContent).toBe(scoreBefore);
+    expect(screen.getByLabelText("加权评估分计算结果").textContent).toBe(formulaBefore);
+
+    fireEvent.click(screen.getByRole("button", { name: "进入发布确认" }));
+    const dialog = within(screen.getByRole("dialog", { name: "发布确认" }));
+    expect(dialog.getByText(/rag-report-linked/)).toBeTruthy();
+    for (let index = 1; index <= 7; index += 1) {
+      expect(dialog.getByText(`回答关键风险 ${index}`)).toBeTruthy();
+    }
+    fireEvent.click(dialog.getByRole("button", { name: "我已了解风险，继续发布" }));
+    expect(listPublishDecisions()[0].acknowledgedRiskIds).toEqual(expect.arrayContaining(
+      Array.from({ length: 7 }, (_, index) => `risk-rag-linked-${index + 1}`),
+    ));
   });
 
   it("invalidates a confirmed step when its configuration changes", () => {
@@ -204,7 +291,7 @@ describe("simplified AI website preview", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /建设评估/ }));
     expect(screen.getByRole("button", { name: "确认当前建设草稿" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText(/配置门槛仅确认 2\/4 项/)).toBeTruthy();
+    expect(within(screen.getByLabelText("评估摘要")).getByText("2/4")).toBeTruthy();
   });
 
   it("reports internal step changes so the URL can stay aligned with the screen", () => {

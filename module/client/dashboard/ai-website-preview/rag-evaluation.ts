@@ -1,5 +1,5 @@
 /** Pure, evidence-aware scoring rules. This module does not judge answer text. */
-export const RAG_RULE_VERSION = "rag-eval-1.1";
+export const RAG_RULE_VERSION = "rag-eval-1.2";
 
 export const RAG_DIMENSIONS = [
   { id: "intent", label: "需求满足度与相关性", weight: 20, question: "是否真正回答了用户想问的内容？" },
@@ -151,8 +151,8 @@ export interface AggregateEvaluationResult {
   failedGateCount: number;
   pendingCount: number;
   usableRate: number;
-  /** Numeric conditions only; external review and all required sets remain necessary. */
-  canConfirm: boolean;
+  /** Quality target only. This is advisory and never authorizes or blocks website publishing. */
+  meetsQualityTarget: boolean;
 }
 
 export function aggregateEvaluations(items: AggregateEvaluationItem[]): AggregateEvaluationResult {
@@ -171,7 +171,7 @@ export function aggregateEvaluations(items: AggregateEvaluationItem[]): Aggregat
   }
   const failedGateCount = items.filter(({ result }) => result.gateStatus === "failed").length;
   if (invalidConfiguration) {
-    return { score: null, lower: 0, upper: 100, coverage: 0, total, usableCount: 0, failedGateCount, pendingCount: total, usableRate: 0, canConfirm: false };
+    return { score: null, lower: 0, upper: 100, coverage: 0, total, usableCount: 0, failedGateCount, pendingCount: total, usableRate: 0, meetsQualityTarget: false };
   }
 
   const validBounds = (result: EvaluationResult) => Number.isFinite(result.lower) && Number.isFinite(result.upper) && result.lower >= 0 && result.upper <= 100 && result.lower <= result.upper;
@@ -199,12 +199,12 @@ export function aggregateEvaluations(items: AggregateEvaluationItem[]): Aggregat
     score: rawScore === null ? null : Math.round(rawScore), lower, upper,
     coverage: completeCount / total * 100,
     total, usableCount, failedGateCount, pendingCount, usableRate,
-    canConfirm: rawScore !== null && rawScore >= 85 && usableRate >= 90 && failedGateCount === 0 && allScenariosMeetMinimum,
+    meetsQualityTarget: rawScore !== null && rawScore >= 85 && usableRate >= 90 && failedGateCount === 0 && allScenariosMeetMinimum,
   };
 }
 
 // ===== 完整对话层与验收报告口径（对齐《企业 RAG 问答 Evaluation 需求与验收逻辑说明》v1.0）=====
-// 单轮分数保持不变；以下规则叠加在分数之上：用例状态、阻断与记录、归因、覆盖点与分项指标。
+// 单轮分数保持不变；以下规则叠加在分数之上：用例状态、关键风险与记录、归因、覆盖点与分项指标。
 
 export type RagCaseStatus = "pass" | "fail" | "unverified";
 export type RagCaseMode = "normal" | "restricted";
@@ -225,7 +225,7 @@ export const RAG_CASE_MODE_LABELS: Record<RagCaseMode, string> = { normal: "正�
 export interface CompletionPoint {
   id: string;
   label: string;
-  /** true 已满足；false 未满足（阻断）；null 前提不足、无法判定。 */
+  /** true 已满足；false 未满足（回答级关键风险）；null 前提不足、无法判定。 */
   met: boolean | null;
 }
 
@@ -245,7 +245,7 @@ export interface ConversationLayer {
 
 export interface ConversationOutcome {
   status: RagCaseStatus;
-  /** 已确认阻断项数量：失败门禁数 + 未满足的必要完成点数。 */
+  /** 已确认回答级关键风险数：失败检查数 + 未满足的必要完成点数。 */
   blockingCount: number;
   unmetPoints: string[];
   reason: string;
@@ -260,14 +260,14 @@ export function resolveConversationOutcome(layer: ConversationLayer, gates: Gate
   }
   if (failedGates.length > 0 || unmetPoints.length > 0) {
     const parts = [
-      failedGates.length > 0 ? `${failedGates.length} 项关键门禁未通过` : "",
+      failedGates.length > 0 ? `${failedGates.length} 项关键回答风险已发现` : "",
       unmetPoints.length > 0 ? `必要完成点未全部满足：${unmetPoints.join("、")}` : "",
     ].filter(Boolean).join("；");
     return { status: "fail", blockingCount: failedGates.length + unmetPoints.length, unmetPoints,
-      reason: `${parts}。单轮高分不能抵消已确认的阻断问题。` };
+      reason: `${parts}。单轮高分不能抵消已确认的回答级风险；此结论不决定网站能否进入发布确认。` };
   }
   return { status: "pass", blockingCount: 0, unmetPoints: [],
-    reason: "全部必要完成点满足且关键门禁通过，经人工确认后记为通过。" };
+    reason: "全部必要完成点满足且关键风险检查通过，经人工确认后记为通过。" };
 }
 
 export interface CoveragePoint { id: string; label: string; risk: string }
@@ -312,7 +312,7 @@ export const RAG_ACCEPTANCE_PARAMS = [
   { label: "L1 / L2 / L3 整轮等待上限", value: "10 / 20 / 40 秒" },
   { label: "自动检查最大执行尝试", value: "2 次（首次＋最多一次修正复查）" },
   { label: "普通 / 重点风险用例运行次数", value: "1 次 / 3 次，全部通过才算通过" },
-  { label: "已确认关键风险漏报", value: "0 容忍，出现即阻断" },
+  { label: "已确认关键风险漏报", value: "0 容忍，出现即判定该回答不可用并给出高风险提示" },
   { label: "误报率 / 无法判定率 / 执行失败率", value: "≤5% / ≤10% / ≤5%（初始观察目标）" },
   { label: "机制验证标注样本", value: "约 90 条（三类风险各约 30 条，含应放行与应拦截）" },
 ] as const;

@@ -1503,6 +1503,57 @@
   margin-top: 8px;
 }
 
+.sfp-rag-evaluation-reference {
+  align-items: center;
+  background: #f7f4fa;
+  border: 1px solid #dfd3e7;
+  border-radius: 10px;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding: 12px 13px;
+}
+
+.sfp-rag-evaluation-reference > div {
+  align-items: center;
+  display: flex;
+  gap: 9px;
+  min-width: 0;
+}
+
+.sfp-rag-evaluation-reference > div:first-child > span {
+  align-items: center;
+  background: #ece3f3;
+  border-radius: 8px;
+  color: var(--sfp-accent-dark);
+  display: flex;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.sfp-rag-evaluation-reference p {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.sfp-rag-evaluation-reference strong { font-size: var(--sfp-type-body); }
+.sfp-rag-evaluation-reference small { color: var(--sfp-muted); font-size: var(--sfp-type-sm); line-height: 1.45; }
+
+.sfp-rag-evaluation-reference button {
+  background: #fff;
+  border: 1px solid #d8c8e2;
+  border-radius: 7px;
+  color: var(--sfp-accent-dark);
+  cursor: pointer;
+  font-size: var(--sfp-type-sm);
+  font-weight: var(--sfp-weight-medium);
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+
 .sfp-eval-group {
   margin-top: 17px;
 }
@@ -1702,6 +1753,81 @@
   color: var(--sfp-muted);
   font-size: var(--sfp-type-sm);
 }
+
+.sfp-action-cluster {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.sfp-release-backdrop {
+  align-items: center;
+  background: rgba(25, 19, 37, .42);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 1100;
+}
+
+.sfp-release-dialog {
+  background: #fff;
+  border: 1px solid #ddd4e3;
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(31, 21, 40, .25);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  padding: 24px;
+  position: relative;
+  width: min(590px, 100%);
+}
+
+.sfp-release-dialog:focus { outline: none; }
+.sfp-release-dialog > small { color: var(--sfp-accent-dark); font-size: var(--sfp-type-sm); font-weight: var(--sfp-weight-bold); }
+.sfp-release-dialog h2 { font-size: 24px; margin: 6px 38px 9px 0; }
+.sfp-release-dialog > p { color: var(--sfp-muted); font-size: var(--sfp-type-body); line-height: 1.65; margin: 0; }
+
+.sfp-release-dialog__close {
+  align-items: center;
+  background: #f3f1f5;
+  border: 0;
+  border-radius: 50%;
+  color: #716879;
+  cursor: pointer;
+  display: flex;
+  height: 32px;
+  justify-content: center;
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  width: 32px;
+}
+
+.sfp-release-dialog dl { border-top: 1px solid var(--sfp-line); margin: 17px 0 0; }
+.sfp-release-dialog dl > div { border-bottom: 1px solid var(--sfp-line); display: flex; font-size: var(--sfp-type-body); gap: 16px; justify-content: space-between; padding: 10px 0; }
+.sfp-release-dialog dt { color: var(--sfp-muted); }
+.sfp-release-dialog dd { font-weight: var(--sfp-weight-bold); margin: 0; text-align: right; }
+.sfp-release-dialog ul { display: grid; gap: 7px; list-style: none; margin: 14px 0 0; padding: 0; }
+.sfp-release-dialog li { background: #fff8e9; border: 1px solid #edd9aa; border-radius: 8px; display: flex; flex-direction: column; gap: 3px; padding: 9px 10px; }
+.sfp-release-dialog li strong { color: #805c15; font-size: var(--sfp-type-body); }
+.sfp-release-dialog li span { color: #7b6e55; font-size: var(--sfp-type-sm); line-height: 1.45; }
+
+.sfp-release-note {
+  align-items: flex-start;
+  background: #f5f2f7;
+  border-radius: 8px;
+  color: #62596b;
+  display: flex;
+  font-size: var(--sfp-type-sm);
+  gap: 8px;
+  line-height: 1.55;
+  margin-top: 14px;
+  padding: 10px;
+}
+
+.sfp-release-note svg { flex: 0 0 auto; margin-top: 1px; }
+.sfp-release-dialog__actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
 
 .sfp-visually-hidden {
   height: 1px !important;
@@ -2749,6 +2875,16 @@
     margin-left: 46px;
   }
 
+  .sfp-rag-evaluation-reference {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sfp-rag-evaluation-reference > div:last-child {
+    flex-wrap: wrap;
+    padding-left: 43px;
+  }
+
   .sfp-section-heading {
     gap: 12px;
   }
@@ -2848,9 +2984,24 @@
     grid-row: 1;
     text-align: center;
   }
+
+  .sfp-action-cluster {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
 }
 
 @container sfp (max-width: 480px) {
+  .sfp-action-cluster {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sfp-release-dialog__actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
   .sfp-steps {
     grid-template-columns: 1fr;
   }
