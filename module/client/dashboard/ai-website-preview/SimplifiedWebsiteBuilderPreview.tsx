@@ -44,7 +44,6 @@ const steps: ReadonlyArray<{
 ];
 
 type EvaluationStatus =
-  | "confirmed"
   | "passed"
   | "partial"
   | "failed"
@@ -66,7 +65,6 @@ type EvaluationCheck = {
 };
 
 const evaluationStatusCoefficient: Record<EvaluationStatus, number> = {
-  confirmed: 1,
   passed: 1,
   partial: 0.5,
   failed: 0,
@@ -547,45 +545,6 @@ export function SimplifiedWebsiteBuilderPreview({
     goTo(steps[stepIndex + 1].id);
   };
 
-  const configurationChecks: EvaluationCheck[] = [
-    {
-      id: "C01",
-      title: "模板版式",
-      detail: templateComplete ? `${selectedTemplate.name}已由用户确认` : "已有默认选择，但仍需在第 1 步确认",
-      status: templateComplete ? "confirmed" : "unexecuted",
-      statusLabel: templateComplete ? "已确认" : "未执行",
-      actionLabel: templateComplete ? "查看模板" : "去确认",
-      onAction: () => goTo("template"),
-    },
-    {
-      id: "C02",
-      title: "网站结构",
-      detail: structureComplete ? `已确认 ${enabledPages.length} 个对外栏目` : structureReady ? "栏目已有默认值，尚未由用户确认" : "至少保留 1 个面向访客的栏目",
-      status: structureComplete ? "confirmed" : "unexecuted",
-      statusLabel: structureComplete ? "已确认" : "未执行",
-      actionLabel: structureComplete ? "查看结构" : "去确认",
-      onAction: () => goTo("structure"),
-    },
-    {
-      id: "C03",
-      title: "品牌与语言",
-      detail: brandComplete ? `${siteName} · ${brandRecognized ? "官网建议已核对" : "已手动确认"}` : brandReady ? "品牌字段已有默认值，尚未由用户确认" : "请补充网站名称和品牌标识",
-      status: brandComplete ? "confirmed" : "unexecuted",
-      statusLabel: brandComplete ? "已确认" : "未执行",
-      actionLabel: brandComplete ? "查看品牌" : "去确认",
-      onAction: () => goTo("structure"),
-    },
-    {
-      id: "C04",
-      title: "AI 助手配置",
-      detail: assistantComplete ? "名称、欢迎语、主题色与来源开关已确认" : assistantReady ? "助手已有默认值，尚未由用户确认" : "请补充助手名称和欢迎语",
-      status: assistantComplete ? "confirmed" : "unexecuted",
-      statusLabel: assistantComplete ? "已确认" : "未执行",
-      actionLabel: assistantComplete ? "试用助手" : "去确认",
-      onAction: () => goTo("assistant"),
-    },
-  ];
-
   const websiteQualityChecks: EvaluationCheck[] = [
     {
       id: "E06 · E07 · E08",
@@ -751,7 +710,7 @@ export function SimplifiedWebsiteBuilderPreview({
         <div className="sfp-check-list">
           {checks.map((check) => (
             <article key={check.id} className={`is-${check.status}`}>
-              <span>{check.status === "confirmed" || check.status === "passed" ? <Check size={17} /> : <CircleAlert size={17} />}</span>
+              <span>{check.status === "passed" ? <Check size={17} /> : <CircleAlert size={17} />}</span>
               <div>
                 <div className="sfp-check-title">
                   <strong>{check.title}</strong>
@@ -999,7 +958,6 @@ export function SimplifiedWebsiteBuilderPreview({
                 </header>
                 <small className="sfp-score-weight-note">权重：网站内容与体验 30 分 · 企业事实与公开边界 30 分 · RAG 回答质量 25 分 · 流程与发布边界 15 分</small>
               </section>
-              {renderEvaluationGroup("配置门槛（不计分）", configurationChecks)}
               {renderEvaluationGroup("网站内容与体验", websiteQualityChecks)}
               {renderEvaluationGroup("企业事实与公开边界", trustBoundaryChecks)}
               {renderEvaluationGroup("RAG 回答质量", ragAnswerChecks)}
