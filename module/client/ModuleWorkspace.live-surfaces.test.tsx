@@ -48,7 +48,7 @@ afterEach(() => {
 });
 
 describe("ModuleWorkspace redesigned live routes", () => {
-  it("uses the connected later RAG design in live mode, never the fixture", () => {
+  it("uses the connected later RAG design without legacy workbench chrome", () => {
     const onOpenWebsite = vi.fn();
     const onOpenWebsiteAssistant = vi.fn();
     render(
@@ -69,13 +69,13 @@ describe("ModuleWorkspace redesigned live routes", () => {
     expect(screen.getByTestId("live-designed-rag")).toBeTruthy();
     expect(screen.queryByTestId("fixture-rag")).toBeNull();
     expect(mocks.ragProps).toMatchObject({
-      workbench: true,
       projectId: "workspace-1",
       storageScopeKey: "live:1:workspace-1",
       onOpenWebsite,
       onOpenWebsiteAssistant,
       websiteEntryLabel: "返回网站建设",
     });
+    expect(mocks.ragProps).not.toHaveProperty("workbench");
   });
 
   it("keeps the synthetic RAG fixture exclusive to preview mode", () => {

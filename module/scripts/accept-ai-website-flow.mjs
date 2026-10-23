@@ -274,6 +274,27 @@ try {
     page.getByRole("heading", { name: "让回答真正满足用户需求" }),
     "The redesigned Enterprise RAG heading is missing",
   );
+  const businessNavigation = page.getByRole("navigation", {
+    name: "切换业务子页面",
+  });
+  if ((await businessNavigation.count()) !== 1) {
+    throw new Error(
+      "The Enterprise RAG route rendered duplicate business navigation chrome",
+    );
+  }
+  await expectVisible(
+    page.getByRole("region", { name: "回答质量评估" }),
+    "The redesigned Enterprise RAG evaluation panel is missing",
+  );
+  if (
+    (await page
+      .getByRole("tablist", { name: "会话与知识来源" })
+      .count()) > 0
+  ) {
+    throw new Error(
+      "The Enterprise RAG route still renders the legacy conversation/source panel",
+    );
+  }
   if (await page.getByText("AI友好官网管理", { exact: true }).count()) {
     throw new Error("The Enterprise RAG route fell back to the legacy SiteOps UI");
   }
