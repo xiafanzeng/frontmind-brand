@@ -21,12 +21,13 @@ const pages:Array<[AppPage,string]>=[['knowledge','智能知识库'],['keywords'
 const websiteSteps:BuildStep[]=['template','structure','assistant','evaluation'];
 const websiteReturnLabels:Record<BuildStep,string>={template:'模板选择',structure:'结构确认',assistant:'AI 助手',evaluation:'整体评估'};
 const brandModule={id:'brand',label:BRAND_MODULE_LABEL,color:'#16794f'};
-const intentModule={id:'intent',label:'意图优化',color:'#7545a0',href:'https://intent.frontmind.cn/?view=questions'};
+const intentModule={id:'intent',label:'意图优化',color:'#7545a0'};
 const extensionsModule={id:'extensions',label:'AI专用官网',color:'#5e6174'};
-// 跨团队模块保留完整产品导航，并通过各自开发子域打开真实功能。
-const progressModule={id:'progress',label:'进度监控',color:'#b45309',href:'https://progress.frontmind.cn/monitoring-system',views:[]};
-const contentModule={id:'content',label:'内容制作',color:'#0e7490',href:'https://content.frontmind.cn/content-production',views:[]};
-const publishModule={id:'publish',label:'媒体发布',color:'#be123c',href:'https://publish.frontmind.cn/publishing',views:[]};
+// 侧边栏按产品六大模块完整展示；未实现模块仅作导航占位，点击保持当前页面。
+// 占位模块只在本地预览（演示完整产品口径）时显示，正式站点不展示未实现功能。
+const progressModule={id:'progress',label:'进度监控',color:'#b45309',views:[]};
+const contentModule={id:'content',label:'内容制作',color:'#0e7490',views:[]};
+const publishModule={id:'publish',label:'媒体发布',color:'#be123c',views:[]};
 function Runtime({context,preview}:{context:ModuleContext;preview:boolean}){
  const runtime=useMemo(()=>{const adapter=createBrandApi(preview?previewRpc:liveRpc);configureBrandApiHooks(adapter.api);installBrandHost(context,preview?previewConversations():liveConversations,preview);return adapter;},[context,preview]);
  const intentApi=useMemo(()=>preview?createIntentPreviewApi(context.workspace.id):undefined,[preview,context.workspace.id]);
@@ -42,7 +43,7 @@ function Runtime({context,preview}:{context:ModuleContext;preview:boolean}){
  const dashboard=runtime.dashboard.useQuery(undefined,{enabled:page==='keywords'||page==='intent',refetchOnWindowFocus:true});const knowledge=runtime.api.workspace.knowledge.useQuery(undefined,{enabled:page==='keywords'||page==='intent',refetchOnWindowFocus:true});
  const selectedModule=page==='intent'?intentModule:page==='knowledge'||page==='keywords'?brandModule:extensionsModule;
  const selectedPages=pages.filter(([id])=>selectedModule.id==='intent'?id==='intent':selectedModule.id==='brand'?id==='knowledge'||id==='keywords':!['knowledge','keywords','intent'].includes(id));
- return <ModuleShell module={selectedModule} navigationModules={[{...brandModule,label:BRAND_MODULE_SIDEBAR_LABEL,views:pages.slice(0,2).map(([id,label])=>({id,label}))},{...intentModule,views:[{id:'intent',label:'优化问题'}]},progressModule,contentModule,publishModule,{...extensionsModule,views:pages.slice(3).map(([id,label])=>({id,label}))}]} views={selectedPages.map(([id,label])=>({id,label}))} activeView={page} onSelectView={id=>brandHost().requestWorkspaceNavigation(()=>navigate(`/?view=${id}`))} preview={preview} showViewTabs={page!=='knowledge'}><div className={`brand-page brand-page--${page}`}>
+ return <ModuleShell module={selectedModule} navigationModules={[{...brandModule,label:BRAND_MODULE_SIDEBAR_LABEL,views:pages.slice(0,2).map(([id,label])=>({id,label}))},{...intentModule,views:[{id:'intent',label:'优化问题'}]},...(preview?[progressModule,contentModule,publishModule]:[]),{...extensionsModule,views:pages.slice(3).map(([id,label])=>({id,label}))}]} views={selectedPages.map(([id,label])=>({id,label}))} activeView={page} onSelectView={id=>brandHost().requestWorkspaceNavigation(()=>navigate(`/?view=${id}`))} preview={preview} showViewTabs={page!=='knowledge'}><div className={`brand-page brand-page--${page}`}>
  {page==='website-builder'?<SimplifiedWebsiteBuilderPreview initialStep={websiteStep} onOpenRag={()=>navigate(`/?view=enterprise-rag&returnStep=${websiteStep}`)} onStepChange={step=>navigate(step==='template'?'/?view=website-builder':`/?view=website-builder&step=${step}`,{replace:true})}/>
  :page==='enterprise-rag'?<EnterpriseRagPreview onOpenWebsite={()=>navigate(returnStep&&returnStep!=='template'?`/?view=website-builder&step=${returnStep}`:'/?view=website-builder')} onOpenWebsiteAssistant={()=>navigate('/?view=website-builder&step=assistant')} websiteEntryLabel={returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}/>
  :<ModuleWorkspace context={context} page={page as BrandPage} preview={preview} intentApi={intentApi} onIntentSectionChange={section=>navigate(`/?view=${section==='universe'?'keywords':'intent'}`)} keywordData={{tables:dashboard.data?.payload?.keywordTables??[],revision:dashboard.data?.revision??null,loading:dashboard.isLoading,error:dashboard.error,knowledgePublished:Boolean(knowledge.data?.snapshot)}} previewKnowledge={{progress:previewKnowledgeProgress,snapshot:previewKnowledgeSnapshot}}/>}
