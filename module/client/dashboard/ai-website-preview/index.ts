@@ -15,6 +15,8 @@ export {
 } from "./WebsiteEditorPreview";
 export { EnterpriseRagPreview } from "./EnterpriseRagPreview";
 export { SimplifiedWebsiteBuilderPreview } from "./SimplifiedWebsiteBuilderPreview";
+export { default as ConnectedSimplifiedWebsiteBuilderPreview } from "./ConnectedSimplifiedWebsiteBuilderPreview";
+export type { ConnectedSimplifiedWebsiteBuilderPreviewProps } from "./ConnectedSimplifiedWebsiteBuilderPreview";
 export {
   ENTERPRISE_RAG_EVALUATION_SKILL_ID,
   ENTERPRISE_RAG_EVALUATION_SKILL_VERSION,

@@ -23,6 +23,7 @@ export type BusinessWorkspaceValue={isWorkbench:boolean;taskId:string|null;agent
 export type BrandHomeProps={embedded?:boolean;fixedAgentProfile?:string;syncKnowledgeBaseSnapshot?:boolean;purpose?:"enterprise_qa";hideSidebar?:boolean;hidePortalNavigation?:boolean;showKnowledgeBaseStarter?:boolean;showAccountMenu?:boolean;showSettings?:boolean;standardWelcomeVariant?:"simple"|"workflow"|"enterprise_qa";messageProjection?:(message:LocalMessage)=>LocalMessage;inlineBlocks?:Array<{id:string;anchor:{kind:"message";messageId:string};placement:"before"|"after";content:ReactNode}>;conversationFooter?:ReactNode;knowledgeBaseProgress?:KnowledgeBaseProgressDto|null;knowledgeBaseResetRevision?:number;operatorWorkspace?:boolean;knowledgeEditingBlocked?:boolean;onComposerDirtyChange?:(dirty:boolean)=>void;knowledgeBaseAccountId?:number;onKnowledgeBaseBatchCancelled?:(id:string,revision:number)=>void|Promise<void>};
 export type BrandChatInputProps={operatorWorkspace?:boolean;onComposerDirtyChange?:(dirty:boolean)=>void;composerScope?:string;fixedAgentProfile?:string;syncKnowledgeBaseSnapshot?:boolean;knowledgeBaseProgress?:KnowledgeBaseProgressDto|null;knowledgeBaseResetRevision?:number;knowledgeBaseAccountId?:number;knowledgeEditingBlocked?:boolean;onDirtyChange?:(dirty:boolean)=>void;onKnowledgeBaseBatchCancelled?:(id:string,revision:number)=>void|Promise<void>};
 export type AgentWorkbenchShellProps={projectId:string;moduleId:string;title:string;main?:ReactNode;auxiliary?:ReactNode;composer?:ReactNode;layout?:"single"|"workflow"|"knowledge"|"workspace";toolbar?:ReactNode;taskTitle?:string;taskKey?:string;scrollMain?:boolean;showLatestControl?:boolean;auxiliaryScroll?:boolean;independentResourceScroll?:boolean;conversation?:ReactNode;children?:ReactNode;result?:ReactNode;resultTitle?:string;resultKey?:string;status?:string;embedded?:boolean;showResult?:boolean;conversationFocusRequest?:object|null;auxiliaryFocusRequest?:object|null;topbarActions?:ReactNode;titleRef?:React.RefObject<HTMLHeadingElement|null>};
+export type ProjectAgentWorkbenchProps={projectId:string;purpose:"enterprise_qa";children?:ReactNode;main?:ReactNode;autoCreate?:boolean;canCreateConversation?:boolean};
 export type BrandHost={
   notifyUsageChanged?():void;
   useRuntimeContext():{workspaceId:string;accountId:number;enabled:boolean};
@@ -34,7 +35,7 @@ export type BrandHost={
   useWorkspaceDraftGuard:(input:DraftGuard)=>void;getUnsavedWorkspaceDrafts:()=>readonly unknown[];requestWorkspaceNavigation:(action:()=>void)=>void;
   showAiBillingAction:(value:unknown)=>boolean;
   Home:ComponentType<BrandHomeProps>;ChatInput:ComponentType<BrandChatInputProps>;AgentWorkbenchShell:ComponentType<AgentWorkbenchShellProps>;
-  ProjectAgentWorkbench:ComponentType<{projectId:string;purpose:"enterprise_qa";children?:ReactNode}>;
+  ProjectAgentWorkbench:ComponentType<ProjectAgentWorkbenchProps>;
   ConversationPurposeProvider:ComponentType<{purpose:"enterprise_qa";children:ReactNode}>;
   useBusinessWorkspace:()=>BusinessWorkspaceValue;useBusinessWorkspaceSummary:(summary:BusinessWorkspaceSummary|null)=>void;
 };
@@ -56,7 +57,7 @@ export function showAiBillingAction(value:unknown){return brandHost().showAiBill
 export function Home(props:BrandHomeProps){const C=brandHost().Home;return <C {...props}/>;}
 export function ChatInput(props:BrandChatInputProps){const C=brandHost().ChatInput;return <C {...props}/>;}
 export function AgentWorkbenchShell(props:AgentWorkbenchShellProps){const C=brandHost().AgentWorkbenchShell;return <C {...props}/>;}
-export function ProjectAgentWorkbench(props:{projectId:string;purpose:"enterprise_qa";children?:ReactNode}){const C=brandHost().ProjectAgentWorkbench;return <C {...props}/>;}
+export function ProjectAgentWorkbench(props:ProjectAgentWorkbenchProps){const C=brandHost().ProjectAgentWorkbench;return <C {...props}/>;}
 export function ConversationPurposeProvider(props:{purpose:"enterprise_qa";children:ReactNode}){const C=brandHost().ConversationPurposeProvider;return <C {...props}/>;}
 export function useBusinessWorkspace(){return brandHost().useBusinessWorkspace();}
 export function useBusinessWorkspaceSummary(summary:BusinessWorkspaceSummary|null){return brandHost().useBusinessWorkspaceSummary(summary);}

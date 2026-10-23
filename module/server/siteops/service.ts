@@ -180,6 +180,7 @@ import {
   visualSearchOperationInputSchema,
   type VisualSearchOperationInput,
 } from "../../contracts/siteops-workflow.js";
+import { mergeSiteOpsCustomerBriefMessage } from "./customer-brief-message.js";
 import {
   managedAgentProfileSchema,
   managedAgentProfileEffort,
@@ -789,71 +790,6 @@ export function visualSearchReadiness(value: unknown): VisualSearchReadiness {
   }
 
   return { ready: true, brief: parsed.data };
-}
-
-function mergeCustomerBriefMessage(brief: SiteBrief, text: string): SiteBrief {
-  const normalized = text.replace(/\r\n?/gu, "\n").trim();
-  const nextContacts = [...brief.contacts];
-  const addContact = (
-    kind: SiteBrief["contacts"][number]["kind"],
-    value: string,
-  ) => {
-    const compact = compactKnowledgeText(value, 512);
-    if (
-      compact &&
-      !nextContacts.some(
-        (item) =>
-          item.kind === kind &&
-          item.value.toLowerCase() === compact.toLowerCase(),
-      )
-    ) {
-      // A value explicitly supplied in the authenticated customer conversation
-      // is customer-confirmed input. It is not attributed to a snapshot document.
-      nextContacts.push({ kind, value: compact, sourceDocumentIds: [] });
-    }
-  };
-  for (const email of normalized.match(
-    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu,
-  ) ?? []) {
-    addContact("email", email);
-  }
-  for (const phone of normalized.match(
-    /(?:\+?86[-\s]?)?(?:1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8})/gu,
-  ) ?? []) {
-    addContact("phone", phone);
-  }
-  const address = normalized.match(
-    /(?:办公地址|联系地址|公司地址|地址)\s*[:：]\s*([^\n]{4,200})/u,
-  )?.[1];
-  if (address) addContact("address", address);
-
-  const audienceValue = normalized.match(
-    /(?:目标受众|核心受众|受众|面向)\s*[:：]\s*([^\n]{2,500})/u,
-  )?.[1];
-  const conversionValue = normalized.match(
-    /(?:转化目标|核心目标|建站目标)\s*[:：]\s*([^\n]{2,500})/u,
-  )?.[1];
-  const audience = audienceValue
-    ? [compactKnowledgeText(audienceValue, 500)]
-    : brief.audience;
-  const conversionGoal = compactKnowledgeText(
-    conversionValue || normalized,
-    500,
-  );
-  const hasNewContact = nextContacts.length > brief.contacts.length;
-
-  return siteBriefSchema.parse({
-    ...brief,
-    contacts: nextContacts.slice(0, 20),
-    audience,
-    conversionGoal: conversionGoal || brief.conversionGoal,
-    unknowns: brief.unknowns.filter((item) => {
-      if (audienceValue && item.includes("目标受众")) return false;
-      if (conversionValue && item.includes("转化")) return false;
-      if (hasNewContact && item.includes("联系方式")) return false;
-      return true;
-    }),
-  });
 }
 
 export function hashSiteOpsRequest(value: unknown) {
@@ -2922,6 +2858,8 @@ async function projectObservationOnce(
       id: input.project.id,
       conversationId: input.project.conversationId,
       currentKnowledgeSnapshotId: input.project.currentKnowledgeSnapshotId,
+      globalLiveDeploymentId: input.project.globalLiveDeploymentId,
+      mainlandLiveDeploymentId: input.project.mainlandLiveDeploymentId,
       primaryLanguage: input.project.primaryLanguage,
       canonicalHostname: input.project.canonicalHostname,
       status: projectedStatuses.projectStatus,
@@ -3703,16 +3641,22 @@ export async function sendSiteOpsMessage(
       turnId,
     });
     const existingBrief = siteBriefSchema.safeParse(project.brief);
-    const nextBrief =
-      project.status === "collecting_brief" && existingBrief.success
-        ? mergeCustomerBriefMessage(existingBrief.data, input.text)
-        : project.brief;
-    if (project.status === "collecting_brief" && existingBrief.success) {
+    const acceptsBriefUpdate =
+      ["collecting_brief", "awaiting_visual_selection"].includes(
+        project.status,
+      ) && existingBrief.success;
+    const nextBrief = acceptsBriefUpdate
+      ? mergeSiteOpsCustomerBriefMessage(existingBrief.data, input.text)
+      : project.brief;
+    if (acceptsBriefUpdate) {
       await appendMessage(tx, {
         conversationId: project.conversationId,
         userId: enterpriseWorkspaceUserId(actor.id),
         role: "assistant",
-        content: "已记录你补充的信息。资料完整后即可生成视觉候选。",
+        content:
+          project.status === "awaiting_visual_selection"
+            ? "已保存本次真实建站配置；现在可以使用所选模板生成网站。"
+            : "已记录你补充的信息。资料完整后即可生成视觉候选。",
         turnId,
         siteOps: {
           kind: "brief_question",
@@ -5864,6 +5808,30 @@ async function handlePublish(
       "线上版本已变化，请刷新后重试。",
       409,
     );
+  }
+  if (currentHead) {
+    const currentHeadRows = await tx
+      .select({ buildId: siteDeployments.buildId })
+      .from(siteDeployments)
+      .where(
+        and(
+          eq(siteDeployments.id, currentHead),
+          eq(siteDeployments.projectId, input.project.id),
+          eq(
+            siteDeployments.userId,
+            enterpriseWorkspaceUserId(input.actor.id),
+          ),
+          eq(siteDeployments.target, input.target),
+        ),
+      )
+      .limit(1);
+    if (currentHeadRows[0]?.buildId === build.id) {
+      throw new SiteOpsServiceError(
+        "STATE_CONFLICT",
+        "当前网站版本已经在线，无需重复发布。",
+        409,
+      );
+    }
   }
   await assertSiteOpsDeploymentTargetAvailable(tx, {
     projectId: input.project.id,

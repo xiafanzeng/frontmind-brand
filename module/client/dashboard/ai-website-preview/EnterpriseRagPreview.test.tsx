@@ -1,17 +1,55 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EnterpriseRagPreview } from "./EnterpriseRagPreview";
+import {
+  EnterpriseRagPreview,
+  enterpriseRagHistoryStorageKey,
+} from "./EnterpriseRagPreview";
 import {
   EVALUATION_REPORT_STORAGE_KEY,
   listEvaluationReports,
 } from "./evaluation-report-store";
 import { previewRagAnswer } from "./preview-copy";
+import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
 
 const historyKey = "frontmind-rag-reviews-v1";
 const dimensionLabels = ["需求满足", "正确与有据", "信息完整", "引用与时效", "清晰可行动", "边界与安全"];
 
 function showPage() {
   return render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} />);
+}
+
+function liveRuntime(overrides: Partial<NonNullable<Parameters<typeof EnterpriseRagPreview>[0]["live"]>> = {}) {
+  return {
+    loaded: true,
+    failed: false,
+    configured: true,
+    providerLabel: "XTY Codex",
+    knowledgeBase: {
+      snapshotId: "snapshot-live",
+      version: 7,
+      sourceFileName: "企业知识库.zip",
+      documentCount: 12,
+    },
+    currentKnowledgeBase: {
+      snapshotId: "snapshot-live",
+      version: 7,
+      sourceFileName: "企业知识库.zip",
+      documentCount: 12,
+    },
+    knowledgeBinding: "current_publication" as const,
+    conversationReady: true,
+    question: "",
+    answer: "",
+    sources: [],
+    busy: false,
+    running: false,
+    onRetryPending: vi.fn(async () => true),
+    onAsk: vi.fn(async () => true),
+    onStop: vi.fn(async () => true),
+    onRetryKnowledge: vi.fn(),
+    onOpenKnowledge: vi.fn(),
+    ...overrides,
+  };
 }
 
 function evaluation() {
@@ -39,6 +77,218 @@ afterEach(() => {
 });
 
 describe("enterprise RAG evidence-based review UI", () => {
+  it("submits a live question without falling back to a synthetic answer", async () => {
+    const runtime = liveRuntime();
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={runtime}
+      />,
+    );
+
+    expect(screen.getByTestId("enterprise-rag-live-root")).toBeTruthy();
+    expect(screen.getByText("企业知识库.zip")).toBeTruthy();
+    expect(screen.getByText(/知识版本 v7/)).toBeTruthy();
+    fireEvent.change(screen.getByTestId("rag-question-input"), {
+      target: { value: "你们支持哪些部署方式？" },
+    });
+    fireEvent.click(screen.getByTestId("rag-submit"));
+
+    await waitFor(() =>
+      expect(runtime.onAsk).toHaveBeenCalledWith("你们支持哪些部署方式？"),
+    );
+    expect(screen.queryByText(previewRagAnswer)).toBeNull();
+    expect(screen.getByTestId("rag-answer").textContent).toContain(
+      "尚无待评估回答",
+    );
+  });
+
+  it("renders the persisted live answer and only server-resolved source metadata", async () => {
+    const runtime = liveRuntime({
+      question: "你们支持哪些部署方式？",
+      questionId: "question-1",
+      answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
+      answerId: "answer-1",
+      sources: [
+        {
+          id: "doc-live-1",
+          title: "部署说明",
+          kind: "published_knowledge",
+        },
+      ],
+    });
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={runtime}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("rag-answer").textContent).toContain(
+        "支持私有化部署",
+      ),
+    );
+    expect(screen.getAllByTestId("rag-source")[0].textContent).toContain(
+      "部署说明",
+    );
+    fireEvent.click(screen.getAllByTestId("rag-source")[0]);
+    const evidence = within(
+      screen.getByRole("dialog", { name: "回答依据与陈述核验" }),
+    );
+    expect(evidence.getByText(/只公开服务端解析后的资料标识与标题/)).toBeTruthy();
+    expect(evidence.getByText(/知识版本：v7/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "编辑回答" })).toBeNull();
+    expect(screen.getByText("服务端原始回答")).toBeTruthy();
+  });
+
+  it("shows the frozen task version and never substitutes a newer publication", () => {
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          knowledgeBinding: "frozen_task",
+          taskId: "task-old",
+          knowledgeBase: {
+            snapshotId: "snapshot-old",
+            version: 3,
+            sourceFileName: "历史资料.zip",
+            documentCount: 5,
+          },
+          currentKnowledgeBase: {
+            snapshotId: "snapshot-current",
+            version: 9,
+            sourceFileName: "当前资料.zip",
+            documentCount: 20,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("本任务冻结知识快照")).toBeTruthy();
+    expect(screen.getByText(/知识版本 v3/)).toBeTruthy();
+    expect(screen.getByText(/项目已发布 v9；本会话仍使用冻结的 v3/)).toBeTruthy();
+    expect(screen.getByText("历史资料.zip")).toBeTruthy();
+    expect(screen.queryByText("当前资料.zip")).toBeNull();
+  });
+
+  it("labels an unavailable historical binding unknown instead of claiming the current version", () => {
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          loaded: true,
+          failed: true,
+          failureCode: "TASK_SOURCE_UNAVAILABLE",
+          knowledgeBinding: "historical_unknown",
+          taskId: "task-old",
+          knowledgeBase: null,
+          currentKnowledgeBase: {
+            snapshotId: "snapshot-current",
+            version: 9,
+            sourceFileName: "当前资料.zip",
+            documentCount: 20,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getAllByText(/历史任务知识版本未知/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/未使用当前发布版本替代/)).toBeTruthy();
+    expect(screen.queryByText(/知识版本 v9/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "前往智能知识库" })).toBeNull();
+  });
+
+  it("offers an explicit retry for a retained pending dispatch", async () => {
+    const runtime = liveRuntime({
+      pendingDispatchQuestion: "尚未确认的问题",
+    });
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={runtime}
+      />,
+    );
+
+    expect(screen.getByText(/尚未确认的问题/)).toBeTruthy();
+    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "重试上次问题" }));
+    await waitFor(() => expect(runtime.onRetryPending).toHaveBeenCalledTimes(1));
+  });
+
+  it("isolates live reviews by owner/workspace while sharing the scoped audit with website flow", () => {
+    const scope = "live:7:workspace-a";
+    const page = render(
+      <EnterpriseRagPreview
+        storageScopeKey={scope}
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({ question: "真实问题", answer: "真实回答" })}
+      />,
+    );
+    openReview();
+    confirmReview();
+
+    expect(window.localStorage.getItem(historyKey)).toBeNull();
+    expect(
+      window.localStorage.getItem(enterpriseRagHistoryStorageKey(scope)),
+    ).not.toBeNull();
+    expect(listEvaluationReports()).toEqual([]);
+    expect(listEvaluationReports(scopedEvaluationStorage(scope))).toHaveLength(1);
+
+    page.unmount();
+    render(
+      <EnterpriseRagPreview
+        storageScopeKey="live:8:workspace-b"
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({ question: "另一问题", answer: "另一回答" })}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "评估记录" })).toBeTruthy();
+  });
+
+  it("keeps the designed surface visible while a real knowledge publication is missing", () => {
+    const openKnowledge = vi.fn();
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          knowledgeBase: null,
+          onOpenKnowledge: openKnowledge,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("enterprise-rag-live-root")).toBeTruthy();
+    expect(screen.getByText(/请先完成并发布企业知识库/)).toBeTruthy();
+    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "前往智能知识库" }));
+    expect(openKnowledge).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed while the model configuration status is unknown", () => {
+    const runtime = liveRuntime({ configured: null });
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={runtime}
+      />,
+    );
+
+    expect(screen.getByText(/模型状态尚未确认/)).toBeTruthy();
+    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByTestId("rag-submit"));
+    expect(runtime.onAsk).not.toHaveBeenCalled();
+  });
+
   it("does not reuse the default answer or an old score for a custom question", () => {
     showPage();
     expect(screen.getByText(previewRagAnswer)).toBeTruthy();

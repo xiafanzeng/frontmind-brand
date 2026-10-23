@@ -7,10 +7,58 @@ import { RAG_ACCEPTANCE_PARAMS, RAG_ATTRIBUTIONS, RAG_CASE_MODE_LABELS, RAG_CASE
 import { RAG_COVERAGE_POINTS, RAG_SAMPLE_CASES, findRagSample, type RagCase, type RagIssue } from "./rag-evaluation-cases";
 import { enterpriseRagEvaluationSkill } from "./enterprise-rag-evaluation-skill";
 import { saveEvaluationReport } from "./evaluation-report-store";
+import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
 import "./simplified-product-preview.css";
 import "./rag-evaluation-ui.css";
 
-type Props = { onOpenWebsite: () => void; onOpenWebsiteAssistant: () => void; websiteEntryLabel?: string };
+export type EnterpriseRagLiveRuntime = {
+  loaded: boolean;
+  failed: boolean;
+  refreshFailed?: boolean;
+  failureCode?: string;
+  configured: boolean | null;
+  providerLabel: string;
+  knowledgeBase: {
+    snapshotId: string;
+    version: number;
+    sourceFileName: string;
+    documentCount: number;
+  } | null;
+  currentKnowledgeBase: {
+    snapshotId: string;
+    version: number;
+    sourceFileName: string;
+    documentCount: number;
+  } | null;
+  knowledgeBinding: "current_publication" | "frozen_task" | "historical_unknown";
+  taskId?: string;
+  conversationReady: boolean;
+  question: string;
+  questionId?: string;
+  answer: string;
+  answerId?: string;
+  sources: Array<{
+    id: string;
+    title: string;
+    kind: "published_knowledge" | "user_attachment";
+  }>;
+  busy: boolean;
+  running: boolean;
+  pendingDispatchQuestion?: string;
+  notice?: string;
+  onAsk: (question: string) => Promise<boolean>;
+  onRetryPending: () => Promise<boolean>;
+  onStop: () => Promise<boolean>;
+  onRetryKnowledge: () => void;
+  onOpenKnowledge: () => void;
+};
+type Props = {
+  onOpenWebsite: () => void;
+  onOpenWebsiteAssistant: () => void;
+  websiteEntryLabel?: string;
+  storageScopeKey?: string;
+  live?: EnterpriseRagLiveRuntime;
+};
 type Drawer = "review" | "evidence" | "rules" | "improve" | "answer" | "history" | null;
 type RecordEntry = { id: string; question: string; answer: string; need: string; reviewer: string; time: string; ruleVersion: string; knowledgeVersion: string; dimensions: DimensionJudgment[]; gates: GateJudgment[] };
 const HISTORY_KEY = "frontmind-rag-reviews-v1";
@@ -31,9 +79,15 @@ const emptyGates = (): GateJudgment[] => RAG_GATES.map(({ id }) => ({ id, status
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const format = (value: number) => Number(value.toFixed(2)).toString();
 
-function loadHistory(): RecordEntry[] {
+export function enterpriseRagHistoryStorageKey(scopeKey?: string) {
+  return scopeKey?.trim()
+    ? `${HISTORY_KEY}.${encodeURIComponent(scopeKey.trim())}`
+    : HISTORY_KEY;
+}
+
+function loadHistory(storageKey: string): RecordEntry[] {
   try {
-    const data: unknown = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    const data: unknown = JSON.parse(localStorage.getItem(storageKey) || "[]");
     if (!Array.isArray(data)) return [];
     return data.filter((item): item is RecordEntry => item && typeof item.id === "string" && typeof item.question === "string" && typeof item.answer === "string" && typeof item.need === "string" && typeof item.reviewer === "string" && typeof item.time === "string" && typeof item.ruleVersion === "string" && /^rag-eval-\d+\.\d+$/u.test(item.ruleVersion) && typeof item.knowledgeVersion === "string" && Array.isArray(item.dimensions) && item.dimensions.every((d: DimensionJudgment) => d && typeof d.id === "string" && typeof d.rationale === "string" && Array.isArray(d.evidenceIds)) && Array.isArray(item.gates) && item.gates.every((g: GateJudgment) => g && typeof g.reason === "string" && typeof g.id === "string")).slice(0, 30);
   } catch { return []; }
@@ -45,17 +99,20 @@ function manualIssues(dimensions: DimensionJudgment[], gates: GateJudgment[]): R
   return [...risks, ...gaps].slice(0, 3);
 }
 
-export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, websiteEntryLabel = "开始网站建设" }: Props) {
+export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, websiteEntryLabel = "开始网站建设", storageScopeKey, live }: Props) {
   const first = RAG_SAMPLE_CASES[0];
-  const [websiteDraft] = useState(loadWebsiteDraft);
-  const [activeCase, setActiveCase] = useState<RagCase | null>(first);
-  const [question, setQuestion] = useState(first.question);
-  const [answer, setAnswer] = useState(first.answer);
-  const [need, setNeed] = useState(first.need);
+  const historyStorageKey = enterpriseRagHistoryStorageKey(storageScopeKey);
+  const [websiteDraft] = useState(() =>
+    live ? null : loadWebsiteDraft(storageScopeKey),
+  );
+  const [activeCase, setActiveCase] = useState<RagCase | null>(live ? null : first);
+  const [question, setQuestion] = useState(live?.question ?? first.question);
+  const [answer, setAnswer] = useState(live?.answer ?? first.answer);
+  const [need, setNeed] = useState(live?.question ? `准确回答访客问题：${live.question}` : live ? "" : first.need);
   const [input, setInput] = useState("");
-  const [dimensions, setDimensions] = useState(clone(first.dimensions));
-  const [gates, setGates] = useState(clone(first.gates));
-  const [mode, setMode] = useState<"sample" | "manual">("sample");
+  const [dimensions, setDimensions] = useState(live ? emptyDimensions() : clone(first.dimensions));
+  const [gates, setGates] = useState(live ? emptyGates() : clone(first.gates));
+  const [mode, setMode] = useState<"sample" | "manual">(live ? "manual" : "sample");
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [reviewDimensions, setReviewDimensions] = useState<DimensionJudgment[]>([]);
   const [reviewGates, setReviewGates] = useState<GateJudgment[]>([]);
@@ -64,9 +121,10 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
   const [answerEdit, setAnswerEdit] = useState("");
   const [needEdit, setNeedEdit] = useState("");
   const [notice, setNotice] = useState("");
-  const [history, setHistory] = useState(loadHistory);
+  const [history, setHistory] = useState(() => loadHistory(historyStorageKey));
   const [tab, setTab] = useState<"single" | "set">("single");
   const backgroundRef = useRef<HTMLDivElement>(null);
+  const syncedLiveAnswer = useRef("");
   const close = () => {
     // Restore interactivity before the dialog hook returns focus to its trigger.
     if (backgroundRef.current) backgroundRef.current.inert = false;
@@ -80,11 +138,66 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = original; };
   }, [drawer]);
+  useEffect(() => {
+    setHistory(loadHistory(historyStorageKey));
+  }, [historyStorageKey]);
+  const liveAnswerKey = live
+    ? `${live.questionId ?? live.question}\u0000${live.answerId ?? live.answer}`
+    : "";
+  useEffect(() => {
+    if (!live || syncedLiveAnswer.current === liveAnswerKey) return;
+    syncedLiveAnswer.current = liveAnswerKey;
+    setActiveCase(null);
+    setQuestion(live.question);
+    setAnswer(live.answer);
+    setNeed(live.question ? `准确回答访客问题：${live.question}` : "");
+    setDimensions(emptyDimensions());
+    setGates(emptyGates());
+    setMode("manual");
+    if (live.answer) setNotice("已载入真实企业问答结果；质量评分需人工核验后生成。");
+  }, [liveAnswerKey, live]);
   const result = scoreEvaluation({ dimensions, gates });
   const issues = mode === "sample" && activeCase ? activeCase.issues : manualIssues(dimensions, gates);
   const conversation = activeCase ? resolveConversationOutcome(activeCase.conversation, activeCase.gates) : null;
   const attributionLabel = activeCase?.conversation.attribution ? RAG_ATTRIBUTIONS.find((item) => item.id === activeCase.conversation.attribution)?.label : null;
-  const currentSources = activeCase?.sources ?? [];
+  const historicalKnowledge = Boolean(
+    live && live.knowledgeBinding !== "current_publication",
+  );
+  const knowledgeVersion = live
+    ? live.knowledgeBase
+      ? `v${live.knowledgeBase.version}`
+      : historicalKnowledge
+        ? "历史任务知识版本未知"
+        : "尚未发布"
+    : activeCase
+      ? KNOWLEDGE_VERSION
+      : "待绑定正式知识版本";
+  const currentSources = live
+    ? live.sources.map((source) => ({
+        ...source,
+        scope: source.kind === "published_knowledge" ? "企业资料" : "本轮附件",
+        section: "服务端解析引用",
+        version:
+          source.kind === "user_attachment" ? "本轮附件" : knowledgeVersion,
+        excerpt: "",
+      }))
+    : activeCase?.sources ?? [];
+  const canAsk = live
+    ? live.loaded &&
+      !live.failed &&
+      live.configured === true &&
+      live.providerLabel !== "未配置" &&
+      Boolean(live.knowledgeBase) &&
+      live.conversationReady &&
+      !live.pendingDispatchQuestion &&
+      !live.busy
+    : true;
+  const hasNewerPublication = Boolean(
+    live?.knowledgeBinding === "frozen_task" &&
+      live.knowledgeBase &&
+      live.currentKnowledgeBase &&
+      live.currentKnowledgeBase.version > live.knowledgeBase.version,
+  );
   const tone = result.gateStatus === "failed" || result.verdict === "unusable" ? "danger" : result.complete ? "ready" : "pending";
 
   const selectCase = (item: RagCase) => {
@@ -95,6 +208,21 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
   const submitQuestion = (event: FormEvent) => {
     event.preventDefault();
     if (!input.trim()) return;
+    if (live) {
+      if (!canAsk) return;
+      const submitted = input.trim();
+      setActiveCase(null); setQuestion(submitted); setAnswer(""); setNeed(`准确回答访客问题：${submitted}`); setMode("manual");
+      setDimensions(emptyDimensions()); setGates(emptyGates()); setInput("");
+      setNotice(
+        live.knowledgeBinding === "current_publication"
+          ? "问题已提交，正在基于当前发布知识版本生成回答…"
+          : "问题已提交，正在基于本任务冻结知识版本生成回答…",
+      );
+      void live.onAsk(submitted).then((accepted) => {
+        if (!accepted) setNotice("问题未成功提交，请检查上方状态后重试。");
+      });
+      return;
+    }
     const match = findRagSample(input);
     if (match) selectCase(match);
     else {
@@ -107,7 +235,10 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
   const openReview = () => {
     setReviewDimensions(clone(dimensions)); setReviewGates(clone(gates)); setConfirmed(false); setDrawer("review");
   };
-  const openAnswer = () => { setAnswerEdit(answer); setNeedEdit(need); setDrawer("answer"); };
+  const openAnswer = () => {
+    if (live) return;
+    setAnswerEdit(answer); setNeedEdit(need); setDrawer("answer");
+  };
   const updateAnswer = (value: string, task: string) => {
     setAnswer(value.trim()); setNeed(task.trim()); setActiveCase(null); setMode("manual");
     setDimensions(emptyDimensions()); setGates(emptyGates()); close();
@@ -115,17 +246,17 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
   };
   const saveReview = () => {
     if (!answer.trim() || !need.trim() || !reviewer.trim() || !confirmed) return;
-    const record: RecordEntry = { id: `review-${crypto.randomUUID()}`, question, answer, need, reviewer: reviewer.trim(), time: new Date().toISOString(), ruleVersion: RAG_RULE_VERSION, knowledgeVersion: activeCase ? KNOWLEDGE_VERSION : "人工录入-待绑定正式知识版本", dimensions: clone(reviewDimensions), gates: clone(reviewGates) };
+    const record: RecordEntry = { id: `review-${crypto.randomUUID()}`, question, answer, need, reviewer: reviewer.trim(), time: new Date().toISOString(), ruleVersion: RAG_RULE_VERSION, knowledgeVersion: live ? knowledgeVersion : activeCase ? KNOWLEDGE_VERSION : "人工录入-待绑定正式知识版本", dimensions: clone(reviewDimensions), gates: clone(reviewGates) };
     const skillResult = enterpriseRagEvaluationSkill.evaluate({ dimensions: record.dimensions, gates: record.gates });
     const reportSaved = saveEvaluationReport({
       reportId: `report-${record.id}`,
       createdAt: record.time,
       subject: { kind: "rag-answer", id: record.id, version: record.ruleVersion },
       result: skillResult,
-    });
+    }, scopedEvaluationStorage(storageScopeKey));
     setDimensions(record.dimensions); setGates(record.gates); setMode("manual");
     const next = [record, ...history].slice(0, 30); setHistory(next);
-    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(next)); setNotice(`已保存人工评审与独立 RAG 评估快照（${reviewer.trim()}）${reportSaved ? "" : "；评估快照存储不可用"}。未判定或缺少证据的维度仍保持待评估。`); }
+    try { localStorage.setItem(historyStorageKey, JSON.stringify(next)); setNotice(`已保存人工评审与独立 RAG 评估快照（${reviewer.trim()}）${reportSaved ? "" : "；评估快照存储不可用"}。未判定或缺少证据的维度仍保持待评估。`); }
     catch { setNotice("人工评审已计算，但浏览器存储不可用，本次记录仅在当前页面保留。"); }
     close();
   };
@@ -135,26 +266,31 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
     return { category, items, result: aggregateEvaluations(items.map((item) => ({ id: item.id, scenario: item.scenario, weight: item.weight, result: scoreEvaluation(item) }))) };
   });
 
-  return <section className="sfp-root erag-root rag-eval-root">
+  return <section className="sfp-root erag-root rag-eval-root" data-testid={live ? "enterprise-rag-live-root" : undefined}>
     <div ref={backgroundRef}>
       <header className="sfp-heading erag-heading"><div><h1>让回答真正满足用户需求</h1><p>从问题、回答和证据出发，发现缺口并确定下一步优化。</p></div><button className="sfp-button sfp-button--ghost" onClick={onOpenWebsite}>{websiteEntryLabel}</button></header>
       <div className="erag-flow" aria-label="企业 RAG 工作方式"><div><span><BookOpenCheck size={18} /></span><strong>企业知识库</strong></div><i /><div><span><Search size={18} /></span><strong>检索与回答</strong></div><i /><div><span><ClipboardCheck size={18} /></span><strong>回答质量评估</strong></div></div>
       <div className="rag-toolbar"><div role="tablist" aria-label="评估工作区"><button role="tab" aria-selected={tab === "single"} onClick={() => setTab("single")}>单次问答</button><button role="tab" aria-selected={tab === "set"} onClick={() => setTab("set")}>测试集演示</button></div><div><button onClick={() => setDrawer("rules")}>评分规则</button><button onClick={() => setDrawer("history")}>评估记录 {history.length > 0 ? `(${history.length})` : ""}</button></div></div>
-      {notice && <div className="sfp-notice" role="status">{notice}</div>}
+      {(live?.notice || notice) && <div className="sfp-notice" role={live?.notice ? "alert" : "status"}>{live?.notice || notice}</div>}
+      {live?.refreshFailed && <div className="sfp-notice" role="alert">暂时无法刷新知识来源；页面继续显示上次已确认的{historicalKnowledge ? "本任务冻结快照" : "当前发布快照"}，不会用其他版本替代。<div className="rag-panel-actions"><button className="sfp-button sfp-button--ghost" onClick={live.onRetryKnowledge}>重新检查</button></div></div>}
+      {live?.pendingDispatchQuestion && <div className="sfp-notice" role="alert">上次问题“{live.pendingDispatchQuestion}”已保存在当前会话，但尚未确认提交。<div className="rag-panel-actions"><button className="sfp-button sfp-button--primary" disabled={live.busy} onClick={() => void live.onRetryPending()}>重试上次问题</button></div></div>}
+      {live && !canAsk && !live.busy && !live.pendingDispatchQuestion && <div className="sfp-notice" role={live.failed || live.configured !== true || live.providerLabel === "未配置" || live.knowledgeBinding === "historical_unknown" ? "alert" : "status"}>{!live.loaded ? historicalKnowledge ? "正在读取本任务冻结的知识快照…" : "正在确认企业知识库与模型状态…" : live.failed ? historicalKnowledge ? `无法确认本任务冻结的历史知识版本${live.failureCode ? `（${live.failureCode}）` : ""}；未使用当前发布版本替代。` : `知识库状态读取失败${live.failureCode ? `（${live.failureCode}）` : ""}。` : live.configured === false ? "企业问答模型尚未配置，请管理员检查模型凭据。" : live.configured !== true || live.providerLabel === "未配置" ? "企业问答模型状态尚未确认；请重新检查后再提问。" : !live.knowledgeBase ? historicalKnowledge ? "本任务的历史知识快照版本未知；未使用当前发布版本冒充来源。" : "请先完成并发布企业知识库，再开始真实问答。" : !live.conversationReady ? "正在准备企业问答会话…" : "当前任务正在处理。"}<div className="rag-panel-actions"><button className="sfp-button sfp-button--ghost" onClick={live.onRetryKnowledge}>重新检查</button>{!live.knowledgeBase && live.knowledgeBinding === "current_publication" && <button className="sfp-button sfp-button--primary" onClick={live.onOpenKnowledge}>前往智能知识库</button>}</div></div>}
       {tab === "single" ? <div className="erag-layout">
         <div className="erag-left-column">
-          <section className="sfp-panel erag-knowledge-card"><div className="erag-card-heading"><div><span className="erag-card-icon"><FileText size={18} /></span><strong>RAG 知识底座</strong></div><span className="erag-version">合成知识快照</span></div>
-            <div className="erag-stats"><div><strong>{previewKnowledgeCollectionCount}</strong><small>知识集合</small></div><div><strong>{previewKnowledgeFragmentCount}</strong><small>示例知识片段</small></div><div><strong>{currentSources.length}</strong><small>当前来源</small></div></div>
-            <div className="rag-knowledge-row"><span>{activeCase ? KNOWLEDGE_VERSION : "实际来源待录入"}</span><button onClick={() => setDrawer("evidence")}>查看知识与依据 <ArrowRight size={14} /></button></div>
+          <section className="sfp-panel erag-knowledge-card"><div className="erag-card-heading"><div><span className="erag-card-icon"><FileText size={18} /></span><strong>RAG 知识底座</strong></div><span className="erag-version">{live ? live.knowledgeBinding === "current_publication" ? live.knowledgeBase ? "当前发布知识快照" : "等待发布" : live.knowledgeBase ? "本任务冻结知识快照" : live.loaded ? "历史快照版本未知" : "正在读取历史快照" : "合成知识快照"}</span></div>
+            <div className="erag-stats"><div><strong>{live ? live.knowledgeBase ? 1 : 0 : previewKnowledgeCollectionCount}</strong><small>{live ? historicalKnowledge ? "任务冻结快照" : "发布快照" : "知识集合"}</small></div><div><strong>{live ? live.knowledgeBase?.documentCount ?? 0 : previewKnowledgeFragmentCount}</strong><small>{live ? "知识文档" : "示例知识片段"}</small></div><div><strong>{currentSources.length}</strong><small>当前来源</small></div></div>
+            <div className="rag-knowledge-row"><span>{live ? live.knowledgeBase?.sourceFileName || knowledgeVersion : activeCase ? KNOWLEDGE_VERSION : "实际来源待录入"}</span><button onClick={() => setDrawer("evidence")}>查看知识与依据 <ArrowRight size={14} /></button></div>
+            {live && <p className="rag-muted">知识版本 {knowledgeVersion} · 问答模型 {live.providerLabel}</p>}
+            {hasNewerPublication && <p className="rag-muted">项目已发布 v{live?.currentKnowledgeBase?.version}；本会话仍使用冻结的 {knowledgeVersion}。</p>}
           </section>
-          <section className="sfp-panel erag-test-card"><div className="erag-card-heading"><div><span className="erag-card-icon"><Bot size={18} /></span><strong>回答示例试用</strong></div><button className="rag-text-button" onClick={openAnswer}>{answer ? "编辑回答" : "录入回答"}</button></div>
-            <label className="rag-case-picker">示例场景<select aria-label="选择评估示例" value={activeCase?.id ?? "custom"} onChange={(event) => { const item = RAG_SAMPLE_CASES.find((item) => item.id === event.target.value); if (item) selectCase(item); }}><option value="custom" disabled>自定义问题</option>{RAG_SAMPLE_CASES.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-            <div className="erag-test-thread"><p className="erag-user-message">{question}</p><article><header><Sparkles size={16} /><strong>{websiteDraft.assistant.name || "企业助手"}</strong><small>{activeCase ? "合成回答" : "人工录入"}</small></header><p>{answer || "尚无待评估回答。请粘贴实际回答，不会为新问题套用默认示例。"}</p>{currentSources.length > 0 && <div className="erag-citations">{currentSources.map((source, index) => <button key={source.id} onClick={() => setDrawer("evidence")}>[{index + 1}] {source.title}</button>)}</div>}</article></div>
-            <form className="erag-composer" onSubmit={submitQuestion}><input aria-label="输入企业 RAG 示例问题" placeholder="输入访客问题，或选择上方示例" value={input} onChange={(event) => setInput(event.currentTarget.value)} /><button type="submit"><Send size={16} />试用问题</button></form>
+          <section className="sfp-panel erag-test-card"><div className="erag-card-heading"><div><span className="erag-card-icon"><Bot size={18} /></span><strong>回答示例试用</strong></div>{live ? <span className="rag-muted">服务端原始回答</span> : <button className="rag-text-button" onClick={openAnswer}>{answer ? "编辑回答" : "录入回答"}</button>}</div>
+            {!live && <label className="rag-case-picker">示例场景<select aria-label="选择评估示例" value={activeCase?.id ?? "custom"} onChange={(event) => { const item = RAG_SAMPLE_CASES.find((item) => item.id === event.target.value); if (item) selectCase(item); }}><option value="custom" disabled>自定义问题</option>{RAG_SAMPLE_CASES.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}
+            <div className="erag-test-thread"><p className="erag-user-message">{question || (live ? "输入一个企业相关问题开始真实问答。" : "")}</p><article><header><Sparkles size={16} /><strong>{websiteDraft?.assistant.name || "企业助手"}</strong><small>{live ? live.running ? "真实回答生成中" : "真实企业问答" : activeCase ? "合成回答" : "人工录入"}</small></header><p data-testid={live ? "rag-answer" : undefined}>{answer || (live && live.busy ? historicalKnowledge ? "正在读取本任务冻结知识并生成回答…" : "正在读取当前发布知识并生成回答…" : live ? "尚无待评估回答。请提交真实问题。" : "尚无待评估回答。请录入一条回答进行人工评审。")}</p>{currentSources.length > 0 && <div className="erag-citations">{currentSources.map((source, index) => <button data-testid={live ? "rag-source" : undefined} key={`${"kind" in source ? source.kind : "source"}:${source.id}`} onClick={() => setDrawer("evidence")}>[{index + 1}] {source.title}</button>)}</div>}</article></div>
+            <form className="erag-composer" onSubmit={submitQuestion}><input data-testid={live ? "rag-question-input" : undefined} aria-label={live ? "输入企业 RAG 问题" : "输入企业 RAG 示例问题"} placeholder={live ? "输入访客问题，基于已发布知识回答" : "输入访客问题，或选择上方示例"} value={input} disabled={Boolean(live) && !canAsk} onChange={(event) => setInput(event.currentTarget.value)} /><button data-testid={live ? "rag-submit" : undefined} type="submit" disabled={Boolean(live) && (!canAsk || !input.trim())}><Send size={16} />{live ? live.busy ? "回答中…" : "发送问题" : "试用问题"}</button>{live?.running && <button type="button" className="sfp-button sfp-button--ghost" onClick={() => void live.onStop()}>停止</button>}</form>
           </section>
         </div>
         <aside className="sfp-panel erag-evaluation-panel" role="region" aria-label="回答质量评估">
-          <div className="erag-evaluation-panel__heading"><div><span className="erag-card-icon"><ClipboardCheck size={18} /></span><span><h2>回答质量评估</h2><small>{mode === "sample" ? "合成样例 · 预设评审" : "人工评审 · 本地计算"}</small></span></div><output className={`erag-evaluation-score is-${tone}`} aria-label="综合评分" aria-live="polite"><span><strong>{result.score ?? "—"}</strong><small>/100</small></span><em>{result.complete ? "六维加权分" : "待完成评审"}</em></output></div>
+          <div className="erag-evaluation-panel__heading"><div><span className="erag-card-icon"><ClipboardCheck size={18} /></span><span><h2>回答质量评估</h2><small>{live ? "真实回答 · 人工评审" : mode === "sample" ? "合成样例 · 预设评审" : "人工评审 · 本地计算"}</small></span></div><output className={`erag-evaluation-score is-${tone}`} aria-label="综合评分" aria-live="polite"><span><strong>{result.score ?? "—"}</strong><small>/100</small></span><em>{result.complete ? "六维加权分" : "待完成评审"}</em></output></div>
           <section className={`rag-verdict is-${tone}`} aria-label="当前评估摘要"><strong>{verdicts[result.verdict]}</strong><p>{result.gateStatus === "failed" ? "发现关键回答风险；高分不能把该回答判为可用，但不会取消网站发布选择。" : result.complete ? (mode === "sample" ? activeCase?.summary : "结论基于人工判定，只提供质量建议，不是发布授权。") : "完成维度与关键风险核验后，才能形成回答可用性结论。"}</p><div className="rag-status-row"><span><ShieldCheck size={14} />关键风险{result.gateStatus === "passed" ? "已核验" : result.gateStatus === "failed" ? "已发现" : "待核验"}</span><span>评审覆盖 {format(result.coverage)}%</span>{!result.complete && <span>可能分数 {Math.floor(result.lower)}–{Math.ceil(result.upper)}</span>}</div></section>
           <section className="rag-conversation" aria-label="完整对话判定">
             <header><h3>完整对话判定</h3>{conversation && <span className={`rag-case-status is-${conversation.status}`}>{RAG_CASE_STATUS_LABELS[conversation.status]}</span>}</header>
@@ -194,7 +330,7 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
     {drawer && <div className="rag-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}><aside ref={dialogRef} className="rag-drawer" role="dialog" aria-modal="true" aria-labelledby="rag-drawer-title" tabIndex={-1}><header><div><small>{RAG_RULE_VERSION}</small><h2 id="rag-drawer-title">{drawerTitle[drawer]}</h2></div><button aria-label="关闭评估面板" onClick={close}><X size={20} /></button></header><div className="rag-drawer-body">
       {drawer === "review" && <><div className="rag-context"><strong>{question}</strong><p>{answer}</p><small>当前任务：{need || "尚未填写"}</small></div><p className="rag-muted">逐维核验后填写等级、理由与证据定位。缺项可保存，但不会被当成已通过。适用性已按固定方案冻结。</p>{RAG_DIMENSIONS.map((item, index) => { const judgment = reviewDimensions[index]; return <fieldset className="rag-review-field" key={item.id}><legend>{shortLabels[index]} · {item.weight} 分</legend><p>{item.question}</p><label>判断等级<select aria-label={`${shortLabels[index]}等级`} value={judgment?.level ?? ""} onChange={(event) => setReviewDimensions((old) => old.map((d) => d.id === item.id ? { ...d, level: event.target.value === "" ? null : Number(event.target.value) as Rating } : d))}><option value="">待判定</option>{levels.map((label, level) => <option key={level} value={level}>{level} · {label}</option>)}</select></label><label>判断理由<textarea aria-label={`${shortLabels[index]}理由`} value={judgment?.rationale ?? ""} onChange={(event) => setReviewDimensions((old) => old.map((d) => d.id === item.id ? { ...d, rationale: event.target.value } : d))} /></label><label>证据定位<input aria-label={`${shortLabels[index]}证据`} placeholder="来源段落、陈述 ID 或回答原句；用逗号分隔" value={judgment?.evidenceIds.join(", ") ?? ""} onChange={(event) => setReviewDimensions((old) => old.map((d) => d.id === item.id ? { ...d, evidenceIds: event.target.value.split(/[,，]/).map((v) => v.trim()).filter(Boolean) } : d))} /></label></fieldset>; })}<h3>关键回答风险</h3>{RAG_GATES.map((item, index) => <fieldset className="rag-review-field rag-gate-field" key={item.id}><legend>{item.label}</legend><p>{item.description}</p><label>核验结果<select aria-label={`${item.label}风险核验`} value={reviewGates[index]?.status ?? "pending"} onChange={(event) => setReviewGates((old) => old.map((g) => g.id === item.id ? { ...g, status: event.target.value as GateJudgment["status"] } : g))}><option value="pending">待核验</option><option value="passed">通过</option><option value="failed">发现风险</option></select></label><label>核验依据<input aria-label={`${item.label}风险核验依据`} value={reviewGates[index]?.reason ?? ""} onChange={(event) => setReviewGates((old) => old.map((g) => g.id === item.id ? { ...g, reason: event.target.value } : g))} /></label></fieldset>)}<label className="rag-reviewer">评审人<input aria-label="评审人" value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="姓名或评审代号" /></label><label className="rag-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />已对照当前回答与证据进行核验，不将预设评审当作自动评估结果。</label><p className="rag-muted">记录仅保存在当前浏览器，最多保留 30 条。请勿粘贴敏感业务资料。</p></>}
       {drawer === "answer" && <><div className="rag-context"><strong>{question}</strong></div><label className="rag-editor-label">用户任务<textarea aria-label="用户任务" value={needEdit} onChange={(event) => setNeedEdit(event.target.value)} placeholder="访客希望解决什么、做出什么决定？" /></label><label className="rag-editor-label">实际回答<textarea className="rag-answer-editor" aria-label="实际回答" value={answerEdit} onChange={(event) => setAnswerEdit(event.target.value)} placeholder="粘贴待评估的回答，包括引用定位。此处不会调用模型。" /></label><p className="rag-muted">保存后清空当前评审。人工证据通过评审表逐项记录，不会自动继承示例来源。</p></>}
-      {drawer === "evidence" && <><div className="rag-context"><strong>{question}</strong><p>知识版本：{activeCase ? KNOWLEDGE_VERSION : "待绑定正式知识版本"}</p></div><h3>陈述与证据</h3>{activeCase?.claims.length ? activeCase.claims.map((claim) => <article className="rag-evidence" key={claim.id}><header><strong>{claim.id}</strong><span className={claim.status === "supported" ? "" : "rag-danger-text"}>{{ supported: "有支持", partial: "部分支持", unsupported: "无支持", restricted: "权限受限" }[claim.status]}</span></header><p>{claim.text}</p><small>{claim.note} · {claim.sourceIds.join("、") || "没有来源"}</small></article>) : <p>当前为人工录入回答。请在评审表中逐维记录可核验的原文与来源定位。</p>}<h3>来源原文</h3>{currentSources.map((source) => <article className="rag-evidence" key={source.id}><header><strong>{source.title}</strong><span>{source.scope}</span></header><small>{source.id} · {source.section} · {source.version}</small><blockquote>{source.excerpt}</blockquote></article>)}<h3>本次判断记录</h3>{dimensions.map((item, index) => <article className="rag-evidence" key={item.id}><strong>{shortLabels[index]} · {item.level === null ? "待判定" : `${item.level}/4`}</strong><p>{item.rationale || "判断理由待补充"}</p><small>证据：{item.evidenceIds.join("、") || "待补充"}</small></article>)}<h3>关键风险核验</h3>{gates.map((gate) => <article className="rag-evidence" key={gate.id}><strong>{RAG_GATES.find((g) => g.id === gate.id)?.label} · {{ passed: "通过", failed: "发现风险", pending: "待核验" }[gate.status]}</strong><p>{gate.reason || "尚无核验记录"}</p></article>)}<p className="rag-muted">预设评审只针对这些合成文本与快照；不证明真实服务已抵御注入、越权或其他攻击。</p></>}
+      {drawer === "evidence" && <><div className="rag-context"><strong>{question}</strong><p>知识版本：{knowledgeVersion}</p></div><h3>陈述与证据</h3>{!live && activeCase?.claims.length ? activeCase.claims.map((claim) => <article className="rag-evidence" key={claim.id}><header><strong>{claim.id}</strong><span className={claim.status === "supported" ? "" : "rag-danger-text"}>{{ supported: "有支持", partial: "部分支持", unsupported: "无支持", restricted: "权限受限" }[claim.status]}</span></header><p>{claim.text}</p><small>{claim.note} · {claim.sourceIds.join("、") || "没有来源"}</small></article>) : <p>{live ? "真实回答的参考资料由服务端根据本次回答解析；陈述级证据仍需人工逐项核验。" : "当前为人工录入回答。请在评审表中逐维记录可核验的原文与来源定位。"}</p>}<h3>{live ? "参考资料" : "来源原文"}</h3>{currentSources.length ? currentSources.map((source) => <article data-testid={live ? "rag-source" : undefined} className="rag-evidence" key={`${"kind" in source ? source.kind : "source"}:${source.id}`}><header><strong>{source.title}</strong><span>{source.scope}</span></header><small>{source.id} · {source.section} · {source.version}</small>{source.excerpt ? <blockquote>{source.excerpt}</blockquote> : <p className="rag-muted">当前接口只公开服务端解析后的资料标识与标题，不展示或伪造原文摘录。</p>}</article>) : <p>当前回答没有返回参考资料。</p>}<h3>本次判断记录</h3>{dimensions.map((item, index) => <article className="rag-evidence" key={item.id}><strong>{shortLabels[index]} · {item.level === null ? "待判定" : `${item.level}/4`}</strong><p>{item.rationale || "判断理由待补充"}</p><small>证据：{item.evidenceIds.join("、") || "待补充"}</small></article>)}<h3>关键风险核验</h3>{gates.map((gate) => <article className="rag-evidence" key={gate.id}><strong>{RAG_GATES.find((g) => g.id === gate.id)?.label} · {{ passed: "通过", failed: "发现风险", pending: "待核验" }[gate.status]}</strong><p>{gate.reason || "尚无核验记录"}</p></article>)}<p className="rag-muted">{live ? "参考资料表示本次回答实际使用的材料；它不是陈述级证明，质量结论仍需人工核验。" : "预设评审只针对这些合成文本与快照；不证明真实服务已抵御注入、越权或其他攻击。"}</p></>}
       {drawer === "rules" && <><h3>六维 100 分</h3><p className="rag-formula">总分 = Σ（维度权重 × 等级 ÷ 4）</p>{RAG_DIMENSIONS.map((item) => <article className="rag-evidence" key={item.id}><header><strong>{item.label}</strong><b>{item.weight} 分</b></header><p>{item.question}</p></article>)}<h3>等级与结论</h3><p>0 不满足 · 1 少量满足 · 2 部分满足 · 3 基本满足 · 4 充分满足。等级必须附判断理由和证据定位。</p><p>原始分 ≥90 优秀；≥80 可用；≥70 需要改进；低于 70 不可用。显示分四舍五入，结论使用未取整的原始分。</p><h3>关键风险优先于回答分数</h3><p>任一关键风险成立，该回答直接判为不可用；有风险待核验，不判为可用。此结论是质量建议，不阻止用户进入网站发布确认。</p>{RAG_GATES.map((item) => <article className="rag-evidence" key={item.id}><strong>{item.label}</strong><p>{item.description}</p></article>)}<h3>缺证据不计作通过</h3><p>未判定维度不删除、不补成满分。页面显示已核验权重覆盖率及数学上的可能得分范围；范围不是统计置信区间。不适用项须在正式测试计划中预先批准，当前页面不提供临时剔除。</p><h3>分数的使用边界</h3><p>单次回答分、企业 RAG 系统分与网站建设评估彼此独立。合成示例、单人自评和少量测试都不能替代正式代表集验收或独立复核。任务未完成或关键回答风险成立时，高分不改变该回答的质量结论；但评估结果不拥有网站发布权限。</p><h3>验收参数 · 初始默认值</h3><p>以下为需求说明第十三章的初始基线，用于试运行与技术设计，不是实测结论；调整需保留原值、原因、版本与审批记录。</p>{RAG_ACCEPTANCE_PARAMS.map((item) => <article className="rag-evidence" key={item.label}><header><strong>{item.label}</strong></header><p>{item.value}</p></article>)}</>}
       {drawer === "improve" && <>{(() => { const blocking = issues.filter((issue) => issue.priority === "P0"); const recorded = issues.filter((issue) => issue.priority !== "P0"); return <>
         <h3>高优先级风险（建议修复并复测）</h3>{blocking.length ? blocking.map((issue) => <article className="rag-evidence" key={issue.id}><header><strong>{issue.title}</strong><span>{issue.priority}</span></header><p>{issue.impact}</p><small>修复方向：{issue.action}</small></article>) : <p className="rag-muted">当前没有已确认的高优先级风险。完整对话层判定不通过时，会在此说明。</p>}

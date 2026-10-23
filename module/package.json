@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.build.json && pnpm build:workflows",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
     "build:workflows": "node workflows/build-keyword-workflow.mjs --output dist/workflows/generate-brand-question-universe && node workflows/build-knowledge-base-workflow.mjs && node workflows/build-siteops-workflows.mjs",
-    "test": "node --test tests/workflow-version.test.mjs && vitest run --config vitest.config.ts"
+    "test": "node --test tests/workflow-version.test.mjs && vitest run --config vitest.config.ts",
+    "accept:ai-website": "node scripts/accept-ai-website-flow.mjs"
   },
   "dependencies": {
     "@frontmind/module-contracts": "workspace:*",

@@ -1,11 +1,18 @@
 import type { SiteOpsObservationV1 } from "../../../contracts/siteops-contract";
 import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "../../../contracts/siteops-branding";
 import type { SiteOpsActInput } from "../../../contracts/siteops";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { uploadChatLocalAsset } from "../../lib/frontmind-api";
 import { trpc } from "../../api-hooks";
 import SiteOpsConversationPanel, {
   siteOpsSelectVisualFailureMessage,
+  type SiteOpsConversationPanelProps,
   type SiteOpsSelectVisualAck,
   type SiteOpsSelectVisualState,
 } from "./SiteOpsConversationPanel";
@@ -245,7 +252,12 @@ export async function siteOpsRevisionAttempt(
       contentSha256: contentSha256s[index],
     })),
   });
-  if (previous?.signature === signature) return previous;
+  if (
+    previous?.signature === signature &&
+    previous.expectedProjectRevision === input.expectedProjectRevision
+  ) {
+    return previous;
+  }
   return {
     signature,
     clientRequestId: siteOpsClientRequestId(),
@@ -375,7 +387,18 @@ export function newestSiteOpsObservation(
   return current;
 }
 
-export default function ConnectedSiteOpsConversationPanel() {
+export type ConnectedSiteOpsConversationPanelProps = {
+  /**
+   * Keep the production SiteOps transport/state machine in one place while
+   * allowing product-specific views to render the exact same live state and
+   * actions. Omitting this keeps the established SiteOps conversation UI.
+   */
+  render?: (props: SiteOpsConversationPanelProps) => ReactNode;
+};
+
+export default function ConnectedSiteOpsConversationPanel({
+  render,
+}: ConnectedSiteOpsConversationPanelProps = {}) {
   const opened = useRef(false);
   const observationRef = useRef<SiteOpsObservationV1 | null>(null);
   const pendingActionAck = useRef<{
@@ -397,6 +420,7 @@ export default function ConnectedSiteOpsConversationPanel() {
   const [selectVisual, setSelectVisual] =
     useState<SiteOpsSelectVisualState | null>(null);
   const [submissionNotice, setSubmissionNotice] = useState<string | null>(null);
+  const [revisionSubmitting, setRevisionSubmitting] = useState(false);
   const [pageActive, setPageActive] = useState(() =>
     Boolean(
       (typeof document === "undefined" || !document.hidden) &&
@@ -745,16 +769,21 @@ export default function ConnectedSiteOpsConversationPanel() {
     onProgress: (fileIndex: number, percent: number) => void;
   }) {
     const currentObservation = observationRef.current;
-    if (
-      !currentObservation ||
-      sendMessageMutation.isPending ||
-      revisionSubmissionInFlightRef.current
-    ) {
-      return;
+    if (!currentObservation) {
+      throw new Error(`${SITEOPS_CUSTOMER_DISPLAY_NAME}尚未就绪，请刷新后重试。`);
     }
+    if (sendMessageMutation.isPending || revisionSubmissionInFlightRef.current) {
+      throw new Error("上一条建站修改仍在提交，请等待完成后再试。");
+    }
+    const isPrebuildConfiguration =
+      currentObservation.builds.length === 0
+      && ["collecting_brief", "awaiting_visual_selection"].includes(
+        currentObservation.interactionState,
+      );
     // React mutation state updates on the next render. This ref is the
     // synchronous click boundary and closes that otherwise-visible gap.
     revisionSubmissionInFlightRef.current = true;
+    setRevisionSubmitting(true);
     try {
       revisionAttemptRef.current = await siteOpsRevisionAttempt(
         revisionAttemptRef.current,
@@ -821,15 +850,23 @@ export default function ConnectedSiteOpsConversationPanel() {
       if (localAssetIds.some((id) => !id.startsWith("asset_"))) {
         throw new Error("图片没有完成安全留存，请重新上传。");
       }
-      await sendMessageMutation.mutateAsync({
+      const updatedObservation = await sendMessageMutation.mutateAsync({
         conversationId: currentObservation.project.conversationId,
         clientRequestId,
         text: input.text,
         localAssetIds,
         expectedProjectRevision: attempt.expectedProjectRevision,
       });
+      // sendMessage returns the committed project observation. Accept it
+      // synchronously so a caller that immediately starts select_visual uses
+      // the new revision instead of racing a later query refetch.
+      acceptObservation(updatedObservation);
       revisionAttemptRef.current = null;
-      setSubmissionNotice("修改版本已创建；当前预览会保留到新版本完成。");
+      setSubmissionNotice(
+        isPrebuildConfiguration
+          ? "真实建站配置已保存；将使用更新后的项目版本开始生成。"
+          : "修改版本已创建；当前预览会保留到新版本完成。",
+      );
       const generation = ++observeRequestGeneration.current;
       const refreshed = await observeQuery.refetch({ cancelRefetch: true });
       if (refreshed.data && generation >= acceptedObserveGeneration.current) {
@@ -841,6 +878,7 @@ export default function ConnectedSiteOpsConversationPanel() {
       throw error;
     } finally {
       revisionSubmissionInFlightRef.current = false;
+      setRevisionSubmitting(false);
     }
   }
 
@@ -852,50 +890,52 @@ export default function ConnectedSiteOpsConversationPanel() {
     sendMessageMutation.error?.message ||
     null;
 
-  return (
-    <SiteOpsConversationPanel
-      observation={observation}
-      loading={openMutation.isPending}
-      refreshing={observeQuery.isFetching}
-      error={requestError}
-      notice={submissionNotice}
-      interactionPending={
-        Boolean(pendingActionAck.current) || selectVisualInFlight(selectVisual)
-      }
-      selectVisual={selectVisual}
-      onRefresh={async () => {
-        if (observation) {
-          const refreshed = await observeQuery.refetch();
-          if (refreshed.data) acceptObservation(refreshed.data);
-          return;
-        }
-        acceptObservation(await openMutation.mutateAsync(undefined));
-      }}
-      onAction={runSiteOpsAction}
-      onRetrySelectVisual={retrySelectVisual}
-      onSubmitRevision={submitRevision}
-      onBeginAliyun={async () => {
-        if (!observation) {
-          throw new Error(`${SITEOPS_CUSTOMER_DISPLAY_NAME}尚未就绪。`);
-        }
-        return await aliyunBeginMutation.mutateAsync({
-          conversationId: observation.project.conversationId,
-        });
-      }}
-      aliyunDomains={aliyunDomainsQuery.data?.domains ?? []}
-      aliyunDomainsLoading={aliyunDomainsQuery.isLoading}
-      aliyunDomainsError={aliyunDomainsQuery.error?.message ?? null}
-      onRefreshAliyunDomains={async () => {
-        await aliyunDomainsQuery.refetch();
-      }}
-      onDisconnectAliyun={async () => {
-        if (!observation) return;
-        await aliyunDisconnectMutation.mutateAsync({
-          conversationId: observation.project.conversationId,
-        });
+  const viewProps: SiteOpsConversationPanelProps = {
+    observation,
+    loading: openMutation.isPending,
+    refreshing: observeQuery.isFetching,
+    error: requestError,
+    notice: submissionNotice,
+    interactionPending:
+      Boolean(pendingActionAck.current) ||
+      selectVisualInFlight(selectVisual) ||
+      revisionSubmitting ||
+      sendMessageMutation.isPending,
+    selectVisual,
+    onRefresh: async () => {
+      if (observation) {
         const refreshed = await observeQuery.refetch();
         if (refreshed.data) acceptObservation(refreshed.data);
-      }}
-    />
-  );
+        return;
+      }
+      acceptObservation(await openMutation.mutateAsync(undefined));
+    },
+    onAction: runSiteOpsAction,
+    onRetrySelectVisual: retrySelectVisual,
+    onSubmitRevision: submitRevision,
+    onBeginAliyun: async () => {
+      if (!observation) {
+        throw new Error(`${SITEOPS_CUSTOMER_DISPLAY_NAME}尚未就绪。`);
+      }
+      return await aliyunBeginMutation.mutateAsync({
+        conversationId: observation.project.conversationId,
+      });
+    },
+    aliyunDomains: aliyunDomainsQuery.data?.domains ?? [],
+    aliyunDomainsLoading: aliyunDomainsQuery.isLoading,
+    aliyunDomainsError: aliyunDomainsQuery.error?.message ?? null,
+    onRefreshAliyunDomains: async () => {
+      await aliyunDomainsQuery.refetch();
+    },
+    onDisconnectAliyun: async () => {
+      if (!observation) return;
+      await aliyunDisconnectMutation.mutateAsync({
+        conversationId: observation.project.conversationId,
+      });
+      const refreshed = await observeQuery.refetch();
+      if (refreshed.data) acceptObservation(refreshed.data);
+    },
+  };
+
+  return render ? <>{render(viewProps)}</> : <SiteOpsConversationPanel {...viewProps} />;
 }
