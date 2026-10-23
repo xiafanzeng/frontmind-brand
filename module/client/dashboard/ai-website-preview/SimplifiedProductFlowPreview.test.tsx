@@ -127,7 +127,7 @@ describe("simplified AI website preview", () => {
     render(<SimplifiedWebsiteBuilderPreview />);
     fireEvent.click(screen.getByRole("button", { name: /建设评估/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: "去确认：网站结构" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看结构：版本、目标问题覆盖与信息结构" }));
 
     expect(screen.getByRole("heading", { name: "确认网站结构与品牌" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /确认结构/ }).getAttribute("aria-current")).toBe("step");
@@ -167,6 +167,7 @@ describe("simplified AI website preview", () => {
   it("calculates a transparent 100-point score without rewarding missing evidence", () => {
     render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
 
+    expect(screen.queryByRole("heading", { name: "配置门槛（不计分）" })).toBeNull();
     expect(screen.getByLabelText(/当前加权评估分/).textContent).toMatch(/0.*\/100.*暂定分/);
     expect(screen.getByText("当前建议：暂不建议发布")).toBeTruthy();
     expect(screen.getByText("无法计算")).toBeTruthy();
@@ -183,7 +184,7 @@ describe("simplified AI website preview", () => {
     expect(screen.queryByText("权重 15 分")).toBeNull();
     expect(screen.queryByText(/正式验收需逐项留存/)).toBeNull();
     expect(screen.getAllByText("待核实")).toHaveLength(3);
-    expect(screen.getAllByText("未执行").length).toBeGreaterThanOrEqual(6);
+    expect(screen.getAllByText("未执行")).toHaveLength(4);
     expect(screen.getByText("受阻")).toBeTruthy();
     expect(screen.queryByText(/0 分只表示尚未获得正式评估分/)).toBeNull();
   });
