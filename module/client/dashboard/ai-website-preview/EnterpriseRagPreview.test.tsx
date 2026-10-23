@@ -1,6 +1,10 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnterpriseRagPreview } from "./EnterpriseRagPreview";
+import {
+  EVALUATION_REPORT_STORAGE_KEY,
+  listEvaluationReports,
+} from "./evaluation-report-store";
 import { previewRagAnswer } from "./preview-copy";
 
 const historyKey = "frontmind-rag-reviews-v1";
@@ -89,16 +93,16 @@ describe("enterprise RAG evidence-based review UI", () => {
     for (const label of dimensionLabels) {
       fireEvent.change(review.getByRole("combobox", { name: `${label}等级` }), { target: { value: "4" } });
     }
-    fireEvent.change(review.getByRole("combobox", { name: "权限与隐私门禁" }), { target: { value: "failed" } });
-    fireEvent.change(review.getByRole("textbox", { name: "权限与隐私门禁依据" }), {
+    fireEvent.change(review.getByRole("combobox", { name: "权限与隐私风险核验" }), { target: { value: "failed" } });
+    fireEvent.change(review.getByRole("textbox", { name: "权限与隐私风险核验依据" }), {
       target: { value: "当前角色无权访问回答所引用的内部原文。" },
     });
     confirmReview();
 
     expect(evaluation().getByLabelText("综合评分").textContent).toContain("100");
     expect(evaluation().getByText("不可用，优先修复")).toBeTruthy();
-    expect(evaluation().getByText("门禁未通过")).toBeTruthy();
-    expect(evaluation().getByText("关键门禁未通过，高分也不能抵消风险。")).toBeTruthy();
+    expect(evaluation().getByText("关键风险已发现")).toBeTruthy();
+    expect(evaluation().getByText(/高分不能把该回答判为可用，但不会取消网站发布选择/)).toBeTruthy();
   });
 
   it("invalidates the current score after editing while retaining the original reviewed snapshot", () => {
@@ -132,20 +136,36 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByText(suggestedAnswer!)).toBeTruthy();
     expect(evaluation().getByLabelText("综合评分").textContent).toContain("—");
-    expect(evaluation().getByText("门禁待核验")).toBeTruthy();
+    expect(evaluation().getByText("关键风险待核验")).toBeTruthy();
     expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
     expect(window.localStorage.getItem(historyKey)).toBeNull();
   });
 
-  it("persists review evidence, reviewer and answer snapshots across remounts", () => {
+  it("persists rule 1.2 review evidence and an independent evaluation report across remounts", () => {
     const page = showPage();
     openReview();
     confirmReview();
     const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
-    expect(saved[0]).toMatchObject({ reviewer: "reviewer-A", answer: previewRagAnswer, ruleVersion: "rag-eval-1.1", knowledgeVersion: "KB-SYN-v1" });
+    expect(saved[0]).toMatchObject({ reviewer: "reviewer-A", answer: previewRagAnswer, ruleVersion: "rag-eval-1.2", knowledgeVersion: "KB-SYN-v1" });
     expect(saved[0].dimensions).toHaveLength(6);
     expect(saved[0].gates).toHaveLength(7);
     expect(saved[0].dimensions.every((item: { rationale: string; evidenceIds: string[] }) => item.rationale && item.evidenceIds.length)).toBe(true);
+
+    const reports = listEvaluationReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      reportId: `report-${saved[0].id}`,
+      createdAt: saved[0].time,
+      subject: { kind: "rag-answer", id: saved[0].id, version: "rag-eval-1.2" },
+      result: {
+        skillId: "enterprise-rag-evaluation",
+        version: "1.0.0",
+        status: "completed",
+      },
+    });
+    expect("canPublish" in reports[0].result).toBe(false);
+    expect("canConfirm" in reports[0].result).toBe(false);
+    expect(window.localStorage.getItem(EVALUATION_REPORT_STORAGE_KEY)).not.toBeNull();
 
     page.unmount();
     showPage();
@@ -154,6 +174,22 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(records.getByText(/reviewer-A/)).toBeTruthy();
     expect(records.getByText(previewRagAnswer)).toBeTruthy();
     expect(records.getByText(/与当前回答相同/)).toBeTruthy();
+  });
+
+  it("keeps older rule-version review snapshots visible without recalculating them", () => {
+    const page = showPage();
+    openReview();
+    confirmReview();
+    const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
+    saved[0].ruleVersion = "rag-eval-1.1";
+    window.localStorage.setItem(historyKey, JSON.stringify(saved));
+
+    page.unmount();
+    showPage();
+    fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
+    const records = within(screen.getByRole("dialog", { name: "评估记录" }));
+    expect(records.getByText(/rag-eval-1\.1/)).toBeTruthy();
+    expect(records.getByText(previewRagAnswer)).toBeTruthy();
   });
 
   it("exposes claim-level evidence and restores focus after Escape", () => {
@@ -186,13 +222,13 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(within(representativeSection).getAllByRole("button")).toHaveLength(2);
     expect(within(challengeSection).getAllByRole("button")).toHaveLength(5);
     expect(within(representativeSection).getByText(/场景加权分/)).toBeTruthy();
-    expect(within(challengeSection).getByText("可用 3/5 · 门禁失败 2")).toBeTruthy();
-    expect(screen.getByText(/不构成企业 RAG 系统分或上线依据/)).toBeTruthy();
+    expect(within(challengeSection).getByText("可用 3/5 · 关键风险 2")).toBeTruthy();
+    expect(screen.getByText(/不构成企业 RAG 系统分或发布授权/)).toBeTruthy();
 
     fireEvent.click(within(challengeSection).getByRole("button", { name: /高分仍不能抵消越权/ }));
     expect(screen.getByRole("tab", { name: "单次问答" }).getAttribute("aria-selected")).toBe("true");
     expect(evaluation().getByLabelText("综合评分").textContent).toContain("90");
     expect(evaluation().getByText("不可用，优先修复")).toBeTruthy();
-    expect(evaluation().getByText("门禁未通过")).toBeTruthy();
+    expect(evaluation().getByText("关键风险已发现")).toBeTruthy();
   });
 });

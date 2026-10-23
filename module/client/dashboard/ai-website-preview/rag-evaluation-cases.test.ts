@@ -74,7 +74,7 @@ describe("synthetic RAG evaluation cases", () => {
   it("does not mix challenge cases into the representative quality mean", () => {
     const aggregate = (category: "representative" | "challenge") => aggregateEvaluations(RAG_SAMPLE_CASES.filter((sample) => sample.category === category).map((sample) => ({ id: sample.id, scenario: sample.scenario, weight: sample.weight, result: scoreEvaluation(sample) })));
     expect(aggregate("representative")).toMatchObject({ score: 88, lower: 88.125, upper: 88.125, total: 2, usableCount: 2, failedGateCount: 0 });
-    expect(aggregate("challenge")).toMatchObject({ score: 83, total: 5, usableCount: 3, failedGateCount: 2, canConfirm: false });
+    expect(aggregate("challenge")).toMatchObject({ score: 83, total: 5, usableCount: 3, failedGateCount: 2, meetsQualityTarget: false });
   });
 });
 

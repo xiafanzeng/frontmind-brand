@@ -19,7 +19,7 @@ function result(rawScore: number): EvaluationResult {
 describe("RAG single-answer scoring", () => {
   it("reproduces the documented six-dimension example without losing internal precision", () => {
     const scored = scoreEvaluation(input());
-    expect(RAG_RULE_VERSION).toBe("rag-eval-1.1");
+    expect(RAG_RULE_VERSION).toBe("rag-eval-1.2");
     expect(RAG_DIMENSIONS.reduce((sum, dimension) => sum + dimension.weight, 0)).toBe(100);
     expect(scored).toMatchObject({ rawScore: 92.5, score: 93, lower: 92.5, upper: 92.5, coverage: 100, gateStatus: "passed", verdict: "excellent", usable: true, complete: true, confidence: "medium" });
     expect(scored.earnedByDimension.completeness).toBe(11.25);
@@ -129,7 +129,7 @@ describe("RAG scenario-weighted aggregation", () => {
       { id: "faq-2", scenario: "FAQ", weight: 1, result: result(100) },
       { id: "policy-1", scenario: "政策", weight: 3, result: result(80) },
     ]);
-    expect(aggregate).toMatchObject({ score: 85, lower: 85, upper: 85, total: 3, coverage: 100, usableRate: 100, canConfirm: true });
+    expect(aggregate).toMatchObject({ score: 85, lower: 85, upper: 85, total: 3, coverage: 100, usableRate: 100, meetsQualityTarget: true });
   });
 
   it("retains pending cases in the denominator and shows a range until every case is complete", () => {
@@ -137,7 +137,7 @@ describe("RAG scenario-weighted aggregation", () => {
       { id: "ready", scenario: "FAQ", weight: 1, result: result(100) },
       { id: "pending", scenario: "FAQ", weight: 1, result: scoreEvaluation({ dimensions: [], gates: [] }) },
     ]);
-    expect(aggregate).toMatchObject({ score: null, lower: 50, upper: 100, coverage: 50, total: 2, usableCount: 1, pendingCount: 1, usableRate: 50, canConfirm: false });
+    expect(aggregate).toMatchObject({ score: null, lower: 50, upper: 100, coverage: 50, total: 2, usableCount: 1, pendingCount: 1, usableRate: 50, meetsQualityTarget: false });
   });
 
   it("counts a confirmed system failure as complete and zero without dropping it", () => {
@@ -147,33 +147,33 @@ describe("RAG scenario-weighted aggregation", () => {
       { id: "good", scenario: "FAQ", weight: 1, result: result(100) },
       { id: "system-failure", scenario: "FAQ", weight: 1, result: scoreEvaluation(failed) },
     ]);
-    expect(aggregate).toMatchObject({ score: 50, total: 2, coverage: 100, failedGateCount: 1, usableRate: 50, pendingCount: 0, canConfirm: false });
+    expect(aggregate).toMatchObject({ score: 50, total: 2, coverage: 100, failedGateCount: 1, usableRate: 50, pendingCount: 0, meetsQualityTarget: false });
   });
 
-  it("blocks confirmation for any gate failure even when score and usable rate pass", () => {
+  it("fails the RAG quality target for any gate failure even when score and usable rate pass", () => {
     const cases = Array.from({ length: 10 }, (_, index) => ({ id: String(index), scenario: "FAQ", weight: 1, result: result(100) }));
     cases[0].result = { ...result(90), gateStatus: "failed", usable: false, verdict: "unusable", confidence: "low" };
-    expect(aggregateEvaluations(cases)).toMatchObject({ score: 99, usableRate: 90, failedGateCount: 1, coverage: 100, canConfirm: false });
+    expect(aggregateEvaluations(cases)).toMatchObject({ score: 99, usableRate: 90, failedGateCount: 1, coverage: 100, meetsQualityTarget: false });
   });
 
   it("uses raw scores for the usable count and release threshold", () => {
     const aggregate = aggregateEvaluations([{ id: "rounded-80", scenario: "FAQ", weight: 1, result: result(79.75) }]);
-    expect(aggregate).toMatchObject({ score: 80, lower: 79.75, usableCount: 0, usableRate: 0, canConfirm: false });
-    expect(aggregateEvaluations([{ id: "rounded-85", scenario: "FAQ", weight: 1, result: result(84.75) }])).toMatchObject({ score: 85, usableRate: 100, canConfirm: false });
+    expect(aggregate).toMatchObject({ score: 80, lower: 79.75, usableCount: 0, usableRate: 0, meetsQualityTarget: false });
+    expect(aggregateEvaluations([{ id: "rounded-85", scenario: "FAQ", weight: 1, result: result(84.75) }])).toMatchObject({ score: 85, usableRate: 100, meetsQualityTarget: false });
   });
 
   it("requires every scenario to meet its floor even when an overall mean is high", () => {
     expect(aggregateEvaluations([
       { id: "common", scenario: "FAQ", weight: 99, result: result(100) },
       { id: "rare", scenario: "高风险", weight: 1, result: result(79) },
-    ])).toMatchObject({ score: 100, canConfirm: false });
+    ])).toMatchObject({ score: 100, meetsQualityTarget: false });
   });
 
   it("rejects inconsistent scene weights, duplicate case IDs and empty batches", () => {
     const first = { id: "case", scenario: "FAQ", weight: 1, result: result(100) };
-    expect(aggregateEvaluations([first, { ...first, id: "case-2", weight: 2 }])).toMatchObject({ score: null, total: 2, coverage: 0, pendingCount: 2, canConfirm: false });
-    expect(aggregateEvaluations([first, first])).toMatchObject({ score: null, total: 2, canConfirm: false });
-    expect(aggregateEvaluations([])).toMatchObject({ score: null, total: 0, coverage: 0, usableRate: 0, canConfirm: false });
+    expect(aggregateEvaluations([first, { ...first, id: "case-2", weight: 2 }])).toMatchObject({ score: null, total: 2, coverage: 0, pendingCount: 2, meetsQualityTarget: false });
+    expect(aggregateEvaluations([first, first])).toMatchObject({ score: null, total: 2, meetsQualityTarget: false });
+    expect(aggregateEvaluations([])).toMatchObject({ score: null, total: 0, coverage: 0, usableRate: 0, meetsQualityTarget: false });
   });
 });
 

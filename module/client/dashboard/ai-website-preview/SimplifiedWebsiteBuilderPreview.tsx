@@ -20,6 +20,17 @@ import {
   previewRagAnswer,
   previewRagQuestion,
 } from "./preview-copy";
+import { usePreviewDialog } from "./qa-widget/usePreviewDialog";
+import {
+  findLatestEvaluationReport,
+  getEvaluationReportById,
+  savePublishDecisionWithReports,
+  type EvaluationReportSnapshot,
+} from "./evaluation-report-store";
+import {
+  websiteBuildEvaluationSkill,
+  type WebsiteBuildEvaluationCheckStatus,
+} from "./website-build-evaluation-skill";
 import "./simplified-product-preview.css";
 
 export type BuildStep = "template" | "structure" | "assistant" | "evaluation";
@@ -64,15 +75,26 @@ type EvaluationCheck = {
   onAction?: () => void;
 };
 
-const evaluationStatusCoefficient: Record<EvaluationStatus, number> = {
-  passed: 1,
-  partial: 0.5,
-  failed: 0,
-  unexecuted: 0,
-  pending: 0,
-  blocked: 0,
-  "not-applicable": 0,
-};
+const LINKED_RAG_REPORT_STORAGE_KEY = "frontmind.website-builder.linked-rag-report.v1";
+
+function draftVersion(value: unknown) {
+  const text = JSON.stringify(value);
+  let hash = 2_166_136_261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `draft-v1-${(hash >>> 0).toString(16)}`;
+}
+
+function loadLinkedRagReportId() {
+  try {
+    const reportId = localStorage.getItem(LINKED_RAG_REPORT_STORAGE_KEY);
+    return reportId && getEvaluationReportById(reportId)?.result.skillId === "enterprise-rag-evaluation" ? reportId : null;
+  } catch {
+    return null;
+  }
+}
 
 const templates = [
   {
@@ -411,7 +433,10 @@ export function SimplifiedWebsiteBuilderPreview({
   const [templateUrl, setTemplateUrl] = useState(draftSeed.templateSourceUrl);
   const [notice, setNotice] = useState("");
   const [storageAvailable, setStorageAvailable] = useState(true);
+  const [linkedRagReportId, setLinkedRagReportId] = useState<string | null>(loadLinkedRagReportId);
+  const [releaseReport, setReleaseReport] = useState<EvaluationReportSnapshot | null>(null);
   const didMountDraftRef = useRef(false);
+  const releaseDialogRef = usePreviewDialog(releaseReport !== null, () => setReleaseReport(null));
 
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? templates[0];
   const enabledPages = useMemo(() => pages.filter((page) => page.enabled), [pages]);
@@ -433,6 +458,25 @@ export function SimplifiedWebsiteBuilderPreview({
     structure: structureComplete && brandComplete,
     assistant: assistantComplete,
     evaluation: false,
+  };
+  const websiteSubject = {
+    kind: "website-build",
+    id: "frontmind-ai-website",
+    version: draftVersion({
+      selectedTemplateId,
+      templateUrl,
+      enabledPageIds: enabledPages.map((page) => page.id),
+      siteName,
+      siteLanguage,
+      brandMark,
+      officialUrl,
+      brandRecognized,
+      siteAccent,
+      assistantName,
+      welcome,
+      assistantAccent,
+      showSources,
+    }),
   };
 
   useEffect(() => setActiveStep(initialStep), [initialStep]);
@@ -547,32 +591,32 @@ export function SimplifiedWebsiteBuilderPreview({
 
   const websiteQualityChecks: EvaluationCheck[] = [
     {
-      id: "E06 · E07 · E08",
+      id: "website-content-structure",
       title: "版本、目标问题覆盖与信息结构",
       detail: "需绑定知识与草稿版本，并用目标访客问题核对栏目和正文；当前只有栏目骨架",
       status: "pending",
       statusLabel: "待核实",
-      weight: 15,
+      weight: 20,
       actionLabel: "查看结构",
       onAction: () => goTo("structure"),
     },
     {
-      id: "E09",
+      id: "website-navigation-contact",
       title: "导航与联系入口",
       detail: "需逐页检查导航、返回路径和联系入口是否可达，当前尚未执行",
       status: "unexecuted",
       statusLabel: "未执行",
-      weight: 7,
+      weight: 10,
       actionLabel: "查看结构",
       onAction: () => goTo("structure"),
     },
     {
-      id: "E15",
+      id: "website-responsive-accessibility",
       title: "窄屏与键盘可用性",
       detail: "手机预览只能辅助观察，仍需完成窄屏、键盘焦点与可读性检查",
       status: "unexecuted",
       statusLabel: "未执行",
-      weight: 8,
+      weight: 10,
       actionLabel: "手机预览",
       onAction: () => {
         setDevice("mobile");
@@ -583,58 +627,44 @@ export function SimplifiedWebsiteBuilderPreview({
 
   const trustBoundaryChecks: EvaluationCheck[] = [
     {
-      id: "E01 · E02",
+      id: "website-facts-evidence",
       title: "企业事实与证据",
       detail: "需为身份、产品和能力声明绑定可追溯来源；示例知识不能代替正式证据",
       status: "pending",
       statusLabel: "待核实",
-      weight: 15,
+      weight: 20,
       critical: true,
       actionLabel: "查看知识范围",
       onAction: onOpenRag ?? (() => goTo("assistant")),
     },
     {
-      id: "E03 · E18",
+      id: "website-public-boundary",
       title: "公开范围与来源展示",
       detail: "隐藏来源只改变展示方式，不会扩大可公开范围；仍需确认公开授权与展示边界",
       status: "pending",
       statusLabel: "待核实",
-      weight: 15,
+      weight: 20,
       critical: true,
       actionLabel: "查看来源设置",
       onAction: onOpenRag ?? (() => goTo("assistant")),
     },
   ];
 
-  const ragAnswerChecks: EvaluationCheck[] = [
-    {
-      id: "E04 · E05",
-      title: "回答引用与未知处理",
-      detail: "本地原型未执行真实检索和模型回答，暂时无法判断引用相关性、正确性与拒答表现",
-      status: "blocked",
-      statusLabel: "受阻",
-      weight: 25,
-      critical: true,
-      actionLabel: "打开 RAG 示例",
-      onAction: onOpenRag ?? (() => goTo("assistant")),
-    },
-  ];
-
   const flowAndPublishChecks: EvaluationCheck[] = [
     {
-      id: "E10 · E11 · E13 · E14",
+      id: "website-flow-recovery",
       title: "建站流程、反馈与失败恢复",
       detail: "需走查阶段、按钮、字段反馈和失败后的恢复路径；组件测试不能代替正式评估证据",
       status: "unexecuted",
       statusLabel: "未执行",
-      weight: 10,
+      weight: 15,
       actionLabel: "返回流程起点",
       onAction: () => goTo("template"),
     },
     {
-      id: "E12 · E17",
+      id: "website-draft-release-state",
       title: "草稿、发布与正式生效",
-      detail: "草稿确认不等于配置正式生效或公开访问验证；待上线能力接入后再执行",
+      detail: "草稿确认、发布决定和真实部署是三个独立状态；当前原型只记录发布决定",
       status: "unexecuted",
       statusLabel: "未执行",
       weight: 5,
@@ -643,67 +673,119 @@ export function SimplifiedWebsiteBuilderPreview({
   ];
 
   const scoreGroups = [
-    { label: "网站内容与体验", checks: websiteQualityChecks },
-    { label: "企业事实与公开边界", checks: trustBoundaryChecks },
-    { label: "RAG 回答质量", checks: ragAnswerChecks },
-    { label: "流程与发布边界", checks: flowAndPublishChecks },
+    { id: "content-experience", label: "网站内容与体验", checks: websiteQualityChecks },
+    { id: "facts-public-boundary", label: "企业事实与公开边界", checks: trustBoundaryChecks },
+    { id: "flow-release-clarity", label: "流程与发布说明", checks: flowAndPublishChecks },
   ];
   const scoredChecks = scoreGroups.flatMap((group) => group.checks);
   const applicableChecks = scoredChecks.filter((check) => check.status !== "not-applicable");
-  const applicableWeight = applicableChecks.reduce((sum, check) => sum + (check.weight ?? 0), 0);
-  const earnedWeight = applicableChecks.reduce(
-    (sum, check) => sum + (check.weight ?? 0) * evaluationStatusCoefficient[check.status],
-    0,
-  );
-  const judgedStatuses = new Set<EvaluationStatus>(["passed", "partial", "failed"]);
-  const judgedChecks = applicableChecks.filter((check) => judgedStatuses.has(check.status));
   const passFailChecks = applicableChecks.filter((check) => check.status === "passed" || check.status === "failed");
-  const judgedWeight = judgedChecks.reduce((sum, check) => sum + (check.weight ?? 0), 0);
-  const weightedScore = applicableWeight > 0 ? Math.round((earnedWeight / applicableWeight) * 100) : 0;
-  const judgmentCoverage = applicableWeight > 0 ? Math.round((judgedWeight / applicableWeight) * 100) : 0;
-  const unresolvedCriticalChecks = applicableChecks.filter(
-    (check) => check.critical && check.status !== "passed",
-  );
-  const formatPoints = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(1);
-  const scoreGroupEarnedPoints = scoreGroups.map((group) => {
-    const applicableGroupChecks = group.checks.filter((check) => check.status !== "not-applicable");
-    return applicableGroupChecks.reduce(
-      (sum, check) => sum + (check.weight ?? 0) * evaluationStatusCoefficient[check.status],
-      0,
-    );
+  const linkedRagReport = linkedRagReportId ? getEvaluationReportById(linkedRagReportId) : null;
+  const latestRagReport = findLatestEvaluationReport({ skillId: "enterprise-rag-evaluation" });
+  const toSkillStatus = (status: EvaluationStatus): WebsiteBuildEvaluationCheckStatus => {
+    if (status === "not-applicable") return "not_applicable";
+    if (status === "passed" || status === "partial" || status === "failed") return status;
+    return "pending";
+  };
+  const websiteEvaluation = websiteBuildEvaluationSkill.evaluate({
+    judgments: scoredChecks.map((check) => ({
+      checkId: check.id as Parameters<typeof websiteBuildEvaluationSkill.evaluate>[0]["judgments"][number]["checkId"],
+      status: toSkillStatus(check.status),
+      summary: check.detail,
+      evidenceIds: ["passed", "partial", "failed"].includes(check.status) ? [`website-preview:${check.id}`] : [],
+    })),
+    relatedReportIds: linkedRagReport ? [linkedRagReport.reportId] : [],
   });
-  const scoreIsProvisional = judgmentCoverage < 100;
-  const recommendation = !canComplete || unresolvedCriticalChecks.length > 0 || weightedScore < 70
-    ? "暂不建议发布"
-    : judgmentCoverage < 100 || weightedScore < 85
-      ? "待补证或修订"
-      : "可进入发布确认";
-  const recommendationDetail = !canComplete
-    ? `配置门槛仅确认 ${configurationConfirmedCount}/4 项，且关键质量条件仍缺少正式验收证据。`
-    : unresolvedCriticalChecks.length > 0
-      ? "建站配置已经确认，但公开范围、事实证据、RAG 回答与发布证据等关键条件仍未闭环。"
-      : judgmentCoverage < 100
-        ? "关键门禁已关闭，但仍有检查维度缺少正式判定。"
-        : weightedScore < 85
-          ? "正式判定已经齐全，但加权得分仍需修订提升。"
-          : "评分与关键门禁均满足，可进入发布确认环节；这不表示已经发布。";
-  const recommendationBadge = !canComplete
-    ? "配置门槛未完成"
-    : unresolvedCriticalChecks.length > 0
-    ? "关键条件未闭环"
-    : scoreIsProvisional
-      ? "仍有项目待判定"
-      : "以发布确认为准";
+  const earnedWeight = websiteEvaluation.dimensions.reduce((sum, dimension) => sum + (dimension.score ?? 0), 0);
+  const weightedScore = websiteEvaluation.score;
+  const judgmentCoverage = Math.round(websiteEvaluation.coverage);
+  const unresolvedCriticalChecks = websiteEvaluation.risks.filter((risk) => risk.severity === "critical" || risk.severity === "high");
+  const formatPoints = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(1);
+  const scoreGroupEarnedPoints = websiteEvaluation.dimensions.map((dimension) => dimension.score ?? 0);
+  const scoreIsProvisional = websiteEvaluation.status !== "completed";
+  const recommendation = {
+    recommended: "建议发布",
+    publish_with_risk: "可知情发布",
+    not_recommended: "暂不建议发布",
+  }[websiteEvaluation.recommendation];
+  const recommendationDetail = websiteEvaluation.summary;
+  const recommendationBadge = "仅作建议，不限制发布";
 
-  const renderEvaluationGroup = (title: string, checks: EvaluationCheck[]) => {
+  const linkLatestRagReport = () => {
+    if (!latestRagReport) {
+      setNotice("尚无已保存的企业 RAG 评估快照。先完成一次人工评审后即可显式关联。");
+      return;
+    }
+    setLinkedRagReportId(latestRagReport.reportId);
+    try { localStorage.setItem(LINKED_RAG_REPORT_STORAGE_KEY, latestRagReport.reportId); } catch { /* session state still works */ }
+    setNotice("已关联最新企业 RAG 评估快照；该结果只作参考，不参与网站建设得分。");
+  };
+
+  const unlinkRagReport = () => {
+    setLinkedRagReportId(null);
+    try { localStorage.removeItem(LINKED_RAG_REPORT_STORAGE_KEY); } catch { /* session state still works */ }
+    setNotice("已取消关联企业 RAG 评估；网站建设评分和发布选择均不受影响。");
+  };
+
+  const openReleaseConfirmation = () => {
+    const report: EvaluationReportSnapshot = {
+      reportId: `website-report-${crypto.randomUUID()}`,
+      createdAt: new Date().toISOString(),
+      subject: websiteSubject,
+      result: websiteEvaluation,
+    };
+    setReleaseReport(report);
+  };
+
+  const confirmReleaseDecision = () => {
+    if (!releaseReport) return;
+    const relatedReports = releaseReport.result.relatedReportIds.flatMap((reportId) => {
+      const report = getEvaluationReportById(reportId);
+      return report ? [report] : [];
+    });
+    const reports = [releaseReport, ...relatedReports];
+    const riskIds = Array.from(new Set(reports.flatMap((report) => report.result.risks.map((risk) => risk.id))));
+    const acceptedRisk = riskIds.length > 0 || reports.some((report) => report.result.recommendation !== "recommended");
+    const saved = savePublishDecisionWithReports({
+      reports: [releaseReport],
+      decision: {
+        decisionId: `publish-decision-${crypto.randomUUID()}`,
+        createdAt: new Date().toISOString(),
+        subject: releaseReport.subject,
+        action: "publish",
+        mode: acceptedRisk ? "accepted_risk" : "follow_recommendation",
+        evaluationReportIds: reports.map((report) => report.reportId),
+        acknowledgedRiskIds: acceptedRisk ? riskIds : [],
+        riskAcknowledged: acceptedRisk,
+        note: null,
+      },
+    });
+    setReleaseReport(null);
+    setNotice(`${saved ? "已记录发布决定" : "已确认继续发布，但浏览器记录存储不可用"}；当前原型未执行真实部署。`);
+  };
+
+  const releaseRelatedReports = releaseReport?.result.relatedReportIds.flatMap((reportId) => {
+    const report = getEvaluationReportById(reportId);
+    return report ? [report] : [];
+  }) ?? [];
+  const releaseRisks = releaseReport
+    ? [releaseReport, ...releaseRelatedReports].flatMap((report) => report.result.risks)
+    : [];
+  const releaseHasRisks = Boolean(releaseReport && (
+    releaseRisks.length > 0
+    || [releaseReport, ...releaseRelatedReports].some((report) => report.result.recommendation !== "recommended")
+  ));
+
+  const renderEvaluationGroup = (dimensionId: string, title: string, checks: EvaluationCheck[]) => {
     const hasWeightedChecks = checks.some((check) => check.weight);
+    const dimension = websiteEvaluation.dimensions.find((item) => item.id === dimensionId);
     return (
       <section className="sfp-eval-group">
         <header>
           <div><h3>{title}</h3></div>
           {hasWeightedChecks && (
             <span>
-              {formatPoints(checks.reduce((sum, check) => sum + (check.weight ?? 0) * evaluationStatusCoefficient[check.status], 0))}/{checks.reduce((sum, check) => sum + (check.weight ?? 0), 0)} 分
+              {formatPoints(dimension?.score ?? 0)}/{dimension?.maxScore ?? checks.reduce((sum, check) => sum + (check.weight ?? 0), 0)} 分
             </span>
           )}
         </header>
@@ -714,7 +796,7 @@ export function SimplifiedWebsiteBuilderPreview({
               <div>
                 <div className="sfp-check-title">
                   <strong>{check.title}</strong>
-                  {check.critical && <em className="is-critical">关键门禁</em>}
+                  {check.critical && <em className="is-critical">关键风险</em>}
                 </div>
                 <small>{check.detail}</small>
               </div>
@@ -917,15 +999,15 @@ export function SimplifiedWebsiteBuilderPreview({
           <div className="sfp-evaluation-layout">
             <section className="sfp-panel sfp-evaluation-main">
               <div className="sfp-section-heading">
-                <div><h2>建设检查与评估</h2><p>按证据闭环程度加权计算 100 分；待核实、未执行和受阻项目暂不获分。</p></div>
+                <div><h2>建设检查与评估</h2><p>网站专属检查按 40/40/20 加权；RAG 评估独立关联，不参与网站得分。</p></div>
                 <aside className="sfp-eval-heading-meta">
-                  <span className="sfp-eval-run-state"><i />正式验收未完成</span>
+                  <span className="sfp-eval-run-state"><i />质量评估未完成</span>
                   <span
-                    className={`sfp-eval-score ${weightedScore >= 85 ? "is-high" : weightedScore >= 70 ? "is-medium" : "is-low"}`}
-                    aria-label={`当前加权评估分：${weightedScore} 分，满分 100 分，${scoreIsProvisional ? "暂定分" : "最终分"}`}
+                    className={`sfp-eval-score ${(weightedScore ?? 0) >= 85 ? "is-high" : (weightedScore ?? 0) >= 70 ? "is-medium" : "is-low"}`}
+                    aria-label={`当前加权评估分：${weightedScore ?? "未形成"}，满分 100 分，${scoreIsProvisional ? "暂定结果" : "最终分"}`}
                   >
-                    <span><strong>{weightedScore}</strong><small>/100</small></span>
-                    <em>{scoreIsProvisional ? "暂定分" : "最终分"}</em>
+                    <span><strong>{weightedScore ?? "—"}</strong><small>/100</small></span>
+                    <em>{scoreIsProvisional ? "暂定结果" : "最终分"}</em>
                   </span>
                 </aside>
               </div>
@@ -946,22 +1028,37 @@ export function SimplifiedWebsiteBuilderPreview({
                 <b>{recommendationBadge}</b>
               </div>
               <div className="sfp-eval-metrics" aria-label="评估摘要">
-                <span><small>配置门槛</small><strong>{configurationConfirmedCount}/4</strong></span>
+                <span><small>配置确认</small><strong>{configurationConfirmedCount}/4</strong></span>
                 <span><small>判定覆盖率</small><strong>{judgmentCoverage}%</strong></span>
                 <span><small>已判定通过率</small><strong>{passFailChecks.length > 0 ? `${Math.round((passFailChecks.filter((check) => check.status === "passed").length / passFailChecks.length) * 100)}%` : "无法计算"}</strong></span>
-                <span><small>关键门禁待处理</small><strong>{unresolvedCriticalChecks.length}</strong></span>
+                <span><small>关键风险提示</small><strong>{unresolvedCriticalChecks.length}</strong></span>
               </div>
               <section className="sfp-score-formula" aria-label="加权评估分计算结果">
                 <header>
                   <strong>加权评分</strong>
-                  <code>{scoreGroupEarnedPoints.map(formatPoints).join(" + ")} = {formatPoints(earnedWeight)} → {weightedScore} 分</code>
+                  <code>{scoreGroupEarnedPoints.map(formatPoints).join(" + ")} = {formatPoints(earnedWeight)} → {weightedScore ?? "—"} 分</code>
                 </header>
-                <small className="sfp-score-weight-note">权重：网站内容与体验 30 分 · 企业事实与公开边界 30 分 · RAG 回答质量 25 分 · 流程与发布边界 15 分</small>
+                <small className="sfp-score-weight-note">权重：网站内容与体验 40 分 · 企业事实与公开边界 40 分 · 流程与发布说明 20 分</small>
               </section>
-              {renderEvaluationGroup("网站内容与体验", websiteQualityChecks)}
-              {renderEvaluationGroup("企业事实与公开边界", trustBoundaryChecks)}
-              {renderEvaluationGroup("RAG 回答质量", ragAnswerChecks)}
-              {renderEvaluationGroup("流程与发布边界", flowAndPublishChecks)}
+              <section className="sfp-rag-evaluation-reference" aria-label="关联的企业 RAG 评估">
+                <div>
+                  <span><Bot size={18} /></span>
+                  <p>
+                    <strong>企业 RAG 评估 · 独立结果</strong>
+                    <small>{linkedRagReport ? `已关联 ${linkedRagReport.result.score ?? "—"}/100 · ${linkedRagReport.result.version}` : "未关联评估快照；不影响网站得分或发布选择"}</small>
+                    {linkedRagReport && <small>报告 ID：{linkedRagReport.reportId}</small>}
+                  </p>
+                </div>
+                <div>
+                  {linkedRagReport
+                    ? <button type="button" onClick={unlinkRagReport}>取消关联</button>
+                    : <button type="button" onClick={linkLatestRagReport}>{latestRagReport ? "关联最新 RAG 评估" : "查找 RAG 评估"}</button>}
+                  {onOpenRag && <button type="button" onClick={onOpenRag}>打开 RAG 评估</button>}
+                </div>
+              </section>
+              {renderEvaluationGroup("content-experience", "网站内容与体验", websiteQualityChecks)}
+              {renderEvaluationGroup("facts-public-boundary", "企业事实与公开边界", trustBoundaryChecks)}
+              {renderEvaluationGroup("flow-release-clarity", "流程与发布说明", flowAndPublishChecks)}
             </section>
             <aside className="sfp-final-preview">
               <div className="sfp-preview-heading"><span><strong>当前草稿预览</strong></span><DevicePicker device={device} onChange={setDevice} /></div>
@@ -975,10 +1072,10 @@ export function SimplifiedWebsiteBuilderPreview({
         <button type="button" className="sfp-button sfp-button--ghost" onClick={goPrevious} disabled={stepIndex === 0}>上一步</button>
         <span>{stepIndex + 1} / {steps.length} · {steps[stepIndex].label}</span>
         {activeStep === "evaluation" ? (
-          <>
+          <div className="sfp-action-cluster">
             <button
               type="button"
-              className="sfp-button sfp-button--primary"
+              className="sfp-button sfp-button--ghost"
               disabled={!canComplete}
               aria-describedby={!canComplete ? "sfp-confirmation-requirement" : undefined}
               onClick={() => {
@@ -989,11 +1086,33 @@ export function SimplifiedWebsiteBuilderPreview({
               {isConfirmed ? "草稿已确认" : "确认当前建设草稿"}
             </button>
             {!canComplete && <span id="sfp-confirmation-requirement" className="sfp-visually-hidden">请先依次确认模板、网站结构与品牌、AI 助手配置。</span>}
-          </>
+            <button type="button" className="sfp-button sfp-button--primary" onClick={openReleaseConfirmation}>进入发布确认</button>
+          </div>
         ) : (
           <button type="button" className="sfp-button sfp-button--primary" onClick={goNext}>继续</button>
         )}
       </footer>
+      {releaseReport && (
+        <div className="sfp-release-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReleaseReport(null); }}>
+          <section ref={releaseDialogRef} className="sfp-release-dialog" role="dialog" aria-modal="true" aria-label="发布确认" tabIndex={-1}>
+            <button type="button" className="sfp-release-dialog__close" aria-label="关闭发布确认" onClick={() => setReleaseReport(null)}><X size={18} /></button>
+            <small>发布决定与质量评估分开记录</small>
+            <h2>确认是否继续发布</h2>
+            <p>网站评估当前为“{recommendation}”，{releaseRelatedReports.length > 0 ? "并已冻结关联的企业 RAG 评估快照" : "未关联企业 RAG 评估快照"}。这些结果只提供质量建议，不会替你决定。</p>
+            <dl>
+              <div><dt>网站评估</dt><dd>{releaseReport.result.score ?? "—"}/100 · {releaseReport.result.version}</dd></div>
+              <div><dt>关联 RAG</dt><dd>{releaseRelatedReports.length > 0 ? `${releaseRelatedReports[0].result.score ?? "—"}/100 · ${releaseRelatedReports[0].result.version} · ${releaseRelatedReports[0].reportId}` : "未关联"}</dd></div>
+              <div><dt>风险提示</dt><dd>{releaseRisks.length} 项</dd></div>
+            </dl>
+            {releaseRisks.length > 0 && <ul>{releaseRisks.map((risk) => <li key={risk.id}><strong>{risk.title}</strong><span>{risk.summary}</span></li>)}</ul>}
+            <div className="sfp-release-note"><CircleAlert size={18} /><span>继续只会记录你的发布决定；当前原型不会执行真实部署。真实发布仍需通过构建、部署目标和域名配置等技术检查。</span></div>
+            <div className="sfp-release-dialog__actions">
+              <button type="button" className="sfp-button sfp-button--ghost" onClick={() => setReleaseReport(null)}>返回评估</button>
+              <button type="button" className="sfp-button sfp-button--primary" onClick={confirmReleaseDecision}>{releaseHasRisks ? "我已了解风险，继续发布" : "确认继续发布"}</button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
