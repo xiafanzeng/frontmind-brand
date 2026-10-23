@@ -3,17 +3,21 @@ import {
   Bot,
   Check,
   CircleAlert,
+  ExternalLink,
   FileText,
   Globe2,
   LayoutTemplate,
+  Loader2,
   MessageCircle,
   Monitor,
   PanelTop,
+  RefreshCw,
   Send,
   Smartphone,
   Sparkles,
   X,
 } from "lucide-react";
+import type { SiteOpsConversationPanelProps } from "../siteops/SiteOpsConversationPanel";
 import {
   previewKnowledgeCollectionCount,
   previewKnowledgeFragmentCount,
@@ -31,16 +35,29 @@ import {
   websiteBuildEvaluationSkill,
   type WebsiteBuildEvaluationCheckStatus,
 } from "./website-build-evaluation-skill";
+import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
 import "./simplified-product-preview.css";
 
 export type BuildStep = "template" | "structure" | "assistant" | "evaluation";
 type PreviewDevice = "desktop" | "mobile";
 type SiteLanguage = "zh-CN" | "en-US";
 
-type SimplifiedWebsiteBuilderPreviewProps = {
+export type SimplifiedWebsiteBuilderPreviewProps = {
   initialStep?: BuildStep;
   onOpenRag?: () => void;
   onStepChange?: (step: BuildStep) => void;
+  /** Real SiteOps state/actions supplied by the connected production adapter. */
+  siteOps?: SiteOpsConversationPanelProps;
+  /** Separates live drafts and audit evidence by account/workspace. */
+  storageScope?: string;
+};
+
+type LiveReleaseCoordinates = {
+  projectId: string;
+  projectRevision: number;
+  knowledgeSnapshotId: string | null;
+  buildId: string;
+  expectedHeadDeploymentId: string | null;
 };
 
 const steps: ReadonlyArray<{
@@ -75,6 +92,22 @@ type EvaluationCheck = {
   onAction?: () => void;
 };
 
+const LIVE_SITEOPS_STATUS_LABELS: Record<string, string> = {
+  loading: "正在连接真实建站服务",
+  select_snapshot: "等待关联知识库",
+  collecting_brief: "等待载入真实模板",
+  visual_searching: "正在载入真实模板",
+  awaiting_visual_selection: "请选择真实模板",
+  preparing: "正在准备网站",
+  building: "正在生成网站",
+  preview_ready: "真实预览已生成",
+  approved: "网站已通过构建检查",
+  live: "网站已发布",
+  attention_required: "建站需要处理",
+  failed: "建站失败",
+  cancelled: "建站已取消",
+};
+
 const LINKED_RAG_REPORT_STORAGE_KEY = "frontmind.website-builder.linked-rag-report.v1";
 
 function draftVersion(value: unknown) {
@@ -87,10 +120,19 @@ function draftVersion(value: unknown) {
   return `draft-v1-${(hash >>> 0).toString(16)}`;
 }
 
-function loadLinkedRagReportId() {
+function scopedStorageKey(key: string, scope?: string) {
+  return scope ? `${key}.${encodeURIComponent(scope)}` : key;
+}
+
+function loadLinkedRagReportId(
+  storageScope?: string,
+  auditStorage?: Pick<Storage, "getItem" | "setItem"> | null,
+) {
   try {
-    const reportId = localStorage.getItem(LINKED_RAG_REPORT_STORAGE_KEY);
-    return reportId && getEvaluationReportById(reportId)?.result.skillId === "enterprise-rag-evaluation" ? reportId : null;
+    const reportId = localStorage.getItem(
+      scopedStorageKey(LINKED_RAG_REPORT_STORAGE_KEY, storageScope),
+    );
+    return reportId && getEvaluationReportById(reportId, auditStorage)?.result.skillId === "enterprise-rag-evaluation" ? reportId : null;
   } catch {
     return null;
   }
@@ -145,6 +187,7 @@ export type WebsiteDraftV1 = {
   disabledPageIds: string[];
   brand: {
     siteName: string;
+    siteGoal: string;
     siteLanguage: SiteLanguage;
     brandMark: string;
     officialUrl: string;
@@ -169,6 +212,7 @@ const defaultDraft = (): WebsiteDraftV1 => ({
   disabledPageIds: [],
   brand: {
     siteName: "FrontMind 帮助中心",
+    siteGoal: "帮助访客快速找到可信的企业资料、产品与服务答案",
     siteLanguage: "zh-CN",
     brandMark: "FM",
     officialUrl: "",
@@ -196,12 +240,14 @@ function isHttpUrl(value: string) {
   }
 }
 
-export function loadWebsiteDraft(): WebsiteDraftV1 {
+export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV1 {
   const fallback = defaultDraft();
   if (typeof window === "undefined") return fallback;
 
   try {
-    const raw = window.localStorage.getItem(WEBSITE_DRAFT_STORAGE_KEY);
+    const raw = window.localStorage.getItem(
+      scopedStorageKey(WEBSITE_DRAFT_STORAGE_KEY, storageScope),
+    );
     if (!raw) return fallback;
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || parsed.version !== 1) return fallback;
@@ -224,9 +270,10 @@ export function loadWebsiteDraft(): WebsiteDraftV1 {
       ? Array.from(new Set(parsed.disabledPageIds.filter((id): id is string => typeof id === "string" && pageIds.has(id))))
       : fallback.disabledPageIds;
     const siteName = typeof brand.siteName === "string" ? brand.siteName.slice(0, 80) : fallback.brand.siteName;
+    const siteGoal = typeof brand.siteGoal === "string" ? brand.siteGoal.slice(0, 200) : fallback.brand.siteGoal;
     const brandMark = typeof brand.brandMark === "string" ? brand.brandMark.slice(0, 3) : fallback.brand.brandMark;
-    const assistantName = typeof assistant.name === "string" ? assistant.name.slice(0, 80) : fallback.assistant.name;
-    const assistantWelcome = typeof assistant.welcome === "string" ? assistant.welcome.slice(0, 240) : fallback.assistant.welcome;
+    const assistantName = typeof assistant.name === "string" ? assistant.name.slice(0, 60) : fallback.assistant.name;
+    const assistantWelcome = typeof assistant.welcome === "string" ? assistant.welcome.slice(0, 140) : fallback.assistant.welcome;
     const validCompletedSteps = new Set<BuildStep>(["template", "structure", "assistant"]);
     let completedStepIds = Array.isArray(parsed.completedStepIds)
       ? Array.from(new Set(parsed.completedStepIds.filter(
@@ -254,6 +301,7 @@ export function loadWebsiteDraft(): WebsiteDraftV1 {
       disabledPageIds,
       brand: {
         siteName,
+        siteGoal,
         siteLanguage: brand.siteLanguage === "en-US" || brand.siteLanguage === "zh-CN" ? brand.siteLanguage : fallback.brand.siteLanguage,
         brandMark,
         officialUrl,
@@ -272,14 +320,46 @@ export function loadWebsiteDraft(): WebsiteDraftV1 {
   }
 }
 
-export function saveWebsiteDraft(draft: WebsiteDraftV1) {
+export function saveWebsiteDraft(draft: WebsiteDraftV1, storageScope?: string) {
   if (typeof window === "undefined") return false;
   try {
-    window.localStorage.setItem(WEBSITE_DRAFT_STORAGE_KEY, JSON.stringify({ ...draft, updatedAt: Date.now() }));
+    window.localStorage.setItem(
+      scopedStorageKey(WEBSITE_DRAFT_STORAGE_KEY, storageScope),
+      JSON.stringify({ ...draft, updatedAt: Date.now() }),
+    );
     return true;
   } catch {
     return false;
   }
+}
+
+function configurationLine(value: string, max: number) {
+  return value.replace(/\s+/gu, " ").trim().slice(0, max);
+}
+
+export function buildLiveSiteOpsConfigurationMessage(input: {
+  siteName: string;
+  siteLanguage: SiteLanguage;
+  siteGoal: string;
+  siteAccent: string;
+  assistantName: string;
+  welcome: string;
+  assistantAccent: string;
+}) {
+  const generationGoal = [
+    // Keep every preference inside SiteBrief.conversionGoal's 500-character
+    // protocol limit; never truncate the tail fields after joining.
+    configurationLine(input.siteGoal, 200),
+    `网站主题色 ${input.siteAccent}`,
+    `AI 助手名称 ${configurationLine(input.assistantName, 60)}`,
+    `AI 助手欢迎语 ${configurationLine(input.welcome, 140)}`,
+    `AI 助手主题色 ${input.assistantAccent}`,
+  ].join("；");
+  return [
+    `网站名称: ${configurationLine(input.siteName, 80)}`,
+    `站点语言: ${input.siteLanguage}`,
+    `建站目标: ${generationGoal}`,
+  ].join("\n");
 }
 
 function MiniSitePreview({
@@ -409,8 +489,11 @@ export function SimplifiedWebsiteBuilderPreview({
   initialStep = "template",
   onOpenRag,
   onStepChange,
+  siteOps,
+  storageScope,
 }: SimplifiedWebsiteBuilderPreviewProps) {
-  const [draftSeed] = useState<WebsiteDraftV1>(loadWebsiteDraft);
+  const auditStorage = useMemo(() => scopedEvaluationStorage(storageScope), [storageScope]);
+  const [draftSeed] = useState<WebsiteDraftV1>(() => loadWebsiteDraft(storageScope));
   const [activeStep, setActiveStep] = useState<BuildStep>(initialStep);
   const [isConfirmed, setIsConfirmed] = useState(draftSeed.confirmed);
   const [completedStepIds, setCompletedStepIds] = useState<BuildStep[]>(draftSeed.completedStepIds);
@@ -420,6 +503,7 @@ export function SimplifiedWebsiteBuilderPreview({
     return initialPages.map((page) => ({ ...page, enabled: !disabledPageIds.has(page.id) }));
   });
   const [siteName, setSiteName] = useState(draftSeed.brand.siteName);
+  const [siteGoal, setSiteGoal] = useState(draftSeed.brand.siteGoal);
   const [siteLanguage, setSiteLanguage] = useState<SiteLanguage>(draftSeed.brand.siteLanguage);
   const [brandMark, setBrandMark] = useState(draftSeed.brand.brandMark);
   const [officialUrl, setOfficialUrl] = useState(draftSeed.brand.officialUrl);
@@ -432,19 +516,120 @@ export function SimplifiedWebsiteBuilderPreview({
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [templateUrl, setTemplateUrl] = useState(draftSeed.templateSourceUrl);
   const [notice, setNotice] = useState("");
+  const [liveAction, setLiveAction] = useState<string | null>(null);
+  const [liveError, setLiveError] = useState<string | null>(null);
   const [storageAvailable, setStorageAvailable] = useState(true);
-  const [linkedRagReportId, setLinkedRagReportId] = useState<string | null>(loadLinkedRagReportId);
+  const [linkedRagReportId, setLinkedRagReportId] = useState<string | null>(
+    () => loadLinkedRagReportId(storageScope, auditStorage),
+  );
   const [releaseReport, setReleaseReport] = useState<EvaluationReportSnapshot | null>(null);
+  const [liveReleaseCoordinates, setLiveReleaseCoordinates] =
+    useState<LiveReleaseCoordinates | null>(null);
   const didMountDraftRef = useRef(false);
-  const releaseDialogRef = usePreviewDialog(releaseReport !== null, () => setReleaseReport(null));
+  const appliedLiveBriefKeyRef = useRef<string | null>(null);
+  const closeReleaseConfirmation = () => {
+    setReleaseReport(null);
+    setLiveReleaseCoordinates(null);
+  };
+  const releaseDialogRef = usePreviewDialog(
+    releaseReport !== null,
+    closeReleaseConfirmation,
+  );
 
-  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? templates[0];
+  const liveObservation = siteOps?.observation ?? null;
+  const liveCandidates = useMemo(
+    () => liveObservation
+      ? [
+          ...liveObservation.visualCandidatePages.flatMap((page) => page.candidates),
+          ...liveObservation.visualCandidates,
+        ].filter(
+          (candidate, index, candidates) =>
+            candidates.findIndex((item) => item.id === candidate.id) === index,
+        )
+      : [],
+    [liveObservation],
+  );
+  const templateOptions = useMemo(
+    () => siteOps
+      ? liveCandidates.map((candidate, index) => ({
+          id: candidate.id,
+          name: candidate.title,
+          description: candidate.note || "真实建站模板；选择后将使用当前已发布知识库生成网站。",
+          source: "真实模板目录",
+          accent: accentOptions[index % accentOptions.length],
+          recommended: candidate.id === liveCandidates.find(
+            (item) => item.executionAdmitted !== false,
+          )?.id,
+          previewUrl: candidate.previewUrl,
+          executionAdmitted: candidate.executionAdmitted !== false,
+          executionUnavailableReason: candidate.executionUnavailableReason ?? null,
+        }))
+      : templates.map((template) => ({
+          ...template,
+          previewUrl: null,
+          executionAdmitted: true,
+          executionUnavailableReason: null,
+        })),
+    [liveCandidates, siteOps],
+  );
+  const isLiveBuilder = Boolean(siteOps);
+  const serverSelectedCandidateId = liveCandidates.find((candidate) => candidate.selected)?.id ?? null;
+  const templateSelectionOpen = liveObservation?.interactionState === "awaiting_visual_selection";
+  const effectiveSelectedTemplateId = isLiveBuilder
+    ? serverSelectedCandidateId ?? (templateSelectionOpen ? selectedTemplateId : "")
+    : selectedTemplateId;
+  const selectedTemplate = templateOptions.find((template) => template.id === effectiveSelectedTemplateId)
+    ?? (!isLiveBuilder || templateSelectionOpen
+      ? templateOptions.find((template) => template.executionAdmitted)
+      : undefined)
+    ?? {
+      ...templates[0],
+      id: "server-selection-pending",
+      name: "等待服务端确认模板",
+      description: "当前构建尚未返回已绑定的模板坐标。",
+      source: "真实 SiteOps",
+      previewUrl: null,
+      executionAdmitted: false,
+      executionUnavailableReason: "服务端尚未确认当前构建模板。",
+    };
+  const latestBuild = liveObservation?.builds[0] ?? null;
+  const liveRevisionEditable = Boolean(
+    latestBuild?.id
+    && liveObservation
+    && [
+      "preview_ready",
+      "approved",
+      "live",
+      "failed",
+      "attention_required",
+    ].includes(liveObservation.interactionState),
+  );
+  const liveConfigurationEditable = templateSelectionOpen || liveRevisionEditable;
+  const latestGlobalDeployment = liveObservation?.deployments.find(
+    (deployment) => deployment.target === "global_excluding_cn" && deployment.status === "active",
+  ) ?? null;
+  const authoritativeGlobalHeadId =
+    liveObservation?.project.globalLiveDeploymentId
+    ?? latestGlobalDeployment?.id
+    ?? null;
+  const pendingGlobalDeployment = liveObservation?.deployments.find(
+    (deployment) => deployment.target === "global_excluding_cn"
+      && ["reserved", "deploying", "verifying"].includes(deployment.status),
+  ) ?? null;
+  const liveInteractionPending = Boolean(siteOps?.interactionPending || liveAction);
   const enabledPages = useMemo(() => pages.filter((page) => page.enabled), [pages]);
   const completedStepSet = useMemo(() => new Set(completedStepIds), [completedStepIds]);
   const stepIndex = steps.findIndex((step) => step.id === activeStep);
-  const templateReady = Boolean(selectedTemplateId);
+  const templateReady = isLiveBuilder
+    ? Boolean(
+        effectiveSelectedTemplateId
+        && liveCandidates.some(
+          (candidate) => candidate.id === effectiveSelectedTemplateId && candidate.executionAdmitted !== false,
+        ),
+      )
+    : Boolean(selectedTemplateId);
   const structureReady = enabledPages.length > 0;
-  const brandReady = Boolean(siteName.trim() && brandMark.trim());
+  const brandReady = Boolean(siteName.trim() && siteGoal.trim() && (isLiveBuilder || brandMark.trim()));
   const assistantReady = Boolean(assistantName.trim() && welcome.trim());
   const templateComplete = templateReady && completedStepSet.has("template");
   const structureComplete = structureReady && completedStepSet.has("structure");
@@ -459,25 +644,79 @@ export function SimplifiedWebsiteBuilderPreview({
     assistant: assistantComplete,
     evaluation: false,
   };
-  const websiteSubject = {
-    kind: "website-build",
-    id: "frontmind-ai-website",
-    version: draftVersion({
-      selectedTemplateId,
-      templateUrl,
-      enabledPageIds: enabledPages.map((page) => page.id),
-      siteName,
-      siteLanguage,
-      brandMark,
-      officialUrl,
-      brandRecognized,
-      siteAccent,
-      assistantName,
-      welcome,
-      assistantAccent,
-      showSources,
-    }),
-  };
+  const websiteSubject = latestBuild && liveObservation
+    ? {
+        kind: "website-build",
+        id: latestBuild.id,
+        version: `r${liveObservation.project.revision}:${liveObservation.project.currentKnowledgeSnapshotId ?? "unbound"}`,
+      }
+    : {
+        kind: "website-build",
+        id: "frontmind-ai-website",
+        version: draftVersion({
+          selectedTemplateId: effectiveSelectedTemplateId,
+          templateUrl,
+          enabledPageIds: enabledPages.map((page) => page.id),
+          siteName,
+          siteGoal,
+          siteLanguage,
+          brandMark,
+          officialUrl,
+          brandRecognized,
+          siteAccent,
+          assistantName,
+          welcome,
+          assistantAccent,
+          showSources,
+        }),
+      };
+
+  const liveBuildStatus = latestBuild?.status ?? liveObservation?.interactionState ?? "loading";
+  const liveBuildApproved = latestBuild?.status === "approved";
+  const liveDnsReady = liveObservation?.domainState?.dnsStatus === "active";
+  const currentBuildAlreadyLive = Boolean(
+    latestBuild && latestGlobalDeployment?.buildId === latestBuild.id,
+  );
+  const livePublishEligible = Boolean(
+    liveBuildApproved
+    && liveDnsReady
+    && !pendingGlobalDeployment
+    && !currentBuildAlreadyLive,
+  );
+
+  useEffect(() => {
+    if (!siteOps || !liveObservation?.brief) return;
+    const brief = liveObservation.brief;
+    const briefKey = JSON.stringify(brief);
+    if (appliedLiveBriefKeyRef.current === briefKey) return;
+    appliedLiveBriefKeyRef.current = briefKey;
+    setPages(brief.routes.map((route) => ({
+      id: route.id,
+      name: route.title,
+      detail: `${route.sourceDocumentIds.length} 个知识来源`,
+      enabled: true,
+    })));
+    setSiteName(brief.companyName);
+    setSiteGoal(brief.conversionGoal.split("；网站主题色 ")[0]?.trim() || brief.conversionGoal);
+    setSiteLanguage(brief.primaryLanguage.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US");
+    const mark = brief.companyName
+      .split(/\s+/u)
+      .map((part) => part[0])
+      .join("")
+      .slice(0, 3)
+      .toUpperCase();
+    if (mark) setBrandMark(mark);
+  }, [liveObservation?.brief, siteOps]);
+
+  useEffect(() => {
+    if (!siteOps) return;
+    const nextTemplateId = serverSelectedCandidateId
+      ?? (templateSelectionOpen
+        ? liveCandidates.find((candidate) => candidate.executionAdmitted !== false)?.id
+        : null);
+    if (!nextTemplateId || selectedTemplateId === nextTemplateId) return;
+    setSelectedTemplateId(nextTemplateId);
+  }, [liveCandidates, selectedTemplateId, serverSelectedCandidateId, siteOps, templateSelectionOpen]);
 
   useEffect(() => setActiveStep(initialStep), [initialStep]);
 
@@ -492,6 +731,7 @@ export function SimplifiedWebsiteBuilderPreview({
       disabledPageIds: pages.filter((page) => !page.enabled).map((page) => page.id),
       brand: {
         siteName,
+        siteGoal,
         siteLanguage,
         brandMark,
         officialUrl,
@@ -504,9 +744,9 @@ export function SimplifiedWebsiteBuilderPreview({
         accent: assistantAccent,
         showSources,
       },
-    });
+    }, storageScope);
     setStorageAvailable(saved);
-  }, [assistantAccent, assistantName, brandMark, brandRecognized, completedStepIds, isConfirmed, officialUrl, pages, selectedTemplateId, showSources, siteAccent, siteLanguage, siteName, templateUrl, welcome]);
+  }, [assistantAccent, assistantName, brandMark, brandRecognized, completedStepIds, isConfirmed, officialUrl, pages, selectedTemplateId, showSources, siteAccent, siteGoal, siteLanguage, siteName, storageScope, templateUrl, welcome]);
 
   useEffect(() => {
     if (!didMountDraftRef.current) {
@@ -514,7 +754,39 @@ export function SimplifiedWebsiteBuilderPreview({
       return;
     }
     if (isConfirmed) setIsConfirmed(false);
-  }, [assistantAccent, assistantName, brandMark, brandRecognized, completedStepIds, officialUrl, pages, selectedTemplateId, showSources, siteAccent, siteLanguage, siteName, templateUrl, welcome]);
+  }, [assistantAccent, assistantName, brandMark, brandRecognized, completedStepIds, officialUrl, pages, selectedTemplateId, showSources, siteAccent, siteGoal, siteLanguage, siteName, templateUrl, welcome]);
+
+  const runLiveAction = async (
+    key: string,
+    input: Parameters<NonNullable<SiteOpsConversationPanelProps["onAction"]>>[0],
+  ) => {
+    if (!siteOps?.onAction || liveInteractionPending) return false;
+    setLiveAction(key);
+    setLiveError(null);
+    try {
+      await siteOps.onAction(input);
+      return true;
+    } catch (error) {
+      setLiveError(error instanceof Error ? error.message : "建站操作没有完成，请重试。");
+      return false;
+    } finally {
+      setLiveAction(null);
+    }
+  };
+
+  const advanceLiveSetup = async () => {
+    if (!liveObservation) {
+      await siteOps?.onRefresh?.();
+      return;
+    }
+    if (liveObservation.interactionState === "select_snapshot") {
+      await runLiveAction("select_snapshot", { action: "select_snapshot", input: {} });
+      return;
+    }
+    if (liveObservation.interactionState === "collecting_brief") {
+      await runLiveAction("start_visual_search", { action: "start_visual_search", input: {} });
+    }
+  };
 
   const invalidateSteps = (...stepIds: BuildStep[]) => {
     const invalidated = new Set(stepIds);
@@ -571,19 +843,117 @@ export function SimplifiedWebsiteBuilderPreview({
     if (stepIndex > 0) goTo(steps[stepIndex - 1].id);
   };
 
-  const goNext = () => {
+  const submitLiveConfigurationAndBuild = async () => {
+    if (
+      !siteOps?.onSubmitRevision
+      || !siteOps.onAction
+      || !liveObservation
+      || liveObservation.interactionState !== "awaiting_visual_selection"
+      || liveInteractionPending
+    ) {
+      setNotice("真实建站服务当前不能保存配置并开始生成，请刷新状态后重试。");
+      return false;
+    }
+    const selectedCandidate = liveCandidates.find(
+      (candidate) => candidate.id === selectedTemplateId,
+    );
+    if (!selectedCandidate || selectedCandidate.executionAdmitted === false) {
+      setNotice(selectedCandidate?.executionUnavailableReason || "请选择一个可用于真实生成的模板。");
+      return false;
+    }
+    setLiveAction("configure_and_build");
+    setLiveError(null);
+    try {
+      await siteOps.onSubmitRevision({
+        text: buildLiveSiteOpsConfigurationMessage({
+          siteName,
+          siteLanguage,
+          siteGoal,
+          siteAccent,
+          assistantName,
+          welcome,
+          assistantAccent,
+        }),
+        files: [],
+        onProgress: () => undefined,
+      });
+      await siteOps.onAction({
+        action: "select_visual",
+        input: { sampleId: selectedCandidate.id },
+      });
+      setNotice("真实建站配置已保存，已使用所选模板提交生成；页面会同步服务端状态。");
+      return true;
+    } catch (error) {
+      setLiveError(error instanceof Error ? error.message : "真实建站配置或生成任务提交失败，请重试。");
+      return false;
+    } finally {
+      setLiveAction(null);
+    }
+  };
+
+  const submitLiveRevision = async () => {
+    if (
+      !siteOps?.onSubmitRevision
+      || !liveObservation
+      || !liveRevisionEditable
+      || liveInteractionPending
+    ) {
+      setNotice("当前真实构建不能提交修改，请等待构建完成或刷新状态后重试。");
+      return false;
+    }
+    setLiveAction("submit_revision");
+    setLiveError(null);
+    try {
+      await siteOps.onSubmitRevision({
+        text: buildLiveSiteOpsConfigurationMessage({
+          siteName,
+          siteLanguage,
+          siteGoal,
+          siteAccent,
+          assistantName,
+          welcome,
+          assistantAccent,
+        }),
+        files: [],
+        onProgress: () => undefined,
+      });
+      setNotice("真实改版要求已提交；旧预览会保留到新版本完成，页面会同步新的构建状态。");
+      return true;
+    } catch (error) {
+      setLiveError(error instanceof Error ? error.message : "真实改版要求提交失败，请重试。");
+      return false;
+    } finally {
+      setLiveAction(null);
+    }
+  };
+
+  const goNext = async () => {
     if (stepIndex >= steps.length - 1) return;
     if (activeStep === "template" && !templateReady) {
       setNotice("请先选择一个模板版式。");
       return;
     }
     if (activeStep === "structure" && (!structureReady || !brandReady)) {
-      setNotice("请至少保留一个网站栏目，并补充网站名称和品牌标识。");
+      setNotice(siteOps
+        ? "请确认真实页面路由，并补充网站名称与站点简介 / 建站目标。"
+        : "请至少保留一个网站栏目，并补充网站名称、站点简介和品牌标识。");
       return;
     }
     if (activeStep === "assistant" && !assistantReady) {
       setNotice("请补充助手名称和欢迎语。");
       return;
+    }
+    if (
+      activeStep === "assistant"
+      && siteOps
+      && liveObservation?.interactionState === "awaiting_visual_selection"
+    ) {
+      const accepted = await submitLiveConfigurationAndBuild();
+      if (!accepted) return;
+    }
+    if (activeStep === "assistant" && siteOps && liveRevisionEditable) {
+      const accepted = await submitLiveRevision();
+      if (!accepted) return;
     }
     setCompletedStepIds((current) => current.includes(activeStep) ? current : [...current, activeStep]);
     goTo(steps[stepIndex + 1].id);
@@ -680,8 +1050,11 @@ export function SimplifiedWebsiteBuilderPreview({
   const scoredChecks = scoreGroups.flatMap((group) => group.checks);
   const applicableChecks = scoredChecks.filter((check) => check.status !== "not-applicable");
   const passFailChecks = applicableChecks.filter((check) => check.status === "passed" || check.status === "failed");
-  const linkedRagReport = linkedRagReportId ? getEvaluationReportById(linkedRagReportId) : null;
-  const latestRagReport = findLatestEvaluationReport({ skillId: "enterprise-rag-evaluation" });
+  const linkedRagReport = linkedRagReportId ? getEvaluationReportById(linkedRagReportId, auditStorage) : null;
+  const latestRagReport = findLatestEvaluationReport(
+    { skillId: "enterprise-rag-evaluation" },
+    auditStorage,
+  );
   const toSkillStatus = (status: EvaluationStatus): WebsiteBuildEvaluationCheckStatus => {
     if (status === "not-applicable") return "not_applicable";
     if (status === "passed" || status === "partial" || status === "failed") return status;
@@ -717,55 +1090,131 @@ export function SimplifiedWebsiteBuilderPreview({
       return;
     }
     setLinkedRagReportId(latestRagReport.reportId);
-    try { localStorage.setItem(LINKED_RAG_REPORT_STORAGE_KEY, latestRagReport.reportId); } catch { /* session state still works */ }
+    try {
+      localStorage.setItem(
+        scopedStorageKey(LINKED_RAG_REPORT_STORAGE_KEY, storageScope),
+        latestRagReport.reportId,
+      );
+    } catch { /* session state still works */ }
     setNotice("已关联最新企业 RAG 评估快照；该结果只作参考，不参与网站建设得分。");
   };
 
   const unlinkRagReport = () => {
     setLinkedRagReportId(null);
-    try { localStorage.removeItem(LINKED_RAG_REPORT_STORAGE_KEY); } catch { /* session state still works */ }
+    try {
+      localStorage.removeItem(
+        scopedStorageKey(LINKED_RAG_REPORT_STORAGE_KEY, storageScope),
+      );
+    } catch { /* session state still works */ }
     setNotice("已取消关联企业 RAG 评估；网站建设评分和发布选择均不受影响。");
   };
 
   const openReleaseConfirmation = () => {
+    if (siteOps && !livePublishEligible) {
+      setNotice(
+        !liveBuildApproved
+          ? "真实网站仍在生成或检查中；只有当前已批准构建才能发布。"
+          : !liveDnsReady
+            ? "域名 DNS 尚未处于 active 状态，不能提交真实发布。"
+            : pendingGlobalDeployment
+              ? "海外站点已有发布任务进行中，请等待服务端完成。"
+              : "当前构建已经在线，无需重复发布。",
+      );
+      return;
+    }
     const report: EvaluationReportSnapshot = {
       reportId: `website-report-${crypto.randomUUID()}`,
       createdAt: new Date().toISOString(),
       subject: websiteSubject,
       result: websiteEvaluation,
     };
+    setLiveReleaseCoordinates(
+      siteOps && liveObservation && latestBuild
+        ? {
+            projectId: liveObservation.project.id,
+            projectRevision: liveObservation.project.revision,
+            knowledgeSnapshotId:
+              liveObservation.project.currentKnowledgeSnapshotId ?? null,
+            buildId: latestBuild.id,
+            expectedHeadDeploymentId: authoritativeGlobalHeadId,
+          }
+        : null,
+    );
     setReleaseReport(report);
   };
 
-  const confirmReleaseDecision = () => {
+  const confirmReleaseDecision = async () => {
     if (!releaseReport) return;
     const relatedReports = releaseReport.result.relatedReportIds.flatMap((reportId) => {
-      const report = getEvaluationReportById(reportId);
+      const report = getEvaluationReportById(reportId, auditStorage);
       return report ? [report] : [];
     });
     const reports = [releaseReport, ...relatedReports];
     const riskIds = Array.from(new Set(reports.flatMap((report) => report.result.risks.map((risk) => risk.id))));
     const acceptedRisk = riskIds.length > 0 || reports.some((report) => report.result.recommendation !== "recommended");
+    const decision = {
+      decisionId: `publish-decision-${crypto.randomUUID()}`,
+      createdAt: new Date().toISOString(),
+      subject: releaseReport.subject,
+      action: "publish" as const,
+      mode: acceptedRisk ? "accepted_risk" as const : "follow_recommendation" as const,
+      evaluationReportIds: reports.map((report) => report.reportId),
+      acknowledgedRiskIds: acceptedRisk ? riskIds : [],
+      riskAcknowledged: acceptedRisk,
+      note: siteOps ? "SiteOps publish_global request acknowledged by the server." : null,
+    };
+    if (siteOps) {
+      const currentCoordinates = liveObservation && latestBuild
+        ? {
+            projectId: liveObservation.project.id,
+            projectRevision: liveObservation.project.revision,
+            knowledgeSnapshotId:
+              liveObservation.project.currentKnowledgeSnapshotId ?? null,
+            buildId: latestBuild.id,
+            expectedHeadDeploymentId: authoritativeGlobalHeadId,
+          }
+        : null;
+      if (
+        !liveReleaseCoordinates
+        || !currentCoordinates
+        || Object.keys(liveReleaseCoordinates).some(
+          (key) =>
+            liveReleaseCoordinates[key as keyof LiveReleaseCoordinates]
+            !== currentCoordinates[key as keyof LiveReleaseCoordinates],
+        )
+        || !livePublishEligible
+      ) {
+        closeReleaseConfirmation();
+        setNotice("真实发布条件已经变化，未提交请求也未写入成功审计；请返回检查状态。");
+        return;
+      }
+      const published = await runLiveAction("publish_global", {
+        action: "publish_global",
+        input: {
+          buildId: liveReleaseCoordinates.buildId,
+          expectedHeadDeploymentId:
+            liveReleaseCoordinates.expectedHeadDeploymentId ?? undefined,
+        },
+      });
+      if (!published) return;
+      const saved = savePublishDecisionWithReports({
+        reports: [releaseReport],
+        decision,
+      }, auditStorage);
+      closeReleaseConfirmation();
+      setNotice(`${saved ? "服务端已受理发布，并记录本次发布决定" : "服务端已受理发布，但本地审计存储不可用"}；部署结果将继续同步，尚不表示已经上线。`);
+      return;
+    }
     const saved = savePublishDecisionWithReports({
       reports: [releaseReport],
-      decision: {
-        decisionId: `publish-decision-${crypto.randomUUID()}`,
-        createdAt: new Date().toISOString(),
-        subject: releaseReport.subject,
-        action: "publish",
-        mode: acceptedRisk ? "accepted_risk" : "follow_recommendation",
-        evaluationReportIds: reports.map((report) => report.reportId),
-        acknowledgedRiskIds: acceptedRisk ? riskIds : [],
-        riskAcknowledged: acceptedRisk,
-        note: null,
-      },
-    });
-    setReleaseReport(null);
+      decision,
+    }, auditStorage);
+    closeReleaseConfirmation();
     setNotice(`${saved ? "已记录发布决定" : "已确认继续发布，但浏览器记录存储不可用"}；当前原型未执行真实部署。`);
   };
 
   const releaseRelatedReports = releaseReport?.result.relatedReportIds.flatMap((reportId) => {
-    const report = getEvaluationReportById(reportId);
+    const report = getEvaluationReportById(reportId, auditStorage);
     return report ? [report] : [];
   }) ?? [];
   const releaseRisks = releaseReport
@@ -812,7 +1261,11 @@ export function SimplifiedWebsiteBuilderPreview({
   };
 
   return (
-    <section className="sfp-root" data-step={activeStep}>
+    <section
+      className="sfp-root"
+      data-step={activeStep}
+      data-testid={siteOps ? "website-builder-live-root" : undefined}
+    >
       <header className="sfp-heading">
         <div>
           <h1>从知识库快速搭建帮助中心</h1>
@@ -821,8 +1274,16 @@ export function SimplifiedWebsiteBuilderPreview({
         <div className={`sfp-draft-state ${storageAvailable ? "" : "is-session-only"}`}>
           <i />
           <span>
-            <strong>{isConfirmed ? "草稿已确认" : "建设中"}</strong>
-            <small>{storageAvailable ? `本地草稿 · ${isConfirmed ? "草稿确认状态已保存" : "配置已自动保存"}` : "仅本次页面保存"}</small>
+            <strong>
+              {siteOps
+                ? LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus
+                : isConfirmed ? "草稿已确认" : "建设中"}
+            </strong>
+            <small>
+              {siteOps
+                ? `真实 SiteOps · 项目版本 ${liveObservation?.project.revision ?? "—"}`
+                : storageAvailable ? `本地草稿 · ${isConfirmed ? "草稿确认状态已保存" : "配置已自动保存"}` : "仅本次页面保存"}
+            </small>
           </span>
         </div>
       </header>
@@ -838,23 +1299,101 @@ export function SimplifiedWebsiteBuilderPreview({
         ))}
       </ol>
 
-      {notice && <div className="sfp-notice" role="status">{notice}</div>}
+      {(notice || siteOps?.notice) && <div className="sfp-notice" role="status">{notice || siteOps?.notice}</div>}
+      {(liveError || siteOps?.error) && (
+        <div className="sfp-notice" role="alert">
+          {liveError || siteOps?.error}
+          {siteOps?.onRefresh && (
+            <button type="button" onClick={() => siteOps.onRefresh?.()}>
+              <RefreshCw size={15} />重新载入
+            </button>
+          )}
+        </div>
+      )}
+      {siteOps && (
+        <div className="sfp-live-status" data-testid="siteops-build-status" role="status">
+          <span>
+            {liveInteractionPending || siteOps.refreshing ? <Loader2 className="sfp-spin" size={17} /> : <i />}
+            <strong>{LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus}</strong>
+            <small>
+              {latestBuild
+                ? `真实构建 #${latestBuild.ordinal} · ${latestBuild.buildDelivery?.qaStatus ?? "检查中"}`
+                : liveObservation?.knowledgeSnapshots[0]?.label ?? "正在读取当前知识库"}
+            </small>
+          </span>
+          {latestBuild?.previewUrl && (
+            <a
+              data-testid="siteops-preview-link"
+              href={latestBuild.previewUrl}
+              target="frontmind-siteops-preview"
+              rel="noreferrer"
+            >
+              打开真实网站预览<ExternalLink size={15} />
+            </a>
+          )}
+        </div>
+      )}
 
       <div className="sfp-step-content">
         {activeStep === "template" && (
           <div className="sfp-panel sfp-template-step">
             <div className="sfp-section-heading">
-              <div><h2>选择一个模板版式</h2><p>模板提供整体版式和默认配色，网站内容仍由当前知识库生成。</p></div>
+              <div><h2>选择一个模板版式</h2><p>{siteOps ? "以下模板来自真实 SiteOps 目录；先选择版式，再确认真实 brief 配置，最后提交生成。" : "模板提供整体版式和默认配色，网站内容仍由当前知识库生成。"}</p></div>
             </div>
+            {siteOps && (
+              <div className="sfp-live-start">
+                {!liveObservation ? (
+                  <>
+                    <Loader2 className="sfp-spin" size={20} />
+                    <span><strong>正在打开真实建站项目</strong><small>读取当前已发布知识库与建站状态</small></span>
+                    {siteOps.onRefresh && !siteOps.loading && (
+                      <button data-testid="siteops-advance" type="button" onClick={() => siteOps.onRefresh?.()}>重新载入</button>
+                    )}
+                  </>
+                ) : liveObservation.interactionState === "select_snapshot" ? (
+                  <>
+                    <FileText size={20} />
+                    <span><strong>从当前已发布知识库开始</strong><small>生成任务会冻结本次使用的知识版本</small></span>
+                    <button data-testid="siteops-advance" type="button" disabled={liveInteractionPending} onClick={advanceLiveSetup}>
+                      {liveAction === "select_snapshot" ? "正在关联…" : "从知识库开始建站"}
+                    </button>
+                  </>
+                ) : liveObservation.interactionState === "collecting_brief" ? (
+                  <>
+                    <LayoutTemplate size={20} />
+                    <span><strong>知识范围已关联</strong><small>载入真实模板目录后选择可执行版式</small></span>
+                    <button data-testid="siteops-advance" type="button" disabled={liveInteractionPending} onClick={advanceLiveSetup}>
+                      {liveAction === "start_visual_search" ? "正在载入…" : "载入真实模板"}
+                    </button>
+                  </>
+                ) : liveObservation.interactionState === "visual_searching" ? (
+                  <>
+                    <Loader2 className="sfp-spin" size={20} />
+                    <span><strong>正在载入真实模板</strong><small>任务会自动更新，无需刷新页面</small></span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={20} />
+                    <span><strong>真实模板目录已就绪</strong><small>{liveCandidates.length} 个候选，{liveCandidates.filter((candidate) => candidate.executionAdmitted !== false).length} 个可执行</small></span>
+                  </>
+                )}
+              </div>
+            )}
             <div className="sfp-template-grid">
-              {templates.map((template) => (
-                <label key={template.id} className={template.id === selectedTemplateId ? "is-selected" : ""}>
+              {templateOptions.map((template) => (
+                <label
+                  key={template.id}
+                  data-testid="website-template-card"
+                  className={`${template.id === selectedTemplateId ? "is-selected" : ""}${template.executionAdmitted ? "" : " is-disabled"}`}
+                >
                   <input
                     type="radio"
                     name="website-template"
                     value={template.id}
-                    checked={template.id === selectedTemplateId}
+                    checked={template.id === effectiveSelectedTemplateId}
+                    disabled={!template.executionAdmitted || liveInteractionPending || Boolean(siteOps && !templateSelectionOpen)}
                     onChange={() => {
+                      if (siteOps && !templateSelectionOpen) return;
                       invalidateSteps("template", "structure");
                       setSelectedTemplateId(template.id);
                       setSiteAccent(template.accent);
@@ -862,23 +1401,31 @@ export function SimplifiedWebsiteBuilderPreview({
                     }}
                   />
                   <div className="sfp-template-thumb" style={{ "--sfp-template-accent": template.accent } as CSSProperties}>
-                    <i /><div><span /><span /><span /></div><strong /><small />
+                    {template.previewUrl
+                      ? <img src={template.previewUrl} alt="" />
+                      : <><i /><div><span /><span /><span /></div><strong /><small /></>}
                   </div>
                   <div className="sfp-template-copy">
                     <span>{template.source}</span>
                     <h3>{template.name}{template.recommended && <em>推荐</em>}</h3>
                     <p>{template.description}</p>
-                    <b>{template.id === selectedTemplateId ? "已应用到当前草稿" : "选择此模板"}</b>
+                    <b>
+                      {!template.executionAdmitted
+                        ? template.executionUnavailableReason || "暂不可用于真实生成"
+                        : template.id === effectiveSelectedTemplateId
+                          ? serverSelectedCandidateId === template.id ? "服务端已绑定此模板" : "已选中，继续配置真实 brief"
+                          : siteOps && !templateSelectionOpen ? "当前阶段不可重新选择" : "选择此模板"}
+                    </b>
                   </div>
                 </label>
               ))}
             </div>
-            <form className="sfp-import-row" onSubmit={importTemplate}>
+            {!siteOps && <form className="sfp-import-row" onSubmit={importTemplate}>
               <LayoutTemplate size={19} />
               <div><strong>保存外部模板参考链接</strong></div>
               <input aria-label="外部模板链接（导入版式）" placeholder="https://template.example/..." value={templateUrl} onChange={(event) => setTemplateUrl(event.currentTarget.value)} />
               <button type="submit">保存链接</button>
-            </form>
+            </form>}
           </div>
         )}
 
@@ -886,7 +1433,7 @@ export function SimplifiedWebsiteBuilderPreview({
           <div className="sfp-workspace-grid">
             <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--structure">
               <div className="sfp-section-heading sfp-section-heading--compact">
-                <div><h2>确认网站结构与品牌</h2><p>系统已按知识库生成栏目；补充少量品牌信息即可完成网站骨架。</p></div>
+                <div><h2>确认网站结构与品牌</h2><p>{siteOps ? "网站名称、语言和站点简介会保存到真实 SiteOps brief；主题色作为生成偏好提交，是否采用以真实预览为准。" : "系统已按知识库生成栏目；补充少量品牌信息即可完成网站骨架。"}</p></div>
               </div>
               <form className="sfp-brand-import" onSubmit={recognizeBrand}>
                 <Globe2 size={19} />
@@ -898,40 +1445,45 @@ export function SimplifiedWebsiteBuilderPreview({
                   aria-label="企业官网 URL（生成品牌建议，可选）"
                   placeholder="https://company.example"
                   value={officialUrl}
+                  disabled={Boolean(siteOps && !liveConfigurationEditable)}
                   onChange={(event) => {
                     invalidateSteps("structure");
                     setOfficialUrl(event.currentTarget.value);
                     setBrandRecognized(false);
                   }}
                 />
-                <button type="submit">生成建议</button>
+                <button type="submit" disabled={Boolean(siteOps && !liveConfigurationEditable)}>生成建议</button>
               </form>
               <div className="sfp-brand-fields">
                 <label className="sfp-brand-name">
-                  <span>网站名称</span>
-                  <input aria-label="网站名称" maxLength={80} value={siteName} onChange={(event) => { invalidateSteps("structure"); setSiteName(event.currentTarget.value); setBrandRecognized(false); }} />
+                  <span>网站名称{siteOps && <small>真实 brief 字段</small>}</span>
+                  <input aria-label="网站名称" data-testid="website-site-name" maxLength={80} value={siteName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("structure"); setSiteName(event.currentTarget.value); setBrandRecognized(false); }} />
+                </label>
+                <label className="sfp-brand-name">
+                  <span>站点简介 / 建站目标{siteOps && <small>真实 brief 字段</small>}</span>
+                  <textarea aria-label="站点简介 / 建站目标" data-testid="website-site-goal" maxLength={200} value={siteGoal} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("structure"); setSiteGoal(event.currentTarget.value); }} />
                 </label>
                 <label>
-                  <span>Logo / 品牌标识</span>
+                  <span>Logo / 品牌标识{siteOps && <small>仅本地示意，不进入真实生成协议</small>}</span>
                   <input aria-label="Logo / 品牌标识" maxLength={3} value={brandMark} onChange={(event) => { invalidateSteps("structure"); setBrandMark(event.currentTarget.value.toUpperCase()); setBrandRecognized(false); }} />
                 </label>
                 <label>
-                  <span>站点语言</span>
-                  <select aria-label="站点语言" value={siteLanguage} onChange={(event) => { invalidateSteps("structure"); setSiteLanguage(event.currentTarget.value as SiteLanguage); setBrandRecognized(false); }}>
+                  <span>站点语言{siteOps && <small>真实 brief 字段</small>}</span>
+                  <select aria-label="站点语言" value={siteLanguage} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("structure"); setSiteLanguage(event.currentTarget.value as SiteLanguage); setBrandRecognized(false); }}>
                     <option value="zh-CN">中文（简体）</option>
                     <option value="en-US">English</option>
                   </select>
                 </label>
                 <fieldset className="sfp-brand-color">
-                  <legend>网站主题色</legend>
+                  <legend>网站主题色{siteOps && <small>生成偏好，以真实预览为准</small>}</legend>
                   <div className="sfp-color-options">
                     {accentOptions.map((color) => (
-                      <button key={color} type="button" aria-label={`选择网站主题色 ${color}`} aria-pressed={siteAccent === color} style={{ background: color }} onClick={() => { if (siteAccent !== color) invalidateSteps("structure"); setSiteAccent(color); setBrandRecognized(false); }} />
+                      <button key={color} type="button" disabled={Boolean(siteOps && !liveConfigurationEditable)} aria-label={`选择网站主题色 ${color}`} aria-pressed={siteAccent === color} style={{ background: color }} onClick={() => { if (siteAccent !== color) invalidateSteps("structure"); setSiteAccent(color); setBrandRecognized(false); }} />
                     ))}
                   </div>
                 </fieldset>
               </div>
-              <div className="sfp-source-strip"><FileText size={17} /><span><strong>当前 RAG 示例知识范围</strong><small>{previewKnowledgeCollectionCount} 个知识集合已映射为 5 个网站栏目</small></span><b>已关联</b></div>
+              <div className="sfp-source-strip"><FileText size={17} /><span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 示例知识范围"}</strong><small>{siteOps ? `${liveObservation?.brief?.routes.length ?? 0} 个真实页面路由 · 项目版本 ${liveObservation?.project.revision ?? "—"}` : `${previewKnowledgeCollectionCount} 个知识集合已映射为 5 个网站栏目`}</small></span><b>{siteOps ? "真实绑定" : "已关联"}</b></div>
               <div className="sfp-page-list">
                 {pages.map((page, index) => (
                   <div key={page.id} className={!page.enabled ? "is-muted" : ""}>
@@ -942,6 +1494,7 @@ export function SimplifiedWebsiteBuilderPreview({
                         type="checkbox"
                         checked={page.enabled}
                         aria-label={`在网站中显示${page.name}`}
+                        disabled={Boolean(siteOps)}
                         onChange={(event) => {
                           const enabled = event.currentTarget.checked;
                           invalidateSteps("structure");
@@ -954,10 +1507,10 @@ export function SimplifiedWebsiteBuilderPreview({
                   </div>
                 ))}
               </div>
-              <p className="sfp-helper">仅控制栏目显示，不修改知识库。</p>
+              <p className="sfp-helper">{siteOps ? "真实路由来自冻结知识版本；需要改版时可在真实预览生成后提交修改要求。" : "仅控制栏目显示，不修改知识库。"}</p>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel">
-              <div className="sfp-preview-heading"><span><strong>即时预览</strong><small>{selectedTemplate.name} · {enabledPages.length} 个栏目</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+              <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地配置示意（非真实预览）" : "即时预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个栏目{siteOps ? " · 真实效果请打开上方预览链接" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
               <MiniSitePreview assistantAccent={assistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} pageNames={enabledPages.map((page) => page.name)} showAssistant={false} showSources={showSources} siteAccent={siteAccent} siteLanguage={siteLanguage} siteName={siteName} welcome={welcome} />
             </section>
           </div>
@@ -967,29 +1520,29 @@ export function SimplifiedWebsiteBuilderPreview({
           <div className="sfp-workspace-grid">
             <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--assistant">
               <div className="sfp-section-heading sfp-section-heading--compact">
-                <div><h2>配置 AI 助手</h2><p>配置网站右下角的帮助窗口并直接试用。</p></div>
+                <div><h2>配置 AI 助手</h2><p>{siteOps ? "名称、欢迎语与主题色会作为真实生成偏好提交；当前协议不保证模板包含可交互助手，以真实预览为准。" : "配置网站右下角的帮助窗口并直接试用。"}</p></div>
               </div>
               <div className="sfp-rag-link-card">
                 <span><Bot size={19} /></span>
-                <div><strong>企业 RAG 示例已关联</strong><small>{previewKnowledgeCollectionCount} 个知识集合 · {previewKnowledgeFragmentCount} 个示例片段 · 网站端来源{showSources ? "已展示" : "已隐藏"}</small></div>
-                <button type="button" onClick={onOpenRag}>查看 RAG 示例</button>
+                <div><strong>{siteOps ? "企业知识问答入口" : "企业 RAG 示例已关联"}</strong><small>{siteOps ? `${liveObservation?.knowledgeSnapshots[0]?.label ?? "当前发布知识"} · 问答入口仍由真实 RAG 服务提供` : `${previewKnowledgeCollectionCount} 个知识集合 · ${previewKnowledgeFragmentCount} 个示例片段 · 网站端来源${showSources ? "已展示" : "已隐藏"}`}</small></div>
+                <button type="button" onClick={onOpenRag}>{siteOps ? "打开真实企业问答" : "查看 RAG 示例"}</button>
               </div>
               <div className="sfp-form-grid">
-                <label><span>助手名称</span><input value={assistantName} onChange={(event) => { invalidateSteps("assistant"); setAssistantName(event.currentTarget.value); }} /></label>
-                <label className="sfp-welcome-field"><span>欢迎语</span><textarea value={welcome} onChange={(event) => { invalidateSteps("assistant"); setWelcome(event.currentTarget.value); }} /></label>
+                <label><span>助手名称{siteOps && <small>生成偏好</small>}</span><input aria-label="助手名称" data-testid="website-assistant-name" maxLength={60} value={assistantName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("assistant"); setAssistantName(event.currentTarget.value); }} /></label>
+                <label className="sfp-welcome-field"><span>欢迎语{siteOps && <small>生成偏好，以真实预览为准</small>}</span><textarea aria-label="欢迎语" data-testid="website-assistant-welcome" maxLength={140} value={welcome} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("assistant"); setWelcome(event.currentTarget.value); }} /></label>
                 <fieldset>
-                  <legend>助手主题色</legend>
+                  <legend>助手主题色{siteOps && <small>生成偏好，以真实预览为准</small>}</legend>
                   <div className="sfp-color-options">
                     {accentOptions.map((color) => (
-                      <button key={color} type="button" aria-label={`选择助手主题色 ${color}`} aria-pressed={assistantAccent === color} style={{ background: color }} onClick={() => { if (assistantAccent !== color) invalidateSteps("assistant"); setAssistantAccent(color); }} />
+                      <button key={color} type="button" disabled={Boolean(siteOps && !liveConfigurationEditable)} aria-label={`选择助手主题色 ${color}`} aria-pressed={assistantAccent === color} style={{ background: color }} onClick={() => { if (assistantAccent !== color) invalidateSteps("assistant"); setAssistantAccent(color); }} />
                     ))}
                   </div>
                 </fieldset>
-                <label className="sfp-setting-row"><span><strong>展示回答来源</strong><small>让访客可以核对回答依据</small></span><input type="checkbox" checked={showSources} onChange={(event) => { invalidateSteps("assistant"); setShowSources(event.currentTarget.checked); }} /></label>
+                <label className="sfp-setting-row"><span><strong>展示回答来源</strong><small>{siteOps ? "仅本地示意；当前 SiteOps 生成协议不支持此开关" : "让访客可以核对回答依据"}</small></span><input type="checkbox" checked={showSources} onChange={(event) => { invalidateSteps("assistant"); setShowSources(event.currentTarget.checked); }} /></label>
               </div>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel">
-              <div className="sfp-preview-heading"><span><strong>网站内效果</strong></span><DevicePicker device={device} onChange={setDevice} /></div>
+              <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地助手示意（非真实预览）" : "网站内效果"}</strong><small>{siteOps ? "真实模板是否采用这些偏好，请以服务端预览为准" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
               <MiniSitePreview assistantAccent={assistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} pageNames={enabledPages.map((page) => page.name)} showAssistant showSources={showSources} siteAccent={siteAccent} siteLanguage={siteLanguage} siteName={siteName} welcome={welcome} />
             </section>
           </div>
@@ -1013,11 +1566,11 @@ export function SimplifiedWebsiteBuilderPreview({
               </div>
               <div className="sfp-eval-context" aria-label="本次评估范围">
                 <span><small>项目</small><strong>FrontMind AI 专用官网</strong></span>
-                <span><small>被测对象</small><strong>当前本地网站草稿</strong></span>
-                <span><small>草稿与知识版本</small><strong>{previewKnowledgeCollectionCount} 个示例集合 · 正式版本未绑定</strong></span>
+                <span><small>被测对象</small><strong>{siteOps ? latestBuild ? `真实构建 #${latestBuild.ordinal}` : "真实建站项目" : "当前本地网站草稿"}</strong></span>
+                <span><small>草稿与知识版本</small><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "等待真实知识版本" : `${previewKnowledgeCollectionCount} 个示例集合 · 正式版本未绑定`}</strong></span>
                 <span><small>页面与问题范围</small><strong>{enabledPages.length} 个栏目 · 目标问题清单待补</strong></span>
                 <span><small>公开范围</small><strong>范围与确认人未记录</strong></span>
-                <span><small>执行记录</small><strong>本地预览 · 评估人和时间待补</strong></span>
+                <span><small>执行记录</small><strong>{siteOps ? `真实 SiteOps · ${LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus}` : "本地预览 · 评估人和时间待补"}</strong></span>
               </div>
               <div className="sfp-eval-summary is-pending">
                 <CircleAlert size={22} />
@@ -1061,7 +1614,7 @@ export function SimplifiedWebsiteBuilderPreview({
               {renderEvaluationGroup("flow-release-clarity", "流程与发布说明", flowAndPublishChecks)}
             </section>
             <aside className="sfp-final-preview">
-              <div className="sfp-preview-heading"><span><strong>当前草稿预览</strong></span><DevicePicker device={device} onChange={setDevice} /></div>
+              <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地配置示意（非真实预览）" : "当前草稿预览"}</strong><small>{siteOps ? "真实成品请使用上方服务端预览链接核验" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
               <MiniSitePreview assistantAccent={assistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} pageNames={enabledPages.map((page) => page.name)} showAssistant showSources={showSources} siteAccent={siteAccent} siteLanguage={siteLanguage} siteName={siteName} welcome={welcome} />
             </aside>
           </div>
@@ -1086,16 +1639,58 @@ export function SimplifiedWebsiteBuilderPreview({
               {isConfirmed ? "草稿已确认" : "确认当前建设草稿"}
             </button>
             {!canComplete && <span id="sfp-confirmation-requirement" className="sfp-visually-hidden">请先依次确认模板、网站结构与品牌、AI 助手配置。</span>}
-            <button type="button" className="sfp-button sfp-button--primary" onClick={openReleaseConfirmation}>进入发布确认</button>
+            <button
+              type="button"
+              className="sfp-button sfp-button--primary"
+              disabled={Boolean(siteOps && (!livePublishEligible || liveInteractionPending))}
+              onClick={openReleaseConfirmation}
+            >
+              {siteOps
+                ? !liveBuildApproved
+                  ? "等待真实构建检查"
+                  : !liveDnsReady
+                    ? "等待域名 DNS 生效"
+                    : pendingGlobalDeployment
+                      ? "海外站点发布中"
+                      : currentBuildAlreadyLive
+                        ? "当前构建已在线"
+                        : "进入发布确认"
+                : "进入发布确认"}
+            </button>
           </div>
         ) : (
-          <button type="button" className="sfp-button sfp-button--primary" onClick={goNext}>继续</button>
+          <button
+            type="button"
+            className="sfp-button sfp-button--primary"
+            data-testid={siteOps && activeStep === "assistant"
+              ? templateSelectionOpen
+                ? "website-build-start"
+                : liveRevisionEditable
+                  ? "website-revision-submit"
+                  : undefined
+              : undefined}
+            disabled={Boolean(siteOps && (
+              liveInteractionPending
+              || (activeStep === "template" && !templateReady)
+              || (activeStep === "assistant" && templateSelectionOpen && (!assistantReady || !brandReady))
+              || (activeStep === "assistant" && liveRevisionEditable && (!assistantReady || !brandReady))
+            ))}
+            onClick={goNext}
+          >
+            {siteOps && activeStep === "template"
+              ? "继续配置真实 brief"
+              : siteOps && activeStep === "assistant" && templateSelectionOpen
+                ? liveAction === "configure_and_build" ? "正在保存配置并生成…" : "保存真实配置并生成网站"
+                : siteOps && activeStep === "assistant" && liveRevisionEditable
+                  ? liveAction === "submit_revision" ? "正在提交修改…" : "提交修改并重新生成"
+                : "继续"}
+          </button>
         )}
       </footer>
       {releaseReport && (
-        <div className="sfp-release-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReleaseReport(null); }}>
+        <div className="sfp-release-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeReleaseConfirmation(); }}>
           <section ref={releaseDialogRef} className="sfp-release-dialog" role="dialog" aria-modal="true" aria-label="发布确认" tabIndex={-1}>
-            <button type="button" className="sfp-release-dialog__close" aria-label="关闭发布确认" onClick={() => setReleaseReport(null)}><X size={18} /></button>
+            <button type="button" className="sfp-release-dialog__close" aria-label="关闭发布确认" onClick={closeReleaseConfirmation}><X size={18} /></button>
             <small>发布决定与质量评估分开记录</small>
             <h2>确认是否继续发布</h2>
             <p>网站评估当前为“{recommendation}”，{releaseRelatedReports.length > 0 ? "并已冻结关联的企业 RAG 评估快照" : "未关联企业 RAG 评估快照"}。这些结果只提供质量建议，不会替你决定。</p>
@@ -1105,10 +1700,10 @@ export function SimplifiedWebsiteBuilderPreview({
               <div><dt>风险提示</dt><dd>{releaseRisks.length} 项</dd></div>
             </dl>
             {releaseRisks.length > 0 && <ul>{releaseRisks.map((risk) => <li key={risk.id}><strong>{risk.title}</strong><span>{risk.summary}</span></li>)}</ul>}
-            <div className="sfp-release-note"><CircleAlert size={18} /><span>继续只会记录你的发布决定；当前原型不会执行真实部署。真实发布仍需通过构建、部署目标和域名配置等技术检查。</span></div>
+            <div className="sfp-release-note"><CircleAlert size={18} /><span>{siteOps ? "继续会向真实 SiteOps 提交海外站点发布；服务端仍会检查构建版本、部署目标和域名条件。" : "继续只会记录你的发布决定；当前原型不会执行真实部署。真实发布仍需通过构建、部署目标和域名配置等技术检查。"}</span></div>
             <div className="sfp-release-dialog__actions">
-              <button type="button" className="sfp-button sfp-button--ghost" onClick={() => setReleaseReport(null)}>返回评估</button>
-              <button type="button" className="sfp-button sfp-button--primary" onClick={confirmReleaseDecision}>{releaseHasRisks ? "我已了解风险，继续发布" : "确认继续发布"}</button>
+              <button type="button" className="sfp-button sfp-button--ghost" onClick={closeReleaseConfirmation}>返回评估</button>
+              <button type="button" className="sfp-button sfp-button--primary" disabled={liveAction === "publish_global" || Boolean(siteOps && !livePublishEligible)} onClick={confirmReleaseDecision}>{liveAction === "publish_global" ? "正在提交真实发布…" : releaseHasRisks ? "我已了解风险，继续发布" : "确认继续发布"}</button>
             </div>
           </section>
         </div>

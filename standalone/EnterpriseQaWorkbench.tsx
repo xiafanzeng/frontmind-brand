@@ -6,26 +6,37 @@ import { brandHost, setWorkbenchTaskQuery, useConversation } from "../module/cli
 import EnterpriseQaConversation from "../module/client/EnterpriseQaConversation";
 
 /** Standalone assembly of the same workbench frame and task controls as Dashboard. */
-export default function EnterpriseQaWorkbench({ projectId, preview, children }: {
+export default function EnterpriseQaWorkbench({
+  projectId,
+  preview,
+  children,
+  main,
+  autoCreate = true,
+  canCreateConversation = true,
+}: {
   projectId: string;
   preview: boolean;
   children?: ReactNode;
+  main?: ReactNode;
+  autoCreate?: boolean;
+  canCreateConversation?: boolean;
 }) {
   const workspace = useConversation();
   const [panel, setPanel] = useState<"tasks" | "outputs">("outputs");
   const creating = useRef(false);
   const active = workspace.activeConversation;
   const newConversation = () => {
+    if (!canCreateConversation) return;
     const id = workspace.createConversation({ title: "企业问答", reuseEmpty: false, purpose: "enterprise_qa" });
     setWorkbenchTaskQuery(id);
   };
   useEffect(() => {
-    if (workspace.hydrated && !active && !creating.current) {
+    if (autoCreate && canCreateConversation && workspace.hydrated && !active && !creating.current) {
       creating.current = true;
       newConversation();
     }
     if (active) creating.current = false;
-  }, [workspace.hydrated, active, workspace.createConversation]);
+  }, [autoCreate, canCreateConversation, workspace.hydrated, active, workspace.createConversation]);
   const auxiliary = <div className="workbench-task-panel">
     <div className="workbench-panel-tabs" role="tablist" aria-label="会话与知识来源">
       <button type="button" role="tab" id="tasks-tab-enterprise-qa" aria-controls="tasks-panel-enterprise-qa" aria-selected={panel === "tasks"} onClick={() => setPanel("tasks")}>会话</button>
@@ -35,7 +46,7 @@ export default function EnterpriseQaWorkbench({ projectId, preview, children }: 
       {panel === "tasks" ? <WorkbenchTaskToolbar
         tasks={workspace.state.conversations}
         currentId={active?.id}
-        disabled={!workspace.hydrated}
+        disabled={!workspace.hydrated || !canCreateConversation}
         loading={workspace.loading}
         error={workspace.syncError}
         onRetry={() => void workspace.refreshConversations()}
@@ -58,7 +69,7 @@ export default function EnterpriseQaWorkbench({ projectId, preview, children }: 
     resultTitle="会话与知识来源"
     scrollMain={false}
     status={active?.status && active.status !== "idle" ? workbenchStatus(active.status) : undefined}
-    main={<EnterpriseQaConversation key={active?.id ?? "new"} preview={preview} />}
+    main={main ?? <EnterpriseQaConversation key={active?.id ?? "new"} preview={preview} />}
     auxiliary={auxiliary}
     requestNavigation={action => brandHost().requestWorkspaceNavigation(action)}
   />;

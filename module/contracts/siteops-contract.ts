@@ -32,6 +32,10 @@ export const siteOpsProjectProjectionSchema = z
     revision: z.number().int().positive(),
     status: siteOpsProjectStatusSchema,
     currentKnowledgeSnapshotId: z.string().uuid().nullable(),
+    /** Authoritative live heads survive a task reset even when the older
+     * deployment rows are intentionally hidden from the new task timeline. */
+    globalLiveDeploymentId: z.string().uuid().nullable().optional(),
+    mainlandLiveDeploymentId: z.string().uuid().nullable().optional(),
     primaryLanguage: z.string().trim().min(2).max(32),
     canonicalHostname: z.string().trim().max(255).nullable(),
     updatedAt: z.string().datetime(),

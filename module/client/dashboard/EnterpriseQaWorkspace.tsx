@@ -19,7 +19,7 @@ type EnterpriseQaWorkspaceProps = {
   projectId?: string;
 };
 
-type SourceState = {
+export type EnterpriseQaSourceState = {
   knowledgeBase: TaskResponse["knowledgeBase"];
   configured: boolean | null;
   provider: string | null;
@@ -34,21 +34,23 @@ type EnterpriseQaRuntimeConfig = Pick<TaskResponse, "knowledgeBase"> & {
   provider?: unknown;
 };
 
-function enterpriseQaProviderLabel(provider: string | null) {
+export function enterpriseQaProviderLabel(provider: string | null) {
   if (provider === "zhipu") return "智谱";
   if (provider === "xty_codex") return "XTY Codex";
   return provider || "未配置";
 }
 
-function useKnowledgeSource(
+export function useEnterpriseQaKnowledgeSource(
   localTaskId?: string | null,
   enabled = true,
-): { source: SourceState; retry: () => void } {
+): { source: EnterpriseQaSourceState; retry: () => void } {
   const search = useSearch();
   const headers = deliveryProjectHeaders();
   const requestKey = JSON.stringify([search, headers, localTaskId ?? null]);
   const [attempt, setAttempt] = useState(0);
-  const [source, setSource] = useState<SourceState & { requestKey: string }>({
+  const [source, setSource] = useState<
+    EnterpriseQaSourceState & { requestKey: string }
+  >({
     requestKey: "",
     knowledgeBase: null,
     configured: null,
@@ -211,11 +213,15 @@ function useKnowledgeSource(
 export function EnterpriseQaSourceNote({
   currentPublication,
   onRetryPublication,
-}: { currentPublication?: SourceState; onRetryPublication?: () => void } = {}) {
+}: {
+  currentPublication?: EnterpriseQaSourceState;
+  onRetryPublication?: () => void;
+} = {}) {
   const { activeConversation } = useConversation();
   const localTaskId =
     activeConversation?.previousResponseId ?? activeConversation?.taskId;
-  const { source: taskSource, retry: retryTaskSource } = useKnowledgeSource(
+  const { source: taskSource, retry: retryTaskSource } =
+    useEnterpriseQaKnowledgeSource(
     localTaskId,
     !!localTaskId || !currentPublication,
   );
@@ -366,7 +372,7 @@ function EnterpriseQaPublishedWorkspace({
   projectId = "account",
 }: EnterpriseQaWorkspaceProps) {
   // A historical conversation's frozen snapshot cannot unlock a project with no current publication.
-  const { source, retry } = useKnowledgeSource();
+  const { source, retry } = useEnterpriseQaKnowledgeSource();
 
   if (
     !source.loaded ||
