@@ -4,6 +4,3 @@
 
 /* Workbench children keep the same flex parent as the integrated Dashboard. */
 .brand-page--knowledge,.brand-page--enterprise-qa{display:contents}
-
-/* 侧边栏模块选中态统一使用 FrontMind 品牌紫，覆盖各模块品牌色。 */
-.operator-sidebar .operator-module-entry.active { --module-accent: #491060 !important; }
