@@ -1,3 +1,4 @@
+import { staticTemplatePagination, staticTemplatePageLength } from "../../contracts/static-template-pagination.js";
 import type {BrandSchema} from '../../schema/index.js';
 import type {MySql2Database} from 'drizzle-orm/mysql2';
 import type {SQL} from 'drizzle-orm';
@@ -127,9 +128,6 @@ const isStaticCatalogWorkflowVersion = (version: string) =>
   version === SITEOPS_STATIC_TEMPLATE_WORKFLOW_VERSION ||
   version === SITEOPS_DYNAMIC_IA_WORKFLOW_VERSION;
 import {
-  STATIC_TEMPLATE_CATALOG_ENTRY_COUNT,
-  STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
-  STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
   StaticTemplateCatalogError,
   readStaticTemplateCatalogVersionPreview,
   requireStaticTemplateCatalogVersion,
@@ -426,7 +424,7 @@ export type TwentyFirstBoardPersistenceInput = {
 };
 
 export type StaticTemplateCatalogPagePersistenceInput = {
-  pageNumber: 1 | 2 | 3 | 4;
+  pageNumber: 1 | 2 | 3 | 4 | 5;
   selectionBundle: VisualSelectionBundleV7;
   selectionBundleArtifact: PreviewArtifact;
   candidates: StaticTemplateBoardCandidate[];
@@ -1138,7 +1136,9 @@ async function loadDefaultContext(
         ),
       ),
     )
-    .limit(staticCatalogMode ? STATIC_TEMPLATE_CATALOG_PAGE_COUNT : 1);
+    .limit(staticCatalogMode
+      ? staticTemplatePagination("catalogVersion" in input ? input.catalogVersion : null).pageCount
+      : 1);
   let existingBoard: ExistingBoard | null = null;
   if (existingRows[0]) {
     const existingBatchIds = existingRows.map((row: { id: string }) => row.id);
@@ -1208,13 +1208,12 @@ async function loadDefaultContext(
     snapshot,
     brief: resolveSiteBrief(project, snapshot),
     existingBoard,
-    publishedPageCount: [...publishedSamplesByBatch.values()].filter(
-      (sampleCount) =>
-        sampleCount ===
-        (staticCatalogMode
-          ? STATIC_TEMPLATE_CATALOG_PAGE_SIZE
-          : SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE),
-    ).length,
+    publishedPageCount: [...publishedSamplesByBatch.entries()].filter(([batchId, sampleCount]) => {
+      if (!staticCatalogMode) return sampleCount === SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE;
+      const metadata = priorSampleRows.find((row: { batchId: string }) => row.batchId === batchId)?.sourceMetadata as Record<string, unknown> | undefined;
+      const page = Math.ceil(Number(metadata?.catalogPosition ?? 1) / 8);
+      return sampleCount === staticTemplatePageLength(typeof metadata?.catalogVersion === "string" ? metadata.catalogVersion : undefined, page);
+    }).length,
     previousReferences: {
       providerItemKeys: priorMetadata.flatMap((metadata) =>
         typeof metadata.providerItemKey === "string"
@@ -3121,13 +3120,16 @@ export async function persistDefaultStaticTemplateCatalogBoards(
   db: any,
   input: StaticTemplateCatalogBoardsPersistenceInput,
 ) {
+  const pagination = staticTemplatePagination(input.catalogVersion);
   if (
-    input.pages.length !== STATIC_TEMPLATE_CATALOG_PAGE_COUNT ||
+    input.pages.length !== pagination.pageCount ||
+    new Set(input.pages.map(page => page.pageNumber)).size !== pagination.pageCount ||
+    input.pages.some(page => page.pageNumber < 1 || page.pageNumber > pagination.pageCount || page.selectionBundle.catalogVersion !== input.catalogVersion) ||
     input.pages.some(
       (page) =>
-        page.candidates.length !== STATIC_TEMPLATE_CATALOG_PAGE_SIZE ||
+        page.candidates.length !== staticTemplatePageLength(input.catalogVersion, page.pageNumber) ||
         page.selectionBundle.candidates.length !==
-          STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
+          staticTemplatePageLength(input.catalogVersion, page.pageNumber),
     )
   ) {
     throw new TwentyFirstProviderFailure(
@@ -3176,7 +3178,7 @@ export async function persistDefaultStaticTemplateCatalogBoards(
         )
         .for("update");
       if (existing.length > 0) {
-        if (existing.length !== STATIC_TEMPLATE_CATALOG_PAGE_COUNT) {
+        if (existing.length !== pagination.pageCount) {
           throw visualSearchSuperseded();
         }
         const existingIds = existing.map((row: { id: string }) => row.id);
@@ -3184,7 +3186,7 @@ export async function persistDefaultStaticTemplateCatalogBoards(
           .select({ id: websiteStyleSamples.id })
           .from(websiteStyleSamples)
           .where(inArray(websiteStyleSamples.batchId, existingIds));
-        if (samples.length !== STATIC_TEMPLATE_CATALOG_ENTRY_COUNT) {
+        if (samples.length !== pagination.entryCount) {
           throw visualSearchSuperseded();
         }
         return {
@@ -3319,7 +3321,7 @@ export async function persistDefaultStaticTemplateCatalogBoards(
         turnId: input.operation.conversationTurnId,
         userId: input.operation.userId,
         role: "assistant",
-        content: `固定目录中的 32 个 Template 预览已准备完成；${admittedCount} 个已通过执行准入，可直接选择。`,
+        content: `固定目录中的 ${pagination.entryCount} 个 Template 预览已准备完成；${admittedCount} 个已通过执行准入，可直接选择。`,
         sequence: Number(sequenceRows[0]?.sequence ?? 0) + 1,
         metadata: {
           siteOps: {
@@ -3333,9 +3335,9 @@ export async function persistDefaultStaticTemplateCatalogBoards(
               page: 1,
               workflowVersion: frozenInput.data.workflowVersion,
               catalogVersion: input.catalogVersion,
-              candidateCount: STATIC_TEMPLATE_CATALOG_ENTRY_COUNT,
-              pageSize: STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
-              pageCount: STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
+              candidateCount: pagination.entryCount,
+              pageSize: pagination.pageSize,
+              pageCount: pagination.pageCount,
               degradedReasons: [],
             },
           },
@@ -3364,7 +3366,7 @@ export async function persistDefaultStaticTemplateCatalogBoards(
       if (affectedRows !== 1) throw visualSearchSuperseded();
       return {
         batchIds,
-        candidateCount: STATIC_TEMPLATE_CATALOG_ENTRY_COUNT,
+        candidateCount: pagination.entryCount,
       };
     },
   );
@@ -5064,6 +5066,7 @@ async function runStaticTemplateCatalogVisualSearch(input: {
   ) => Promise<StaticTemplateCatalogBoardsPersistenceResult>;
   db: any;
 }) {
+  const pagination = staticTemplatePagination(input.catalog.catalogVersion);
   const frozenInput = visualSearchOperationInputSchema.parse(
     input.operation.input,
   );
@@ -5080,9 +5083,9 @@ async function runStaticTemplateCatalogVisualSearch(input: {
   }
   const workflowVersion = frozenInput.workflowVersion;
   if (
-    input.catalog.entries.length !== STATIC_TEMPLATE_CATALOG_ENTRY_COUNT ||
-    input.catalog.pageSize !== STATIC_TEMPLATE_CATALOG_PAGE_SIZE ||
-    input.catalog.pageCount !== STATIC_TEMPLATE_CATALOG_PAGE_COUNT
+    input.catalog.entries.length !== pagination.entryCount ||
+    input.catalog.pageSize !== pagination.pageSize ||
+    input.catalog.pageCount !== pagination.pageCount
   ) {
     throw new TwentyFirstProviderFailure(
       "STATIC_TEMPLATE_CATALOG_INCOMPLETE",
@@ -5098,8 +5101,8 @@ async function runStaticTemplateCatalogVisualSearch(input: {
       (entry, index) =>
         entry.order !== index + 1 ||
         entry.page !==
-          Math.floor(index / STATIC_TEMPLATE_CATALOG_PAGE_SIZE) + 1 ||
-        entry.pageIndex !== index % STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
+          Math.floor(index / pagination.pageSize) + 1 ||
+        entry.pageIndex !== index % pagination.pageSize,
     )
   ) {
     throw new TwentyFirstProviderFailure(
@@ -5234,7 +5237,7 @@ async function runStaticTemplateCatalogVisualSearch(input: {
     },
   });
   const previewsByCandidateId = new Map(mirroredPreviews);
-  if (previewsByCandidateId.size !== STATIC_TEMPLATE_CATALOG_ENTRY_COUNT) {
+  if (previewsByCandidateId.size !== pagination.entryCount) {
     throw new TwentyFirstProviderFailure(
       "STATIC_TEMPLATE_CATALOG_PREVIEW_SET_INCOMPLETE",
       "冻结的建站模板预览集合不完整。",
@@ -5246,12 +5249,12 @@ async function runStaticTemplateCatalogVisualSearch(input: {
   const pages: StaticTemplateCatalogPagePersistenceInput[] = [];
   for (
     let pageNumber = 1;
-    pageNumber <= STATIC_TEMPLATE_CATALOG_PAGE_COUNT;
+    pageNumber <= pagination.pageCount;
     pageNumber += 1
   ) {
     const entries = sortedEntries.slice(
-      (pageNumber - 1) * STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
-      pageNumber * STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
+      (pageNumber - 1) * pagination.pageSize,
+      pageNumber * pagination.pageSize,
     );
     const candidates = entries.map(
       (entry, index): StaticTemplateBoardCandidate => ({
@@ -5295,9 +5298,9 @@ async function runStaticTemplateCatalogVisualSearch(input: {
       workflowVersion,
       catalogVersion: input.catalog.catalogVersion,
       pageNumber,
-      pageSize: STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
-      pageCount: STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
-      displayTarget: STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
+      pageSize: pagination.pageSize,
+      pageCount: pagination.pageCount,
+      displayTarget: candidates.length,
       candidates: candidates.map((candidate) => ({
         id: candidate.sampleId,
         sampleId: candidate.sampleId,
@@ -5360,7 +5363,7 @@ async function runStaticTemplateCatalogVisualSearch(input: {
       );
     }
     pages.push({
-      pageNumber: pageNumber as 1 | 2 | 3 | 4,
+      pageNumber: pageNumber as 1 | 2 | 3 | 4 | 5,
       selectionBundle,
       selectionBundleArtifact: artifact,
       candidates,
@@ -5386,15 +5389,15 @@ async function runStaticTemplateCatalogVisualSearch(input: {
       candidateCount: board.candidateCount,
       workflowVersion,
       catalogVersion: input.catalog.catalogVersion,
-      pageSize: STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
-      pageCount: STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
-      availablePages: STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
+      pageSize: pagination.pageSize,
+      pageCount: pagination.pageCount,
+      availablePages: pagination.pageCount,
       reservedPages: 0,
       canGenerateMore: false,
       admittedCount,
-      unavailableCount: STATIC_TEMPLATE_CATALOG_ENTRY_COUNT - admittedCount,
+      unavailableCount: pagination.entryCount - admittedCount,
     },
-    message: `32 个固定 Template 预览已准备完成；${admittedCount} 个已通过执行准入，可直接选择。`,
+    message: `${pagination.entryCount} 个固定 Template 预览已准备完成；${admittedCount} 个已通过执行准入，可直接选择。`,
   };
 }
 
@@ -5470,15 +5473,16 @@ export function createTwentyFirstSiteOpsProviderHandler(
         (supportsDefaultCandidatePool
           ? persistDefaultNativeTemplatePool
           : undefined);
+      const frozenPagination = staticTemplatePagination("catalogVersion" in parsedInput ? parsedInput.catalogVersion : undefined);
       if (context.existingBoard) {
         if (
           context.existingBoard.candidateCount !==
             (staticCatalogMode
-              ? STATIC_TEMPLATE_CATALOG_ENTRY_COUNT
+              ? frozenPagination.entryCount
               : SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE) ||
           (staticCatalogMode &&
             context.existingBoard.pageCount !==
-              STATIC_TEMPLATE_CATALOG_PAGE_COUNT)
+              frozenPagination.pageCount)
         ) {
           throw new TwentyFirstProviderFailure(
             "VISUAL_CANDIDATE_PAGE_INCOMPLETE",
@@ -5518,9 +5522,9 @@ export function createTwentyFirstSiteOpsProviderHandler(
               ? {
                   workflowVersion: parsedInput.workflowVersion,
                   catalogVersion: parsedInput.catalogVersion,
-                  pageSize: STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
-                  pageCount: STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
-                  availablePages: STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
+                  pageSize: frozenPagination.pageSize,
+                  pageCount: frozenPagination.pageCount,
+                  availablePages: frozenPagination.pageCount,
                   reservedPages: 0,
                   canGenerateMore: false,
                 }

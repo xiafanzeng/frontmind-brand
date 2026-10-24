@@ -1,3 +1,5 @@
+import JSZip from "jszip";
+import { STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "./static-template-catalog-manifest.js";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
@@ -93,15 +95,12 @@ function jsonBuffer(value: unknown) {
   return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-/** The current production admission lane is deliberately narrow: #22 is the
- * user-visible recovery baseline and must complete the full controlled Vite,
- * dist, static QA and browser QA pipeline. Every other frozen raw source stays
- * visible but unavailable until it receives the same immutable evidence. */
+/** #22 remains the recovery baseline. The three curated help centers use the
+ * same controlled compiler and browser QA; all other raw sources stay unavailable. */
 export const buildStaticTemplateExecutionAdmission: StaticTemplateExecutionAdmissionBuilder =
   async (input) => {
     if (
-      input.definition.candidateId !==
-      REQUIRED_STATIC_TEMPLATE_EXECUTION_CANDIDATE_ID
+      !STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.includes(input.definition.candidateId)
     ) {
       return {
         status: "unavailable",
@@ -117,7 +116,14 @@ export const buildStaticTemplateExecutionAdmission: StaticTemplateExecutionAdmis
     ) {
       throw new Error("STATIC_TEMPLATE_RAW_SOURCE_HASH_MISMATCH");
     }
-    const prepared = await prepareStaticTemplateExecutionSource({
+    const runtimeMedia = input.definition.candidateId === REQUIRED_STATIC_TEMPLATE_EXECUTION_CANDIDATE_ID ? REQUIRED_STATIC_TEMPLATE_RUNTIME_MEDIA : [];
+    const cached = input.cachedNormalizedSource;
+    const cachedBytes = cached ? await readFile(cached.path) : null;
+    if (cached && (!cachedBytes || cachedBytes.length !== cached.bytes || sha256(cachedBytes) !== cached.sha256 || cached.rawSourceSha256 !== input.rawSourceSha256)) throw new Error("STATIC_TEMPLATE_NORMALIZED_SOURCE_HASH_MISMATCH");
+    const prepared = cached && cachedBytes ? {
+      framework: "vite_react" as const, sourceArchive: cachedBytes,
+      sourceArchiveSha256: cached.sha256, sourceTreeSha256: cached.sourceTreeSha256,
+    } : await prepareStaticTemplateExecutionSource({
       templateId: input.definition.providerTemplateId,
       slug: input.definition.providerSlug,
       version: input.definition.sourceCommitSha,
@@ -125,8 +131,10 @@ export const buildStaticTemplateExecutionAdmission: StaticTemplateExecutionAdmis
       expectedArchiveSha256: input.rawSourceSha256,
       sourceSubdirectory: input.definition.sourceSubdirectory,
       signal: input.signal,
-      frozenRuntimeMedia: REQUIRED_STATIC_TEMPLATE_RUNTIME_MEDIA,
+      frozenRuntimeMedia: runtimeMedia,
     });
+    const sourceArchive = await JSZip.loadAsync(prepared.sourceArchive);
+    const sourceFileCount = Object.values(sourceArchive.files).filter(file => !file.dir).length;
     const operationToken = `catalog-admission:${input.catalogVersion}:${input.definition.candidateId}`;
     const validated = await validateNativeReactSourceArchive({
       archive: prepared.sourceArchive,
@@ -134,7 +142,7 @@ export const buildStaticTemplateExecutionAdmission: StaticTemplateExecutionAdmis
         operationToken,
         baseSourceSha256: prepared.sourceArchiveSha256,
         archiveSha256: prepared.sourceArchiveSha256,
-        fileCount: prepared.files.length + 1,
+        fileCount: sourceFileCount,
         preflightVersion: NATIVE_SOURCE_PREFLIGHT_V2_VERSION,
         preflightStatus: "passed",
         preflightSha256: NATIVE_SOURCE_PREFLIGHT_V2_SHA256,
@@ -185,7 +193,7 @@ export const buildStaticTemplateExecutionAdmission: StaticTemplateExecutionAdmis
         catalogVersion: input.catalogVersion,
         candidateId: input.definition.candidateId,
         rawSourceSha256: input.rawSourceSha256,
-        runtimeMedia: REQUIRED_STATIC_TEMPLATE_RUNTIME_MEDIA,
+        runtimeMedia,
       },
       normalizedSourceSha256: prepared.sourceArchiveSha256,
       sourceTreeSha256: prepared.sourceTreeSha256,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { staticTemplatePageLength, staticTemplatePagination } from "./static-template-pagination.js";
 import {
   siteBriefSchema,
   siteOpsBuildStatusSchema,
@@ -95,14 +96,14 @@ export const siteOpsVisualCandidateProjectionSchema = z
 export const siteOpsVisualCandidatePageProjectionSchema = z
   .object({
     batchId: z.string().uuid(),
-    page: z.number().int().min(1).max(4),
+    page: z.number().int().min(1).max(5),
     candidates: z
       .array(siteOpsVisualCandidateProjectionSchema)
       .refine(
         (candidates) =>
-          candidates.length === 8 ||
+          candidates.length === 3 || candidates.length === 8 ||
           candidates.length === SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE,
-        "Visual candidate page must contain 8 static or 9 historical candidates",
+        "Visual candidate page must contain 3 or 8 static or 9 historical candidates",
       ),
   })
   .strict();
@@ -111,26 +112,40 @@ export const siteOpsVisualGenerationProjectionSchema = z
   .object({
     status: z.enum(["idle", "generating", "retryable_error"]).default("idle"),
     targetPage: z
-      .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)])
+      .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .nullable()
       .default(null),
-    generatedPages: z.number().int().min(0).max(4),
-    availablePages: z.number().int().min(0).max(4).optional(),
-    reservedPages: z.number().int().min(0).max(4).optional(),
+    generatedPages: z.number().int().min(0).max(5),
+    availablePages: z.number().int().min(0).max(5).optional(),
+    reservedPages: z.number().int().min(0).max(5).optional(),
     maxPages: z.union([
       z.literal(SITEOPS_VISUAL_CANDIDATE_MAX_PAGES),
       z.literal(4),
+      z.literal(5),
     ]),
     workflowVersion: z.string().trim().min(1).max(32).optional(),
     catalogVersion: z.string().trim().min(1).max(191).optional(),
     pageSize: z.union([z.literal(8), z.literal(9)]).optional(),
-    pageCount: z.union([z.literal(3), z.literal(4)]).optional(),
+    pageCount: z.union([z.literal(3), z.literal(4), z.literal(5)]).optional(),
     canGenerateMore: z.boolean(),
     canSelectExisting: z.boolean().default(true),
     retryAction: z.enum(["start", "supplemental"]).nullable().optional(),
     failureCategory: siteOpsVisualFailureCategorySchema.nullable().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const staticCatalog = value.workflowVersion === "2.8.0" || value.workflowVersion === "2.9.0";
+    const pageCount = staticCatalog ? staticTemplatePagination(value.catalogVersion).pageCount : 4;
+    if (
+      (staticCatalog && value.maxPages !== pageCount) ||
+      value.maxPages > pageCount || value.generatedPages > pageCount ||
+      (value.availablePages ?? 0) > pageCount || (value.reservedPages ?? 0) > pageCount ||
+      (value.targetPage ?? 0) > pageCount ||
+      (value.pageCount !== undefined && (staticCatalog ? value.pageCount !== pageCount : value.pageCount > pageCount))
+    ) {
+      context.addIssue({ code: "custom", message: "Visual generation must match its frozen catalog pagination" });
+    }
+  });
 
 /** Public state for one immutable build in the current logical task. */
 export const siteOpsBuildProjectionSchema = z
@@ -381,7 +396,7 @@ export const siteOpsObservationV1Schema = z
       .default([]),
     visualCandidatePages: z
       .array(siteOpsVisualCandidatePageProjectionSchema)
-      .max(4)
+      .max(5)
       .default([]),
     visualGeneration: siteOpsVisualGenerationProjectionSchema.default({
       status: "idle",
@@ -422,16 +437,16 @@ export const siteOpsObservationV1Schema = z
     const staticCatalog =
       value.visualGeneration.workflowVersion === "2.8.0" ||
       value.visualGeneration.workflowVersion === "2.9.0";
-    const expectedPageSize = staticCatalog
-      ? 8
-      : SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE;
     value.visualCandidatePages.forEach((page, index) => {
-      if (page.candidates.length !== expectedPageSize) {
+      const expectedPageSize = staticCatalog
+        ? staticTemplatePageLength(value.visualGeneration.catalogVersion, page.page)
+        : SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE;
+      if (page.candidates.length !== expectedPageSize || page.page > value.visualGeneration.maxPages) {
         context.addIssue({
           code: "custom",
           path: ["visualCandidatePages", index, "candidates"],
           message: staticCatalog
-            ? "Static catalog visual pages must contain exactly 8 candidates"
+            ? "Static catalog visual pages must match their frozen catalog pagination"
             : "Historical visual pages must contain exactly 9 candidates",
         });
       }

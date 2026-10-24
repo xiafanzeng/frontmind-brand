@@ -28,6 +28,7 @@ import {
   STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
   STATIC_TEMPLATE_CATALOG_VERSION,
   STATIC_TEMPLATE_CATALOG_WORKFLOW_VERSION,
+  STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS,
   type FrozenStaticTemplateDefinition,
 } from "./static-template-catalog-manifest.js";
 import {
@@ -370,6 +371,7 @@ export type StaticTemplateExecutionAdmissionBuilder = (input: {
   rawSourcePath: string;
   rawSourceSha256: string;
   rawSourceBytes: number;
+  cachedNormalizedSource?: { path: string; sha256: string; bytes: number; sourceTreeSha256: string; rawSourceSha256: string };
   signal: AbortSignal;
 }) => Promise<StaticTemplateExecutionAdmissionMaterial>;
 
@@ -1665,6 +1667,7 @@ async function materializeExecutionAdmission(input: {
   rawSourcePath: string;
   rawSourceSha256: string;
   rawSourceBytes: number;
+  cachedNormalizedSource?: { path: string; sha256: string; bytes: number; sourceTreeSha256: string; rawSourceSha256: string };
   builder?: StaticTemplateExecutionAdmissionBuilder;
 }) {
   if (!input.builder) return unavailableExecutionAdmission(input);
@@ -1677,12 +1680,12 @@ async function materializeExecutionAdmission(input: {
       rawSourcePath: input.rawSourcePath,
       rawSourceSha256: input.rawSourceSha256,
       rawSourceBytes: input.rawSourceBytes,
+      cachedNormalizedSource: input.cachedNormalizedSource,
       signal: controller.signal,
     });
   } catch (error) {
     if (
-      input.definition.candidateId ===
-      "static-template-22-hirael-agency-landing"
+      STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.includes(input.definition.candidateId)
     ) {
       throw error;
     }
@@ -1800,6 +1803,7 @@ async function materializeEntry(input: {
   fetchImpl: typeof fetch;
   sourceArchives: Map<string, Promise<UpstreamSourceArchive>>;
   executionAdmissionBuilder?: StaticTemplateExecutionAdmissionBuilder;
+  reuseEntry?: StaticTemplateCatalogEntry;
 }) {
   const sourceTarget = path.join(
     input.stagingDirectory,
@@ -1813,7 +1817,13 @@ async function materializeEntry(input: {
   );
   let sourceHash: DownloadResult;
   let archive: ArchiveInspection;
-  if (input.definition.sourceSubdirectory) {
+  if (input.reuseEntry) {
+    await copyStaticTemplateSourceArchive({ source: resolveCatalogAssetPath(input.root, input.reuseEntry.rawSourcePath), target: sourceTarget });
+    await copyStaticTemplateSourceArchive({ source: resolveCatalogAssetPath(input.root, input.reuseEntry.previewPath), target: previewTarget });
+    sourceHash = await hashFile(sourceTarget);
+    if (sourceHash.sha256 !== input.reuseEntry.rawSourceSha256) throw new StaticTemplateCatalogError("STATIC_TEMPLATE_CATALOG_RAW_SOURCE_HASH_MISMATCH");
+    archive = await inspectStaticTemplateSourceArchive(sourceTarget);
+  } else if (input.definition.sourceSubdirectory) {
     const upstream = await getUpstreamSourceArchive(input);
     archive = await projectStaticTemplateSourceArchive({
       archivePath: upstream.path,
@@ -1854,6 +1864,12 @@ async function materializeEntry(input: {
     });
     preview = await inspectPreview(previewTarget);
   }
+  if (input.reuseEntry && (
+    previewHash.sha256 !== input.reuseEntry.previewSha256 ||
+    previewHash.bytes !== input.reuseEntry.previewBytes
+  )) {
+    throw new StaticTemplateCatalogError("STATIC_TEMPLATE_CATALOG_PREVIEW_HASH_MISMATCH");
+  }
   const finalDirectory = finalCatalogDirectory(input.root);
   const rawSourcePath = relativeAssetPath(
     input.root,
@@ -1870,6 +1886,13 @@ async function materializeEntry(input: {
     rawSourcePath: sourceTarget,
     rawSourceSha256: sourceHash.sha256,
     rawSourceBytes: sourceHash.bytes,
+    cachedNormalizedSource: input.reuseEntry?.executionAdmission.status === "admitted" ? {
+      path: resolveCatalogAssetPath(input.root, input.reuseEntry.executionAdmission.normalizedSourcePath),
+      sha256: input.reuseEntry.executionAdmission.normalizedSourceSha256,
+      bytes: input.reuseEntry.executionAdmission.normalizedSourceBytes,
+      sourceTreeSha256: input.reuseEntry.executionAdmission.sourceTreeSha256,
+      rawSourceSha256: input.reuseEntry.rawSourceSha256,
+    } : undefined,
     builder: input.executionAdmissionBuilder,
   });
   const executionSource =
@@ -2086,10 +2109,7 @@ function assertCatalogCoordinates(catalog: StaticTemplateCatalog) {
   }
   if (
     strictCurrent &&
-    catalog.entries.find(
-      (entry) =>
-        entry.candidateId === "static-template-22-hirael-agency-landing",
-    )?.executionAdmission.status !== "admitted"
+    !STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.every(id => catalog.entries.some(entry => entry.candidateId === id && entry.executionAdmission.status === "admitted"))
   ) {
     throw new StaticTemplateCatalogError(
       "STATIC_TEMPLATE_CATALOG_REQUIRED_ADMISSION_MISSING",
@@ -2895,6 +2915,13 @@ export async function seedStaticTemplateCatalog(options: SeedOptions = {}) {
         );
       }
     }
+    let reuseCatalog: StaticTemplateCatalog | null = null;
+    try {
+      const previous = await loadStaticTemplateCatalogVersion("21st-included-recommended-20260828-v2", { rootDir: root, verifyAssetHashes: true });
+      if (previous?.schemaVersion === CATALOG_SCHEMA_VERSION) reuseCatalog = previous;
+    } catch (error) {
+      if (!isRecoverableCatalogCorruption(error)) throw error;
+    }
     const stagingDirectory = stagingCatalogDirectory(root);
     await mkdir(path.join(stagingDirectory, "sources"), {
       recursive: true,
@@ -2933,6 +2960,10 @@ export async function seedStaticTemplateCatalog(options: SeedOptions = {}) {
             definition: FROZEN_STATIC_TEMPLATE_CATALOG[index]!,
             fetchImpl: options.fetchImpl ?? fetch,
             sourceArchives,
+            reuseEntry: reuseCatalog?.entries.find(entry => {
+              const definition = FROZEN_STATIC_TEMPLATE_CATALOG[index]!;
+              return entry.candidateId === definition.candidateId && entry.sourceOwner === definition.sourceOwner && entry.sourceRepo === definition.sourceRepo && entry.sourceCommitSha === definition.sourceCommitSha && entry.sourceSubdirectory === definition.sourceSubdirectory && entry.providerTemplateId === definition.providerTemplateId;
+            }),
             executionAdmissionBuilder: options.executionAdmissionBuilder,
           });
         } catch (error) {
@@ -2990,12 +3021,8 @@ export async function getStaticTemplateCatalogReadiness(
           const admittedCount = catalog.entries.filter(
             (entry) => entry.executionAdmission.status === "admitted",
           ).length;
-          const requiredAdmissionReady =
-            catalog.entries.find(
-              (entry) =>
-                entry.candidateId ===
-                "static-template-22-hirael-agency-landing",
-            )?.executionAdmission.status === "admitted";
+          const requiredAdmissionReady = STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.every(id =>
+            catalog.entries.some(entry => entry.candidateId === id && entry.executionAdmission.status === "admitted"));
           return {
             ready: true as const,
             expectedCatalogVersion: STATIC_TEMPLATE_CATALOG_VERSION,
@@ -3031,5 +3058,17 @@ export async function getStaticTemplateCatalogReadiness(
           ? error.code
           : "STATIC_TEMPLATE_CATALOG_INVALID",
     };
+  }
+}
+
+/** Report the actual pointer without interpreting it as the current source version. */
+export async function readStaticTemplateCatalogActiveVersion(options: CatalogOptions = {}) {
+  try {
+    const loaded = await readJson(path.join(catalogRoot(assetRoot(options)), "active.json"));
+    return activeSchema.parse(loaded.value).catalogVersion;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    if (error instanceof z.ZodError || error instanceof SyntaxError) return null;
+    throw error;
   }
 }
