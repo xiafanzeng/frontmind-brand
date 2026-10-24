@@ -131,3 +131,28 @@ test("keyword adapter includes new references and scripts without rebuilding unc
     await fs.unlink(environment);
   }
 }));
+
+test("rebuilt keyword archives retain identical bytes across different build clocks", async t => fixture(async root => {
+  const sourceRoot = path.join(root, "source");
+  await fs.cp(fileURLToPath(new URL("../workflows/generate-brand-question-universe", import.meta.url)), sourceRoot, { recursive: true });
+  await fs.appendFile(path.join(sourceRoot, "source/SKILL.md"), "\nA changed upstream instruction.\n");
+  const nestedReference = path.join(sourceRoot, "frontmind-adapter-v1.0.0/references/nested/clock.md");
+  await fs.mkdir(path.dirname(nestedReference), { recursive: true });
+  await fs.writeFile(nestedReference, "A nested adapter resource.\n");
+
+  t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2021, 0, 1) });
+  const firstOutput = path.join(root, "first");
+  const first = await buildKeywordWorkflow(firstOutput, { sourceRoot });
+  t.mock.timers.setTime(Date.UTC(2031, 0, 1));
+  const secondOutput = path.join(root, "second");
+  const second = await buildKeywordWorkflow(secondOutput, { sourceRoot });
+  for (const kind of ["upstream", "adapter"]) {
+    const firstBytes = await fs.readFile(path.join(firstOutput, "archives", first[kind].filename));
+    const secondBytes = await fs.readFile(path.join(secondOutput, "archives", second[kind].filename));
+    assert.equal(second[kind].sha256, first[kind].sha256);
+    assert.deepEqual(secondBytes, firstBytes);
+    const archive = await JSZip.loadAsync(firstBytes);
+    assert.ok(Object.values(archive.files).every(entry => !entry.dir));
+    assert.ok(Object.values(archive.files).every(entry => entry.date.toISOString() === "2020-01-01T00:00:00.000Z"));
+  }
+}));
