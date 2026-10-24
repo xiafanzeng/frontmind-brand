@@ -3,13 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import JSZip from "jszip";
+import { buildSiteOpsSocialWorkflows } from "./build-siteops-social-workflows.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const workflows = [
   "react-static-company-site-workflow-v2.6.0",
-  "siteops-wechat-package-v1.0.0",
-  "siteops-xiaohongshu-package-v1.0.0",
 ];
 
 /** Package the source whose immutable manifest the runtime already verifies.
@@ -42,6 +41,8 @@ export async function buildSiteOpsWorkflows(output = path.join(root, "../dist/wo
     catch (error) { if (error.code !== "EEXIST" || !(await fs.readFile(destination)).equals(bytes)) throw error; }
     artifacts.push({ name: manifest.name, version: manifest.version, filename, sha256, manifestSha256: hash(manifestBytes) });
   }
+  const social = await buildSiteOpsSocialWorkflows(output);
+  artifacts.push(...Object.values(social.channels));
   // 2.9 uses module-owned prompt/schema and materialization source. These are
   // source inputs, not customer runs or downloaded site/template artifacts.
   const sourceFiles = ["contracts/siteops.ts", "server/siteops/site-content-plan.ts", "server/siteops/native-react-source.ts", "server/siteops/manus-provider.ts"];

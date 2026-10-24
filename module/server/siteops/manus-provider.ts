@@ -2,6 +2,7 @@ import type {DashboardAgentClient,DashboardAgentClientOptions} from "./provider-
 import type {BrandSchema} from '../../schema/index.js';
 import type {MySql2Database} from 'drizzle-orm/mysql2';
 import type {SQL} from 'drizzle-orm';
+import { readBuiltSiteOpsSocialWorkflowPackage } from "./social-workflow-runtime.js";
 type Port=(...args:any[])=>any;
 type SiteOperation=BrandSchema['siteOperations']['$inferSelect'];
 import type {ManusV2MessageEvent,ManusV2Attachment,ManusV2StructuredOutputSchema,ProviderError,CredentialMetadata} from './provider-ports.js';
@@ -1813,6 +1814,8 @@ function verifiedVisualEvidence(candidate: {
   return evidence;
 }
 
+// Historical fallback coordinates. Current builds use the module-generated
+// descriptor and keep these original manifest hashes unchanged.
 const SOCIAL_WORKFLOWS = {
   wechat: {
     directory: "siteops-wechat-package-v1.0.0",
@@ -1836,6 +1839,8 @@ const socialWorkflowPackages = new Map<
 export async function loadVerifiedSiteOpsSocialWorkflowPackage(
   channel: keyof typeof SOCIAL_WORKFLOWS,
 ) {
+  const built = await readBuiltSiteOpsSocialWorkflowPackage(channel);
+  if (built) return built.bytes;
   const existing = socialWorkflowPackages.get(channel);
   if (existing) return existing;
   const definition = SOCIAL_WORKFLOWS[channel];
@@ -1958,13 +1963,15 @@ export async function getSiteOpsSocialWorkflowReadiness() {
     Promise.all(
       (
         Object.keys(SOCIAL_WORKFLOWS) as Array<keyof typeof SOCIAL_WORKFLOWS>
-      ).map(async (channel) => ({
-        channel,
-        version: SOCIAL_WORKFLOWS[channel].version,
-        manifestSha256: SOCIAL_WORKFLOWS[channel].manifestSha256,
-        packageBytes: (await loadVerifiedSiteOpsSocialWorkflowPackage(channel))
-          .length,
-      })),
+      ).map(async (channel) => {
+        const built = await readBuiltSiteOpsSocialWorkflowPackage(channel);
+        return {
+          channel,
+          version: built?.version ?? SOCIAL_WORKFLOWS[channel].version,
+          manifestSha256: built?.manifestSha256 ?? SOCIAL_WORKFLOWS[channel].manifestSha256,
+          packageBytes: built?.bytes.length ?? (await loadVerifiedSiteOpsSocialWorkflowPackage(channel)).length,
+        };
+      }),
     ),
   ]);
   return {

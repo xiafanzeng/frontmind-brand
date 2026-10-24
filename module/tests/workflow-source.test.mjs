@@ -63,7 +63,7 @@ test("knowledge Skill rejects missing required files, linked resources, and envi
   await fs.unlink(required);
   await assert.rejects(packageSocraticKnowledgeBaseSkill({ sourceRoot, outputPath }), /required source is missing/u);
   await fs.writeFile(required, original);
-  await fs.symlink(path.join(sourceRoot, "references"), path.join(sourceRoot, "linked-resources"));
+  await fs.symlink(path.join(sourceRoot, "references"), path.join(sourceRoot, "linked-resources"), process.platform === "win32" ? "junction" : "dir");
   await assert.rejects(packageSocraticKnowledgeBaseSkill({ sourceRoot, outputPath }), /symlink/u);
   await fs.unlink(path.join(sourceRoot, "linked-resources"));
   for (const filename of [".env", "references/.env.local"]) {
