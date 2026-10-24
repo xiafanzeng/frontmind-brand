@@ -1663,9 +1663,15 @@ export const visualSelectionBundleV7Schema = z
     catalogVersion: z.string().trim().min(1).max(191),
     pageNumber: z.number().int().min(1).max(5),
     pageSize: z.literal(8),
+<<<<<<< Updated upstream
     pageCount: z.number().int().min(4).max(5),
     displayTarget: z.number().int().min(1).max(8),
     candidates: z.array(visualCandidateV7Schema).min(1).max(8),
+=======
+    pageCount: z.union([z.literal(4), z.literal(5)]),
+    displayTarget: z.literal(8),
+    candidates: z.array(visualCandidateV7Schema).length(8),
+>>>>>>> Stashed changes
     selectedCandidateId: z.string().trim().min(1).max(191).nullable(),
     delegated: z.boolean().default(false),
     degradedReasons: z.array(z.string().max(500)).max(30).default([]),
