@@ -1,7 +1,7 @@
 /** Module-owned maintenance command. Never runs in the browser/API process. */
 export async function runStaticTemplateCatalogCli(args: string[]) {
   if (args.length === 1 && args[0] === "--help") {
-    process.stdout.write(`${JSON.stringify({ cliVersion: 2, capabilities: ["ensure-ready-v1", "v2-to-v3-cache-reuse"], options: ["--ensure-ready", "--check-active", "--root ABS_DIR", "--concurrency N"], assetRootEnvironment: "FRONTMIND_DASHBOARD_ASSET_DIR" })}\n`);
+    process.stdout.write(`${JSON.stringify({ cliVersion: 2, capabilities: ["ensure-ready-v1", "v2-to-v4-cache-reuse", "v3-to-v4-cache-reuse", "required-admission-binding-v1"], options: ["--ensure-ready", "--check-active", "--root ABS_DIR", "--concurrency N"], assetRootEnvironment: "FRONTMIND_DASHBOARD_ASSET_DIR" })}\n`);
     return;
   }
   let command: "seed" | "ensure" | "check" = "seed";

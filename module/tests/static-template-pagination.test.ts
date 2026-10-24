@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { visualSelectionBundleV7Schema } from "../contracts/siteops.js";
 import { siteOpsObservationV1Schema } from "../contracts/siteops-contract.js";
-import { CURATED_STATIC_TEMPLATE_CATALOG_VERSION, staticTemplatePageLength, staticTemplatePagination } from "../contracts/static-template-pagination.js";
+import { CURATED_STATIC_TEMPLATE_CATALOG_VERSION, PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION, staticTemplatePageLength, staticTemplatePagination } from "../contracts/static-template-pagination.js";
 import { completePublishedVisualPageCount, projectSiteOpsVisualGeneration, projectStaticTemplateCatalogVisualReadiness, resolveVisualCatalogObservationCoordinates } from "../server/siteops/service.js";
 import { FROZEN_STATIC_TEMPLATE_CATALOG, STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "../server/siteops/static-template-catalog-manifest.js";
 
@@ -67,7 +67,7 @@ function observation(version: string) {
 }
 
 describe("frozen catalog pagination", () => {
-  it("keeps v2 page four readable after v3 becomes current", () => {
+  it("keeps v2 page four readable after catalog upgrades", () => {
     expect(visualSelectionBundleV7Schema.parse(bundle(oldVersion, 4)).candidates).toHaveLength(8);
     const coordinates = resolveVisualCatalogObservationCoordinates({ frozenVisualInput: { workflowVersion: "2.9.0", catalogVersion: oldVersion }, hasAnyVisualOperation: true, visibleBatchCount: 4 });
     expect(coordinates.pageCount).toBe(4);
@@ -78,7 +78,7 @@ describe("frozen catalog pagination", () => {
     expect(pages.map(page => page.candidates.length)).toEqual([8, 8, 8, 8, 3]);
     expect(pages.flatMap(page => page.candidates).at(-1)?.catalogPosition).toBe(35);
   });
-  it("serializes all five v3 pages through the public observation contract", () => {
+  it("serializes all five current pages through the public observation contract", () => {
     const current = siteOpsObservationV1Schema.parse(observation(CURATED_STATIC_TEMPLATE_CATALOG_VERSION));
     expect(current.visualCandidatePages.map(page => page.candidates.length)).toEqual([8, 8, 8, 8, 3]);
     expect(current.visualGeneration).toMatchObject({ maxPages: 5, generatedPages: 5, canSelectExisting: true });
@@ -86,6 +86,13 @@ describe("frozen catalog pagination", () => {
     expect(siteOpsObservationV1Schema.safeParse({
       ...observation(oldVersion), visualCandidatePages: current.visualCandidatePages,
     }).success).toBe(false);
+  });
+  it("keeps frozen v3 bundles and public observations at 35 entries and five pages", () => {
+    const version = PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION;
+    expect(visualSelectionBundleV7Schema.parse(bundle(version, 5)).candidates).toHaveLength(3);
+    const historical = siteOpsObservationV1Schema.parse(observation(version));
+    expect(historical.visualGeneration).toMatchObject({ maxPages: 5, generatedPages: 5 });
+    expect(historical.visualCandidatePages.map(page => page.candidates.length)).toEqual([8, 8, 8, 8, 3]);
   });
   it("rejects mixed versions, incomplete full pages and extra legacy pages", () => {
     expect(visualSelectionBundleV7Schema.safeParse({ ...bundle(oldVersion, 4), pageCount: 5 }).success).toBe(false);

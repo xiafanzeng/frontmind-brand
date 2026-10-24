@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import { chromium } from "playwright";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { FROZEN_STATIC_TEMPLATE_CATALOG, STATIC_TEMPLATE_CATALOG_VERSION } from "../server/siteops/static-template-catalog-manifest.js";
 import { buildStaticTemplateExecutionAdmission } from "../server/siteops/static-template-execution-admission.js";
 
@@ -41,6 +41,26 @@ it.runIf(browserInstalled).each(["helpcenter-search", "helpcenter-docs", "helpce
       const receipt = JSON.parse(result.browserReceipt.toString());
       expect(receipt.binding).toMatchObject({ catalogVersion: STATIC_TEMPLATE_CATALOG_VERSION, candidateId: definition.candidateId, rawSourceSha256: digest, runtimeMedia: [] });
       expect(receipt.normalizedSourceSha256).toBe(createHash("sha256").update(result.normalizedSource).digest("hex"));
+      if (slug === "helpcenter-search") {
+        const cachedPath = path.join(root, "normalized-source.zip");
+        await writeFile(cachedPath, result.normalizedSource);
+        const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Cached admission must stay offline"));
+        try {
+          const rebound = await buildStaticTemplateExecutionAdmission({
+            catalogVersion: STATIC_TEMPLATE_CATALOG_VERSION, definition,
+            rawSourcePath: target, rawSourceSha256: digest, rawSourceBytes: raw.length,
+            cachedNormalizedSource: { path: cachedPath, sha256: receipt.normalizedSourceSha256,
+              bytes: result.normalizedSource.length, sourceTreeSha256: result.sourceTreeSha256, rawSourceSha256: digest },
+            signal: AbortSignal.timeout(120_000),
+          });
+          expect(rebound.status).toBe("admitted");
+          if (rebound.status !== "admitted") throw new Error(rebound.code);
+          expect(rebound.normalizedSource).toEqual(result.normalizedSource);
+          expect(JSON.parse(rebound.browserReceipt.toString()).binding.runtimeMedia).toEqual([]);
+          expect(JSON.parse(rebound.qa.toString()).browser.available).toBe(true);
+          expect(network).not.toHaveBeenCalled();
+        } finally { network.mockRestore(); }
+      }
     } finally { await rm(root, { recursive: true, force: true }); }
   }, 120_000,
 );
