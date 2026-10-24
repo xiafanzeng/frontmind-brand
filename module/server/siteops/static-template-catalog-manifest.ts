@@ -7,7 +7,8 @@ import {
  * Immutable input coordinates for the FrontMind 2.8 Template catalog.
  *
  * The first 32 rows preserve the 2026-08-28 21st projection; v3 appends three
- * FrontMind help-center layouts. Customer requests never refresh or reorder them.
+ * FrontMind help-center layouts. V4 refreshes admission bindings without changing
+ * those definitions. Customer requests never refresh or reorder them.
  * The seed command downloads the exact immutable GitHub commit and preview for
  * every row, then records the resulting byte hashes in the active manifest.
  */

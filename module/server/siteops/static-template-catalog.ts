@@ -20,6 +20,11 @@ import { pipeline } from "node:stream/promises";
 import { createInflateRaw, inflateRawSync } from "node:zlib";
 import sharp from "sharp";
 import { z } from "zod";
+import {
+  CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+  PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+} from "../../contracts/static-template-pagination.js";
+import { staticTemplateRuntimeMedia } from "./static-template-admission-policy.js";
 
 import {
   FROZEN_STATIC_TEMPLATE_CATALOG,
@@ -1777,7 +1782,7 @@ async function materializeExecutionAdmission(input: {
     browserReceiptBytes: browserReceipt.bytes,
     qaStatus: material.qaStatus,
   } as const;
-  return admittedExecutionSchema.parse({
+  const validatedAdmission = admittedExecutionSchema.parse({
     ...admitted,
     admissionEvidenceSha256: staticTemplateAdmissionEvidenceSha256({
       catalogVersion: admitted.binding.catalogVersion,
@@ -1794,6 +1799,10 @@ async function materializeExecutionAdmission(input: {
       qaStatus: admitted.qaStatus,
     }),
   });
+  if (STATIC_TEMPLATE_CATALOG_VERSION === CURATED_STATIC_TEMPLATE_CATALOG_VERSION) {
+    assertRequiredAdmissionBinding(validatedAdmission, material.browserReceipt, material.qa);
+  }
+  return validatedAdmission;
 }
 
 async function materializeEntry(input: {
@@ -2168,6 +2177,60 @@ async function validateCatalogAssets(
   );
 }
 
+/** Current admissions bind actual browser evidence and the candidate's media policy.
+ * Historical immutable catalogs retain their original interpretation. */
+function assertRequiredAdmissionBinding(
+  admission: z.infer<typeof admittedExecutionSchema>,
+  browserReceipt: Buffer,
+  qaBytes: Buffer,
+) {
+  if (!STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.includes(admission.binding.candidateId)) return;
+  try {
+    const receipt = JSON.parse(browserReceipt.toString("utf8"));
+    const qa = JSON.parse(qaBytes.toString("utf8"));
+    const binding = receipt?.binding;
+    const media = binding?.runtimeMedia;
+    const expectedMedia = staticTemplateRuntimeMedia(admission.binding.candidateId);
+    const digests = ["normalizedSourceSha256", "sourceTreeSha256", "runtimeContractSha256",
+      "executionShellSha256", "deliveryContractSha256", "distSha256", "qaSha256"] as const;
+    if (
+      browserReceipt.length !== admission.browserReceiptBytes ||
+      createHash("sha256").update(browserReceipt).digest("hex") !== admission.browserReceiptSha256 ||
+      qaBytes.length !== admission.qaBytes ||
+      createHash("sha256").update(qaBytes).digest("hex") !== admission.qaSha256 ||
+      receipt?.schemaVersion !== 1 || receipt?.receiptKind !== "frontmind_static_template_browser_admission" ||
+      binding?.catalogVersion !== admission.binding.catalogVersion ||
+      binding?.candidateId !== admission.binding.candidateId ||
+      binding?.rawSourceSha256 !== admission.binding.rawSourceSha256 ||
+      digests.some(key => receipt[key] !== admission[key]) ||
+      !Array.isArray(media) || media.length !== expectedMedia.length ||
+      expectedMedia.some((expected, index) => {
+        const actual = media[index];
+        return actual?.kind !== expected.kind || actual?.url !== expected.url ||
+          actual?.bytes !== expected.bytes || actual?.sha256 !== expected.sha256;
+      }) ||
+      receipt?.browser?.available !== true || qa?.passed !== true || qa?.browser?.available !== true
+      || receipt?.buildDelivery?.qaStatus !== admission.qaStatus
+    ) throw new Error("Invalid required admission binding");
+  } catch {
+    throw new StaticTemplateCatalogError("STATIC_TEMPLATE_CATALOG_ADMISSION_BINDING_INVALID");
+  }
+}
+
+async function validateRequiredAdmissionBindings(root: string, catalog: ReadableStaticTemplateCatalog) {
+  if (catalog.catalogVersion !== CURATED_STATIC_TEMPLATE_CATALOG_VERSION ||
+      catalog.schemaVersion !== CATALOG_SCHEMA_VERSION) return;
+  await Promise.all(catalog.entries.map(async entry => {
+    const admission = entry.executionAdmission;
+    if (admission.status !== "admitted" || !STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.includes(entry.candidateId)) return;
+    const [receipt, qa] = await Promise.all([
+      readFile(resolveCatalogAssetPath(root, admission.browserReceiptPath)),
+      readFile(resolveCatalogAssetPath(root, admission.qaPath)),
+    ]);
+    assertRequiredAdmissionBinding(admission, receipt, qa);
+  }));
+}
+
 function expectedCatalogAssets(catalog: ReadableStaticTemplateCatalog) {
   if (catalog.schemaVersion === LEGACY_CATALOG_SCHEMA_VERSION) {
     return catalog.entries.flatMap((entry) => [
@@ -2419,6 +2482,7 @@ async function loadCatalogManifestAt(
   const { bytes, value } = await readJson(resolved);
   const catalog = readableCatalogSchema.parse(value);
   assertReadableCatalogCoordinates(catalog);
+  await validateRequiredAdmissionBindings(root, catalog);
   if (options.verifyAssetSizes) {
     await validateCatalogAssets(root, catalog);
   }
@@ -2916,11 +2980,16 @@ export async function seedStaticTemplateCatalog(options: SeedOptions = {}) {
       }
     }
     let reuseCatalog: StaticTemplateCatalog | null = null;
-    try {
-      const previous = await loadStaticTemplateCatalogVersion("21st-included-recommended-20260828-v2", { rootDir: root, verifyAssetHashes: true });
-      if (previous?.schemaVersion === CATALOG_SCHEMA_VERSION) reuseCatalog = previous;
-    } catch (error) {
-      if (!isRecoverableCatalogCorruption(error)) throw error;
+    for (const previousVersion of [PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION, "21st-included-recommended-20260828-v2"]) {
+      try {
+        const previous = await loadStaticTemplateCatalogVersion(previousVersion, { rootDir: root, verifyAssetHashes: true });
+        if (previous?.schemaVersion === CATALOG_SCHEMA_VERSION) {
+          reuseCatalog = previous;
+          break;
+        }
+      } catch (error) {
+        if (!isRecoverableCatalogCorruption(error)) throw error;
+      }
     }
     const stagingDirectory = stagingCatalogDirectory(root);
     await mkdir(path.join(stagingDirectory, "sources"), {
