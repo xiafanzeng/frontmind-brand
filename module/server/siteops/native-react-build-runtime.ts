@@ -814,6 +814,16 @@ async function linkHostDependencies(root: string, dependencies: string[]) {
   for (const dependency of dependencies) {
     const target = path.join(modules, ...dependency.split("/"));
     await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    // Windows rejects unprivileged directory symlinks (EPERM without
+    // Developer Mode); junctions keep the staging build runnable there.
+    if (process.platform === "win32") {
+      await (await import("node:fs/promises")).symlink(
+        hostPackageRoot(dependency),
+        target,
+        "junction",
+      );
+      continue;
+    }
     await symlink(hostPackageRoot(dependency), target, "dir");
   }
 }
