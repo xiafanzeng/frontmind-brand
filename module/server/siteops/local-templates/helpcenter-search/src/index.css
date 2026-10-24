@@ -1,19 +1,110 @@
 :root {
-  --hc-bg: #ffffff;
-  --hc-bg-muted: #f6f8fa;
-  --hc-fg: #101828;
-  --hc-fg-muted: #667085;
-  --hc-accent: #1f5eff;
-  --hc-accent-strong: #1a4ddb;
-  --hc-accent-soft: #eef3ff;
-  --hc-border: #e4e8ee;
-  --hc-border-strong: #d3d9e2;
   --hc-radius: 12px;
   --hc-radius-lg: 16px;
   --hc-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
   --hc-font:
     "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system,
     "Segoe UI", sans-serif;
+}
+
+/* Palette layers: one block per named palette. The four canonical blueprint
+ * variables (--canvas/--ink/--accent/--muted) stay overridable by the
+ * materialization runtime; [data-palette] only re-skins the derived tokens. */
+
+:root,
+[data-palette="azure"] {
+  --canvas: #ffffff;
+  --ink: #101828;
+  --accent: #1f5eff;
+  --muted: #667085;
+  --hc-bg: #ffffff;
+  --hc-bg-muted: #f6f8fa;
+  --hc-fg: #101828;
+  --hc-fg-muted: #667085;
+  --hc-fg-faint: #98a2b3;
+  --hc-accent: #1f5eff;
+  --hc-accent-strong: #1a4ddb;
+  --hc-accent-soft: #eef3ff;
+  --hc-accent-border: #dbe5ff;
+  --hc-on-accent: #ffffff;
+  --hc-border: #e4e8ee;
+  --hc-border-strong: #d3d9e2;
+}
+
+[data-palette="warm"] {
+  --canvas: #fbfaf8;
+  --ink: #292524;
+  --accent: #b45309;
+  --muted: #78716c;
+  --hc-bg: #fbfaf8;
+  --hc-bg-muted: #f4f2ee;
+  --hc-fg: #292524;
+  --hc-fg-muted: #78716c;
+  --hc-fg-faint: #a8a29e;
+  --hc-accent: #b45309;
+  --hc-accent-strong: #92400e;
+  --hc-accent-soft: #faf0e1;
+  --hc-accent-border: #efe0c8;
+  --hc-on-accent: #ffffff;
+  --hc-border: #e9e4dc;
+  --hc-border-strong: #d9d2c7;
+}
+
+[data-palette="navy"] {
+  --canvas: #ffffff;
+  --ink: #0f1e3d;
+  --accent: #1e3a8a;
+  --muted: #5b6b8c;
+  --hc-bg: #ffffff;
+  --hc-bg-muted: #f1f4f9;
+  --hc-fg: #0f1e3d;
+  --hc-fg-muted: #5b6b8c;
+  --hc-fg-faint: #8e9ab5;
+  --hc-accent: #1e3a8a;
+  --hc-accent-strong: #172d6d;
+  --hc-accent-soft: #e8edf8;
+  --hc-accent-border: #d5def0;
+  --hc-on-accent: #ffffff;
+  --hc-border: #e2e7f0;
+  --hc-border-strong: #ccd5e5;
+}
+
+[data-palette="forest"] {
+  --canvas: #fcfdfc;
+  --ink: #14231a;
+  --accent: #166534;
+  --muted: #64748b;
+  --hc-bg: #fcfdfc;
+  --hc-bg-muted: #f2f6f2;
+  --hc-fg: #14231a;
+  --hc-fg-muted: #5c6b60;
+  --hc-fg-faint: #93a396;
+  --hc-accent: #166534;
+  --hc-accent-strong: #14532d;
+  --hc-accent-soft: #e9f4ec;
+  --hc-accent-border: #d3e7d9;
+  --hc-on-accent: #ffffff;
+  --hc-border: #e2e9e3;
+  --hc-border-strong: #d0dbd2;
+}
+
+[data-palette="plum"] {
+  --canvas: #fdfcfd;
+  --ink: #201a2e;
+  --accent: #6d28d9;
+  --muted: #6f6a80;
+  --hc-bg: #fdfcfd;
+  --hc-bg-muted: #f6f4f9;
+  --hc-fg: #201a2e;
+  --hc-fg-muted: #6f6a80;
+  --hc-fg-faint: #a09dad;
+  --hc-accent: #6d28d9;
+  --hc-accent-strong: #5b21b6;
+  --hc-accent-soft: #f1eafd;
+  --hc-accent-border: #e2d8f7;
+  --hc-on-accent: #ffffff;
+  --hc-border: #e7e3ee;
+  --hc-border-strong: #d6cfe3;
 }
 
 * {
@@ -82,7 +173,7 @@ body {
   height: 30px;
   border-radius: 9px;
   background: var(--hc-accent);
-  color: #ffffff;
+  color: var(--hc-on-accent, #ffffff);
 }
 
 .hc-nav {
@@ -159,7 +250,7 @@ body {
   padding: 7px 7px 7px 16px;
   border: 1px solid var(--hc-border-strong);
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--hc-bg);
   box-shadow: var(--hc-shadow);
   transition:
     border-color 0.15s ease,
@@ -188,7 +279,7 @@ body {
 }
 
 .hc-search__input::placeholder {
-  color: #98a2b3;
+  color: var(--hc-fg-faint);
 }
 
 .hc-search__button {
@@ -197,7 +288,7 @@ body {
   border-radius: 999px;
   padding: 9px 20px;
   background: var(--hc-accent);
-  color: #ffffff;
+  color: var(--hc-on-accent, #ffffff);
   font: inherit;
   font-size: 14px;
   font-weight: 600;
@@ -224,7 +315,7 @@ body {
   font-size: 13px;
   color: var(--hc-fg-muted);
   text-decoration: none;
-  background: #ffffff;
+  background: var(--hc-bg);
   transition:
     color 0.15s ease,
     border-color 0.15s ease;
@@ -276,7 +367,7 @@ body {
   padding: 20px;
   border: 1px solid var(--hc-border);
   border-radius: var(--hc-radius-lg);
-  background: #ffffff;
+  background: var(--hc-bg);
   text-decoration: none;
   color: inherit;
   transition:
@@ -346,7 +437,7 @@ body {
   padding: 18px 22px;
   border: 1px solid var(--hc-border);
   border-radius: var(--hc-radius);
-  background: #ffffff;
+  background: var(--hc-bg);
   text-decoration: none;
   color: inherit;
   transition:
@@ -381,7 +472,7 @@ body {
 
 .hc-article__date {
   font-size: 12px;
-  color: #98a2b3;
+  color: var(--hc-fg-faint);
 }
 
 .hc-article__title {
@@ -406,7 +497,7 @@ body {
 
 .hc-article__source {
   font-size: 12px;
-  color: #98a2b3;
+  color: var(--hc-fg-faint);
 }
 
 /* ---------- faq ---------- */
@@ -420,7 +511,7 @@ body {
 .hc-faq {
   border: 1px solid var(--hc-border);
   border-radius: var(--hc-radius);
-  background: #ffffff;
+  background: var(--hc-bg);
   padding: 0 18px;
 }
 
@@ -473,9 +564,9 @@ body {
   background: linear-gradient(
     135deg,
     var(--hc-accent-soft) 0%,
-    #f5f8ff 100%
+    var(--hc-bg-muted) 100%
   );
-  border: 1px solid #dbe5ff;
+  border: 1px solid var(--hc-accent-border);
 }
 
 .hc-contact__title {
@@ -497,7 +588,7 @@ body {
   padding: 11px 26px;
   border-radius: 999px;
   background: var(--hc-accent);
-  color: #ffffff;
+  color: var(--hc-on-accent, #ffffff);
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
@@ -562,7 +653,7 @@ body {
   padding-bottom: 20px;
   border-top: 1px solid var(--hc-border);
   font-size: 12.5px;
-  color: #98a2b3;
+  color: var(--hc-fg-faint);
 }
 
 /* ---------- responsive ---------- */

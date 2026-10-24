@@ -21,8 +21,11 @@ export type HelpFaq = {
   answer: string;
 };
 
+export type PaletteName = "azure" | "warm" | "navy" | "forest" | "plum";
+
 export const siteMeta = {
   brand: "FrontMind 帮助中心",
+  palette: "azure" as PaletteName,
   slogan: "有问题，随时查",
   heroTitle: "我们能帮你什么？",
   heroSummary: "搜索帮助文档，或按分类浏览常见问题的解决办法。",

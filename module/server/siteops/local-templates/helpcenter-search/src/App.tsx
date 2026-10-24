@@ -5,10 +5,11 @@ import { ArticleList } from "./components/ArticleList";
 import { FaqSection } from "./components/FaqSection";
 import { ContactBand } from "./components/ContactBand";
 import { Footer } from "./components/Footer";
+import { siteMeta } from "./content";
 
 export default function App() {
   return (
-    <div className="hc-page">
+    <div className="hc-page" data-palette={siteMeta.palette}>
       <Header />
       <main>
         <HeroSearch />
