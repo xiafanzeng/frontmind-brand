@@ -621,7 +621,11 @@ function safeDownloadUrl(raw: string, kind: "source" | "preview") {
   const validHost =
     kind === "source"
       ? host === "codeload.github.com"
-      : host === "21st.dev" || host.endsWith(".21st.dev");
+      : host === "21st.dev" ||
+        host.endsWith(".21st.dev") ||
+        // FrontMind-curated entries pin preview images to immutable
+        // raw.githubusercontent.com commits in the brand repository.
+        host === "raw.githubusercontent.com";
   if (
     url.protocol !== "https:" ||
     url.username ||
