@@ -1605,7 +1605,7 @@ export function projectSiteOpsVisualGeneration(input: {
   workflowVersion?: string | null;
   catalogVersion?: string | null;
   pageSize?: 8 | 9;
-  pageCount?: 3 | 4;
+  pageCount?: 3 | 4 | 5;
 }) {
   const staticCatalogMode = isStaticCatalogWorkflowVersion(
     input.workflowVersion ?? null,
