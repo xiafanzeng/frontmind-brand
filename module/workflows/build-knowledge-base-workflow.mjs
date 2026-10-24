@@ -33,12 +33,30 @@ export const socraticKnowledgeBaseSkillEntries = [
   "scripts/validate_working_set.py",
 ];
 
-async function readRequiredSource(root, relativePath) {
-  const content = await fs.readFile(path.join(root, relativePath));
-  if (content.length === 0) {
-    throw new Error(`Skill source is empty: ${relativePath}`);
+const ignoredDirectories = new Set([
+  ".git", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+]);
+
+async function skillSourceFiles(root, prefix = "") {
+  const directory = path.join(root, prefix);
+  const stat = await fs.lstat(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`Skill source must be a regular directory: ${prefix || "."}`);
   }
-  return content;
+  const files = [];
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const relative = path.posix.join(prefix, entry.name);
+    if (/^\.env(?:\.|$)/u.test(entry.name)) throw new Error(`Skill source environment file: ${relative}`);
+    if (entry.isSymbolicLink()) throw new Error(`Skill source symlink: ${relative}`);
+    if (entry.isDirectory()) {
+      if (!ignoredDirectories.has(entry.name)) files.push(...await skillSourceFiles(root, relative));
+    } else if (entry.isFile()) {
+      if (entry.name !== ".DS_Store" && !/\.py[co]$/u.test(entry.name)) files.push(relative);
+    } else {
+      throw new Error(`Skill source must be a regular file: ${relative}`);
+    }
+  }
+  return files.sort();
 }
 
 async function writeHistoricalArchiveNoClobber(targetPath, archive) {
@@ -93,16 +111,26 @@ export async function packageSocraticKnowledgeBaseSkill(options = {}) {
   const selectedSourceRoot = options.sourceRoot || sourceRoot;
   const selectedOutputPath = options.outputPath || outputPath;
   await fs.mkdir(path.dirname(selectedOutputPath), { recursive: true });
+  const files = await skillSourceFiles(selectedSourceRoot);
+  for (const required of socraticKnowledgeBaseSkillEntries) {
+    if (!files.includes(required)) throw new Error(`Skill required source is missing: ${required}`);
+  }
   const zip = new JSZip();
-  for (const relativePath of [...socraticKnowledgeBaseSkillEntries].sort()) {
+  for (const relativePath of files) {
+    const sourcePath = path.join(selectedSourceRoot, relativePath);
+    const content = await fs.readFile(sourcePath);
+    if (socraticKnowledgeBaseSkillEntries.includes(relativePath) && content.length === 0) {
+      throw new Error(`Skill source is empty: ${relativePath}`);
+    }
+    const executable = relativePath.endsWith(".py") || (await fs.stat(sourcePath)).mode & 0o111;
     zip.file(
       relativePath,
-      await readRequiredSource(selectedSourceRoot, relativePath),
+      content,
       {
         binary: true,
         createFolders: false,
         date: fixedDate,
-        unixPermissions: relativePath.endsWith(".py") ? 0o100755 : 0o100644,
+        unixPermissions: executable ? 0o100755 : 0o100644,
       },
     );
   }

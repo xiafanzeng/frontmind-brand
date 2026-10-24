@@ -6,20 +6,23 @@ import JSZip from 'jszip';
 const defaultSourceRoot=path.join(path.dirname(fileURLToPath(import.meta.url)),'generate-brand-question-universe');
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const date=new Date('2020-01-01T00:00:00.000Z');
-async function files(root,prefix=''){const result=[];for(const entry of (await fs.readdir(path.join(root,prefix),{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){const relative=path.posix.join(prefix,entry.name);if(entry.isSymbolicLink())throw new Error('KEYWORD_WORKFLOW_SYMLINK');if(entry.isDirectory())result.push(...await files(root,relative));else if(entry.isFile())result.push(relative);else throw new Error('KEYWORD_WORKFLOW_SPECIAL_FILE');}return result;}
+async function files(root,prefix=''){const result=[];for(const entry of (await fs.readdir(path.join(root,prefix),{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){const relative=path.posix.join(prefix,entry.name);if(/^\.env(?:\.|$)/u.test(entry.name))throw new Error(`KEYWORD_WORKFLOW_ENVIRONMENT_FILE:${relative}`);if(entry.isSymbolicLink())throw new Error('KEYWORD_WORKFLOW_SYMLINK');if(entry.isDirectory())result.push(...await files(root,relative));else if(entry.isFile())result.push(relative);else throw new Error('KEYWORD_WORKFLOW_SPECIAL_FILE');}return result;}
 export async function buildKeywordWorkflow(outputRoot,options={}){
  const sourceRoot=options.sourceRoot??defaultSourceRoot;
  await fs.mkdir(outputRoot,{recursive:true});
- if(path.resolve(outputRoot)!==path.resolve(sourceRoot))await fs.cp(sourceRoot,outputRoot,{recursive:true});
  const manifest=JSON.parse(await fs.readFile(path.join(sourceRoot,'upstream/MANIFEST.json'),'utf8'));
  const source=path.join(sourceRoot,'source');const names=await files(source);const zip=new JSZip();let unchanged=names.length===manifest.fileCount;
+ const adapterDirectory=path.join(sourceRoot,'frontmind-adapter-v1.0.0');
+ const adapterFiles=(await files(adapterDirectory)).filter(name=>name!=='MANIFEST.json'&&!name.split('/').some(part=>['.git','node_modules','__pycache__','.pytest_cache','.mypy_cache','.ruff_cache'].includes(part))&&!/\.py[co]$/.test(name)&&path.basename(name)!=='.DS_Store').sort();
+ if(path.resolve(outputRoot)!==path.resolve(sourceRoot))await fs.cp(sourceRoot,outputRoot,{recursive:true});
  for(const name of names){const bytes=await fs.readFile(path.join(source,name));const original=manifest.entries.find(entry=>entry.path===`generate-brand-question-universe/${name}`);if(original?.sha256!==hash(bytes))unchanged=false;zip.file(`generate-brand-question-universe/${name}`,bytes,{date,unixPermissions:(await fs.stat(path.join(source,name))).mode&0o777});}
  const upstream=unchanged?await fs.readFile(path.join(sourceRoot,'upstream',manifest.sourceFilename)):await zip.generateAsync({type:'nodebuffer',compression:'DEFLATE',compressionOptions:{level:9},platform:'UNIX'});
  const upstreamSha=hash(upstream);const version=`2.0.0+${upstreamSha.slice(0,12)}`;
- const adapterDirectory=path.join(sourceRoot,'frontmind-adapter-v1.0.0');const adapterManifest=JSON.parse(await fs.readFile(path.join(adapterDirectory,'MANIFEST.json'),'utf8'));
+ const adapterManifest=JSON.parse(await fs.readFile(path.join(adapterDirectory,'MANIFEST.json'),'utf8'));
  adapterManifest.upstream.archiveSha256=upstreamSha;adapterManifest.files=[];
  const adapter=new JSZip();
- for(const name of ['SKILL.md','runtime-contract.json']){const bytes=await fs.readFile(path.join(adapterDirectory,name));adapterManifest.files.push({path:name,bytes:bytes.length,sha256:hash(bytes)});adapter.file(name,bytes,{date,unixPermissions:0o644});}
+ for(const required of ['SKILL.md','runtime-contract.json'])if(!adapterFiles.includes(required))throw new Error(`KEYWORD_ADAPTER_SOURCE_MISSING:${required}`);
+ for(const name of adapterFiles){const file=path.join(adapterDirectory,name);const bytes=await fs.readFile(file);if(['SKILL.md','runtime-contract.json'].includes(name)&&!bytes.length)throw new Error(`KEYWORD_ADAPTER_SOURCE_EMPTY:${name}`);adapterManifest.files.push({path:name,bytes:bytes.length,sha256:hash(bytes)});adapter.file(name,bytes,{date,unixPermissions:(await fs.stat(file)).mode&0o111?0o755:0o644});}
  adapter.file('MANIFEST.json',JSON.stringify(adapterManifest,null,2)+'\n',{date,unixPermissions:0o644});
  const adapterBytes=await adapter.generateAsync({type:'nodebuffer',compression:'DEFLATE',compressionOptions:{level:9},platform:'UNIX'});
  const archives=path.join(outputRoot,'archives');await fs.mkdir(archives,{recursive:true});

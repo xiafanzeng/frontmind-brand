@@ -1,5 +1,5 @@
 import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
-import { type EnterpriseQaAnswerMeta } from "@frontmind/module-ui/contracts/enterprise-qa-answer";
+import { type EnterpriseQaAnswerMeta } from "../contracts/enterprise-qa-answer";
 import { sanitizeBrandText } from "./lib/frontmind-api";
 import { normalizeKnowledgeCollectionCopy } from "../contracts/knowledge-base-copy";
 import type { KnowledgeBaseApprovedResourceDto, KnowledgeBaseContentAvailability, KnowledgeBaseContentState, KnowledgeBaseFailureClass, KnowledgeBaseFailureStage, KnowledgeBaseOperationType, KnowledgeBaseOperationState, KnowledgeBasePackageState, KnowledgeBaseProcessingPhase, KnowledgeBasePublicationState, KnowledgeBaseRecoveryAction, KnowledgeBaseSyncState, KnowledgeBaseTaskCreationState } from "../contracts/knowledge-base-public-progress";
