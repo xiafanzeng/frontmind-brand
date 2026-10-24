@@ -1,5 +1,5 @@
 import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
-import type { EnterpriseQaAnswerMeta } from "@frontmind/module-ui/contracts/enterprise-qa-answer";
+import type { EnterpriseQaAnswerMeta } from "../../contracts/enterprise-qa-answer";
 import { captureWorkspaceRestOperation } from "./workspace-rest-scope";
 import { waitForKnowledgeBaseReply } from "./knowledge-base-reply";
 import type { KnowledgeBaseInteractionDto } from "../../contracts/knowledge-base-public-progress";
