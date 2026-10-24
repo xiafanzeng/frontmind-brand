@@ -9,10 +9,10 @@
 
 export const STATIC_TEMPLATE_CATALOG_WORKFLOW_VERSION = "2.8.0" as const;
 export const STATIC_TEMPLATE_CATALOG_VERSION =
-  "21st-included-recommended-20260828-v2" as const;
+  "frontmind-curated-20261024-v3" as const;
 export const STATIC_TEMPLATE_CATALOG_PAGE_SIZE = 8 as const;
-export const STATIC_TEMPLATE_CATALOG_PAGE_COUNT = 4 as const;
-export const STATIC_TEMPLATE_CATALOG_ENTRY_COUNT = 32 as const;
+export const STATIC_TEMPLATE_CATALOG_PAGE_COUNT = 5 as const;
+export const STATIC_TEMPLATE_CATALOG_ENTRY_COUNT = 35 as const;
 
 export type FrozenStaticTemplateDefinition = Readonly<{
   order: number;
@@ -460,6 +460,45 @@ const FROZEN_ROWS: readonly FrozenRow[] = [
     null,
     "MIT",
     ["portfolio", "personal-website"],
+  ],
+  [
+    9001,
+    "helpcenter-search",
+    "蔚蓝帮助中心",
+    "搜索优先的帮助中心门户：大标题搜索、分类卡片、热门文章与常见问题折叠，内容来自企业知识库并保留引用来源。",
+    "https://raw.githubusercontent.com/xiafanzeng/frontmind-brand/64b6a8d96210b531752a4aa6c0d1233de5e0c422/module/server/siteops/local-templates/previews/helpcenter-search-azure.png",
+    "xiafanzeng",
+    "frontmind-brand",
+    "64b6a8d96210b531752a4aa6c0d1233de5e0c422",
+    "module/server/siteops/local-templates/helpcenter-search",
+    "MIT",
+    ["help-center", "search", "knowledge-base"],
+  ],
+  [
+    9002,
+    "helpcenter-docs",
+    "藏青文档站",
+    "侧边栏文档式帮助中心：左侧分类导航、中间分组文章列表、右侧本页目录，适合层级较深的产品文档。",
+    "https://raw.githubusercontent.com/xiafanzeng/frontmind-brand/64b6a8d96210b531752a4aa6c0d1233de5e0c422/module/server/siteops/local-templates/previews/helpcenter-docs-navy.png",
+    "xiafanzeng",
+    "frontmind-brand",
+    "64b6a8d96210b531752a4aa6c0d1233de5e0c422",
+    "module/server/siteops/local-templates/helpcenter-docs",
+    "MIT",
+    ["help-center", "docs", "sidebar"],
+  ],
+  [
+    9003,
+    "helpcenter-minimal",
+    "松绿极简帮助页",
+    "极简单栏式帮助页：杂志式文章列表与紧凑常见问题，零卡片零按钮，适合内容量少的轻量说明场景。",
+    "https://raw.githubusercontent.com/xiafanzeng/frontmind-brand/64b6a8d96210b531752a4aa6c0d1233de5e0c422/module/server/siteops/local-templates/previews/helpcenter-minimal-forest.png",
+    "xiafanzeng",
+    "frontmind-brand",
+    "64b6a8d96210b531752a4aa6c0d1233de5e0c422",
+    "module/server/siteops/local-templates/helpcenter-minimal",
+    "MIT",
+    ["help-center", "minimal", "single-column"],
   ],
 ] as const;
 
