@@ -97,11 +97,29 @@ function jsonBuffer(value: unknown) {
  * user-visible recovery baseline and must complete the full controlled Vite,
  * dist, static QA and browser QA pipeline. Every other frozen raw source stays
  * visible but unavailable until it receives the same immutable evidence. */
+/**
+ * FrontMind-curated catalog entries (pinned to the brand repository) join the
+ * #22 baseline in the full admission lane. They carry no remote runtime media,
+ * so the frozen #22 media manifest must not be bound to them.
+ */
+export function isFrontMindCuratedAdmissionCandidate(definition: {
+  sourceOwner: string;
+  sourceRepo: string;
+}) {
+  return (
+    definition.sourceOwner === "xiafanzeng" &&
+    definition.sourceRepo === "frontmind-brand"
+  );
+}
+
 export const buildStaticTemplateExecutionAdmission: StaticTemplateExecutionAdmissionBuilder =
   async (input) => {
+    const requiredBaseline =
+      input.definition.candidateId ===
+      REQUIRED_STATIC_TEMPLATE_EXECUTION_CANDIDATE_ID;
     if (
-      input.definition.candidateId !==
-      REQUIRED_STATIC_TEMPLATE_EXECUTION_CANDIDATE_ID
+      !requiredBaseline &&
+      !isFrontMindCuratedAdmissionCandidate(input.definition)
     ) {
       return {
         status: "unavailable",
@@ -125,7 +143,9 @@ export const buildStaticTemplateExecutionAdmission: StaticTemplateExecutionAdmis
       expectedArchiveSha256: input.rawSourceSha256,
       sourceSubdirectory: input.definition.sourceSubdirectory,
       signal: input.signal,
-      frozenRuntimeMedia: REQUIRED_STATIC_TEMPLATE_RUNTIME_MEDIA,
+      frozenRuntimeMedia: requiredBaseline
+        ? REQUIRED_STATIC_TEMPLATE_RUNTIME_MEDIA
+        : undefined,
     });
     const operationToken = `catalog-admission:${input.catalogVersion}:${input.definition.candidateId}`;
     const validated = await validateNativeReactSourceArchive({
