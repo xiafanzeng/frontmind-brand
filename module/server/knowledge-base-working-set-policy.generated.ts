@@ -1,5 +1,5 @@
-// Generated from modules/brand/workflows/socratic-kb-builder/references/working-set-policy.json.
-// Run `node scripts/generate-knowledge-base-working-set-policy.mjs` after changing the source.
+// Generated from workflows/socratic-kb-builder/references/working-set-policy.json.
+// Run `node workflows/generate-knowledge-base-working-set-policy.mjs` after changing the source.
 // prettier-ignore
 export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
   "schemaVersion": 1,
