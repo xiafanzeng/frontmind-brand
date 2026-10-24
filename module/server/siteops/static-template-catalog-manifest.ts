@@ -1,18 +1,29 @@
+import {
+  CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+  CURATED_STATIC_TEMPLATE_PAGINATION,
+} from "../../contracts/static-template-pagination.js";
+
 /**
  * Immutable input coordinates for the FrontMind 2.8 Template catalog.
  *
- * These rows are a frozen projection of 21st's included/recommended lane on
- * 2026-08-28. Runtime customer requests must never refresh or reorder them.
+ * The first 32 rows preserve the 2026-08-28 21st projection; v3 appends three
+ * FrontMind help-center layouts. Customer requests never refresh or reorder them.
  * The seed command downloads the exact immutable GitHub commit and preview for
  * every row, then records the resulting byte hashes in the active manifest.
  */
 
 export const STATIC_TEMPLATE_CATALOG_WORKFLOW_VERSION = "2.8.0" as const;
-export const STATIC_TEMPLATE_CATALOG_VERSION =
-  "frontmind-curated-20261024-v3" as const;
-export const STATIC_TEMPLATE_CATALOG_PAGE_SIZE = 8 as const;
-export const STATIC_TEMPLATE_CATALOG_PAGE_COUNT = 5 as const;
-export const STATIC_TEMPLATE_CATALOG_ENTRY_COUNT = 35 as const;
+export const STATIC_TEMPLATE_CATALOG_VERSION = CURATED_STATIC_TEMPLATE_CATALOG_VERSION;
+export const STATIC_TEMPLATE_CATALOG_PAGE_SIZE = CURATED_STATIC_TEMPLATE_PAGINATION.pageSize;
+export const STATIC_TEMPLATE_CATALOG_PAGE_COUNT = CURATED_STATIC_TEMPLATE_PAGINATION.pageCount;
+export const STATIC_TEMPLATE_CATALOG_ENTRY_COUNT = CURATED_STATIC_TEMPLATE_PAGINATION.entryCount;
+
+export const STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: readonly string[] = Object.freeze([
+  "static-template-22-hirael-agency-landing",
+  "static-template-33-helpcenter-search",
+  "static-template-34-helpcenter-docs",
+  "static-template-35-helpcenter-minimal",
+]);
 
 export type FrozenStaticTemplateDefinition = Readonly<{
   order: number;

@@ -1698,7 +1698,7 @@ export default function SiteOpsConversationPanel({
                 <h3 id="siteops-visual-search-title">生成视觉候选</h3>
                 <p>
                   {usesStaticTemplateCatalog
-                    ? "可先在下方补充转化目标；准备好后将展示固定目录中的 32 个完整 Template。"
+                    ? "可先在下方补充转化目标；准备好后将展示固定目录中的完整 Template。"
                     : "可先在下方补充转化目标；准备好后将生成九种不同风格的官网方案。"}
                 </p>
               </div>

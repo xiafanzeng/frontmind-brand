@@ -1,3 +1,4 @@
+import { staticTemplatePagination, staticTemplatePageLength } from "./static-template-pagination.js";
 import { z } from "zod";
 
 /** Every persisted/runtime workflow coordinate must satisfy this shared
@@ -1600,7 +1601,7 @@ export const visualCandidateV7Schema = z
     title: z.string().trim().min(1).max(300),
     description: z.string().trim().min(1).max(1_000).nullable(),
     catalogVersion: z.string().trim().min(1).max(191),
-    catalogPosition: z.number().int().min(1).max(32),
+    catalogPosition: z.number().int().min(1).max(35),
     catalogCandidateId: z.string().trim().min(1).max(191),
     providerTemplateId: z.string().trim().min(1).max(191),
     providerSlug: z.string().trim().min(1).max(191),
@@ -1631,6 +1632,9 @@ export const visualCandidateV7Schema = z
   })
   .strict()
   .superRefine((value, context) => {
+    if (value.catalogPosition > staticTemplatePagination(value.catalogVersion).entryCount) {
+      context.addIssue({ code: "custom", path: ["catalogPosition"], message: "Candidate exceeds its frozen catalog" });
+    }
     if (value.id !== value.sampleId) {
       context.addIssue({
         code: "custom",
@@ -1657,17 +1661,22 @@ export const visualSelectionBundleV7Schema = z
     renderer: z.literal("frontmind_static_template_catalog_v1"),
     workflowVersion: z.enum(["2.8.0", "2.9.0"]),
     catalogVersion: z.string().trim().min(1).max(191),
-    pageNumber: z.number().int().min(1).max(4),
+    pageNumber: z.number().int().min(1).max(5),
     pageSize: z.literal(8),
-    pageCount: z.literal(4),
-    displayTarget: z.literal(8),
-    candidates: z.array(visualCandidateV7Schema).length(8),
+    pageCount: z.number().int().min(4).max(5),
+    displayTarget: z.number().int().min(1).max(8),
+    candidates: z.array(visualCandidateV7Schema).min(1).max(8),
     selectedCandidateId: z.string().trim().min(1).max(191).nullable(),
     delegated: z.boolean().default(false),
     degradedReasons: z.array(z.string().max(500)).max(30).default([]),
   })
   .strict()
   .superRefine((value, context) => {
+    const pagination = staticTemplatePagination(value.catalogVersion);
+    const length = staticTemplatePageLength(value.catalogVersion, value.pageNumber);
+    if (value.pageCount !== pagination.pageCount || value.pageNumber > pagination.pageCount || value.candidates.length !== length || value.displayTarget !== length) {
+      context.addIssue({ code: "custom", path: ["candidates"], message: "Page must match its frozen catalog pagination" });
+    }
     const unique = (coordinates: string[], path: string) => {
       if (new Set(coordinates).size !== coordinates.length) {
         context.addIssue({

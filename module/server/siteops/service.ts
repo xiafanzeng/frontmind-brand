@@ -1,3 +1,4 @@
+import { staticTemplatePagination, staticTemplatePageLength } from "../../contracts/static-template-pagination.js";
 import {restartSiteOpsProject,siteOpsRestartState,SiteOpsRestartError} from "./restart-service.js";
 import {customerVisibleStyleBatchStatusCondition} from "./visual-batch-visibility.js";
 import type {BrandSchema} from '../../schema/index.js';
@@ -172,6 +173,7 @@ import {
   requireActiveStaticTemplateCatalog,
   staticTemplateAdmissionEvidenceSha256,
 } from "./static-template-catalog.js";
+import { STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "./static-template-catalog-manifest.js";
 import {
   NATIVE_RUNTIME_CONTRACT_V1_SHA256,
   NATIVE_RUNTIME_EXECUTION_SHELL_V1_SHA256,
@@ -879,7 +881,7 @@ export const staticTemplateSelectionMetadataSchema = z
     renderer: z.literal("frontmind_static_template_catalog_v1"),
     workflowVersion: z.enum(["2.8.0", "2.9.0"]),
     catalogVersion: z.string().trim().min(1).max(191),
-    catalogPosition: z.number().int().min(1).max(32),
+    catalogPosition: z.number().int().min(1).max(35),
     catalogCandidateId: z.string().trim().min(1).max(191),
     providerTemplateId: z.string().trim().min(1).max(191),
     providerSlug: z.string().trim().min(1).max(191),
@@ -912,6 +914,9 @@ export const staticTemplateSelectionMetadataSchema = z
   })
   .passthrough()
   .superRefine((value, context) => {
+    if (value.catalogPosition > staticTemplatePagination(value.catalogVersion).entryCount) {
+      context.addIssue({ code: "custom", path: ["catalogPosition"], message: "Candidate exceeds its frozen catalog" });
+    }
     if (
       value.executionAdmission?.status === "admitted" &&
       value.executionAdmission.normalizedSourceSha256 !==
@@ -1232,16 +1237,17 @@ export function projectStaticTemplateCatalogVisualReadiness(
     }[];
   } | null,
 ) {
-  const requiredAdmissionReady = catalog?.entries.some(
-    (entry) =>
-      entry.candidateId === "static-template-22-hirael-agency-landing" &&
-      entry.executionAdmission.status === "admitted",
+  const requiredAdmissionReady = STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.every(
+    (id) => catalog?.entries.some(
+      (entry) => entry.candidateId === id && entry.executionAdmission.status === "admitted",
+    ),
   );
   const ready =
     isStaticCatalogWorkflowVersion(catalog?.workflowVersion ?? null) &&
     catalog?.catalogVersion === STATIC_TEMPLATE_CATALOG_VERSION &&
     catalog?.pageSize === STATIC_TEMPLATE_CATALOG_PAGE_SIZE &&
     catalog?.pageCount === STATIC_TEMPLATE_CATALOG_PAGE_COUNT &&
+    catalog?.entries.length === staticTemplatePagination(catalog.catalogVersion).entryCount &&
     requiredAdmissionReady;
   return {
     status: ready ? ("configured" as const) : ("not_configured" as const),
@@ -1535,6 +1541,7 @@ export function completePublishedVisualPageCount(input: {
   batches: Array<{ id: string; status: string }>;
   candidates: Array<{ batchId: string }>;
   pageSize?: 8 | 9;
+  catalogVersion?: string | null;
   visibleStatuses?: readonly string[];
 }) {
   const candidateCountByBatch = new Map<string, number>();
@@ -1545,10 +1552,12 @@ export function completePublishedVisualPageCount(input: {
     );
   }
   return input.batches.filter(
-    (batch) =>
+    (batch, index) =>
       (input.visibleStatuses ?? ["published"]).includes(batch.status) &&
       candidateCountByBatch.get(batch.id) ===
-        (input.pageSize ?? SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE),
+        (input.catalogVersion
+          ? staticTemplatePageLength(input.catalogVersion, index + 1)
+          : (input.pageSize ?? SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE)),
   ).length;
 }
 
@@ -1582,7 +1591,7 @@ export function resolveVisualCatalogObservationCoordinates(input: {
       ? STATIC_TEMPLATE_CATALOG_PAGE_SIZE
       : SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE,
     pageCount: staticCatalogVisualCycle
-      ? STATIC_TEMPLATE_CATALOG_PAGE_COUNT
+      ? staticTemplatePagination(catalogVersion).pageCount
       : SITEOPS_VISUAL_CANDIDATE_MAX_PAGES,
     defaultAvailability: pristineVisualCycle
       ? {
@@ -1611,7 +1620,7 @@ export function projectSiteOpsVisualGeneration(input: {
     input.workflowVersion ?? null,
   );
   const maxPages = staticCatalogMode
-    ? STATIC_TEMPLATE_CATALOG_PAGE_COUNT
+    ? staticTemplatePagination(input.catalogVersion).pageCount
     : SITEOPS_VISUAL_CANDIDATE_MAX_PAGES;
   const hasFrozenAvailability = Number.isInteger(input.availablePages);
   const availablePages = hasFrozenAvailability
@@ -2581,7 +2590,7 @@ async function projectObservationOnce(
             right: typeof websiteStyleSampleBatches.$inferSelect,
           ) => left.ordinal - right.ordinal,
         )
-        .slice(0, STATIC_TEMPLATE_CATALOG_PAGE_COUNT)
+        .slice(0, visualPageCount)
     : publishedBatchRows.length > 0
       ? publishedBatchRows
       : batchRows
@@ -2601,8 +2610,7 @@ async function projectObservationOnce(
           .where(inArray(websiteStyleSamples.batchId, visibleBatchIds))
           .limit(
             staticCatalogVisualCycle
-              ? STATIC_TEMPLATE_CATALOG_PAGE_COUNT *
-                  STATIC_TEMPLATE_CATALOG_PAGE_SIZE
+              ? staticTemplatePagination(visualCatalogVersion).entryCount
               : SITEOPS_VISUAL_CANDIDATE_MAX_TOTAL,
           )
       : [];
@@ -2610,6 +2618,7 @@ async function projectObservationOnce(
     batches: staticCatalogVisualCycle ? visibleBatchRows : publishedBatchRows,
     candidates: candidateRows,
     pageSize: visualPageSize,
+    catalogVersion: staticCatalogVisualCycle ? visualCatalogVersion : null,
     ...(staticCatalogVisualCycle
       ? { visibleStatuses: ["published", "selected"] }
       : {}),
@@ -2779,7 +2788,10 @@ async function projectObservationOnce(
           ) => left.sortOrder - right.sortOrder,
         )
         .map(projectVisualCandidate);
-      return candidates.length === visualPageSize
+      const expectedPageLength = staticCatalogVisualCycle
+        ? staticTemplatePageLength(visualCatalogVersion, pageIndex + 1)
+        : visualPageSize;
+      return candidates.length === expectedPageLength
         ? [{ batchId: batch.id, page: pageIndex + 1, candidates }]
         : [];
     },
@@ -4622,7 +4634,7 @@ async function handleVisualSearch(
   ) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "固定目录的 32 个完整 Template 已全部展示，请直接选择一个方向。",
+      "固定目录的模板已全部展示，请直接选择一个方向。",
       409,
     );
   }
@@ -4756,7 +4768,7 @@ async function handleVisualSearch(
     role: "assistant",
     turnId: input.turnId,
     content: staticCatalogVisualCycle
-      ? "正在载入 32 个固定完整 Template，完成后将按四页展示。"
+      ? "正在载入固定完整 Template 目录。"
       : `正在生成第 ${page} 组全新视觉候选；前面展示过的参考不会重复。`,
     siteOps: {
       kind: "build_progress",
@@ -4766,10 +4778,7 @@ async function handleVisualSearch(
       payload: {
         stage: "visual_searching",
         targets: staticCatalogVisualCycle
-          ? [
-              STATIC_TEMPLATE_CATALOG_PAGE_COUNT *
-                STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
-            ]
+          ? [staticCatalog!.entryCount]
           : [18, 12, 9],
         page,
         mode,
@@ -4906,7 +4915,11 @@ async function selectVisualSample(
         : null,
     );
     const recoveryPageCount = recoveryStaticCatalog
-      ? STATIC_TEMPLATE_CATALOG_PAGE_COUNT
+      ? staticTemplatePagination(
+          typeof latestVisualInput?.catalogVersion === "string"
+            ? latestVisualInput.catalogVersion
+            : null,
+        ).pageCount
       : SITEOPS_VISUAL_CANDIDATE_MAX_PAGES;
     const recoveryPageSize = recoveryStaticCatalog
       ? STATIC_TEMPLATE_CATALOG_PAGE_SIZE
@@ -4926,6 +4939,7 @@ async function selectVisualSample(
           ),
         ),
       )
+      .orderBy(asc(websiteStyleSampleBatches.ordinal))
       .limit(recoveryPageCount)
       .for("update");
     const publishedIds = publishedRows.map((row: { id: string }) => row.id);
@@ -4937,16 +4951,14 @@ async function selectVisualSample(
             .where(inArray(websiteStyleSamples.batchId, publishedIds))
             .limit(recoveryPageCount * recoveryPageSize)
         : [];
-    const samplesPerBatch = new Map<string, number>();
-    for (const row of publishedSamples as Array<{ batchId: string }>) {
-      samplesPerBatch.set(
-        row.batchId,
-        (samplesPerBatch.get(row.batchId) ?? 0) + 1,
-      );
-    }
-    const completePublishedPages = publishedIds.filter(
-      (id: string) => samplesPerBatch.get(id) === recoveryPageSize,
-    ).length;
+    const completePublishedPages = completePublishedVisualPageCount({
+      batches: publishedIds.map((id: string) => ({ id, status: "published" })),
+      candidates: publishedSamples,
+      pageSize: recoveryPageSize,
+      catalogVersion: recoveryStaticCatalog && typeof latestVisualInput?.catalogVersion === "string"
+        ? latestVisualInput.catalogVersion
+        : null,
+    });
     recoveredSelection = siteOpsVisualSelectionRecovery({
       projectStatus: input.project.status,
       completePublishedPages,

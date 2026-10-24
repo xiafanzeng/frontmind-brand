@@ -9,7 +9,9 @@
     "build:workflows": "pnpm generate:policy && node workflows/build-keyword-workflow.mjs --output dist/workflows/generate-brand-question-universe && node workflows/build-knowledge-base-workflow.mjs && node workflows/build-siteops-workflows.mjs",
     "test": "node --test tests/workflow-version.test.mjs tests/workflow-source.test.mjs && vitest run --config vitest.config.ts",
     "accept:ai-website": "node scripts/accept-ai-website-flow.mjs",
-    "generate:policy": "node workflows/generate-knowledge-base-working-set-policy.mjs"
+    "generate:policy": "node workflows/generate-knowledge-base-working-set-policy.mjs",
+    "catalog:ensure": "node dist/server/siteops/prepare-module-assets.js --ensure-ready --concurrency 1",
+    "catalog:check": "node dist/server/siteops/seed-static-template-catalog.js --check-active"
   },
   "dependencies": {
     "@frontmind/module-contracts": "workspace:*",
