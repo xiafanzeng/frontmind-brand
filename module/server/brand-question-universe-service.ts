@@ -806,6 +806,12 @@ async function updateOperationState(input: {
 }) {
   const db = await requireDb();
   await db.transaction(async (tx: any) => {
+    const current = (await tx.select({status: agentOperations.status})
+      .from(agentOperations)
+      .where(eq(agentOperations.id, input.operationId))
+      .limit(1).for("update"))[0];
+    // A delayed observer/worker cannot undo another worker's durable delivery.
+    if (current?.status === "succeeded" && input.status !== "succeeded") return;
     await tx
       .update(agentOperations)
       .set({ status: input.status, errorCode: input.errorCode ?? null })
@@ -1826,6 +1832,16 @@ async function reconcileOperation(
 ) {
   let owned = initial;
   let context = await readOperationContext(owned.task.id);
+  if (context.publicationOutcome !== null && context.resultArtifacts !== null) {
+    // Publication stores validated immutable coordinates before terminal state.
+    // Recover that committed delivery without provider calls or rebuilding XLSX.
+    await updateOperationState({
+      operationId: owned.operation.id, taskId: owned.task.id,
+      status: "succeeded", providerState: owned.task.providerState ?? "succeeded",
+      errorCode: null, resultDeadlineAt: null,
+    });
+    return (await findOperationById(owned.operation.id)) ?? owned;
+  }
   const credential = await getDecryptedCredentialForAccountById(
     owned.operation.accountUserId!,
     owned.operation.apiCredentialId,
@@ -2098,8 +2114,12 @@ function projectBrandQuestionUniversePublicOperation(input: {
 function brandQuestionUniverseCanRecheckFailedResult(
   operation: { status: string; errorCode: string | null },
   task: { providerTaskId: string | null },
-  context: { firstDispatchState: string; publicationOutcome: unknown },
+  context: { firstDispatchState: string; publicationOutcome: unknown; resultArtifacts?: unknown },
 ) {
+  if (operation.status === "failed" &&
+      operation.errorCode === "WORKBOOK_OR_PUBLISH_FAILED" &&
+      context.publicationOutcome != null && context.resultArtifacts != null)
+    return true;
   return (
     operation.status === "failed" &&
     operation.errorCode === "PROVIDER_TASK_FAILED" &&
@@ -2395,5 +2415,5 @@ async function runBrandQuestionUniverseWorkerSweep(options?: {
   return { reconciled, failed };
 }
 
-return {BRAND_QUESTION_UNIVERSE_OPERATION_TYPE, BRAND_QUESTION_UNIVERSE_CONTRACT_REVISION, BRAND_QUESTION_UNIVERSE_MAX_REPAIRS, brandQuestionUniverseStatusFencesStart, brandQuestionUniverseFirstDispatchAction, brandQuestionUniverseCreateFailureDisposition, BrandQuestionUniverseServiceError, brandQuestionUniverseKnowledgeReadiness, brandQuestionUniversePreparationServiceError, operationIdempotencyKeyHash, brandQuestionUniverseFrozenRequestHash, persistImmutableResultArtifact, brandQuestionUniverseReplayMatches, structuredRoundResult, projectBrandQuestionUniversePublicOperation, brandQuestionUniverseCanRecheckFailedResult, brandQuestionUniverseTerminalResultAction, observeBrandQuestionUniverse, startBrandQuestionUniverse, runBrandQuestionUniverseWorkerSweep};
+return {BRAND_QUESTION_UNIVERSE_OPERATION_TYPE, BRAND_QUESTION_UNIVERSE_CONTRACT_REVISION, BRAND_QUESTION_UNIVERSE_MAX_REPAIRS, brandQuestionUniverseStatusFencesStart, brandQuestionUniverseFirstDispatchAction, brandQuestionUniverseCreateFailureDisposition, BrandQuestionUniverseServiceError, brandQuestionUniverseKnowledgeReadiness, brandQuestionUniversePreparationServiceError, operationIdempotencyKeyHash, brandQuestionUniverseFrozenRequestHash, persistImmutableResultArtifact, brandQuestionUniverseReplayMatches, structuredRoundResult, projectBrandQuestionUniversePublicOperation, brandQuestionUniverseCanRecheckFailedResult, brandQuestionUniverseTerminalResultAction, observeBrandQuestionUniverse, startBrandQuestionUniverse, runBrandQuestionUniverseWorkerSweep, updateOperationState};
 }

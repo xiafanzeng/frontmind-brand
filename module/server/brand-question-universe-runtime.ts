@@ -539,7 +539,28 @@ export async function buildAndVerifyBrandQuestionUniverseWorkbook(
   for (let index = 2; index <= 161; index += 1) {
     sheet.getRow(index).alignment = { vertical: "top", wrapText: true };
   }
-  const bytes = Buffer.from(await workbook.xlsx.writeBuffer());
+  // ExcelJS fixes document properties above but its ZIP entries still use the
+  // current clock. Repeated reconciliation must retain one immutable identity.
+  const generated = await JSZip.loadAsync(
+    Buffer.from(await workbook.xlsx.writeBuffer()),
+  );
+  const canonical = new JSZip();
+  for (const entry of Object.values(generated.files).sort((left, right) =>
+    codePointOrder(left.name, right.name),
+  )) {
+    if (entry.dir) continue;
+    canonical.file(entry.name, await entry.async("nodebuffer"), {
+      date: new Date("1980-01-01T00:00:00.000Z"),
+      createFolders: false,
+      unixPermissions: 0o100644,
+    });
+  }
+  const bytes = await canonical.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 9 },
+    platform: "UNIX",
+  });
 
   const readback = new ExcelJS.Workbook();
   await readback.xlsx.load(bytes as unknown as ExcelJS.Buffer);
