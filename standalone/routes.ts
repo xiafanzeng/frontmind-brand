@@ -4,7 +4,7 @@ export type StandaloneBrandPage = BrandPage;
 
 export const standaloneBrandPages: Array<[StandaloneBrandPage, string]> = [
   ["knowledge", "智能知识库"],
-  ["keywords", "品牌全域词库"],
+  ["keywords", "全域词库优化"],
   ["intent", "优化问题"],
   ["enterprise-qa", "企业 RAG"],
   ["website", "网站建设"],
@@ -21,4 +21,3 @@ export function resolveStandaloneBrandPage(value: string) {
     ? (canonical as StandaloneBrandPage)
     : null;
 }
-
