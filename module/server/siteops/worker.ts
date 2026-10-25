@@ -12,7 +12,11 @@ import {
   getSiteOpsProviderHandler,
   type SiteOpsProviderResult,
 } from "./providers.js";
-import { siteOpsQuotaStateForProviderResult } from "./quota-state.js";
+import {
+  siteOpsQuotaPairIsActive,
+  siteOpsQuotaStateForPeriod,
+  siteOpsQuotaStateForProviderResult,
+} from "./quota-state.js";
 import { publicSiteOpsProviderResult } from "./public-errors.js";
 import {
   siteOpsTrustedFallbackPreviewFromResult,
@@ -84,6 +88,10 @@ function affectedRows(result: unknown) {
       ? (result[0] as { affectedRows?: unknown } | undefined)?.affectedRows
       : (result as { affectedRows?: unknown } | undefined)?.affectedRows) ?? 0,
   );
+}
+
+function nullableCoordinate(column: any, value: string | null) {
+  return value === null ? isNull(column) : eq(column, value);
 }
 
 function parseSiteOpsBuildArtifactBindings(
@@ -1007,6 +1015,8 @@ function fallbackMarkerMatchesOperation(input: {
 type BuildArtifactVerification = {
   projection: ReturnType<typeof siteOpsBuildArtifactProjection>;
   mode: "initial" | "fallback_bind" | "formal_upgrade";
+  quotaPeriodId: string | null;
+  quotaState: "reserved" | "consumed" | "released" | null;
 };
 
 async function verifiedBuildArtifactProjection(
@@ -1119,7 +1129,7 @@ async function verifiedBuildArtifactProjection(
   if (fallbackBind) {
     if (
       build.parentBuildId !== null ||
-      build.quotaState !== "reserved" ||
+      !siteOpsQuotaPairIsActive(build.quotaPeriodId, build.quotaState) ||
       !allCurrentNull
     ) {
       throw workerArtifactError("SITEOPS_BUILD_ARTIFACT_BINDING_CONFLICT");
@@ -1199,6 +1209,8 @@ async function verifiedBuildArtifactProjection(
       : formalUpgrade
         ? "formal_upgrade"
         : "initial",
+    quotaPeriodId: build.quotaPeriodId,
+    quotaState: build.quotaState,
   };
 }
 
@@ -1395,7 +1407,6 @@ async function finalize(
           .set({
             ...buildArtifactVerification.projection,
             status: "qa_running",
-            quotaState: "reserved",
             updatedAt: now,
           })
           .where(
@@ -1405,7 +1416,14 @@ async function finalize(
               eq(siteBuilds.userId, locked.userId),
               isNull(siteBuilds.parentBuildId),
               eq(siteBuilds.status, "qa_running"),
-              eq(siteBuilds.quotaState, "reserved"),
+              nullableCoordinate(
+                siteBuilds.quotaPeriodId,
+                buildArtifactVerification.quotaPeriodId,
+              ),
+              nullableCoordinate(
+                siteBuilds.quotaState,
+                buildArtifactVerification.quotaState,
+              ),
               isNull(siteBuilds.contractLocalAssetId),
               isNull(siteBuilds.sourceLocalAssetId),
               isNull(siteBuilds.distLocalAssetId),
@@ -1747,6 +1765,22 @@ async function finalize(
     const terminalFallback =
       fallbackMarkerFromOperationResult(result.result) ??
       fallbackMarkerFromOperationResult(locked.result);
+    const buildQuotaRows =
+      locked.buildId &&
+      ["site_build", "build_revision"].includes(locked.kind)
+        ? await tx
+            .select({ quotaPeriodId: siteBuilds.quotaPeriodId })
+            .from(siteBuilds)
+            .where(
+              and(
+                eq(siteBuilds.id, locked.buildId),
+                eq(siteBuilds.projectId, locked.projectId),
+                eq(siteBuilds.userId, locked.userId),
+              ),
+            )
+            .limit(1)
+            .for("update")
+        : [];
     if (locked.buildId) {
       await tx
         .update(siteBuilds)
@@ -1763,18 +1797,35 @@ async function finalize(
           errorMessage: unsuccessful ? result.message : null,
           approvedAt:
             !unsuccessful && result.buildStatus === "approved" ? now : null,
-          ...(["site_build", "build_revision"].includes(locked.kind)
+          ...(buildQuotaRows[0]
             ? {
-                quotaState:
+                quotaState: siteOpsQuotaStateForPeriod(
+                  buildQuotaRows[0].quotaPeriodId,
                   result.status === "attention_required" && terminalFallback
                     ? "released"
                     : siteOpsQuotaStateForProviderResult(result.status),
+                ),
               }
             : {}),
           updatedAt: now,
         })
         .where(eq(siteBuilds.id, locked.buildId));
     }
+    const socialQuotaRows =
+      locked.kind === "social_package"
+        ? await tx
+            .select({ quotaPeriodId: socialPackages.quotaPeriodId })
+            .from(socialPackages)
+            .where(
+              and(
+                eq(socialPackages.operationId, locked.id),
+                eq(socialPackages.projectId, locked.projectId),
+                eq(socialPackages.userId, locked.userId),
+              ),
+            )
+            .limit(1)
+            .for("update")
+        : [];
     await tx
       .update(socialPackages)
       .set({
@@ -1785,7 +1836,14 @@ async function finalize(
           : (result.socialPackageStatus ?? "ready"),
         errorCode: unsuccessful ? result.code : null,
         errorMessage: unsuccessful ? result.message : null,
-        quotaState: siteOpsQuotaStateForProviderResult(result.status),
+        ...(socialQuotaRows[0]
+          ? {
+              quotaState: siteOpsQuotaStateForPeriod(
+                socialQuotaRows[0].quotaPeriodId,
+                siteOpsQuotaStateForProviderResult(result.status),
+              ),
+            }
+          : {}),
         updatedAt: now,
       })
       .where(eq(socialPackages.operationId, locked.id));
