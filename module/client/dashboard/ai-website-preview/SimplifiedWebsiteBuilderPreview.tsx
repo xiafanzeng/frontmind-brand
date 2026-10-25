@@ -723,8 +723,15 @@ export function SimplifiedWebsiteBuilderPreview({
 
   useEffect(() => {
     if (!siteOps) return;
+    // Keep an explicit user selection of any selectable template; only fall
+    // back to the first admitted candidate while nothing valid is selected.
+    const hasSelectableSelection = liveCandidates.some(
+      (candidate) =>
+        candidate.id === selectedTemplateId &&
+        candidate.executionAdmitted !== false,
+    );
     const nextTemplateId = serverSelectedCandidateId
-      ?? (templateSelectionOpen
+      ?? (templateSelectionOpen && !hasSelectableSelection
         ? liveCandidates.find((candidate) => candidate.executionAdmitted !== false)?.id
         : null);
     if (!nextTemplateId || selectedTemplateId === nextTemplateId) return;
