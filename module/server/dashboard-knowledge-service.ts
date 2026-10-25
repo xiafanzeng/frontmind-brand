@@ -3900,6 +3900,16 @@ export async function publishKnowledgeBaseBuild(input: KnowledgeBasePublicationC
     if (input.firstPublicationOnly && (build.publishedAt || build.publishedSnapshotId)) {
       throw new Error("当前知识库已有发布版本，请手动更新知识库");
     }
+    // Reject a known project identity mismatch before acknowledging a
+    // background update, so the caller receives its actionable cause.
+    if (isDashboardOwnedKnowledgePackageBuild(build)) {
+      const workspace = await getDashboardWorkspace(targetUserId);
+      assertDashboardOwnedKnowledgePackageEnterpriseIdentity({
+        brandName: workspace.payload.brandName,
+        buildCompanyName: build.companyName,
+        manifestCompanyName: build.companyName,
+      });
+    }
     // Freeze the accepted draft even for older clients that omit coordinates.
     // A concurrent edit must never become part of an already-confirmed update.
     Object.assign(requestedVersion, {

@@ -41,7 +41,7 @@ import {
   useConversation,
   type Conversation,
 } from "../conversation";
-import { syncKnowledgeBaseArchiveFromOutput } from "../lib/knowledge-snapshot";
+import { KnowledgePublicationRejectedError, syncKnowledgeBaseArchiveFromOutput } from "../lib/knowledge-snapshot";
 import {
   KNOWLEDGE_BASE_RESET_REQUEST_EVENT,
   isKnowledgeBaseProgressCoordinateOlder,
@@ -794,11 +794,17 @@ function ManualKnowledgeUpdateButton({
       });
     } catch (error) {
       if (operation.signal.aborted) return;
-      setUncertainConversation(updatedConversationId);
       setConfirmOpen(false);
-      toast.error("知识库更新结果待核实", {
-        description: "请先重新读取实际结果，避免重复提交更新。",
-      });
+      if (error instanceof KnowledgePublicationRejectedError) {
+        setUncertainConversation(null);
+        toast.error("知识库未更新", { description: error.message });
+        void progressQuery.refetch();
+      } else {
+        setUncertainConversation(updatedConversationId);
+        toast.error("知识库更新结果待核实", {
+          description: "请先重新读取实际结果，避免重复提交更新。",
+        });
+      }
     } finally {
       updateLock.current = false;
       setUpdating(false);
