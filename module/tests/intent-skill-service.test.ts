@@ -85,9 +85,45 @@ function harness() {
   const send = (value = output()) => client.listAllMessages.mockResolvedValue([{
     id: "event", timestamp: Date.now(), type: "structured_output_result", structured_output_result: {success: true, value},
   }]);
-  return {service, client, intake, request, nodes, output, send, storedTasks, storedOperations, latestState};
+  return {service, client, intake, request, nodes, output, send, storedTasks, storedOperations, latestState,
+    ledger: () => ledger!};
 }
 describe("优化模型持久化任务", () => {
+  it("延迟轮询先读取已完成结果，不能仅凭本地时长判超时", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request); h.send();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 60_000);
+    try {
+      expect((await h.service.poll()).state.jobs?.[0].status).toBe("succeeded");
+      expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    } finally {clock.mockRestore();}
+  });
+  it("超时失败只回读原任务；真实结果到达后恢复，不重复上传或创建", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 60_000);
+    try {
+      expect((await h.service.poll()).state.jobs?.[0].status).toBe("failed");
+      expect((await h.service.poll()).state.jobs?.[0].status).toBe("failed");
+      h.send();
+      const recovered = await h.service.poll();
+      expect(recovered.state.jobs?.[0].status).toBe("succeeded");
+      expect(recovered.state.evaluations[0].method).toBe("skill_v1");
+      expect(h.client.createTask).toHaveBeenCalledTimes(1);
+      expect(h.client.uploadFile).toHaveBeenCalledTimes(1);
+    } finally {clock.mockRestore();}
+  });
+  it("超时恢复仍拒绝过期知识和伪造引用，不能覆盖更新任务", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.ledger().state.jobs![0].status = "failed";
+    h.ledger().state.jobs![0].error = "模型任务超时，请查看账户任务记录后重新评估";
+    h.send(); h.nodes[0].content += "知识变更";
+    expect((await h.service.poll()).state.jobs?.[0].error).toContain("知识或问题已更新");
+    expect(h.ledger().state.evaluations).toEqual([]);
+    h.ledger().state.jobs![0].error = "模型任务超时，请查看账户任务记录后重新评估";
+    h.ledger().state.jobs!.push({...h.ledger().state.jobs![0], id: "newer", status: "succeeded"});
+    h.client.listAllMessages.mockClear();
+    await h.service.poll();
+    expect(h.client.listAllMessages).not.toHaveBeenCalled();
+  });
   it("先保存任务，再调用 API；轮询发布模型结果，重放不重复创建", async () => {
     const h = harness(); await h.intake();
     const pending = await h.service.command(h.request);

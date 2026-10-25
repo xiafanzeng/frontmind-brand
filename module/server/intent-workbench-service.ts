@@ -86,6 +86,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     return {...ledger, nodes: data.nodes, preview: false};
   }
   const activeJob = (job: IntentSkillJob) => !["succeeded", "failed"].includes(job.status);
+  const timeoutMessage = "模型任务超时，请查看账户任务记录后重新评估";
+  const recoverableTimeout = (job: IntentSkillJob) => job.status === "failed" && job.error === timeoutMessage;
   async function startSkill(kind: "evaluate" | "plan", questionIds: string[], expectedRevision: number,
     clientRequestId: string, receiptId?: string) {
     const previous = (await observe()).state.jobs?.find(job => job.id === clientRequestId);
@@ -130,12 +132,15 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     return observe();
   }
   async function advance(original: IntentSkillJob) {
-    if (!activeJob(original) || (original.lease?.expiresAt ?? 0) > Date.now()) return;
+    if ((!activeJob(original) && !recoverableTimeout(original)) || (original.lease?.expiresAt ?? 0) > Date.now()) return;
     const owner = randomUUID();
     let job: IntentSkillJob | undefined;
     await locked(undefined, async (_tx, ledger) => {
       const current = ledger.state.jobs?.find(j => j.id === original.id);
-      if (!current || !activeJob(current) || (current.lease?.expiresAt ?? 0) > Date.now()) return;
+      if (!current || (!activeJob(current) && !recoverableTimeout(current)) || (current.lease?.expiresAt ?? 0) > Date.now()) return;
+      // A late result must never replace a newer evaluation of the same question.
+      if (ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
+        .some(later => later.questionIds.some(id => current.questionIds.includes(id)))) return;
       current.lease = {owner, expiresAt: Date.now() + 120000}; job = structuredClone(current);
     });
     if (!job) return;
@@ -157,8 +162,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         });
         phase = status;
       };
-      if (Date.now() - Date.parse(job.createdAt) > 30 * 60_000) throw new IntentSkillRuntimeError("模型任务超时，请查看账户任务记录后重新评估");
+      const timedOut = Date.now() - Date.parse(job.createdAt) > 30 * 60_000;
       if (phase === "queued" || phase === "uploading") {
+        if (timedOut) throw new IntentSkillRuntimeError(timeoutMessage);
         await update("uploading");
         const attachments = await uploadIntentSkill(client, model, job, input, context.accountUserId);
         // Claim before POST. A crash/ambiguous response is reconciled by reads only.
@@ -185,7 +191,10 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         await update("running", providerTaskId);
         await model.recordUpstreamResource({userId: context.accountUserId, apiCredentialId: job.credentialId, kind: "task", upstreamId: providerTaskId});
       }
-      if (!providerTaskId) return;
+      if (!providerTaskId) {
+        if (timedOut && phase !== "failed") throw new IntentSkillRuntimeError(timeoutMessage);
+        return;
+      }
       const events = await client.listAllMessages({taskId: providerTaskId, order: "asc"});
       const resultEvent = model.orderManusV2EventsByProviderRank(events, "newest_first").find(event => event.type === "structured_output_result");
       if (resultEvent) {
@@ -213,6 +222,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         });
         return;
       }
+      // Old timeout failures may only retrieve an existing result, never dispatch.
+      if (phase === "failed") return;
       const state = model.latestManusV2TaskState(events) ?? (await client.taskDetail(providerTaskId)).status;
       if (["finished", "completed"].includes(state)) {
         if (!job.terminalObservedAt) {
@@ -228,13 +239,14 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         throw new IntentSkillRuntimeError("模型任务已结束，但没有可验证的评估结果");
       }
       if (["error", "failed", "cancelled", "stopped"].includes(state)) throw new IntentSkillRuntimeError("模型任务失败，请检查账户任务记录");
+      if (timedOut) throw new IntentSkillRuntimeError(timeoutMessage);
     } catch (error) {
       // Upstream transport errors are retriable reads; creation is never retried.
       const upstream = error as {outcomeUnknown?: boolean; retryable?: boolean; status?: number};
       const creationRejected = phase === "create_unknown" && upstream.outcomeUnknown === false &&
         upstream.retryable === false && upstream.status !== undefined &&
         upstream.status >= 400 && upstream.status < 500;
-      if ((phase === "running" && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
+      if (((phase === "running" || phase === "failed") && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
         (phase === "create_unknown" && !creationRejected && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
         (phase === "uploading" && upstream.retryable)) return;
       terminalError = error instanceof z.ZodError ? "模型输出字段格式不正确，请重新生成" :
@@ -258,7 +270,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   }
   async function poll() {
     const workspace = await observe();
-    const job = workspace.state.jobs?.find(activeJob);
+    const job = workspace.state.jobs?.find(activeJob) ??
+      workspace.state.jobs?.find((candidate, index, jobs) => recoverableTimeout(candidate) &&
+        !jobs.slice(index + 1).some(later => later.questionIds.some(id => candidate.questionIds.includes(id))));
     if (job) await advance(job);
     return observe();
   }
