@@ -166,6 +166,15 @@
 .iw-catalog-category{color:#9a7028;background:#fbf4e5;border-radius:4px;padding:3px 6px;font-size:12px}
 .iw-catalog-category[data-category=competitor_comparison]{color:#496f9d;background:#edf3fa}
 .iw-catalog-category[data-category=product_scenario]{color:#2f7e7a;background:#eaf6f4}
+.iw-handoff-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px;margin-bottom:18px;border:1px solid #ded0e8;border-radius:10px;background:#faf7fc;color:#7545a0}
+.iw-handoff-banner p{margin:6px 0 0;font-size:12px;line-height:1.8;color:#667085}
+.iw-catalog-table .iw-new-row{box-shadow:inset 3px 0 #7545a0}
+.iw-catalog-table td:nth-child(5){min-width:170px}
+.iw-catalog-table td:nth-child(5) .iw-tag{margin:3px;white-space:normal}
+.iw-batch-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:20px}
+.iw-batch-summary section{padding:20px;color:#667085}
+.iw-batch-summary strong{display:block;font-size:24px;color:#7545a0;margin-top:10px}
+@media(max-width:800px){.iw-handoff-banner{flex-wrap:wrap}.iw-batch-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .iw-selection-bar>div{display:flex;gap:8px}
 .iw-selection-bar button.iw-primary{color:#fff;background:#7545a0}
 @media(max-width:1150px){.iw-catalog-header{align-items:flex-start;flex-direction:column}}
