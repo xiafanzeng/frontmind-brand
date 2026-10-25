@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { visualSelectionBundleV7Schema, SITEOPS_VISUAL_CANDIDATE_MAX_PAGES } from "../contracts/siteops.js";
 import { siteOpsObservationV1Schema } from "../contracts/siteops-contract.js";
-import { CURATED_STATIC_TEMPLATE_CATALOG_VERSION, PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION, staticTemplatePageLength, staticTemplatePagination } from "../contracts/static-template-pagination.js";
-import { completePublishedVisualPageCount, projectSiteOpsVisualGeneration, projectStaticTemplateCatalogVisualReadiness, resolveVisualCatalogObservationCoordinates, siteOpsVisibleStyleBatchQueryLimit } from "../server/siteops/service.js";
-import { FROZEN_STATIC_TEMPLATE_CATALOG, STATIC_TEMPLATE_CATALOG_PAGE_COUNT, STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "../server/siteops/static-template-catalog-manifest.js";
+import { CURATED_STATIC_TEMPLATE_CATALOG_VERSION, MAX_STATIC_TEMPLATE_CATALOG_PAGE_COUNT, PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION, ROLLING_STATIC_TEMPLATE_CATALOG_VERSION, staticTemplatePageLength, staticTemplatePagination } from "../contracts/static-template-pagination.js";
+import { completePublishedVisualPageCount, projectSiteOpsVisualGeneration, projectStaticTemplateCatalogVisualReadiness, resolveVisualCatalogObservationCoordinates, siteOpsVisibleStyleBatchQueryLimit, siteOpsVisualCycleCatalogVersion } from "../server/siteops/service.js";
+import { FROZEN_STATIC_TEMPLATE_CATALOG, HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG, ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS, STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "../server/siteops/static-template-catalog-manifest.js";
 
 const oldVersion = "21st-included-recommended-20260828-v2";
 const v3Version = "frontmind-curated-20261024-v3";
@@ -70,19 +70,27 @@ function observation(version: string) {
 describe("frozen catalog pagination", () => {
   it("keeps v2 page four readable after catalog upgrades", () => {
     expect(visualSelectionBundleV7Schema.parse(bundle(oldVersion, 4)).candidates).toHaveLength(8);
-    const coordinates = resolveVisualCatalogObservationCoordinates({ frozenVisualInput: { workflowVersion: "2.9.0", catalogVersion: oldVersion }, hasAnyVisualOperation: true, visibleBatchCount: 4 });
+    const coordinates = resolveVisualCatalogObservationCoordinates({ frozenVisualInput: { workflowVersion: "2.9.0", catalogVersion: oldVersion }, activeCatalogVersion: CURATED_STATIC_TEMPLATE_CATALOG_VERSION, hasAnyVisualOperation: true, visibleBatchCount: 4 });
     expect(coordinates.pageCount).toBe(4);
     expect(coordinates.catalogVersion).toBe(oldVersion);
   });
-  it("accepts all 35 positions with a three-candidate fifth page", () => {
-    const pages = Array.from({ length: 5 }, (_, index) => visualSelectionBundleV7Schema.parse(bundle(CURATED_STATIC_TEMPLATE_CATALOG_VERSION, index + 1)));
-    expect(pages.map(page => page.candidates.length)).toEqual([8, 8, 8, 8, 3]);
-    expect(pages.flatMap(page => page.candidates).at(-1)?.catalogPosition).toBe(35);
+  it("publishes the six v6 templates on one page", () => {
+    const page = visualSelectionBundleV7Schema.parse(bundle(CURATED_STATIC_TEMPLATE_CATALOG_VERSION, 1));
+    expect(page.candidates).toHaveLength(6);
+    expect(page.pageCount).toBe(1);
+    expect(FROZEN_STATIC_TEMPLATE_CATALOG.map((entry) => entry.candidateId)).toEqual([
+      "static-template-33-helpcenter-search",
+      "static-template-34-helpcenter-docs",
+      "static-template-35-helpcenter-minimal",
+      "static-template-15-hirael-nexacore",
+      "static-template-21-hirael-mindloop",
+      "static-template-22-hirael-agency-landing",
+    ]);
   });
-  it("serializes all five current pages through the public observation contract", () => {
+  it("serializes the current page through the public observation contract", () => {
     const current = siteOpsObservationV1Schema.parse(observation(CURATED_STATIC_TEMPLATE_CATALOG_VERSION));
-    expect(current.visualCandidatePages.map(page => page.candidates.length)).toEqual([8, 8, 8, 8, 3]);
-    expect(current.visualGeneration).toMatchObject({ maxPages: 5, generatedPages: 5, canSelectExisting: true });
+    expect(current.visualCandidatePages.map(page => page.candidates.length)).toEqual([6]);
+    expect(current.visualGeneration).toMatchObject({ maxPages: 1, generatedPages: 1, canSelectExisting: true });
     expect(siteOpsObservationV1Schema.parse(observation(oldVersion)).visualGeneration.maxPages).toBe(4);
     expect(siteOpsObservationV1Schema.safeParse({
       ...observation(oldVersion), visualCandidatePages: current.visualCandidatePages,
@@ -90,7 +98,8 @@ describe("frozen catalog pagination", () => {
   });
   it.each([
     ["v3", v3Version],
-    ["v4", PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION],
+    ["v4", ROLLING_STATIC_TEMPLATE_CATALOG_VERSION],
+    ["v5", PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION],
   ])("keeps frozen %s bundles and public observations at 35 entries and five pages", (_label, version) => {
     expect(visualSelectionBundleV7Schema.parse(bundle(version, 5)).candidates).toHaveLength(3);
     const historical = siteOpsObservationV1Schema.parse(observation(version));
@@ -103,28 +112,83 @@ describe("frozen catalog pagination", () => {
     const page = bundle(CURATED_STATIC_TEMPLATE_CATALOG_VERSION, 1);
     expect(visualSelectionBundleV7Schema.safeParse({ ...page, candidates: page.candidates.slice(0, 3), displayTarget: 3 }).success).toBe(false);
   });
+  it.each([
+    ["v6", CURATED_STATIC_TEMPLATE_CATALOG_VERSION, 1],
+    ["rolling v4", ROLLING_STATIC_TEMPLATE_CATALOG_VERSION, 5],
+  ])("uses the actual active %s coordinates for a pristine 2.9 cycle", (_label, activeCatalogVersion, pageCount) => {
+    const coordinates = resolveVisualCatalogObservationCoordinates({
+      frozenVisualInput: null,
+      activeCatalogVersion,
+      hasAnyVisualOperation: false,
+      visibleBatchCount: 0,
+    });
+    expect(coordinates).toMatchObject({
+      workflowVersion: "2.9.0",
+      catalogVersion: activeCatalogVersion,
+      pageCount,
+      defaultAvailability: { availablePages: pageCount, reservedPages: 0 },
+    });
+  });
+  it("keeps a frozen historical catalog coordinate and rejects mixed retry versions", () => {
+    const frozen = {
+      schemaVersion: 4,
+      knowledgeSnapshotId: "11111111-1111-4111-8111-111111111111",
+      workflowVersion: "2.9.0",
+      catalogVersion: ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
+      mode: "initial",
+      page: 1,
+      admissionRevision: 1,
+    } as const;
+    expect(siteOpsVisualCycleCatalogVersion([frozen, frozen])).toBe(
+      ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
+    );
+    expect(() => siteOpsVisualCycleCatalogVersion([
+      frozen,
+      { ...frozen, catalogVersion: CURATED_STATIC_TEMPLATE_CATALOG_VERSION },
+    ])).toThrow("冻结目录版本不一致");
+  });
   it("counts the short final page as a complete selectable page", () => {
-    const batches = Array.from({ length: 5 }, (_, index) => ({ id: String(index), status: "published" }));
+    const batches = Array.from({ length: 1 }, (_, index) => ({ id: String(index), status: "published" }));
     const candidates = batches.flatMap((batch, index) => Array.from({ length: staticTemplatePageLength(CURATED_STATIC_TEMPLATE_CATALOG_VERSION, index + 1) }, () => ({ batchId: batch.id })));
-    expect(completePublishedVisualPageCount({ batches, candidates, pageSize: 8, catalogVersion: CURATED_STATIC_TEMPLATE_CATALOG_VERSION })).toBe(5);
-    expect(completePublishedVisualPageCount({ batches: batches.slice(0, 4), candidates, pageSize: 8, catalogVersion: oldVersion })).toBe(4);
+    expect(completePublishedVisualPageCount({ batches, candidates, pageSize: 8, catalogVersion: CURATED_STATIC_TEMPLATE_CATALOG_VERSION })).toBe(1);
+    const historicalBatches = Array.from({ length: 5 }, (_, index) => ({ id: `h-${index}`, status: "published" }));
+    const historicalCandidates = historicalBatches.flatMap((batch, index) => Array.from({ length: staticTemplatePageLength(PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION, index + 1) }, () => ({ batchId: batch.id })));
+    expect(completePublishedVisualPageCount({ batches: historicalBatches, candidates: historicalCandidates, pageSize: 8, catalogVersion: PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION })).toBe(5);
   });
   it("loads every published batch of the widest pool in the observation query", () => {
     const limit = siteOpsVisibleStyleBatchQueryLimit();
-    expect(limit).toBeGreaterThanOrEqual(STATIC_TEMPLATE_CATALOG_PAGE_COUNT + 1);
+    expect(limit).toBeGreaterThanOrEqual(MAX_STATIC_TEMPLATE_CATALOG_PAGE_COUNT + 1);
     expect(limit).toBeGreaterThanOrEqual(SITEOPS_VISUAL_CANDIDATE_MAX_PAGES + 1);
   });
   it("requires every supported template admission before advertising readiness", () => {
     const catalog = {
       workflowVersion: "2.8.0", catalogVersion: CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
-      pageSize: 8, pageCount: 5,
+      pageSize: 8, pageCount: 1,
       entries: FROZEN_STATIC_TEMPLATE_CATALOG.map(entry => ({
         candidateId: entry.candidateId,
         executionAdmission: { status: STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.includes(entry.candidateId) ? "admitted" as const : "unavailable" as const },
       })),
     };
     expect(projectStaticTemplateCatalogVisualReadiness(catalog).status).toBe("configured");
-    catalog.entries[34]!.executionAdmission.status = "unavailable";
+    catalog.entries[5]!.executionAdmission.status = "unavailable";
     expect(projectStaticTemplateCatalogVisualReadiness(catalog).status).toBe("not_configured");
+
+    const rollingCatalog = {
+      workflowVersion: "2.8.0",
+      catalogVersion: ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
+      pageSize: 8,
+      pageCount: 5,
+      entries: HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG.map((entry) => ({
+        candidateId: entry.candidateId,
+        executionAdmission: {
+          status: ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.includes(entry.candidateId)
+            ? "admitted" as const
+            : "unavailable" as const,
+        },
+      })),
+    };
+    expect(projectStaticTemplateCatalogVisualReadiness(rollingCatalog).status).toBe("configured");
+    rollingCatalog.entries[0]!.executionAdmission.status = "admitted";
+    expect(projectStaticTemplateCatalogVisualReadiness(rollingCatalog).status).toBe("not_configured");
   });
 });

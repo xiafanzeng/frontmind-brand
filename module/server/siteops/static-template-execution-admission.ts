@@ -315,7 +315,7 @@ async function materializePreparedAdmission(input: {
   };
 }
 
-/** Every v5 catalog entry must pass the same controlled compiler and browser
+/** Every current catalog entry must pass the same controlled compiler and browser
  * QA before the catalog may become active. The guard remains explicit so a
  * future catalog can stage entries without accidentally making them usable. */
 export const buildStaticTemplateExecutionAdmission: StaticTemplateExecutionAdmissionBuilder =

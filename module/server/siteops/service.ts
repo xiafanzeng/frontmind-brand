@@ -1,4 +1,10 @@
-import { staticTemplatePagination, staticTemplatePageLength } from "../../contracts/static-template-pagination.js";
+import {
+  MAX_STATIC_TEMPLATE_CATALOG_ENTRY_COUNT,
+  MAX_STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
+  ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
+  staticTemplatePagination,
+  staticTemplatePageLength,
+} from "../../contracts/static-template-pagination.js";
 import {restartSiteOpsProject,siteOpsRestartState,SiteOpsRestartError} from "./restart-service.js";
 import {customerVisibleStyleBatchStatusCondition} from "./visual-batch-visibility.js";
 import type {BrandSchema} from '../../schema/index.js';
@@ -166,14 +172,17 @@ import {
   type ReferenceBlueprint,
 } from "../../contracts/siteops-design.js";
 import {
-  STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
   STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
   STATIC_TEMPLATE_CATALOG_VERSION,
   loadActiveStaticTemplateCatalog,
   requireActiveStaticTemplateCatalog,
+  requireStaticTemplateCatalogVersion,
   staticTemplateAdmissionEvidenceSha256,
 } from "./static-template-catalog.js";
-import { STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "./static-template-catalog-manifest.js";
+import {
+  ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS,
+  STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS,
+} from "./static-template-catalog-manifest.js";
 import {
   NATIVE_RUNTIME_CONTRACT_V1_SHA256,
   NATIVE_RUNTIME_EXECUTION_SHELL_V1_SHA256,
@@ -1249,17 +1258,31 @@ export function projectStaticTemplateCatalogVisualReadiness(
     }[];
   } | null,
 ) {
-  const requiredAdmissionReady = STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.every(
+  const supportedCatalog =
+    catalog?.catalogVersion === STATIC_TEMPLATE_CATALOG_VERSION ||
+    catalog?.catalogVersion === ROLLING_STATIC_TEMPLATE_CATALOG_VERSION;
+  const requiredAdmissionIds =
+    catalog?.catalogVersion === ROLLING_STATIC_TEMPLATE_CATALOG_VERSION
+      ? ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS
+      : STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS;
+  const admittedIds = catalog?.entries
+    .filter((entry) => entry.executionAdmission.status === "admitted")
+    .map((entry) => entry.candidateId) ?? [];
+  const requiredAdmissionReady = requiredAdmissionIds.every(
     (id) => catalog?.entries.some(
       (entry) => entry.candidateId === id && entry.executionAdmission.status === "admitted",
     ),
+  ) && (
+    catalog?.catalogVersion !== ROLLING_STATIC_TEMPLATE_CATALOG_VERSION ||
+    admittedIds.length === requiredAdmissionIds.length
   );
+  const pagination = staticTemplatePagination(catalog?.catalogVersion);
   const ready =
+    supportedCatalog &&
     isStaticCatalogWorkflowVersion(catalog?.workflowVersion ?? null) &&
-    catalog?.catalogVersion === STATIC_TEMPLATE_CATALOG_VERSION &&
-    catalog?.pageSize === STATIC_TEMPLATE_CATALOG_PAGE_SIZE &&
-    catalog?.pageCount === STATIC_TEMPLATE_CATALOG_PAGE_COUNT &&
-    catalog?.entries.length === staticTemplatePagination(catalog.catalogVersion).entryCount &&
+    catalog?.pageSize === pagination.pageSize &&
+    catalog?.pageCount === pagination.pageCount &&
+    catalog?.entries.length === pagination.entryCount &&
     requiredAdmissionReady;
   return {
     status: ready ? ("configured" as const) : ("not_configured" as const),
@@ -1290,12 +1313,7 @@ async function loadServiceReadiness(
   );
   let staticTemplateCatalog: Awaited<
     ReturnType<typeof loadActiveStaticTemplateCatalog>
-  > = null;
-  try {
-    staticTemplateCatalog = await loadActiveStaticTemplateCatalog();
-  } catch {
-    staticTemplateCatalog = null;
-  }
+  > = await loadStaticTemplateCatalogForServiceReadiness();
   const hasAiBuilderCredential = aiBuilderCredentials.length > 0;
   const aliyunFeatureEnabled =
     process.env.FRONTMIND_ALIYUN_DOMAIN_ENABLED?.trim() === "1";
@@ -1306,6 +1324,8 @@ async function loadServiceReadiness(
     providerRegistered: siteOpsProviderConfigured("aliyun_esa"),
   });
   return {
+    activeStaticTemplateCatalogVersion:
+      staticTemplateCatalog?.catalogVersion ?? null,
     visuals: projectStaticTemplateCatalogVisualReadiness(staticTemplateCatalog),
     website: {
       status: hasAiBuilderCredential
@@ -1336,6 +1356,19 @@ async function loadServiceReadiness(
             : "请先完成阿里云账号授权",
     },
   };
+}
+
+export async function loadStaticTemplateCatalogForServiceReadiness(
+  options: { rootDir?: string } = {},
+) {
+  try {
+    return await loadActiveStaticTemplateCatalog({
+      ...options,
+      verifyIntegrityStats: true,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function requireEsaRuntimeConfigured() {
@@ -1576,13 +1609,13 @@ export function completePublishedVisualPageCount(input: {
 /** The observation must load every customer-visible batch of the widest pool
  * it can serve: the legacy 21st lane tracks up to
  * SITEOPS_VISUAL_CANDIDATE_MAX_PAGES published batches plus one in flight,
- * while the frozen static catalog publishes STATIC_TEMPLATE_CATALOG_PAGE_COUNT
- * batches in a single operation. */
+ * while immutable static catalogs may retain up to the historical maximum in
+ * one operation. */
 export function siteOpsVisibleStyleBatchQueryLimit() {
   return (
     Math.max(
       SITEOPS_VISUAL_CANDIDATE_MAX_PAGES,
-      STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
+      MAX_STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
     ) + 1
   );
 }
@@ -1591,6 +1624,7 @@ export function resolveVisualCatalogObservationCoordinates(input: {
   frozenVisualInput: Record<string, unknown> | null;
   hasAnyVisualOperation: boolean;
   visibleBatchCount: number;
+  activeCatalogVersion: string | null;
 }) {
   const pristineVisualCycle =
     !input.hasAnyVisualOperation && input.visibleBatchCount === 0;
@@ -1604,7 +1638,7 @@ export function resolveVisualCatalogObservationCoordinates(input: {
     typeof input.frozenVisualInput?.catalogVersion === "string"
       ? input.frozenVisualInput.catalogVersion
       : pristineVisualCycle
-        ? STATIC_TEMPLATE_CATALOG_VERSION
+        ? input.activeCatalogVersion
         : null;
   const staticCatalogVisualCycle =
     isStaticCatalogWorkflowVersion(workflowVersion);
@@ -1614,14 +1648,16 @@ export function resolveVisualCatalogObservationCoordinates(input: {
     catalogVersion,
     staticCatalogVisualCycle,
     pageSize: staticCatalogVisualCycle
-      ? STATIC_TEMPLATE_CATALOG_PAGE_SIZE
+      ? staticTemplatePagination(catalogVersion).pageSize
       : SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE,
     pageCount: staticCatalogVisualCycle
       ? staticTemplatePagination(catalogVersion).pageCount
       : SITEOPS_VISUAL_CANDIDATE_MAX_PAGES,
     defaultAvailability: pristineVisualCycle
       ? {
-          availablePages: STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
+          availablePages: catalogVersion
+            ? staticTemplatePagination(catalogVersion).pageCount
+            : 0,
           reservedPages: 0,
         }
       : null,
@@ -1640,7 +1676,7 @@ export function projectSiteOpsVisualGeneration(input: {
   workflowVersion?: string | null;
   catalogVersion?: string | null;
   pageSize?: 8 | 9;
-  pageCount?: 3 | 4 | 5;
+  pageCount?: 1 | 3 | 4 | 5;
 }) {
   const staticCatalogMode = isStaticCatalogWorkflowVersion(
     input.workflowVersion ?? null,
@@ -2298,7 +2334,7 @@ async function projectObservationOnce(
     rawBuildRows,
     rawDeploymentRows,
     rawPackageRows,
-    serviceReadiness,
+    serviceReadinessState,
     snapshotRows,
     rawBatchRows,
     rawTimelineOperationRows,
@@ -2505,6 +2541,11 @@ async function projectObservationOnce(
   ])) as any[];
 
   const {
+    activeStaticTemplateCatalogVersion,
+    ...serviceReadiness
+  } = serviceReadinessState;
+
+  const {
     messageRows,
     timelineMessageRows,
     buildRows,
@@ -2580,6 +2621,7 @@ async function projectObservationOnce(
   > | null;
   const visualCoordinates = resolveVisualCatalogObservationCoordinates({
     frozenVisualInput,
+    activeCatalogVersion: activeStaticTemplateCatalogVersion,
     hasAnyVisualOperation: timelineOperationRows.some(
       (row: { kind: string }) => row.kind === "visual_search",
     ),
@@ -4052,6 +4094,44 @@ export function siteOpsVisualCycleWorkflowVersion(
   return workflowVersion;
 }
 
+/** Resolve one immutable static-catalog coordinate for retries. Mixed or
+ * malformed cycles must never silently move to whichever catalog is active. */
+export function siteOpsVisualCycleCatalogVersion(
+  frozenInputs: readonly unknown[],
+) {
+  const parsedInputs = frozenInputs.map((value) =>
+    visualSearchOperationInputSchema.safeParse(value),
+  );
+  if (
+    parsedInputs.length < 1 ||
+    parsedInputs.some(
+      (result) =>
+        !result.success ||
+        !("catalogVersion" in result.data) ||
+        !isStaticCatalogWorkflowVersion(result.data.workflowVersion),
+    )
+  ) {
+    throw new SiteOpsServiceError(
+      "STATE_CONFLICT",
+      "本轮视觉候选的冻结目录坐标无法核验，请重置后重新检索。",
+      409,
+    );
+  }
+  const catalogVersions = new Set(
+    parsedInputs.map((result) =>
+      "catalogVersion" in result.data! ? result.data.catalogVersion : "",
+    ),
+  );
+  if (catalogVersions.size !== 1) {
+    throw new SiteOpsServiceError(
+      "STATE_CONFLICT",
+      "本轮视觉候选的冻结目录版本不一致，请重置后重新检索。",
+      409,
+    );
+  }
+  return [...catalogVersions][0]!;
+}
+
 async function frozenSupplementalVisualWorkflowVersion(
   tx: any,
   input: {
@@ -4501,7 +4581,7 @@ async function handleVisualSearch(
         ),
       ),
     )
-    .limit(STATIC_TEMPLATE_CATALOG_PAGE_COUNT)
+    .limit(MAX_STATIC_TEMPLATE_CATALOG_PAGE_COUNT)
     .for("update");
   const currentPublishedBatches = currentVisualBatches.filter(
     (batch: { status: string }) => batch.status === "published",
@@ -4572,14 +4652,32 @@ async function handleVisualSearch(
     frozenVisualInputs.length > 0
       ? siteOpsVisualCycleWorkflowVersion(frozenVisualInputs)
       : SITEOPS_DEFAULT_WORKFLOW.frontMindVersion;
-  const staticCatalogVisualCycle =
-    frozenVisualInputs.length === 0 ||
-    frozenVisualInputs.some(
-      (frozen) =>
-        "schemaVersion" in frozen &&
-        (frozen.schemaVersion === 3 || frozen.schemaVersion === 4) &&
-        isStaticCatalogWorkflowVersion(frozen.workflowVersion),
+  const frozenStaticCatalogFlags = frozenVisualInputs.map(
+    (frozen) =>
+      "catalogVersion" in frozen &&
+      isStaticCatalogWorkflowVersion(frozen.workflowVersion),
+  );
+  if (
+    frozenStaticCatalogFlags.some(Boolean) &&
+    !frozenStaticCatalogFlags.every(Boolean)
+  ) {
+    throw new SiteOpsServiceError(
+      "STATE_CONFLICT",
+      "本轮视觉候选的冻结目录坐标不一致，请重置后重新检索。",
+      409,
     );
+  }
+  const staticCatalogVisualCycle =
+    frozenVisualInputs.length === 0 || frozenStaticCatalogFlags.every(Boolean);
+  const frozenCatalogVersion =
+    staticCatalogVisualCycle && frozenVisualInputs.length > 0
+      ? siteOpsVisualCycleCatalogVersion(frozenVisualInputs)
+      : null;
+  const staticCatalogPageCount = staticCatalogVisualCycle
+    ? staticTemplatePagination(
+        frozenCatalogVersion ?? STATIC_TEMPLATE_CATALOG_VERSION,
+      ).pageCount
+    : SITEOPS_VISUAL_CANDIDATE_MAX_PAGES;
   const historicalCredentialCoordinates = new Set(
     staticCatalogVisualCycle
       ? []
@@ -4656,7 +4754,7 @@ async function handleVisualSearch(
   }
   if (
     input.reselect &&
-    currentPublishedBatches.length >= STATIC_TEMPLATE_CATALOG_PAGE_COUNT
+    currentPublishedBatches.length >= staticCatalogPageCount
   ) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
@@ -4702,7 +4800,9 @@ async function handleVisualSearch(
     | 2
     | 3;
   const staticCatalog = staticCatalogVisualCycle
-    ? await requireActiveStaticTemplateCatalog()
+    ? frozenCatalogVersion
+      ? await requireStaticTemplateCatalogVersion(frozenCatalogVersion)
+      : await requireActiveStaticTemplateCatalog()
     : null;
   const credential = staticCatalogVisualCycle
     ? null
@@ -5037,7 +5137,7 @@ async function selectVisualSample(
   if (
     sampleRows.length < 1 ||
     sampleRows.length >
-      STATIC_TEMPLATE_CATALOG_PAGE_COUNT * STATIC_TEMPLATE_CATALOG_PAGE_SIZE
+      MAX_STATIC_TEMPLATE_CATALOG_ENTRY_COUNT
   ) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",

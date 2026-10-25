@@ -61,7 +61,7 @@ it("does not downgrade ordinary, aborted, network, or browser environment errors
 
 const browserInstalled = existsSync(chromium.executablePath());
 it.runIf(browserInstalled)(
-  "builds an unsupported provider source as a preview-bound fallback through real Chromium QA",
+  "builds an unsafe provider source as a preview-bound fallback through real Chromium QA",
   async () => {
     const definition = FROZEN_STATIC_TEMPLATE_CATALOG[0]!;
     const zip = new JSZip();
@@ -126,7 +126,7 @@ it.runIf(browserInstalled)(
       expect(result).toMatchObject({
         admissionMode: "preview_reference_fallback",
         referencePreviewSha256: previewSha256,
-        fallbackReasonCode: "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED",
+        fallbackReasonCode: "NATIVE_TEMPLATE_SOURCE_UNSAFE",
       });
       expect(JSON.parse(result.qa.toString())).toMatchObject({
         passed: true,
@@ -136,7 +136,7 @@ it.runIf(browserInstalled)(
         rawSourceSha256: rawSha256,
         admissionMode: "preview_reference_fallback",
         referencePreviewSha256: previewSha256,
-        fallbackReasonCode: "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED",
+        fallbackReasonCode: "NATIVE_TEMPLATE_SOURCE_UNSAFE",
       });
       const normalized = await JSZip.loadAsync(result.normalizedSource);
       const frozenPreview = Object.values(normalized.files).find(

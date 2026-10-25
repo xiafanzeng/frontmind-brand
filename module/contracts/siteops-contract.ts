@@ -109,9 +109,9 @@ export const siteOpsVisualCandidatePageProjectionSchema = z
       .array(siteOpsVisualCandidateProjectionSchema)
       .refine(
         (candidates) =>
-          candidates.length === 3 || candidates.length === 8 ||
+          candidates.length === 3 || candidates.length === 6 || candidates.length === 8 ||
           candidates.length === SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE,
-        "Visual candidate page must contain 3 or 8 static or 9 historical candidates",
+        "Visual candidate page must contain 3, 6 or 8 static or 9 historical candidates",
       ),
   })
   .strict();
@@ -127,6 +127,7 @@ export const siteOpsVisualGenerationProjectionSchema = z
     availablePages: z.number().int().min(0).max(5).optional(),
     reservedPages: z.number().int().min(0).max(5).optional(),
     maxPages: z.union([
+      z.literal(1),
       z.literal(SITEOPS_VISUAL_CANDIDATE_MAX_PAGES),
       z.literal(4),
       z.literal(5),
@@ -134,7 +135,7 @@ export const siteOpsVisualGenerationProjectionSchema = z
     workflowVersion: z.string().trim().min(1).max(32).optional(),
     catalogVersion: z.string().trim().min(1).max(191).optional(),
     pageSize: z.union([z.literal(8), z.literal(9)]).optional(),
-    pageCount: z.union([z.literal(3), z.literal(4), z.literal(5)]).optional(),
+    pageCount: z.union([z.literal(1), z.literal(3), z.literal(4), z.literal(5)]).optional(),
     canGenerateMore: z.boolean(),
     canSelectExisting: z.boolean().default(true),
     retryAction: z.enum(["start", "supplemental"]).nullable().optional(),

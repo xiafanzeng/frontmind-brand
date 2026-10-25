@@ -1700,7 +1700,7 @@ export const visualSelectionBundleV7Schema = z
     catalogVersion: z.string().trim().min(1).max(191),
     pageNumber: z.number().int().min(1).max(5),
     pageSize: z.literal(8),
-    pageCount: z.union([z.literal(4), z.literal(5)]),
+    pageCount: z.union([z.literal(1), z.literal(4), z.literal(5)]),
     displayTarget: z.number().int().min(1).max(8),
     candidates: z.array(visualCandidateV7Schema).min(1).max(8),
     selectedCandidateId: z.string().trim().min(1).max(191).nullable(),
