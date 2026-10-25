@@ -38,9 +38,11 @@ import { Readable } from "node:stream";
 import express from "express";
 import JSZip from "jszip";
 import { and, eq, sql, type SQLWrapper } from "drizzle-orm";
+import { z } from "zod";
 
 import { siteContentPlanV2Schema } from "../../contracts/siteops-content-plan.js";
-import { openStaticTemplateCatalogDist } from "./static-template-catalog.js";
+import { staticTemplateExecutionAdmissionEvidenceSchema } from "../../contracts/siteops.js";
+import { openStaticTemplateCatalogVersionDist } from "./static-template-catalog.js";
 import { previewNavigationBridgeSource } from "./preview-routing.js";
 import { customerVisibleStyleBatchStatusCondition } from "./visual-batch-visibility.js";
 
@@ -819,6 +821,94 @@ function nonEmptyString(value: unknown) {
     : null;
 }
 
+const staticTemplatePreviewMetadataSchema = z
+  .object({
+    schemaVersion: z.literal(7),
+    renderer: z.literal("frontmind_static_template_catalog_v1"),
+    workflowVersion: z.enum(["2.8.0", "2.9.0"]),
+    catalogVersion: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._-]{0,190}$/u),
+    catalogPosition: z.number().int().min(1).max(35),
+    catalogCandidateId: z
+      .string()
+      .regex(/^static-template-[0-9]{2,3}-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u),
+    providerTemplateId: z.string().trim().min(1).max(191),
+    providerSlug: z.string().trim().min(1).max(191),
+    providerVersion: z.string().regex(/^[a-f0-9]{40}$/u),
+    sourceOwner: z.string().trim().min(1).max(191),
+    sourceRepo: z.string().trim().min(1).max(191),
+    sourceCommitSha: z.string().regex(/^[a-f0-9]{40}$/u),
+    sourceSubdirectory: z.string().trim().min(1).max(1_024).nullable(),
+    sourceLicense: z.enum(["MIT", "Apache-2.0"]),
+    sourceAssetId: z.string().trim().min(1).max(512),
+    sourceArchiveSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    sourceArchiveBytes: z.number().int().positive().max(MAX_ARCHIVE_BYTES * 2),
+    previewAssetId: z.string().trim().min(1).max(512),
+    previewSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    executionAdmission: staticTemplateExecutionAdmissionEvidenceSchema,
+  })
+  .passthrough();
+
+/** Resolve a saved selection against its frozen catalog, never current active. */
+export async function openFrozenStaticTemplatePreviewDist(
+  metadata: unknown,
+  options: { rootDir?: string } = {},
+) {
+  const parsed = staticTemplatePreviewMetadataSchema.safeParse(metadata);
+  if (!parsed.success) {
+    throw new Error("NOT_FOUND");
+  }
+  const frozen = parsed.data;
+  const evidence = frozen.executionAdmission;
+  if (evidence.status !== "admitted") {
+    throw new Error("NOT_FOUND");
+  }
+  const opened = await openStaticTemplateCatalogVersionDist(
+    frozen.catalogVersion,
+    frozen.catalogCandidateId,
+    options,
+  );
+  const entry = opened.entry;
+  const admission = entry.executionAdmission;
+  const valid =
+    entry.order === frozen.catalogPosition &&
+    entry.providerTemplateId === frozen.providerTemplateId &&
+    entry.providerSlug === frozen.providerSlug &&
+    entry.providerVersion === frozen.providerVersion &&
+    entry.sourceOwner === frozen.sourceOwner &&
+    entry.sourceRepo === frozen.sourceRepo &&
+    entry.sourceCommitSha === frozen.sourceCommitSha &&
+    entry.sourceSubdirectory === frozen.sourceSubdirectory &&
+    entry.sourceLicense === frozen.sourceLicense &&
+    entry.sourceAssetId === frozen.sourceAssetId &&
+    entry.sourceSha256 === frozen.sourceArchiveSha256 &&
+    entry.sourceBytes === frozen.sourceArchiveBytes &&
+    entry.previewAssetId === frozen.previewAssetId &&
+    entry.previewSha256 === frozen.previewSha256 &&
+    admission.binding.catalogVersion === frozen.catalogVersion &&
+    admission.binding.candidateId === frozen.catalogCandidateId &&
+    admission.binding.rawSourceSha256 === evidence.rawSourceSha256 &&
+    admission.normalizedSourceSha256 === evidence.normalizedSourceSha256 &&
+    admission.sourceTreeSha256 === evidence.sourceTreeSha256 &&
+    admission.runtimeContractSha256 === evidence.runtimeContractSha256 &&
+    admission.executionShellSha256 === evidence.executionShellSha256 &&
+    admission.deliveryContractSha256 === evidence.deliveryContractSha256 &&
+    admission.distSha256 === evidence.distSha256 &&
+    admission.qaSha256 === evidence.qaSha256 &&
+    admission.browserReceiptSha256 === evidence.browserReceiptSha256 &&
+    admission.qaStatus === evidence.qaStatus &&
+    admission.admissionEvidenceSha256 === evidence.admissionEvidenceSha256 &&
+    admission.admissionMode === evidence.admissionMode &&
+    admission.referencePreviewSha256 === evidence.referencePreviewSha256 &&
+    admission.fallbackReasonCode === evidence.fallbackReasonCode;
+  if (!valid) {
+    opened.stream.destroy();
+    throw new Error("NOT_FOUND");
+  }
+  return opened;
+}
+
 /**
  * A V4 style sample freezes two independent images: the provider reference
  * shown on the selection board and FrontMind's realization of that reference.
@@ -1165,20 +1255,8 @@ siteOpsArtifactApi.get("/template-previews/:sampleId", async (req, res) => {
       !Array.isArray(rows[0].sourceMetadata)
         ? (rows[0].sourceMetadata as Record<string, unknown>)
         : null;
-    const admission =
-      metadata?.executionAdmission &&
-      typeof metadata.executionAdmission === "object" &&
-      !Array.isArray(metadata.executionAdmission)
-        ? (metadata.executionAdmission as Record<string, unknown>)
-        : null;
-    const candidateId =
-      metadata?.schemaVersion === 7 &&
-      metadata.renderer === "frontmind_static_template_catalog_v1" &&
-      admission?.status === "admitted"
-        ? nonEmptyString(metadata.catalogCandidateId)
-        : "";
-    if (!candidateId) return notFound(res);
-    const opened = await openStaticTemplateCatalogDist(candidateId);
+    if (!metadata) return notFound(res);
+    const opened = await openFrozenStaticTemplatePreviewDist(metadata);
     const archive = await streamToBuffer(opened.stream, MAX_ARCHIVE_BYTES);
     const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
     const entries = Object.values(zip.files).filter((entry) => !entry.dir);

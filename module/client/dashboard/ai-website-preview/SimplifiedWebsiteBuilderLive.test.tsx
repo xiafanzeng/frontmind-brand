@@ -194,25 +194,28 @@ function liveBuildObservation(
 function fullCatalogObservation(): SiteOpsObservationV1 {
   const base = liveBuildObservation("awaiting_visual_selection");
   const labels = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
-  const customTitles = new Map([
+  const templates = [
     [33, "蔚蓝帮助中心"],
     [34, "藏青文档站"],
     [35, "松绿极简帮助页"],
-  ]);
-  const candidates = Array.from({ length: 35 }, (_, index) => {
+    [15, "NexaCore"],
+    [21, "Mindloop"],
+    [22, "Agency Landing"],
+  ] as const;
+  const candidates = templates.map(([catalogPosition, title], index) => {
     const order = index + 1;
     return {
       id: `33333333-3333-4333-8333-${String(order).padStart(12, "0")}`,
       label: labels[index % 8]!,
-      title: customTitles.get(order) ?? `模板 ${order}`,
+      title,
       previewUrl: `/api/frontmind/v2/siteops/templates/preview-${order}`,
       note: `真实模板目录中的第 ${order} 个可执行候选`,
       visualFamily: "editorial" as const,
       selected: false,
       executionAdmitted: true,
-      executionAdmissionMode: order <= 32
+      executionAdmissionMode: catalogPosition === 15 || catalogPosition === 21
         ? "preview_reference_fallback" as const
-        : order === 34
+        : catalogPosition === 22
           ? "verified_normalized_cache" as const
           : "provider_source" as const,
       executionUnavailableReason: null,
@@ -221,21 +224,21 @@ function fullCatalogObservation(): SiteOpsObservationV1 {
   return {
     ...base,
     visualCandidates: [],
-    visualCandidatePages: Array.from({ length: 5 }, (_, index) => ({
-      batchId: `44444444-4444-4444-8444-${String(index + 1).padStart(12, "0")}`,
-      page: index + 1,
-      candidates: candidates.slice(index * 8, Math.min((index + 1) * 8, 35)),
-    })),
+    visualCandidatePages: [{
+      batchId: "44444444-4444-4444-8444-000000000001",
+      page: 1,
+      candidates,
+    }],
     visualGeneration: {
       ...base.visualGeneration,
-      generatedPages: 5,
-      availablePages: 5,
-      maxPages: 5,
+      generatedPages: 1,
+      availablePages: 1,
+      maxPages: 1,
       canSelectExisting: true,
       workflowVersion: "2.9.0",
-      catalogVersion: "frontmind-curated-20261025-v5",
+      catalogVersion: "frontmind-curated-20261025-v6",
       pageSize: 8,
-      pageCount: 5,
+      pageCount: 1,
     },
   };
 }
@@ -373,7 +376,7 @@ describe("redesigned live website builder setup", () => {
     );
   });
 
-  it("shows all five admitted catalog pages and keeps the three custom templates selectable", () => {
+  it("shows the six admitted v6 templates without hiding the three custom templates", () => {
     render(
       <SimplifiedWebsiteBuilderPreview
         siteOps={{ observation: fullCatalogObservation(), onAction: vi.fn() }}
@@ -381,14 +384,14 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    expect(screen.getAllByTestId("website-template-card")).toHaveLength(35);
-    for (const title of ["蔚蓝帮助中心", "藏青文档站", "松绿极简帮助页"]) {
+    expect(screen.getAllByTestId("website-template-card")).toHaveLength(6);
+    for (const title of ["蔚蓝帮助中心", "藏青文档站", "松绿极简帮助页", "NexaCore", "Mindloop", "Agency Landing"]) {
       expect(screen.getByText(title)).toBeTruthy();
       expect((screen.getByRole("radio", { name: new RegExp(title) }) as HTMLInputElement).disabled).toBe(false);
     }
-    expect(screen.getAllByText("安全视觉参考")).toHaveLength(32);
-    expect(screen.getAllByText("真实可执行模板")).toHaveLength(3);
-    expect(screen.getAllByText(/基于冻结预览图重建/).length).toBeGreaterThanOrEqual(32);
+    expect(screen.getAllByText("安全视觉参考")).toHaveLength(2);
+    expect(screen.getAllByText("真实可执行模板")).toHaveLength(4);
+    expect(screen.getAllByText(/基于冻结预览图重建/)).toHaveLength(4);
     expect((screen.getByDisplayValue(
       "33333333-3333-4333-8333-000000000001",
     ) as HTMLInputElement).disabled).toBe(false);

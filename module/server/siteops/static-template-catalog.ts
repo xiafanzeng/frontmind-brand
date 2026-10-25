@@ -22,12 +22,17 @@ import sharp from "sharp";
 import { z } from "zod";
 import {
   CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+  PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
   PRIOR_CURATED_STATIC_TEMPLATE_CATALOG_VERSIONS,
+  ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
+  staticTemplatePagination,
 } from "../../contracts/static-template-pagination.js";
 import { staticTemplateRuntimeMedia } from "./static-template-admission-policy.js";
 
 import {
   FROZEN_STATIC_TEMPLATE_CATALOG,
+  HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG,
+  ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS,
   STATIC_TEMPLATE_CATALOG_ENTRY_COUNT,
   STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
   STATIC_TEMPLATE_CATALOG_PAGE_SIZE,
@@ -207,7 +212,7 @@ const admittedExecutionSchema = z
       .max(4 * 1024 * 1024),
     qaStatus: z.enum(["passed", "passed_with_warnings"]),
     admissionEvidenceSha256: z.string().regex(SHA256),
-    // Optional only so immutable v4 manifests remain readable. Current v5
+    // Optional only so immutable v4 manifests remain readable. Current v6
     // coordinates below require and cross-check all three provenance fields.
     admissionMode: admissionModeSchema.optional(),
     referencePreviewSha256: z.string().regex(SHA256).nullable().optional(),
@@ -383,6 +388,12 @@ export type ReadableStaticTemplateCatalog =
 export type StaticTemplateExecutionAdmission = z.infer<
   typeof executionAdmissionSchema
 >;
+export type AdmittedStaticTemplateCatalogEntry = Omit<
+  StaticTemplateCatalogEntry,
+  "executionAdmission"
+> & {
+  executionAdmission: z.infer<typeof admittedExecutionSchema>;
+};
 
 export type StaticTemplateExecutionAdmissionMaterial =
   | {
@@ -1954,13 +1965,23 @@ async function materializeEntry(input: {
     previewSha256: previewHash.sha256,
     previewBytes: previewHash.bytes,
     previewMimeType: preview.mimeType,
-    cachedNormalizedSource: input.reuseEntry?.executionAdmission.status === "admitted" ? {
-      path: resolveCatalogAssetPath(input.root, input.reuseEntry.executionAdmission.normalizedSourcePath),
-      sha256: input.reuseEntry.executionAdmission.normalizedSourceSha256,
-      bytes: input.reuseEntry.executionAdmission.normalizedSourceBytes,
-      sourceTreeSha256: input.reuseEntry.executionAdmission.sourceTreeSha256,
-      rawSourceSha256: input.reuseEntry.rawSourceSha256,
-    } : undefined,
+    cachedNormalizedSource:
+      input.reuseEntry?.executionAdmission.status === "admitted" &&
+      input.reuseEntry.executionAdmission.admissionMode !==
+        "preview_reference_fallback"
+        ? {
+            path: resolveCatalogAssetPath(
+              input.root,
+              input.reuseEntry.executionAdmission.normalizedSourcePath,
+            ),
+            sha256:
+              input.reuseEntry.executionAdmission.normalizedSourceSha256,
+            bytes: input.reuseEntry.executionAdmission.normalizedSourceBytes,
+            sourceTreeSha256:
+              input.reuseEntry.executionAdmission.sourceTreeSha256,
+            rawSourceSha256: input.reuseEntry.rawSourceSha256,
+          }
+        : undefined,
     builder: input.executionAdmissionBuilder,
   });
   const executionSource =
@@ -2029,14 +2050,25 @@ function assertCatalogCoordinates(catalog: StaticTemplateCatalog) {
   safeCatalogVersion(catalog.catalogVersion);
   const strictCurrent =
     catalog.catalogVersion === STATIC_TEMPLATE_CATALOG_VERSION;
+  const strictHistorical = PRIOR_CURATED_STATIC_TEMPLATE_CATALOG_VERSIONS.some(
+    (version) => version === catalog.catalogVersion,
+  );
+  const strictDefinitions = strictCurrent
+    ? FROZEN_STATIC_TEMPLATE_CATALOG
+    : strictHistorical
+      ? HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG
+      : null;
+  const strictPagination = strictCurrent || strictHistorical
+    ? staticTemplatePagination(catalog.catalogVersion)
+    : null;
   if (
     catalog.entryCount !== catalog.entries.length ||
     catalog.pageCount !== Math.ceil(catalog.entryCount / catalog.pageSize) ||
-    (strictCurrent &&
+    (strictPagination &&
       (catalog.workflowVersion !== STATIC_TEMPLATE_CATALOG_WORKFLOW_VERSION ||
-        catalog.entryCount !== STATIC_TEMPLATE_CATALOG_ENTRY_COUNT ||
-        catalog.pageSize !== STATIC_TEMPLATE_CATALOG_PAGE_SIZE ||
-        catalog.pageCount !== STATIC_TEMPLATE_CATALOG_PAGE_COUNT))
+        catalog.entryCount !== strictPagination.entryCount ||
+        catalog.pageSize !== strictPagination.pageSize ||
+        catalog.pageCount !== strictPagination.pageCount))
   ) {
     throw new StaticTemplateCatalogError(
       "STATIC_TEMPLATE_CATALOG_MANIFEST_INVALID",
@@ -2063,8 +2095,8 @@ function assertCatalogCoordinates(catalog: StaticTemplateCatalog) {
   for (let index = 0; index < catalog.entries.length; index += 1) {
     const entry = catalog.entries[index]!;
     const admission = entry.executionAdmission;
-    const definition = strictCurrent
-      ? FROZEN_STATIC_TEMPLATE_CATALOG[index]
+    const definition = strictDefinitions
+      ? strictDefinitions[index]
       : undefined;
     if (entry.sourceSubdirectory) {
       if (
@@ -2103,7 +2135,8 @@ function assertCatalogCoordinates(catalog: StaticTemplateCatalog) {
           entry.sourceFileCount !== admission.normalizedSourceFileCount ||
           entry.sourceExpandedBytes !==
             admission.normalizedSourceExpandedBytes ||
-          (catalog.catalogVersion === CURATED_STATIC_TEMPLATE_CATALOG_VERSION &&
+          ((catalog.catalogVersion === CURATED_STATIC_TEMPLATE_CATALOG_VERSION ||
+            catalog.catalogVersion === PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION) &&
             (admission.admissionMode === undefined ||
               (admission.admissionMode === "preview_reference_fallback"
                 ? admission.referencePreviewSha256 !== entry.previewSha256 ||
@@ -2193,6 +2226,36 @@ function assertCatalogCoordinates(catalog: StaticTemplateCatalog) {
       "STATIC_TEMPLATE_CATALOG_REQUIRED_ADMISSION_MISSING",
     );
   }
+  if (
+    catalog.catalogVersion ===
+      PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION &&
+    !HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG.every((definition) =>
+      catalog.entries.some(
+        (entry) =>
+          entry.candidateId === definition.candidateId &&
+          entry.executionAdmission.status === "admitted",
+      ),
+    )
+  ) {
+    throw new StaticTemplateCatalogError(
+      "STATIC_TEMPLATE_CATALOG_REQUIRED_ADMISSION_MISSING",
+    );
+  }
+  if (catalog.catalogVersion === ROLLING_STATIC_TEMPLATE_CATALOG_VERSION) {
+    const admittedIds = catalog.entries
+      .filter((entry) => entry.executionAdmission.status === "admitted")
+      .map((entry) => entry.candidateId)
+      .sort();
+    const expectedIds = [...ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS].sort();
+    if (
+      admittedIds.length !== expectedIds.length ||
+      admittedIds.some((id, index) => id !== expectedIds[index])
+    ) {
+      throw new StaticTemplateCatalogError(
+        "STATIC_TEMPLATE_CATALOG_REQUIRED_ADMISSION_MISSING",
+      );
+    }
+  }
 }
 
 function assertReadableCatalogCoordinates(
@@ -2252,8 +2315,9 @@ function assertRequiredAdmissionBinding(
   admission: z.infer<typeof admittedExecutionSchema>,
   browserReceipt: Buffer,
   qaBytes: Buffer,
+  requiredAdmissionIds: readonly string[] = STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS,
 ) {
-  if (!STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.includes(admission.binding.candidateId)) return;
+  if (!requiredAdmissionIds.includes(admission.binding.candidateId)) return;
   try {
     const receipt = JSON.parse(browserReceipt.toString("utf8"));
     const qa = JSON.parse(qaBytes.toString("utf8"));
@@ -2290,16 +2354,27 @@ function assertRequiredAdmissionBinding(
 }
 
 async function validateRequiredAdmissionBindings(root: string, catalog: ReadableStaticTemplateCatalog) {
-  if (catalog.catalogVersion !== CURATED_STATIC_TEMPLATE_CATALOG_VERSION ||
-      catalog.schemaVersion !== CATALOG_SCHEMA_VERSION) return;
+  if (catalog.schemaVersion !== CATALOG_SCHEMA_VERSION) return;
+  const requiredAdmissionIds =
+    catalog.catalogVersion === CURATED_STATIC_TEMPLATE_CATALOG_VERSION
+      ? STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS
+      : catalog.catalogVersion ===
+          PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION
+        ? HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG.map(
+            (definition) => definition.candidateId,
+          )
+      : catalog.catalogVersion === ROLLING_STATIC_TEMPLATE_CATALOG_VERSION
+        ? ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS
+        : null;
+  if (!requiredAdmissionIds) return;
   await Promise.all(catalog.entries.map(async entry => {
     const admission = entry.executionAdmission;
-    if (admission.status !== "admitted" || !STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.includes(entry.candidateId)) return;
+    if (admission.status !== "admitted" || !requiredAdmissionIds.includes(entry.candidateId)) return;
     const [receipt, qa] = await Promise.all([
       readFile(resolveCatalogAssetPath(root, admission.browserReceiptPath)),
       readFile(resolveCatalogAssetPath(root, admission.qaPath)),
     ]);
-    assertRequiredAdmissionBinding(admission, receipt, qa);
+    assertRequiredAdmissionBinding(admission, receipt, qa, requiredAdmissionIds);
   }));
 }
 
@@ -2663,7 +2738,8 @@ export async function loadActiveStaticTemplateCatalog(
   try {
     const active = activeSchema.parse(activeValue);
     if (
-      active.catalogVersion !== STATIC_TEMPLATE_CATALOG_VERSION ||
+      (active.catalogVersion !== STATIC_TEMPLATE_CATALOG_VERSION &&
+        active.catalogVersion !== ROLLING_STATIC_TEMPLATE_CATALOG_VERSION) ||
       active.workflowVersion !== STATIC_TEMPLATE_CATALOG_WORKFLOW_VERSION
     ) {
       throw new StaticTemplateCatalogError(
@@ -2694,20 +2770,29 @@ export async function loadActiveStaticTemplateCatalog(
         "STATIC_TEMPLATE_CATALOG_VERSION_MISMATCH",
       );
     }
+    if (
+      loaded.catalog.catalogVersion !== active.catalogVersion ||
+      loaded.catalog.workflowVersion !== active.workflowVersion
+    ) {
+      throw new StaticTemplateCatalogError(
+        "STATIC_TEMPLATE_CATALOG_VERSION_MISMATCH",
+      );
+    }
     if (loaded.sha256 !== active.manifestSha256) {
       throw new StaticTemplateCatalogError(
         "STATIC_TEMPLATE_CATALOG_MANIFEST_HASH_MISMATCH",
       );
     }
-    if (options.verifyIntegrityStats || options.verifyAssetHashes) {
-      await validateIntegrityReceipt({
-        root,
-        catalog: loaded.catalog,
-        manifestSha256: loaded.sha256,
-        integrityPath: active.integrityPath,
-        integritySha256: active.integritySha256,
-      });
-    }
+    await validateIntegrityReceipt({
+      root,
+      catalog: loaded.catalog,
+      manifestSha256: loaded.sha256,
+      integrityPath: active.integrityPath,
+      integritySha256: active.integritySha256,
+      verifyStats: Boolean(
+        options.verifyIntegrityStats || options.verifyAssetHashes,
+      ),
+    });
     if (options.verifyAssetHashes) {
       await verifyCatalogAssetHashes(root, loaded.catalog);
     }
@@ -2860,6 +2945,54 @@ export async function readStaticTemplateCatalogVersionPreview(
   );
   opened.stream.destroy();
   return { entry: opened.entry, bytes: await readFile(opened.path) };
+}
+
+export async function openStaticTemplateCatalogVersionDist(
+  catalogVersion: string,
+  candidateId: string,
+  options: CatalogOptions = {},
+): Promise<{
+  entry: AdmittedStaticTemplateCatalogEntry;
+  path: string;
+  stream: ReadStream;
+}> {
+  const root = assetRoot(options);
+  const entry = await getStaticTemplateCatalogVersionEntry(
+    catalogVersion,
+    candidateId,
+    options,
+  );
+  const parsedEntry = entrySchema.safeParse(entry);
+  const parsedAdmission = parsedEntry.success
+    ? admittedExecutionSchema.safeParse(parsedEntry.data.executionAdmission)
+    : null;
+  if (!parsedEntry.success || !parsedAdmission?.success) {
+    throw new StaticTemplateCatalogError(
+      "STATIC_TEMPLATE_CATALOG_EXECUTION_NOT_ADMITTED",
+    );
+  }
+  const admittedEntry: AdmittedStaticTemplateCatalogEntry = {
+    ...parsedEntry.data,
+    executionAdmission: parsedAdmission.data,
+  };
+  const distPath = resolveCatalogAssetPath(
+    root,
+    admittedEntry.executionAdmission.distPath,
+  );
+  const actual = await hashFile(distPath);
+  if (
+    actual.bytes !== admittedEntry.executionAdmission.distBytes ||
+    actual.sha256 !== admittedEntry.executionAdmission.distSha256
+  ) {
+    throw new StaticTemplateCatalogError(
+      "STATIC_TEMPLATE_CATALOG_DIST_HASH_MISMATCH",
+    );
+  }
+  return {
+    entry: admittedEntry,
+    path: distPath,
+    stream: createReadStream(distPath),
+  };
 }
 
 export async function openStaticTemplateCatalogSource(
@@ -3018,6 +3151,11 @@ async function activateExistingFinalCatalog(root: string) {
     verifyAssetHashes: true,
   });
   if (loaded.catalog.schemaVersion !== CATALOG_SCHEMA_VERSION) {
+    throw new StaticTemplateCatalogError(
+      "STATIC_TEMPLATE_CATALOG_VERSION_CONFLICT",
+    );
+  }
+  if (loaded.catalog.catalogVersion !== STATIC_TEMPLATE_CATALOG_VERSION) {
     throw new StaticTemplateCatalogError(
       "STATIC_TEMPLATE_CATALOG_VERSION_CONFLICT",
     );
@@ -3196,12 +3334,19 @@ export async function getStaticTemplateCatalogReadiness(
           const admittedCount = catalog.entries.filter(
             (entry) => entry.executionAdmission.status === "admitted",
           ).length;
-          const requiredAdmissionReady = STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.every(id =>
+          const requiredAdmissionIds =
+            catalog.catalogVersion === ROLLING_STATIC_TEMPLATE_CATALOG_VERSION
+              ? ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS
+              : STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS;
+          const requiredAdmissionReady = requiredAdmissionIds.every(id =>
             catalog.entries.some(entry => entry.candidateId === id && entry.executionAdmission.status === "admitted"));
+          const upgradePending =
+            catalog.catalogVersion === ROLLING_STATIC_TEMPLATE_CATALOG_VERSION;
           return {
-            ready: true as const,
+            ready: requiredAdmissionReady,
             expectedCatalogVersion: STATIC_TEMPLATE_CATALOG_VERSION,
             activeCatalogVersion: catalog.catalogVersion,
+            upgradePending,
             workflowVersion: catalog.workflowVersion,
             entryCount: catalog.entryCount,
             pageSize: catalog.pageSize,
@@ -3215,16 +3360,22 @@ export async function getStaticTemplateCatalogReadiness(
           ready: false as const,
           expectedCatalogVersion: STATIC_TEMPLATE_CATALOG_VERSION,
           activeCatalogVersion: null,
+          upgradePending: false,
           admittedCount: 0,
           unavailableCount: STATIC_TEMPLATE_CATALOG_ENTRY_COUNT,
           requiredAdmissionReady: false,
           code: "STATIC_TEMPLATE_CATALOG_NOT_ACTIVE",
         };
   } catch (error) {
+    const activeCatalogVersion = await readStaticTemplateCatalogActiveVersion(
+      options,
+    );
     return {
       ready: false as const,
       expectedCatalogVersion: STATIC_TEMPLATE_CATALOG_VERSION,
-      activeCatalogVersion: null,
+      activeCatalogVersion,
+      upgradePending:
+        activeCatalogVersion === ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
       admittedCount: 0,
       unavailableCount: STATIC_TEMPLATE_CATALOG_ENTRY_COUNT,
       requiredAdmissionReady: false,

@@ -12,7 +12,10 @@ import {
 } from "../contracts/siteops.js";
 import * as manifest from "../server/siteops/static-template-catalog-manifest.js";
 import { NATIVE_RUNTIME_CONTRACT_V1_SHA256, NATIVE_RUNTIME_EXECUTION_SHELL_V1_SHA256 } from "../server/siteops/native-react-source.js";
-import { PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION } from "../contracts/static-template-pagination.js";
+import {
+  PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+  ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
+} from "../contracts/static-template-pagination.js";
 import { staticTemplateRuntimeMedia } from "../server/siteops/static-template-admission-policy.js";
 
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -110,10 +113,10 @@ function selectionBundleForCatalog(
   });
 }
 
-it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback receipt tampering", async () => {
+it("serves exact v4 during rollout, upgrades from historical caches to six v6 admissions, and rejects receipt tampering", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "frontmind-catalog-upgrade-"));
   const payloads = new Map<string, Buffer>();
-  const definitions = manifest.FROZEN_STATIC_TEMPLATE_CATALOG;
+  const definitions = manifest.HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG;
   const groups = new Map<string, typeof definitions[number][]>();
   for (const definition of definitions) {
     const url = `https://codeload.github.com/${definition.sourceOwner}/${definition.sourceRepo}/zip/${definition.sourceCommitSha}`;
@@ -136,14 +139,20 @@ it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback 
     "static-template-34-helpcenter-docs",
     "static-template-35-helpcenter-minimal",
   ];
+  const previewFallbackIds = [
+    "static-template-15-hirael-nexacore",
+    "static-template-21-hirael-mindloop",
+  ];
   // This fixture replaces the compiler transport only; the separate admission
   // suite runs the three repository-local templates through real Vite and Chromium.
   const builder = vi.fn(async (input: any) => {
     const admittedIds = input.catalogVersion === "21st-included-recommended-20260828-v2"
       ? v2AdmissionIds
-      : input.catalogVersion === PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION
+      : input.catalogVersion === ROLLING_STATIC_TEMPLATE_CATALOG_VERSION
         ? v4AdmissionIds
-        : manifest.STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS;
+        : input.catalogVersion === PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION
+          ? definitions.map((entry) => entry.candidateId)
+          : manifest.STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS;
     if (!admittedIds.includes(input.definition.candidateId)) return { status: "unavailable" as const, code: "TEST_NOT_ADMITTED", reason: "Transport fixture" };
     const normalized = input.cachedNormalizedSource ? await readFile(input.cachedNormalizedSource.path)
       : await new JSZip().file("source/binding.txt", input.rawSourceSha256).generateAsync({ type: "nodebuffer", platform: "UNIX" });
@@ -151,13 +160,16 @@ it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback 
     const dist = Buffer.from("dist");
     const qa = Buffer.from(JSON.stringify({ passed: true, browser: { available: true } }));
     const runtimeMedia = staticTemplateRuntimeMedia(input.definition.candidateId);
-    const isV5 = input.catalogVersion === manifest.STATIC_TEMPLATE_CATALOG_VERSION;
+    const bindsProvenance =
+      input.catalogVersion === manifest.STATIC_TEMPLATE_CATALOG_VERSION ||
+      input.catalogVersion === PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION;
     const admissionMode = input.cachedNormalizedSource
       ? "verified_normalized_cache"
-      : input.definition.order === 1
+      : previewFallbackIds.includes(input.definition.candidateId) ||
+          input.definition.order === 1
         ? "preview_reference_fallback"
         : "provider_source";
-    const provenance = isV5 ? {
+    const provenance = bindsProvenance ? {
       admissionMode,
       referencePreviewSha256: admissionMode === "preview_reference_fallback" ? input.previewSha256 : null,
       fallbackReasonCode: admissionMode === "preview_reference_fallback" ? "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED" : null,
@@ -192,9 +204,11 @@ it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback 
     const oldRuntime = await import("../server/siteops/static-template-catalog.js");
     const previous = await oldRuntime.seedStaticTemplateCatalog({ rootDir: root, fetchImpl: fetchFixture as typeof fetch, executionAdmissionBuilder: builder });
     expect(previous.catalog.entryCount).toBe(32);
-    const previous22 = previous.catalog.entries[21]!;
     vi.doMock("../server/siteops/static-template-catalog-manifest.js", () => ({ ...manifest,
-      STATIC_TEMPLATE_CATALOG_VERSION: PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+      STATIC_TEMPLATE_CATALOG_VERSION: ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
+      STATIC_TEMPLATE_CATALOG_PAGE_COUNT: 5,
+      STATIC_TEMPLATE_CATALOG_ENTRY_COUNT: 35,
+      FROZEN_STATIC_TEMPLATE_CATALOG: definitions,
       STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: v4AdmissionIds,
     }));
     vi.resetModules();
@@ -215,33 +229,137 @@ it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback 
       expect(entry.executionAdmission).not.toHaveProperty("referencePreviewSha256");
       expect(entry.executionAdmission).not.toHaveProperty("fallbackReasonCode");
     }
+    const v4Active = await readFile(path.join(root, "siteops/static-template-catalog/active.json"));
+    vi.doMock("../server/siteops/static-template-catalog-manifest.js", () => ({ ...manifest,
+      STATIC_TEMPLATE_CATALOG_VERSION: PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+      STATIC_TEMPLATE_CATALOG_PAGE_COUNT: 5,
+      STATIC_TEMPLATE_CATALOG_ENTRY_COUNT: 35,
+      FROZEN_STATIC_TEMPLATE_CATALOG: definitions,
+      STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: definitions.map((entry) => entry.candidateId),
+    }));
+    vi.resetModules();
+    const v5Runtime = await import("../server/siteops/static-template-catalog.js");
+    const v5 = await v5Runtime.seedStaticTemplateCatalog({
+      rootDir: root,
+      concurrency: 1,
+      fetchImpl: fetchNewOnly as typeof fetch,
+      executionAdmissionBuilder: builder,
+    });
+    expect(v5.catalog.entries).toHaveLength(35);
+    expect(v5.catalog.entries.every((entry) => entry.executionAdmission.status === "admitted")).toBe(true);
+    const v5Manifest = await readFile(manifestPath(v5.catalog.catalogVersion));
+    const v5Active = await readFile(path.join(root, "siteops/static-template-catalog/active.json"));
+    await writeFile(path.join(root, "siteops/static-template-catalog/active.json"), v4Active);
+
     vi.doUnmock("../server/siteops/static-template-catalog-manifest.js");
     vi.resetModules();
     const current = await import("../server/siteops/static-template-catalog.js");
+    expect(await current.getStaticTemplateCatalogReadiness({ rootDir: root })).toMatchObject({
+      ready: true,
+      activeCatalogVersion: ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
+      upgradePending: true,
+      entryCount: 35,
+      admittedCount: 4,
+      unavailableCount: 31,
+      requiredAdmissionReady: true,
+    });
+    await writeFile(path.join(root, "siteops/static-template-catalog/active.json"), v5Active);
+    await expect(current.loadActiveStaticTemplateCatalog({ rootDir: root })).rejects.toMatchObject({
+      code: "STATIC_TEMPLATE_CATALOG_VERSION_MISMATCH",
+    });
+    await writeFile(path.join(root, "siteops/static-template-catalog/active.json"), v4Active);
+    const v5ManifestPath = manifestPath(v5.catalog.catalogVersion);
+    const unavailableV5 = JSON.parse(v5Manifest.toString());
+    const unavailableEntry = unavailableV5.entries[0];
+    unavailableEntry.executionAdmission = {
+      status: "unavailable",
+      binding: {
+        catalogVersion: unavailableV5.catalogVersion,
+        candidateId: unavailableEntry.candidateId,
+        rawSourceSha256: unavailableEntry.rawSourceSha256,
+      },
+      code: "TEST_UNAVAILABLE",
+      reason: "Strict v5 history must remain fully admitted",
+    };
+    Object.assign(unavailableEntry, {
+      sourceAssetId: `${unavailableV5.catalogVersion}/source/${unavailableEntry.candidateId}`,
+      sourcePath: unavailableEntry.rawSourcePath,
+      sourceSha256: unavailableEntry.rawSourceSha256,
+      sourceBytes: unavailableEntry.rawSourceBytes,
+      sourceFileCount: unavailableEntry.rawSourceFileCount,
+      sourceExpandedBytes: unavailableEntry.rawSourceExpandedBytes,
+    });
+    await writeFile(v5ManifestPath, `${JSON.stringify(unavailableV5)}\n`);
+    await expect(
+      current.loadStaticTemplateCatalogVersion(v5.catalog.catalogVersion, {
+        rootDir: root,
+      }),
+    ).rejects.toMatchObject({
+      code: "STATIC_TEMPLATE_CATALOG_REQUIRED_ADMISSION_MISSING",
+    });
+    await writeFile(v5ManifestPath, v5Manifest);
+
+    const missingProvenanceV5 = JSON.parse(v5Manifest.toString());
+    delete missingProvenanceV5.entries[0].executionAdmission.admissionMode;
+    await writeFile(v5ManifestPath, `${JSON.stringify(missingProvenanceV5)}\n`);
+    await expect(
+      current.loadStaticTemplateCatalogVersion(v5.catalog.catalogVersion, {
+        rootDir: root,
+      }),
+    ).rejects.toMatchObject({
+      code: "STATIC_TEMPLATE_CATALOG_MANIFEST_INVALID",
+    });
+    await writeFile(v5ManifestPath, v5Manifest);
+    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const { runStaticTemplateCatalogCli } = await import("../server/siteops/static-template-catalog-cli.js");
+    await runStaticTemplateCatalogCli(["--check-active", "--root", root]);
+    expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({
+      ok: true,
+      reused: false,
+      activeCatalogVersion: ROLLING_STATIC_TEMPLATE_CATALOG_VERSION,
+      upgradePending: true,
+      admittedCount: 4,
+      unavailableCount: 31,
+    });
     builder.mockClear();
-    const offlineFetch = vi.fn(async () => { throw new Error("Verified cached v4 must need no downloads"); });
-    const upgraded = await current.seedStaticTemplateCatalog({ rootDir: root, concurrency: 1, fetchImpl: offlineFetch as typeof fetch, executionAdmissionBuilder: builder });
-    expect(upgraded.catalog.entries).toHaveLength(35);
-    expect(upgraded.catalog.entries.filter(entry => entry.executionAdmission.status === "admitted")).toHaveLength(35);
-    expect(upgraded.catalog.entries[21]?.sourceSha256).toBe(previous22.sourceSha256);
-    expect(builder.mock.calls.find(([input]) => input.definition.order === 22)?.[0].cachedNormalizedSource).toMatchObject({ sha256: previous22.sourceSha256 });
+    const offlineFetch = vi.fn(async () => { throw new Error("Verified historical caches must need no downloads"); });
+    vi.stubGlobal("fetch", offlineFetch);
+    vi.doMock("../server/siteops/static-template-execution-admission.js", () => ({
+      buildStaticTemplateExecutionAdmission: builder,
+    }));
+    await runStaticTemplateCatalogCli(["--ensure-ready", "--root", root]);
+    const upgraded = { catalog: await current.requireActiveStaticTemplateCatalog({ rootDir: root }) };
+    expect(upgraded.catalog.entries).toHaveLength(6);
+    expect(upgraded.catalog.entries.filter(entry => entry.executionAdmission.status === "admitted")).toHaveLength(6);
+    expect(upgraded.catalog.entries.map((entry) => entry.candidateId)).toEqual([
+      "static-template-33-helpcenter-search",
+      "static-template-34-helpcenter-docs",
+      "static-template-35-helpcenter-minimal",
+      "static-template-15-hirael-nexacore",
+      "static-template-21-hirael-mindloop",
+      "static-template-22-hirael-agency-landing",
+    ]);
     expect(builder.mock.calls.filter(([input]) => input.cachedNormalizedSource)).toHaveLength(4);
     expect(offlineFetch).not.toHaveBeenCalled();
     expect((await current.loadStaticTemplateCatalogVersion(previous.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(32);
     expect((await current.loadStaticTemplateCatalogVersion(v4.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(35);
+    expect((await current.loadStaticTemplateCatalogVersion(v5.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(35);
     expect(await readFile(manifestPath(previous.catalog.catalogVersion))).toEqual(v2Manifest);
     expect(await readFile(manifestPath(v4.catalog.catalogVersion))).toEqual(v4Manifest);
+    expect(await readFile(manifestPath(v5.catalog.catalogVersion))).toEqual(v5Manifest);
     for (const entry of upgraded.catalog.entries) {
       expect(entry.executionAdmission.status).toBe("admitted");
       if (entry.executionAdmission.status !== "admitted") throw new Error("Missing required admission");
       const receipt = JSON.parse(await readFile(path.join(root, entry.executionAdmission.browserReceiptPath), "utf8"));
-      const expectedMode = v4AdmissionIds.includes(entry.candidateId)
-        ? "verified_normalized_cache"
-        : entry.order === 1
-          ? "preview_reference_fallback"
-          : "provider_source";
-      const expectedReference = expectedMode === "preview_reference_fallback" ? entry.previewSha256 : null;
-      const expectedReason = expectedMode === "preview_reference_fallback" ? "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED" : null;
+      const expectedMode = previewFallbackIds.includes(entry.candidateId)
+        ? "preview_reference_fallback"
+        : "verified_normalized_cache";
+      const expectedReference = expectedMode === "preview_reference_fallback"
+        ? entry.previewSha256
+        : null;
+      const expectedReason = expectedMode === "preview_reference_fallback"
+        ? "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED"
+        : null;
       expect(entry.executionAdmission).toMatchObject({
         admissionMode: expectedMode,
         referencePreviewSha256: expectedReference,
@@ -262,11 +380,43 @@ it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback 
         }),
       );
     }
-    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("Healthy ensure-ready must remain offline"); }));
-    const { runStaticTemplateCatalogCli } = await import("../server/siteops/static-template-catalog-cli.js");
     await runStaticTemplateCatalogCli(["--ensure-ready", "--root", root]);
-    expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({ ok: true, reused: true, entryCount: 35, admittedCount: 35 });
+    expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({ ok: true, reused: true, upgradePending: false, entryCount: 6, admittedCount: 6, unavailableCount: 0 });
+
+    const serviceActivePath = path.join(
+      root,
+      "siteops/static-template-catalog/active.json",
+    );
+    const serviceIntegrityPath = path.join(
+      path.dirname(manifestPath(upgraded.catalog.catalogVersion)),
+      "integrity.json",
+    );
+    const stableActiveBytes = await readFile(serviceActivePath);
+    const stableIntegrityBytes = await readFile(serviceIntegrityPath);
+    const invalidIntegrity = JSON.parse(stableIntegrityBytes.toString());
+    invalidIntegrity.assets[0].inode =
+      invalidIntegrity.assets[0].inode === "0" ? "1" : "0";
+    const invalidIntegrityBytes = Buffer.from(
+      `${JSON.stringify(invalidIntegrity)}\n`,
+    );
+    const invalidActive = JSON.parse(stableActiveBytes.toString());
+    invalidActive.integritySha256 = digest(invalidIntegrityBytes);
+    await writeFile(serviceIntegrityPath, invalidIntegrityBytes);
+    await writeFile(
+      serviceActivePath,
+      `${JSON.stringify(invalidActive)}\n`,
+    );
+    const { loadStaticTemplateCatalogForServiceReadiness } = await import(
+      "../server/siteops/service.js"
+    );
+    expect(
+      await loadStaticTemplateCatalogForServiceReadiness({ rootDir: root }),
+    ).toBeNull();
+    await writeFile(serviceIntegrityPath, stableIntegrityBytes);
+    await writeFile(serviceActivePath, stableActiveBytes);
+    expect(
+      await loadStaticTemplateCatalogForServiceReadiness({ rootDir: root }),
+    ).toMatchObject({ catalogVersion: manifest.STATIC_TEMPLATE_CATALOG_VERSION });
 
     const previousAssetRoot = process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
     process.env.FRONTMIND_DASHBOARD_ASSET_DIR = root;
@@ -298,6 +448,50 @@ it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback 
         selectedCandidateId: v4Bundle.selectedCandidateId!,
       });
       expect(v4Selection.archiveSha256).toBe(v4Selected.sourceSha256);
+
+      const removedV5Entry = v5.catalog.entries[0]!;
+      const removedV5Bundle = selectionBundleForCatalog(
+        v5.catalog,
+        removedV5Entry.candidateId,
+      );
+      const removedV5Candidate = removedV5Bundle.candidates.find(
+        (candidate) => candidate.catalogCandidateId === removedV5Entry.candidateId,
+      )!;
+      const { openFrozenStaticTemplatePreviewDist } = await import(
+        "../server/siteops/artifact-api.js"
+      );
+      const historicalPreview = await openFrozenStaticTemplatePreviewDist(
+        {
+          schemaVersion: 7,
+          renderer: "frontmind_static_template_catalog_v1",
+          workflowVersion: "2.9.0",
+          ...removedV5Candidate,
+        },
+        { rootDir: root },
+      );
+      historicalPreview.stream.destroy();
+      expect(historicalPreview.entry.candidateId).toBe(
+        removedV5Entry.candidateId,
+      );
+      await expect(
+        current.openStaticTemplateCatalogDist(removedV5Entry.candidateId, {
+          rootDir: root,
+        }),
+      ).rejects.toMatchObject({
+        code: "STATIC_TEMPLATE_CATALOG_CANDIDATE_NOT_FOUND",
+      });
+      await expect(
+        openFrozenStaticTemplatePreviewDist(
+          {
+            schemaVersion: 7,
+            renderer: "frontmind_static_template_catalog_v1",
+            workflowVersion: "2.9.0",
+            ...removedV5Candidate,
+            sourceArchiveSha256: "0".repeat(64),
+          },
+          { rootDir: root },
+        ),
+      ).rejects.toThrow("NOT_FOUND");
     } finally {
       if (previousAssetRoot === undefined) {
         delete process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
@@ -305,6 +499,49 @@ it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback 
         process.env.FRONTMIND_DASHBOARD_ASSET_DIR = previousAssetRoot;
       }
     }
+
+    // v5 remains a strict immutable historical cache source. Even when an
+    // attacker rewrites all outer hashes, the browser receipt must still bind
+    // the exact provenance frozen in the admission manifest.
+    const tamperedV5Manifest = JSON.parse(v5Manifest.toString());
+    const tamperedV5Entry = tamperedV5Manifest.entries[0];
+    const tamperedV5Admission = tamperedV5Entry.executionAdmission;
+    const tamperedV5ReceiptPath = path.join(
+      root,
+      tamperedV5Admission.browserReceiptPath,
+    );
+    const tamperedV5Receipt = JSON.parse(
+      await readFile(tamperedV5ReceiptPath, "utf8"),
+    );
+    tamperedV5Receipt.binding.fallbackReasonCode =
+      tamperedV5Admission.fallbackReasonCode ===
+      "NATIVE_TEMPLATE_SOURCE_UNSAFE"
+        ? "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED"
+        : "NATIVE_TEMPLATE_SOURCE_UNSAFE";
+    const tamperedV5ReceiptBytes = Buffer.from(
+      `${JSON.stringify(tamperedV5Receipt)}\n`,
+    );
+    await writeFile(tamperedV5ReceiptPath, tamperedV5ReceiptBytes);
+    tamperedV5Admission.browserReceiptSha256 = digest(
+      tamperedV5ReceiptBytes,
+    );
+    tamperedV5Admission.browserReceiptBytes = tamperedV5ReceiptBytes.length;
+    tamperedV5Admission.admissionEvidenceSha256 =
+      current.staticTemplateAdmissionEvidenceSha256({
+        ...tamperedV5Admission,
+        ...tamperedV5Admission.binding,
+      });
+    const tamperedV5ManifestBytes = Buffer.from(
+      `${JSON.stringify(tamperedV5Manifest)}\n`,
+    );
+    await writeFile(v5ManifestPath, tamperedV5ManifestBytes);
+    await expect(
+      current.loadStaticTemplateCatalogVersion(v5.catalog.catalogVersion, {
+        rootDir: root,
+      }),
+    ).rejects.toMatchObject({
+      code: "STATIC_TEMPLATE_CATALOG_ADMISSION_BINDING_INVALID",
+    });
 
     // A buggy producer can rewrite the fallback receipt and every outer
     // file/hash/stat consistently. The manifest provenance must still bind the
@@ -343,6 +580,7 @@ it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback 
     expect(await readFile(manifestPath(v4.catalog.catalogVersion))).toEqual(v4Manifest);
   } finally {
     vi.restoreAllMocks(); vi.unstubAllGlobals();
+    vi.doUnmock("../server/siteops/static-template-execution-admission.js");
     vi.doUnmock("../server/siteops/static-template-catalog-manifest.js"); vi.resetModules();
     await rm(root, { recursive: true, force: true });
   }

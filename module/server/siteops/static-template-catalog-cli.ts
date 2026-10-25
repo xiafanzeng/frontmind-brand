@@ -1,7 +1,7 @@
 /** Module-owned maintenance command. Never runs in the browser/API process. */
 export async function runStaticTemplateCatalogCli(args: string[]) {
   if (args.length === 1 && args[0] === "--help") {
-    process.stdout.write(`${JSON.stringify({ cliVersion: 2, capabilities: ["ensure-ready-v1", "v2-to-v5-cache-reuse", "v3-to-v5-cache-reuse", "v4-to-v5-cache-reuse", "all-template-admission-v1", "required-admission-binding-v1"], options: ["--ensure-ready", "--check-active", "--root ABS_DIR", "--concurrency N"], assetRootEnvironment: "FRONTMIND_DASHBOARD_ASSET_DIR" })}\n`);
+    process.stdout.write(`${JSON.stringify({ cliVersion: 2, capabilities: ["ensure-ready-v1", "v2-to-v6-cache-reuse", "v3-to-v6-cache-reuse", "v4-to-v6-cache-reuse", "v5-to-v6-cache-reuse", "six-template-admission-v1", "rolling-v4-readiness-v1", "required-admission-binding-v1"], options: ["--ensure-ready", "--check-active", "--root ABS_DIR", "--concurrency N"], assetRootEnvironment: "FRONTMIND_DASHBOARD_ASSET_DIR" })}\n`);
     return;
   }
   let command: "seed" | "ensure" | "check" = "seed";
@@ -25,7 +25,7 @@ export async function runStaticTemplateCatalogCli(args: string[]) {
   if (command === "check" || command === "ensure") {
     const readiness = await getStaticTemplateCatalogReadiness({ rootDir, verifyAssetHashes: command === "check" });
     const actualActiveVersion = readiness.activeCatalogVersion ?? await readStaticTemplateCatalogActiveVersion({ rootDir });
-    if (command === "check" || (readiness.ready && readiness.requiredAdmissionReady)) {
+    if (command === "check" || (readiness.ready && readiness.requiredAdmissionReady && !readiness.upgradePending)) {
       process.stdout.write(`${JSON.stringify({ ...readiness, activeCatalogVersion: actualActiveVersion, reused: command === "ensure", ok: readiness.ready && readiness.requiredAdmissionReady })}\n`);
       if (!readiness.ready || !readiness.requiredAdmissionReady) process.exitCode = 1;
       return;

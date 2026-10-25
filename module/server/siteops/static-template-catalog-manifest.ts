@@ -6,10 +6,11 @@ import {
 /**
  * Immutable input coordinates for the FrontMind 2.8 Template catalog.
  *
- * The first 32 rows preserve the 2026-08-28 21st projection; v3 appends three
- * FrontMind help-center layouts. V4 refreshes admission bindings, while v5
- * admits every frozen entry through the same controlled compiler and browser
- * checks. Customer requests never refresh or reorder these definitions.
+ * The 35-row library preserves the immutable v3-v5 coordinates. V6 publishes
+ * a deliberately smaller six-template set: FrontMind's three help-center
+ * layouts first, followed by three selected Hirael layouts. Stable candidate
+ * ids keep their original library positions even though v6 display order is
+ * different. Customer requests never refresh these definitions.
  * The seed command downloads the exact immutable GitHub commit and preview for
  * every row, then records the resulting byte hashes in the active manifest.
  */
@@ -508,7 +509,7 @@ const FROZEN_ROWS: readonly FrozenRow[] = [
   ],
 ] as const;
 
-export const FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTemplateDefinition[] =
+export const HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTemplateDefinition[] =
   Object.freeze(
     FROZEN_ROWS.map((row, index) =>
       Object.freeze({
@@ -529,7 +530,43 @@ export const FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTemplateDefini
     ),
   );
 
-/** A v5 catalog is ready only when every customer-visible template has passed
+const V6_CANDIDATE_IDS = Object.freeze([
+  "static-template-33-helpcenter-search",
+  "static-template-34-helpcenter-docs",
+  "static-template-35-helpcenter-minimal",
+  "static-template-15-hirael-nexacore",
+  "static-template-21-hirael-mindloop",
+  "static-template-22-hirael-agency-landing",
+] as const);
+
+const HISTORICAL_DEFINITIONS_BY_ID = new Map(
+  HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG.map((definition) => [
+    definition.candidateId,
+    definition,
+  ]),
+);
+
+export const FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTemplateDefinition[] =
+  Object.freeze(
+    V6_CANDIDATE_IDS.map((candidateId, index) => {
+      const definition = HISTORICAL_DEFINITIONS_BY_ID.get(candidateId);
+      if (!definition) {
+        throw new Error("STATIC_TEMPLATE_CATALOG_SELECTED_DEFINITION_MISSING");
+      }
+      return Object.freeze({ ...definition, order: index + 1 });
+    }),
+  );
+
+/** The rolling v4 catalog exposed exactly these four admitted entries. */
+export const ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: readonly string[] =
+  Object.freeze([
+    "static-template-22-hirael-agency-landing",
+    "static-template-33-helpcenter-search",
+    "static-template-34-helpcenter-docs",
+    "static-template-35-helpcenter-minimal",
+  ]);
+
+/** A v6 catalog is ready only when every customer-visible template has passed
  * the controlled Vite build, static validation and real-browser admission. */
 export const STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: readonly string[] =
   Object.freeze(
@@ -540,4 +577,7 @@ if (
   FROZEN_STATIC_TEMPLATE_CATALOG.length !== STATIC_TEMPLATE_CATALOG_ENTRY_COUNT
 ) {
   throw new Error("STATIC_TEMPLATE_CATALOG_DEFINITION_COUNT_INVALID");
+}
+if (HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG.length !== 35) {
+  throw new Error("STATIC_TEMPLATE_CATALOG_HISTORICAL_DEFINITION_COUNT_INVALID");
 }
