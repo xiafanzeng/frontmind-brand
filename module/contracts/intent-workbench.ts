@@ -54,6 +54,10 @@ export type IntentSkillJob = {
   receiptId?: string; error?: string; lease?: {owner: string; expiresAt: number};
   createClaimedAt?: number;
   terminalObservedAt?: number;
+  repair?: {
+    intentId: string; claimedAt: number; sentAt?: number;
+    baselineEventIds: string[]; reason: string;
+  };
 };
 export type IntentTodo = {
   id: string; questionId: string; title: string;

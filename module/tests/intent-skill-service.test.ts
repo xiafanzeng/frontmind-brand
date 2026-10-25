@@ -50,6 +50,7 @@ function harness() {
     createTask: vi.fn(async () => ({taskId: "upstream-task"})),
     findCreatedTask: vi.fn(async () => ({matches: [{id: "upstream-task"}], unique: {id: "upstream-task"}})),
     taskDetail: vi.fn(async () => ({status: "running"})),
+    sendMessage: vi.fn(async () => ({taskId: "upstream-task"})),
     listAllMessages: vi.fn(async (): Promise<any[]> => []),
   };
   const latestState = vi.fn(() => "running");
@@ -185,11 +186,17 @@ describe("优化模型持久化任务", () => {
     expect(changed.state.evaluations).toEqual([]);
     expect(changed.state.jobs?.[0].error).toContain("知识或问题已更新");
   });
-  it("模型格式错误不会写入评分，失败原因可见", async () => {
+  it("模型证据错误触发一次修复，修复再次失败仍不写入评分", async () => {
     const h = harness(); await h.intake(); await h.service.command(h.request);
     const output = h.output(); output.evaluations[0].points[0].evidence = "伪造原文"; h.send(output);
+    h.latestState.mockReturnValue("stopped");
+    expect((await h.service.poll()).state.jobs?.[0].repair).toBeDefined();
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    h.client.listAllMessages.mockResolvedValue([{id: "repaired", timestamp: Date.now(), type: "structured_output_result",
+      structured_output_result: {success: true, value: output}}]);
     const result = await h.service.poll();
     expect(result.state.jobs?.[0].status).toBe("failed");
+    expect(result.state.jobs?.[0].error).toContain("自动修复后仍未通过");
     expect(result.state.evaluations).toEqual([]);
   });
   it("任务处理中禁止修改清单及开启另一个任务", async () => {
@@ -253,5 +260,59 @@ describe("优化模型持久化任务", () => {
     expect(waiting.state.jobs?.[0].terminalObservedAt).toBeDefined();
     h.send();
     expect((await h.service.poll()).state.jobs?.[0].status).toBe("succeeded");
+  });
+  it("正常 stopped 等待结果同步，不再误报执行失败", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.latestState.mockReturnValue("stopped");
+    expect((await h.service.poll()).state.jobs?.[0].status).toBe("running");
+    expect(h.client.sendMessage).not.toHaveBeenCalled();
+    h.send(); expect((await h.service.poll()).state.jobs?.[0].status).toBe("succeeded");
+  });
+  it("最终 JSON 语法错误在原任务追加一次修复，刷新和并发不重复派发", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.latestState.mockReturnValue("stopped");
+    const original = {id: "original", type: "assistant_message", assistant_message: {content: '{"evaluations":[}'}};
+    h.client.listAllMessages.mockResolvedValue([original]);
+    let finish!: () => void;
+    h.client.sendMessage.mockImplementationOnce(() => new Promise(done => {finish = () => done({taskId: "upstream-task"});}));
+    const repairing = h.service.poll();
+    await vi.waitFor(() => expect(h.client.sendMessage).toHaveBeenCalledTimes(1));
+    expect(h.ledger().state.jobs![0].repair?.reason).toContain("JSON 语法");
+    await h.service.poll(); finish(); await repairing; await h.service.poll();
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.ledger().state.evaluations).toEqual([]);
+    h.send();
+    expect((await h.service.poll()).state.jobs?.[0].status).toBe("succeeded");
+  });
+  it("未知修复请求只回读，不再次 POST，也不借用原轮结果", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.latestState.mockReturnValue("stopped");
+    h.client.listAllMessages.mockResolvedValue([{id: "bad", type: "assistant_message", assistant_message: {content: "invalid JSON"}}]);
+    h.client.sendMessage.mockRejectedValueOnce(Object.assign(new Error("transport"), {outcomeUnknown: true}));
+    expect((await h.service.poll()).state.jobs?.[0].status).toBe("running");
+    await h.service.poll(); expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 121_000);
+    try {
+      expect((await h.service.poll()).state.jobs?.[0].error).toContain("修复请求未能确认");
+      expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {clock.mockRestore();}
+  });
+  it("真实执行失败与用户取消不触发结果修复", async () => {
+    for (const state of ["failed", "error", "cancelled"]) {
+      const h = harness(); await h.intake(); await h.service.command(h.request); h.latestState.mockReturnValue(state);
+      const result = await h.service.poll();
+      expect(result.state.jobs?.[0].status).toBe("failed");
+      expect(result.state.jobs?.[0].error).not.toBe("模型任务失败，请检查账户任务记录");
+      expect(h.client.sendMessage).not.toHaveBeenCalled();
+    }
+  });
+  it("历史 stopped 误判可恢复，但已存在更新任务时不追加修复", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.ledger().state.jobs![0].status = "failed"; h.ledger().state.jobs![0].error = "模型任务失败，请检查账户任务记录";
+    h.latestState.mockReturnValue("stopped");
+    h.client.listAllMessages.mockResolvedValue([{id: "bad", type: "assistant_message", assistant_message: {content: "invalid JSON"}}]);
+    expect((await h.service.poll()).state.jobs?.[0].status).toBe("running");
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
   });
 });

@@ -129,6 +129,8 @@ export async function intentSkillClient(job: IntentSkillJob, accountUserId: numb
   if (input.inputHash !== job.inputHash || intentHash(frozen) !== job.inputHash || intentHash(input.skill) !== job.skillHash)
     throw new IntentSkillRuntimeError("任务知识或 Skill 快照校验失败");
   return {core, task, input,
+    repairClient: (intentId: string) => core.createCredentialAgentClient(credential,
+      {accountUserId, operationId: job.id, localTaskId: job.taskId, intentId}),
     client: core.createCredentialAgentClient(credential, {accountUserId, operationId: job.id, localTaskId: job.taskId, intentId: job.id})};
 }
 export async function uploadIntentSkill(client: any, core: BrandKeywordPorts, job: IntentSkillJob, input: IntentSkillInput, accountUserId: number) {

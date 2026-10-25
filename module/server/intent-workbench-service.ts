@@ -88,6 +88,10 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   const activeJob = (job: IntentSkillJob) => !["succeeded", "failed"].includes(job.status);
   const timeoutMessage = "模型任务超时，请查看账户任务记录后重新评估";
   const recoverableTimeout = (job: IntentSkillJob) => job.status === "failed" && job.error === timeoutMessage;
+  // Migrate the previous stopped-as-failed diagnosis by observing the original task.
+  const legacyFailure = (job: IntentSkillJob) => job.status === "failed" &&
+    job.error === "模型任务失败，请检查账户任务记录" && !job.repair;
+  const recoverableJob = (job: IntentSkillJob) => recoverableTimeout(job) || legacyFailure(job);
   async function startSkill(kind: "evaluate" | "plan", questionIds: string[], expectedRevision: number,
     clientRequestId: string, receiptId?: string) {
     const previous = (await observe()).state.jobs?.find(job => job.id === clientRequestId);
@@ -132,23 +136,24 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     return observe();
   }
   async function advance(original: IntentSkillJob) {
-    if ((!activeJob(original) && !recoverableTimeout(original)) || (original.lease?.expiresAt ?? 0) > Date.now()) return;
+    if ((!activeJob(original) && !recoverableJob(original)) || (original.lease?.expiresAt ?? 0) > Date.now()) return;
     const owner = randomUUID();
     let job: IntentSkillJob | undefined;
     await locked(undefined, async (_tx, ledger) => {
       const current = ledger.state.jobs?.find(j => j.id === original.id);
-      if (!current || (!activeJob(current) && !recoverableTimeout(current)) || (current.lease?.expiresAt ?? 0) > Date.now()) return;
+      if (!current || (!activeJob(current) && !recoverableJob(current)) || (current.lease?.expiresAt ?? 0) > Date.now()) return;
       // A late result must never replace a newer evaluation of the same question.
-      if (recoverableTimeout(current) && ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
+      if (recoverableJob(current) && ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
         .some(later => later.questionIds.some(id => current.questionIds.includes(id)))) return;
       current.lease = {owner, expiresAt: Date.now() + 120000}; job = structuredClone(current);
     });
     if (!job) return;
     let phase = job.status;
     let terminalError: string | undefined;
+    let repairDispatch = false;
     try {
       const db = await database();
-      const {core: model, client, task, input} = await intentSkillClient(job, context.accountUserId, db);
+      const {core: model, client, repairClient, task, input} = await intentSkillClient(job, context.accountUserId, db);
       const update = async (status: IntentSkillJob["status"], providerTaskId?: string, providerRequestId?: string | null) => {
         await locked(undefined, async (tx, ledger) => {
           const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
@@ -162,7 +167,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         });
         phase = status;
       };
-      const timedOut = Date.now() - Date.parse(job.createdAt) > 30 * 60_000;
+      const timedOut = Date.now() - (job.repair?.claimedAt ?? Date.parse(job.createdAt)) > 30 * 60_000;
       if (phase === "queued" || phase === "uploading") {
         if (timedOut) throw new IntentSkillRuntimeError(timeoutMessage);
         await update("uploading");
@@ -195,12 +200,26 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         if (timedOut && phase !== "failed") throw new IntentSkillRuntimeError(timeoutMessage);
         return;
       }
-      const events = await client.listAllMessages({taskId: providerTaskId, order: "asc"});
+      const allEvents: Array<{id: string; type: string; timestamp: number; [key: string]: any}> = await client.listAllMessages({taskId: providerTaskId, order: "asc"});
+      // A repair turn may never borrow the original turn's result or terminal event.
+      const baseline = new Set(job.repair?.baselineEventIds ?? []);
+      const events = allEvents.filter(event => !baseline.has(event.id));
       const resultEvent = model.orderManusV2EventsByProviderRank(events, "newest_first").find(event => event.type === "structured_output_result");
+      let invalidResult: string | undefined;
+      let classified: ReturnType<typeof model.classifyManusV2StructuredResultEnvelope> | undefined;
+      let result: ReturnType<typeof validateIntentSkillResult> | undefined;
       if (resultEvent) {
-        const classified = model.classifyManusV2StructuredResultEnvelope(resultEvent.structured_output_result);
-        if (classified.kind !== "accepted") throw new IntentSkillRuntimeError("模型未返回有效结构化结果");
-        const result = validateIntentSkillResult(classified.value, input, job);
+        try {
+          classified = model.classifyManusV2StructuredResultEnvelope(resultEvent.structured_output_result);
+          if (classified.kind !== "accepted") throw new IntentSkillRuntimeError("模型未返回有效结构化结果");
+          result = validateIntentSkillResult(classified.value, input, job);
+        } catch (error) {
+          if (!(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) throw error;
+          invalidResult = error instanceof z.ZodError ? "模型输出字段不符合评分结构" : error.message;
+        }
+      }
+      if (resultEvent && result && classified?.kind === "accepted") {
+        const accepted = classified;
         const currentKnowledge = await knowledge();
         await locked(undefined, async (tx, ledger) => {
           const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
@@ -219,16 +238,69 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
           current.status = "succeeded"; delete current.error;
           await tx.insert(model.agentEvents).values({id: randomUUID(), taskId: job!.taskId, providerEventId: resultEvent.id,
             eventType: "structured_output_result", providerTimestampMs: resultEvent.timestamp,
-            normalizedPayload: {kind: "intent_skill_result", value: classified.value}});
+            normalizedPayload: {kind: "intent_skill_result", value: accepted.value}});
           await tx.update(model.agentOperations).set({status: "succeeded", errorCode: null, updatedAt: new Date()}).where(eq(model.agentOperations.id, job!.id));
           await tx.update(model.agentTasks).set({providerState: "succeeded", lastMessageSyncAt: new Date(), updatedAt: new Date()}).where(eq(model.agentTasks.id, job!.taskId));
         });
         return;
       }
       // Old timeout failures may only retrieve an existing result, never dispatch.
-      if (phase === "failed") return;
+      if (phase === "failed" && !legacyFailure(job)) return;
       const state = model.latestManusV2TaskState(events) ?? (await client.taskDetail(providerTaskId)).status;
-      if (["finished", "completed"].includes(state)) {
+      if (["error", "failed", "cancelled"].includes(state))
+        throw new IntentSkillRuntimeError(state === "cancelled" ? "模型任务已取消，未写入评分" : "模型执行异常，未写入评分；请查看该任务的执行错误后重试");
+      if (["finished", "completed", "stopped"].includes(state)) {
+        const final = model.orderManusV2EventsByProviderRank(events, "newest_first")
+          .find(event => event.type === "assistant_message" && typeof (event.assistant_message as any)?.content === "string" && (event.assistant_message as any).content.trim());
+        if (final && !invalidResult) {
+          let raw = String((final.assistant_message as any)?.content).trim();
+          const fence = /^```(?:json)?\s*\n([\s\S]*?)\n```$/u.exec(raw);
+          if (fence) raw = fence[1]!.trim();
+          try {
+            validateIntentSkillResult(JSON.parse(raw), input, job);
+          } catch (error) {
+            invalidResult = error instanceof SyntaxError ? "模型最终 JSON 语法错误" :
+              error instanceof z.ZodError ? "模型输出字段不符合评分结构" :
+              error instanceof IntentSkillRuntimeError ? error.message : "模型最终结果不可验证";
+          }
+        }
+        if (invalidResult) {
+          if (job.repair) throw new IntentSkillRuntimeError(`模型结果自动修复后仍未通过校验：${invalidResult}；未写入评分，请重新评估`);
+          const currentKnowledge = await knowledge();
+          const intentId = randomUUID();
+          // Persist a single mutation claim BEFORE sending. Ambiguous responses
+          // are reconciled by reads; no later poll can repeat this POST.
+          await locked(undefined, async (tx, ledger) => {
+            const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
+            if (current.lease?.owner !== owner || current.lease.expiresAt < Date.now() || current.repair)
+              throw new IntentSkillRuntimeError("任务执行权已变化");
+            if (ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
+              .some(later => later.questionIds.some(id => current.questionIds.includes(id))))
+              throw new IntentSkillRuntimeError("已有更新的评估任务，旧任务结果不再发布");
+            if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash || intentHash(ledger.state.questions) !== job!.questionsHash)
+              throw new IntentSkillRuntimeError("任务期间知识或问题已更新，请重新评估");
+            current.repair = {intentId, claimedAt: Date.now(), baselineEventIds: allEvents.map(event => event.id), reason: invalidResult!};
+            current.status = "running"; delete current.error; delete current.terminalObservedAt;
+            await tx.update(model.agentOperations).set({status: "result_pending", errorCode: null, updatedAt: new Date()}).where(eq(model.agentOperations.id, job!.id));
+          });
+          phase = "running";
+          repairDispatch = true;
+          await repairClient(intentId).sendMessage({
+            taskId: providerTaskId, structuredOutputSchema: INTENT_WIRE_SCHEMA,
+            prompt: `上一轮结果未通过校验：${invalidResult}。请重新完整读取原附件 SKILL.md 和 input.json，修正并返回完整 JSON。原知识与问题仍是唯一来源，禁止执行方案、联网补造证据或改变任务标识。根字段只能是 operationToken,inputHash,evaluations,plans；检查所有括号、逗号、字段及连续原文引用，再按最终要点重算 support、第六维和 value。仅返回 JSON，不要解释。\noperationToken=${input.operationToken}\ninputHash=${input.inputHash}\n本轮修复标识=${intentId}`,
+          });
+          await locked(undefined, async (_tx, ledger) => {
+            const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
+            if (current.lease?.owner === owner && current.repair?.intentId === intentId) current.repair.sentAt = Date.now();
+          });
+          return;
+        }
+        if (job.repair && !events.length) {
+          if (!job.repair.sentAt && Date.now() - job.repair.claimedAt > 2 * 60_000)
+            throw new IntentSkillRuntimeError("模型结果修复请求未能确认，系统未重复提交；请重新评估");
+          if (timedOut) throw new IntentSkillRuntimeError(timeoutMessage);
+          return;
+        }
         if (!job.terminalObservedAt) {
           await locked(undefined, async (tx, ledger) => {
             const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
@@ -241,7 +313,6 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         if (Date.now() - job.terminalObservedAt < 2 * 60_000) return;
         throw new IntentSkillRuntimeError("模型任务已结束，但没有可验证的评估结果");
       }
-      if (["error", "failed", "cancelled", "stopped"].includes(state)) throw new IntentSkillRuntimeError("模型任务失败，请检查账户任务记录");
       if (timedOut) throw new IntentSkillRuntimeError(timeoutMessage);
     } catch (error) {
       // Upstream transport errors are retriable reads; creation is never retried.
@@ -249,11 +320,14 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       const creationRejected = phase === "create_unknown" && upstream.outcomeUnknown === false &&
         upstream.retryable === false && upstream.status !== undefined &&
         upstream.status >= 400 && upstream.status < 500;
-      if (((phase === "running" || phase === "failed") && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
+      const repairRejected = repairDispatch && upstream.outcomeUnknown === false &&
+        upstream.retryable === false && upstream.status !== undefined && upstream.status >= 400 && upstream.status < 500;
+      if (((phase === "running" || phase === "failed") && !repairRejected && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
         (phase === "create_unknown" && !creationRejected && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
         (phase === "uploading" && upstream.retryable)) return;
       terminalError = error instanceof z.ZodError ? "模型输出字段格式不正确，请重新生成" :
         error instanceof IntentSkillRuntimeError ? error.message :
+        repairRejected ? "模型服务拒绝结果修复请求，未写入评分；请检查账户 API 后重新评估" :
         creationRejected ? "模型服务拒绝创建任务，请检查账户 API 配置和任务记录" :
         "模型服务调用未完成，请检查账户任务记录";
     } finally {
@@ -274,7 +348,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   async function poll() {
     const workspace = await observe();
     const job = workspace.state.jobs?.find(activeJob) ??
-      workspace.state.jobs?.find((candidate, index, jobs) => recoverableTimeout(candidate) &&
+      workspace.state.jobs?.find((candidate, index, jobs) => recoverableJob(candidate) &&
         !jobs.slice(index + 1).some(later => later.questionIds.some(id => candidate.questionIds.includes(id))));
     if (job) await advance(job);
     return observe();

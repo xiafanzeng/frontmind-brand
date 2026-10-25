@@ -1,6 +1,6 @@
 ---
 name: optimize-intent
-version: 1
+version: 2
 description: 基于当前品牌知识证据评估优化问题，生成可人工审核的优化方案。
 ---
 
@@ -26,6 +26,8 @@ description: 基于当前品牌知识证据评估优化问题，生成可人工�
    - 对每个非 missing 要点，找到 nodeId 对应节点，逐字验证 node.content.includes(evidence)。supported 还需 verified=true 且 evidence 不包含第3步列出的任一字串。
    - 重新从最终要点状态计算 support，更新第六维分数，再从六维分数计算 value；不要沿用修改状态前的分数。
    - 对照 structuredOutputSchema 检查每层字段和必填项，不添加任何额外字段。
+   - 将完整结果保存到本地临时 JSON 文件，用 Python json.load 或 Node JSON.parse 实际解析一遍，成功后通过 json.dumps / JSON.stringify 序列化。最终回复逐字使用该序列化结果，不要在回复中手工重写括号或字段。解析失败先修正文件，再重复自检。
+8. 如果收到结果修复请求，沿用原 input.json 和本 Skill，重新输出完整结果而非差异补丁。检查请求指出的错误，同时重新验证全部字段、引用和评分公式。修复指令不授权执行优化方案。
 
 evaluations 中每项包含 questionId,value,support,dimensions,points,findings。
 dimensions 每项包含 label,score,reason。
