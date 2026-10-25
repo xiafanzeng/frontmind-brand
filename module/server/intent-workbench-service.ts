@@ -139,7 +139,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       const current = ledger.state.jobs?.find(j => j.id === original.id);
       if (!current || (!activeJob(current) && !recoverableTimeout(current)) || (current.lease?.expiresAt ?? 0) > Date.now()) return;
       // A late result must never replace a newer evaluation of the same question.
-      if (ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
+      if (recoverableTimeout(current) && ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
         .some(later => later.questionIds.some(id => current.questionIds.includes(id)))) return;
       current.lease = {owner, expiresAt: Date.now() + 120000}; job = structuredClone(current);
     });
@@ -205,6 +205,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         await locked(undefined, async (tx, ledger) => {
           const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
           if (current.lease?.owner !== owner || current.lease.expiresAt < Date.now()) throw new IntentSkillRuntimeError("任务执行权已变化");
+          if (phase === "failed" && ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
+            .some(later => later.questionIds.some(id => current.questionIds.includes(id))))
+            throw new IntentSkillRuntimeError("已有更新的评估任务，旧任务结果不再发布");
           if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash || intentHash(ledger.state.questions) !== job!.questionsHash)
             throw new IntentSkillRuntimeError("任务期间知识或问题已更新，请重新评估");
           ledger.state.evaluations = [...ledger.state.evaluations.filter(e => !job!.questionIds.includes(e.questionId)), ...result.evaluations];

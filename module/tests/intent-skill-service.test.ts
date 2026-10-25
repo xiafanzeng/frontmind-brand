@@ -124,6 +124,21 @@ describe("优化模型持久化任务", () => {
     await h.service.poll();
     expect(h.client.listAllMessages).not.toHaveBeenCalled();
   });
+  it("回读期间开启更新任务时，旧结果不能发布", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.ledger().state.jobs![0].status = "failed";
+    h.ledger().state.jobs![0].error = "模型任务超时，请查看账户任务记录后重新评估";
+    let resolve!: (events: any[]) => void;
+    h.client.listAllMessages.mockImplementationOnce(() => new Promise(done => {resolve = done;}));
+    const recovering = h.service.poll();
+    await vi.waitFor(() => expect(h.client.listAllMessages).toHaveBeenCalledTimes(1));
+    h.ledger().state.jobs!.push({...h.ledger().state.jobs![0], id: "newer", status: "running"});
+    resolve([{id: "event", timestamp: Date.now(), type: "structured_output_result",
+      structured_output_result: {success: true, value: h.output()}}]);
+    await recovering;
+    expect(h.ledger().state.evaluations).toEqual([]);
+    expect(h.ledger().state.jobs![0].error).toContain("更新的评估任务");
+  });
   it("先保存任务，再调用 API；轮询发布模型结果，重放不重复创建", async () => {
     const h = harness(); await h.intake();
     const pending = await h.service.command(h.request);
