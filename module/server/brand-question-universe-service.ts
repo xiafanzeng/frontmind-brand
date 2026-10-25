@@ -2,6 +2,7 @@ import {createHash,randomUUID} from "node:crypto";
 import {Readable} from "node:stream";
 import {and,desc,eq,inArray,type SQL} from "drizzle-orm";
 import {z} from "zod";
+import {registerIntentSkillPorts} from "@frontmind/module-brand/server/intent-skill-runtime";
 import {generalExecutionActivity} from "@frontmind/module-contracts/execution";
 import {assertUpstreamPromptBudget} from "@frontmind/module-contracts/upstream-prompt-budget";
 import {brandQuestionUniverseStartInputSchema,BrandQuestionUniverseValidationError,type BrandQuestionUniversePayload} from "../contracts/brand-question-universe.js";
@@ -28,6 +29,7 @@ import {
 } from "./brand-question-universe-runtime.js";
 
 export function createBrandQuestionUniverseService(core:BrandKeywordPorts) {
+registerIntentSkillPorts(core);
 const {projectBrandQuestionExecution, lockCustomerProjectBusinessWrite, currentEnterpriseProjectId, enterpriseWorkspaceUserId, getEnterpriseProjectScope, runWithStoredEnterpriseProjectScope, enterpriseAccountOwnerPredicate, enterpriseDashboardTable, enterpriseDashboardOwnerPredicate, createCredentialAgentClient, agentEvents, agentOperations, agentTasks, artifacts, localAssets, dashboardPayloadSchema, getApiCredentialStatus, getDecryptedCredentialForAccountById, getDecryptedCredentialForUser, recordUpstreamResource, getLatestAuthenticatedKnowledgeSnapshot, DashboardRevisionConflictError, getDashboardWorkspace, getKnowledgeSnapshotById, updateDashboardWorkspace, getDb, classifyManusV2StructuredResultEnvelope, latestManusV2TaskState, ManusV2ApiError, manusV2EventOperationToken, manusV2EventsContainOperationToken, orderManusV2EventsByProviderRank, assertServiceCapability, getUpstreamBaseUrl, sealLocalAssetStorageIdentity, readStoredPresalesFile, removeStoredPresalesFile, stagePresalesFileContent}=core;
 const BRAND_QUESTION_UNIVERSE_OPERATION_TYPE = "brand_question_universe";
 const BRAND_QUESTION_UNIVERSE_CONTRACT_REVISION = 1;

@@ -28,7 +28,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   });
  }
  router.get("/intent",async(req,res)=>{
-  try {res.setHeader("Cache-Control","no-store");res.json(await createIntentWorkbenchService(core,req).observe());}
+  try {res.setHeader("Cache-Control","no-store");res.json(await createIntentWorkbenchService(core,req).poll());}
   catch {res.status(503).json({error:{code:"INTENT_UNAVAILABLE",message:"优化工作台暂不可用，请确认数据库迁移已完成后重新读取"}});}
  });
  router.get("/capabilities",(req,res)=>{

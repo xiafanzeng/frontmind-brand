@@ -1,14 +1,16 @@
 import {createHash, randomUUID} from "node:crypto";
-import {sql} from "drizzle-orm";
+import {sql, eq} from "drizzle-orm";
 import {z} from "zod";
 import type {Request} from "express";
 import type {ModuleHttpCore} from "./http-api.js";
 import {getKnowledgeNodeDetails, saveKnowledgeNodeContent} from "./knowledge-node-workspace-service.js";
 import {projectKnowledgeBaseCustomerMarkdown} from "../contracts/knowledge-base-materialized-contract.js";
 import {
-  createIntentPlan, emptyIntentState, evaluateIntent,
-  type IntentState, type IntentNode, type IntentWorkspace,
+  emptyIntentState,
+  type IntentState, type IntentNode, type IntentWorkspace, type IntentSkillJob,
 } from "../contracts/intent-workbench.js";
+import {intentHash, prepareIntentSkill, reserveIntentSkill, intentSkillClient, uploadIntentSkill,
+  validateIntentSkillResult, INTENT_WIRE_SCHEMA, intentSkillPorts, IntentSkillRuntimeError, type IntentSkillInput} from "./intent-skill-runtime.js";
 
 export class IntentWorkbenchError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {super(message);}
@@ -19,8 +21,8 @@ const commandSchema = z.discriminatedUnion("kind", [
     id, question: z.string().trim().min(2).max(500), category: z.string().max(80), subdivision: z.string().max(80),
     tableId: id, rowIndex: z.number().int().nonnegative(), sourceRevision: z.number().int().nonnegative().nullable(),
   }).strict()).min(1).max(160)}).strict(),
-  z.object({kind: z.literal("evaluate"), expectedRevision: z.number().int().nonnegative(), questionIds: z.array(id).min(1).max(160)}).strict(),
-  z.object({kind: z.literal("plan"), expectedRevision: z.number().int().nonnegative(), questionIds: z.array(id).min(1).max(160)}).strict(),
+  z.object({kind: z.literal("evaluate"), clientRequestId: z.string().uuid(), expectedRevision: z.number().int().nonnegative(), questionIds: z.array(id).min(1).max(160)}).strict(),
+  z.object({kind: z.literal("plan"), clientRequestId: z.string().uuid(), expectedRevision: z.number().int().nonnegative(), questionIds: z.array(id).min(1).max(160)}).strict(),
   z.object({kind: z.literal("edit"), expectedRevision: z.number().int().nonnegative(), questionId: id,
     actions: z.array(z.object({id, selected: z.boolean(), after: z.string().trim().min(1).max(300000)}).strict()).max(3)}).strict(),
   z.object({kind: z.literal("todo"), expectedRevision: z.number().int().nonnegative(), todoId: id,
@@ -46,6 +48,11 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   async function locked<T>(expectedRevision: number | undefined, work: (tx: any, ledger: {revision: number; state: IntentState}) => Promise<T>) {
     const db = await database();
     return db.transaction(async tx => {
+      const actor = (request as Request & {frontmindUser?: {id: number; role: string}}).frontmindUser;
+      if (!actor || actor.id !== context.actorUserId) throw new IntentWorkbenchError("ACTOR_INVALID", "当前账号无权修改此工作区", 403);
+      const model = intentSkillPorts();
+      model.assertActorAllowed(actor);
+      await model.lockCustomerProjectBusinessWrite(tx, context.accountUserId, actor);
       await tx.execute(sql`INSERT IGNORE INTO brand_intent_workspaces (workspace_key, owner_user_id, project_id, revision, payload) VALUES (${workspaceKey}, ${context.accountUserId}, ${context.enterpriseProjectId}, 0, ${JSON.stringify(emptyIntentState())})`);
       const ledger = await readLedger(tx, true);
       if (expectedRevision !== undefined && ledger.revision !== expectedRevision)
@@ -78,26 +85,193 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     const [ledger, data] = await Promise.all([readLedger(db), knowledge()]);
     return {...ledger, nodes: data.nodes, preview: false};
   }
+  const activeJob = (job: IntentSkillJob) => !["succeeded", "failed"].includes(job.status);
+  async function startSkill(kind: "evaluate" | "plan", questionIds: string[], expectedRevision: number,
+    clientRequestId: string, receiptId?: string) {
+    const previous = (await observe()).state.jobs?.find(job => job.id === clientRequestId);
+    if (previous) {
+      if (previous.kind !== kind || intentHash([...previous.questionIds].sort()) !== intentHash([...new Set(questionIds)].sort()))
+        throw new IntentWorkbenchError("IDEMPOTENCY_CONFLICT", "任务标识已用于其他问题");
+      await advance(previous);
+      return observe();
+    }
+    let prepared: Awaited<ReturnType<typeof prepareIntentSkill>>;
+    try {prepared = await prepareIntentSkill(context.accountUserId);}
+    catch (error) {throw new IntentWorkbenchError("MODEL_UNAVAILABLE", error instanceof IntentSkillRuntimeError ? error.message : "当前模型服务不可用，请检查服务权限与 API 配置", 503);}
+    const data = await knowledge();
+    if (!data.nodes.length) throw new IntentWorkbenchError("KNOWLEDGE_MISSING", "请先生成品牌知识库");
+    if (Buffer.byteLength(JSON.stringify(data.nodes), "utf8") > 6 * 1024 * 1024)
+      throw new IntentWorkbenchError("KNOWLEDGE_LIMIT", "当前知识库过大，请缩小知识范围后评估");
+    let reserved!: IntentSkillJob;
+    await locked(expectedRevision, async (tx, ledger) => {
+      if (ledger.state.jobs?.some(activeJob) || ledger.state.receipts.some(r => r.status === "running" || (r.lease?.expiresAt ?? 0) > Date.now()))
+        throw new IntentWorkbenchError("OPERATION_ACTIVE", "请先等待当前优化任务完成");
+      const selectedQuestions = [...new Set(questionIds)].map(id => {
+        const question = ledger.state.questions.find(q => q.id === id);
+        if (!question) throw new IntentWorkbenchError("QUESTION_MISSING", "所选问题已不存在");
+        return question;
+      });
+      const frozen = {kind, selectedQuestions, candidates: ledger.state.questions, nodes: data.nodes, skill: prepared.skill};
+      const inputHash = intentHash(frozen);
+      reserved = {id: clientRequestId, taskId: randomUUID(), kind, questionIds: selectedQuestions.map(q => q.id),
+        status: "queued", createdAt: new Date().toISOString(), inputHash, knowledgeHash: intentHash(data.nodes),
+        questionsHash: intentHash(ledger.state.questions), credentialId: prepared.credential.id,
+        credentialVersion: prepared.credential.version, skillHash: prepared.skillHash, model: prepared.credential.upstreamModel, receiptId};
+      const input: IntentSkillInput = {...frozen, inputHash, operationToken: `brand-intent:${clientRequestId}`};
+      await reserveIntentSkill(tx, reserved, input, prepared.credential, context.accountUserId, context.enterpriseProjectId);
+      ledger.state.jobs ??= [];
+      ledger.state.jobs.push(reserved);
+      ledger.state.evaluations = ledger.state.evaluations.filter(item => !reserved.questionIds.includes(item.questionId));
+      ledger.state.plans = ledger.state.plans.filter(item => !reserved.questionIds.includes(item.questionId));
+      // Keep task history bounded; never remove an active task.
+      ledger.state.jobs = ledger.state.jobs.slice(-100);
+    });
+    await advance(reserved);
+    return observe();
+  }
+  async function advance(original: IntentSkillJob) {
+    if (!activeJob(original) || (original.lease?.expiresAt ?? 0) > Date.now()) return;
+    const owner = randomUUID();
+    let job: IntentSkillJob | undefined;
+    await locked(undefined, async (_tx, ledger) => {
+      const current = ledger.state.jobs?.find(j => j.id === original.id);
+      if (!current || !activeJob(current) || (current.lease?.expiresAt ?? 0) > Date.now()) return;
+      current.lease = {owner, expiresAt: Date.now() + 120000}; job = structuredClone(current);
+    });
+    if (!job) return;
+    let phase = job.status;
+    let terminalError: string | undefined;
+    try {
+      const db = await database();
+      const {core: model, client, task, input} = await intentSkillClient(job, context.accountUserId, db);
+      const update = async (status: IntentSkillJob["status"], providerTaskId?: string, providerRequestId?: string | null) => {
+        await locked(undefined, async (tx, ledger) => {
+          const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
+          if (current.lease?.owner !== owner || current.lease.expiresAt < Date.now()) throw new IntentSkillRuntimeError("任务执行权已变化");
+          current.status = status;
+          current.lease.expiresAt = Date.now() + 120000;
+          if (status === "create_unknown") current.createClaimedAt = Date.now();
+          await tx.update(model.agentOperations).set({status: status === "failed" ? "attention_required" : "running", updatedAt: new Date()}).where(eq(model.agentOperations.id, job!.id));
+          await tx.update(model.agentTasks).set({providerState: status, ...(providerTaskId ? {providerTaskId} : {}),
+            ...(providerRequestId ? {providerRequestId} : {}), updatedAt: new Date()}).where(eq(model.agentTasks.id, job!.taskId));
+        });
+        phase = status;
+      };
+      if (Date.now() - Date.parse(job.createdAt) > 30 * 60_000) throw new IntentSkillRuntimeError("模型任务超时，请查看账户任务记录后重新评估");
+      if (phase === "queued" || phase === "uploading") {
+        await update("uploading");
+        const attachments = await uploadIntentSkill(client, model, job, input, context.accountUserId);
+        // Claim before POST. A crash/ambiguous response is reconciled by reads only.
+        await update("create_unknown");
+        const created = await client.createTask({
+          title: task.title, prompt: `解压附件并完整读取 SKILL.md，按其流程处理 input.json。只返回结构化结果。\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({operationToken: input.operationToken})}`,
+          attachments, agentProfile: job.model, locale: "zh-CN", interactiveMode: false,
+          structuredOutputSchema: INTENT_WIRE_SCHEMA,
+        });
+        await update("running", created.taskId, created.requestId);
+        await model.recordUpstreamResource({userId: context.accountUserId, apiCredentialId: job.credentialId, kind: "task", upstreamId: created.taskId});
+        return;
+      }
+      let providerTaskId = task.providerTaskId;
+      if (phase === "create_unknown" && !providerTaskId) {
+        const found = await client.findCreatedTask({title: task.title, operationToken: input.operationToken,
+          createdAfterSeconds: Math.floor(Date.parse(job.createdAt) / 1000) - 60, createdBeforeSeconds: Math.floor(Date.now() / 1000) + 60});
+        if (found.matches.length > 1) throw new IntentSkillRuntimeError("发现多个同标识模型任务，请人工核对账户任务记录");
+        if (!found.unique) {
+          if (Date.now() - (job.createClaimedAt ?? Date.parse(job.createdAt)) > 2 * 60_000) throw new IntentSkillRuntimeError("模型任务创建结果无法确认，请核对账户任务记录；系统不会重复创建");
+          return;
+        }
+        providerTaskId = found.unique.id;
+        await update("running", providerTaskId);
+        await model.recordUpstreamResource({userId: context.accountUserId, apiCredentialId: job.credentialId, kind: "task", upstreamId: providerTaskId});
+      }
+      if (!providerTaskId) return;
+      const events = await client.listAllMessages({taskId: providerTaskId, order: "asc"});
+      const resultEvent = model.orderManusV2EventsByProviderRank(events, "newest_first").find(event => event.type === "structured_output_result");
+      if (resultEvent) {
+        const classified = model.classifyManusV2StructuredResultEnvelope(resultEvent.structured_output_result);
+        if (classified.kind !== "accepted") throw new IntentSkillRuntimeError("模型未返回有效结构化结果");
+        const result = validateIntentSkillResult(classified.value, input, job);
+        const currentKnowledge = await knowledge();
+        await locked(undefined, async (tx, ledger) => {
+          const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
+          if (current.lease?.owner !== owner || current.lease.expiresAt < Date.now()) throw new IntentSkillRuntimeError("任务执行权已变化");
+          if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash || intentHash(ledger.state.questions) !== job!.questionsHash)
+            throw new IntentSkillRuntimeError("任务期间知识或问题已更新，请重新评估");
+          ledger.state.evaluations = [...ledger.state.evaluations.filter(e => !job!.questionIds.includes(e.questionId)), ...result.evaluations];
+          if (job!.kind === "plan") ledger.state.plans = [...ledger.state.plans.filter(p => !job!.questionIds.includes(p.questionId)), ...result.plans];
+          if (job!.receiptId) {
+            const receipt = ledger.state.receipts.find(r => r.id === job!.receiptId);
+            if (receipt && receipt.status !== "reverted") receipt.after = result.evaluations;
+          }
+          current.status = "succeeded"; delete current.error;
+          await tx.insert(model.agentEvents).values({id: randomUUID(), taskId: job!.taskId, providerEventId: resultEvent.id,
+            eventType: "structured_output_result", providerTimestampMs: resultEvent.timestamp,
+            normalizedPayload: {kind: "intent_skill_result", value: classified.value}});
+          await tx.update(model.agentOperations).set({status: "succeeded", errorCode: null, updatedAt: new Date()}).where(eq(model.agentOperations.id, job!.id));
+          await tx.update(model.agentTasks).set({providerState: "succeeded", lastMessageSyncAt: new Date(), updatedAt: new Date()}).where(eq(model.agentTasks.id, job!.taskId));
+        });
+        return;
+      }
+      const state = model.latestManusV2TaskState(events) ?? (await client.taskDetail(providerTaskId)).status;
+      if (["finished", "completed"].includes(state)) {
+        if (!job.terminalObservedAt) {
+          await locked(undefined, async (tx, ledger) => {
+            const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
+            if (current.lease?.owner !== owner) return;
+            current.terminalObservedAt = Date.now();
+            await tx.update(model.agentOperations).set({status: "result_pending", updatedAt: new Date()}).where(eq(model.agentOperations.id, job!.id));
+          });
+          return;
+        }
+        if (Date.now() - job.terminalObservedAt < 2 * 60_000) return;
+        throw new IntentSkillRuntimeError("模型任务已结束，但没有可验证的评估结果");
+      }
+      if (["error", "failed", "cancelled", "stopped"].includes(state)) throw new IntentSkillRuntimeError("模型任务失败，请检查账户任务记录");
+    } catch (error) {
+      // Upstream transport errors are retriable reads; creation is never retried.
+      const upstream = error as {outcomeUnknown?: boolean; retryable?: boolean; status?: number};
+      if ((phase === "running" && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
+        (phase === "create_unknown" && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
+        (phase === "uploading" && upstream.retryable)) return;
+      terminalError = error instanceof z.ZodError ? "模型输出字段格式不正确，请重新生成" :
+        error instanceof IntentSkillRuntimeError ? error.message : "模型服务调用未完成，请检查账户任务记录";
+    } finally {
+      await locked(undefined, async (tx, ledger) => {
+        const current = ledger.state.jobs?.find(j => j.id === job!.id);
+        if (current?.lease?.owner !== owner) return;
+        delete current.lease;
+        if (terminalError) {
+          current.status = "failed"; current.error = terminalError;
+          const model = intentSkillPorts();
+          await tx.update(model.agentOperations).set({
+            status: phase === "create_unknown" ? "attention_required" : "failed", errorCode: "INTENT_RESULT_UNAVAILABLE", updatedAt: new Date(),
+          }).where(eq(model.agentOperations.id, job!.id));
+        }
+      });
+    }
+  }
+  async function poll() {
+    const workspace = await observe();
+    const job = workspace.state.jobs?.find(activeJob);
+    if (job) await advance(job);
+    return observe();
+  }
   async function command(value: unknown) {
     const input = commandSchema.parse(value);
+    if (input.kind === "evaluate" || input.kind === "plan")
+      return startSkill(input.kind, input.questionIds, input.expectedRevision, input.clientRequestId);
     const data = await knowledge();
     await locked(input.expectedRevision, async (_tx, ledger) => {
       if (ledger.state.receipts.some(receipt => receipt.status === "running" || (receipt.lease?.expiresAt ?? 0) > Date.now()))
         throw new IntentWorkbenchError("EXECUTION_ACTIVE", "请先继续完成当前执行");
+      if (ledger.state.jobs?.some(activeJob)) throw new IntentWorkbenchError("OPERATION_ACTIVE", "请等待当前优化评估完成");
       const state = ledger.state;
       if (input.kind === "intake") {
         for (const question of input.questions) {
           if (!state.questions.some(item => item.id === question.id || item.question === question.question)) state.questions.push(question);
         }
         if (state.questions.length > 500) throw new IntentWorkbenchError("LIST_LIMIT", "优化清单最多保留 500 条问题");
-      } else if (input.kind === "evaluate" || input.kind === "plan") {
-        for (const questionId of input.questionIds) {
-          const question = state.questions.find(item => item.id === questionId);
-          if (!question) throw new IntentWorkbenchError("QUESTION_MISSING", "所选问题已不存在");
-          const evaluation = evaluateIntent(question, data.nodes, state.questions);
-          state.evaluations = [...state.evaluations.filter(item => item.questionId !== questionId), evaluation];
-          if (input.kind === "plan") state.plans = [...state.plans.filter(item => item.questionId !== questionId), createIntentPlan(question, evaluation, data.nodes)];
-        }
       } else if (input.kind === "edit") {
         const plan = state.plans.find(item => item.questionId === input.questionId);
         if (!plan) throw new IntentWorkbenchError("PLAN_MISSING", "请先生成方案");
@@ -127,11 +301,16 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     if (existing && [...new Set(existing.changes.map(change => change.questionId))].sort().join("|") !== [...new Set(input.questionIds)].sort().join("|"))
       throw new IntentWorkbenchError("IDEMPOTENCY_CONFLICT", "本次执行标识已用于其他问题");
     if (existing && existing.status !== "running") return observe();
+    const executionKnowledge = await knowledge();
     if (!existing) await locked(input.expectedRevision, async (_tx, ledger) => {
+      if (ledger.state.jobs?.some(activeJob)) throw new IntentWorkbenchError("OPERATION_ACTIVE", "请等待当前评估完成");
       if (ledger.state.receipts.some(receipt => receipt.status === "running")) throw new IntentWorkbenchError("EXECUTION_ACTIVE", "已有执行处理中，请继续原执行");
       const plans = input.questionIds.map(questionId => {
         const plan = ledger.state.plans.find(item => item.questionId === questionId);
         if (!plan) throw new IntentWorkbenchError("PLAN_MISSING", "请先生成并审核方案");
+        const source = ledger.state.jobs?.find(job => job.kind === "plan" && job.inputHash === plan.inputHash && job.status === "succeeded");
+        if (!source || source.knowledgeHash !== intentHash(executionKnowledge.nodes) || source.questionsHash !== intentHash(ledger.state.questions))
+          throw new IntentWorkbenchError("PLAN_STALE", "方案依据的知识或问题已变化，请重新生成方案");
         return plan;
       });
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({questionId: plan.questionId, action: structuredClone(action), status: "pending" as const})));
@@ -194,21 +373,21 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         target.status = failure ? "failed" : "succeeded"; target.error = failure;
       });
     }
-    const current = await knowledge();
     await locked(undefined, async (_tx, ledger) => {
       receipt = ledger.state.receipts.find(item => item.id === input.clientRequestId)!;
       if (receipt.lease?.owner !== leaseOwner) throw new IntentWorkbenchError("LEASE_CHANGED", "执行权已变化");
-      receipt.after = [...new Set(receipt.changes.map(item => item.questionId))].map(questionId =>
-        evaluateIntent(ledger.state.questions.find(item => item.id === questionId)!, current.nodes, ledger.state.questions));
-      ledger.state.evaluations = [...ledger.state.evaluations.filter(item => !receipt.after.some(after => after.questionId === item.questionId)), ...receipt.after];
+      const changedIds = receipt.changes.map(item => item.questionId);
+      ledger.state.evaluations = ledger.state.evaluations.filter(item => !changedIds.includes(item.questionId));
+      ledger.state.plans = ledger.state.plans.filter(item => !changedIds.includes(item.questionId));
       receipt.status = receipt.changes.some(change => change.status === "failed") ? "partial" : "completed";
       delete receipt.lease;
     });
-    return observe();
+    return reEvaluateReceipt(receipt.id, [...new Set(receipt.changes.map(item => item.questionId))]);
   }
   async function rollback(value: unknown) {
     const input = z.object({receiptId: z.string().uuid(), expectedRevision: z.number().int().nonnegative()}).strict().parse(value);
     const workspace = await observe();
+    if (workspace.state.jobs?.some(activeJob)) throw new IntentWorkbenchError("OPERATION_ACTIVE", "请等待当前评估完成后撤销");
     if (workspace.revision !== input.expectedRevision) throw new IntentWorkbenchError("REVISION_CONFLICT", "清单已更新，请重新读取");
     const receipt = workspace.state.receipts.find(item => item.id === input.receiptId);
     if (!receipt || receipt.status === "running") throw new IntentWorkbenchError("RECEIPT_INVALID", "当前执行无法撤销");
@@ -262,13 +441,22 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       }
       target.status = "reverted";
       delete target.lease;
-      const refreshed = await knowledge();
-      for (const questionId of new Set(target.changes.map(change => change.questionId))) {
-        const question = ledger.state.questions.find(item => item.id === questionId);
-        if (question) ledger.state.evaluations = [...ledger.state.evaluations.filter(item => item.questionId !== questionId), evaluateIntent(question, refreshed.nodes, ledger.state.questions)];
-      }
+      const changedIds = target.changes.map(change => change.questionId);
+      ledger.state.evaluations = ledger.state.evaluations.filter(item => !changedIds.includes(item.questionId));
+      ledger.state.plans = ledger.state.plans.filter(item => !changedIds.includes(item.questionId));
     });
-    return observe();
+    return reEvaluateReceipt(receipt.id, [...new Set(receipt.changes.map(item => item.questionId))]);
   }
-  return {observe, command, execute, rollback};
+  async function reEvaluateReceipt(receiptId: string, questionIds: string[]) {
+    try {
+      return await startSkill("evaluate", questionIds, (await observe()).revision, randomUUID(), receiptId);
+    } catch {
+      await locked(undefined, async (_tx, ledger) => {
+        const target = ledger.state.receipts.find(r => r.id === receiptId)!;
+        target.reEvaluationError = "变更已保存，但模型重评未启动，请返回问题列表重新评估";
+      });
+      return observe();
+    }
+  }
+  return {observe, poll, command, execute, rollback};
 }

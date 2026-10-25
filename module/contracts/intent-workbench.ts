@@ -31,7 +31,8 @@ export type IntentEvaluation = {
   dimensions: Array<{label: string; score: number; reason: string}>;
   points: SupportPoint[];
   findings: string[];
-  method: "rules_v1";
+  method: "rules_v1" | "skill_v1";
+  provenance?: {operationId: string; inputHash: string; skillHash: string; model: string};
   evaluatedAt: string;
 };
 export type IntentAction = {
@@ -44,7 +45,16 @@ export type IntentAction = {
   after: string;
   source: string;
 };
-export type IntentPlan = {questionId: string; actions: IntentAction[]};
+export type IntentPlan = {questionId: string; actions: IntentAction[]; inputHash?: string};
+export type IntentSkillJob = {
+  id: string; taskId: string; kind: "evaluate" | "plan"; questionIds: string[];
+  status: "queued" | "uploading" | "create_unknown" | "running" | "succeeded" | "failed";
+  createdAt: string; inputHash: string; knowledgeHash: string; questionsHash: string;
+  credentialId: string; credentialVersion: number; skillHash: string; model: string;
+  receiptId?: string; error?: string; lease?: {owner: string; expiresAt: number};
+  createClaimedAt?: number;
+  terminalObservedAt?: number;
+};
 export type IntentTodo = {
   id: string; questionId: string; title: string;
   status: "pending" | "completed"; source: string;
@@ -62,6 +72,7 @@ export type IntentReceipt = {
   changes: IntentChange[];
   before: IntentEvaluation[];
   after: IntentEvaluation[];
+  reEvaluationError?: string;
   lease?: {owner: string; expiresAt: number};
 };
 export type IntentState = {
@@ -71,6 +82,7 @@ export type IntentState = {
   plans: IntentPlan[];
   todos: IntentTodo[];
   receipts: IntentReceipt[];
+  jobs?: IntentSkillJob[];
 };
 export type IntentWorkspace = {
   revision: number;
@@ -79,7 +91,7 @@ export type IntentWorkspace = {
   preview: boolean;
 };
 export const emptyIntentState = (): IntentState => ({
-  version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [],
+  version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [], jobs: [],
 });
 
 /** A transparent lexical assessment, not an AI or search-volume measurement. */
