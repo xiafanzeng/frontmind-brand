@@ -112,6 +112,20 @@ describe("优化模型持久化任务", () => {
     expect(h.client.findCreatedTask).toHaveBeenCalledTimes(1);
     expect(h.client.createTask).toHaveBeenCalledTimes(1);
   });
+  it("服务明确拒绝创建时立即显示失败，不进入未知创建等待或重复提交", async () => {
+    const h = harness(); await h.intake();
+    h.client.createTask.mockRejectedValueOnce(Object.assign(new Error("private schema error"), {
+      status: 400, retryable: false, outcomeUnknown: false,
+    }));
+    const rejected = await h.service.command(h.request);
+    expect(rejected.state.jobs?.[0].status).toBe("failed");
+    expect(rejected.state.jobs?.[0].error).toContain("拒绝创建任务");
+    expect(rejected.state.jobs?.[0].error).not.toContain("private");
+    await h.service.poll();
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.client.findCreatedTask).not.toHaveBeenCalled();
+    expect(rejected.state.evaluations).toEqual([]);
+  });
   it("拒绝知识变化和伪造结果，不回退到规则评估", async () => {
     const h = harness(); await h.intake(); await h.service.command(h.request);
     h.send(); h.nodes[0].content += "后来修改。";

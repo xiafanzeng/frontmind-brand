@@ -49,7 +49,7 @@ const resultSchema = z.object({
     }).strict()).min(1).max(3),
   }).strict()).max(160),
 }).strict();
-export const INTENT_WIRE_SCHEMA = z.toJSONSchema(resultSchema);
+export const INTENT_WIRE_SCHEMA = z.toJSONSchema(resultSchema, {target: "draft-7"});
 const dimensionLabels = ["意图明确度", "品牌关联度", "决策相关度", "问题清晰度", "内容独特度", "知识支撑初评"];
 export function validateIntentSkillResult(value: unknown, input: IntentSkillInput, job: IntentSkillJob) {
   if (Buffer.byteLength(JSON.stringify(value) ?? "", "utf8") > 4 * 1024 * 1024) throw new IntentSkillRuntimeError("模型结果超过大小限制");

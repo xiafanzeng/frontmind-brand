@@ -231,11 +231,16 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     } catch (error) {
       // Upstream transport errors are retriable reads; creation is never retried.
       const upstream = error as {outcomeUnknown?: boolean; retryable?: boolean; status?: number};
+      const creationRejected = phase === "create_unknown" && upstream.outcomeUnknown === false &&
+        upstream.retryable === false && upstream.status !== undefined &&
+        upstream.status >= 400 && upstream.status < 500;
       if ((phase === "running" && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
-        (phase === "create_unknown" && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
+        (phase === "create_unknown" && !creationRejected && !(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) ||
         (phase === "uploading" && upstream.retryable)) return;
       terminalError = error instanceof z.ZodError ? "模型输出字段格式不正确，请重新生成" :
-        error instanceof IntentSkillRuntimeError ? error.message : "模型服务调用未完成，请检查账户任务记录";
+        error instanceof IntentSkillRuntimeError ? error.message :
+        creationRejected ? "模型服务拒绝创建任务，请检查账户 API 配置和任务记录" :
+        "模型服务调用未完成，请检查账户任务记录";
     } finally {
       await locked(undefined, async (tx, ledger) => {
         const current = ledger.state.jobs?.find(j => j.id === job!.id);
