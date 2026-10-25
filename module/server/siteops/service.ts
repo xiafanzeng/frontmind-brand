@@ -1561,6 +1561,20 @@ export function completePublishedVisualPageCount(input: {
   ).length;
 }
 
+/** The observation must load every customer-visible batch of the widest pool
+ * it can serve: the legacy 21st lane tracks up to
+ * SITEOPS_VISUAL_CANDIDATE_MAX_PAGES published batches plus one in flight,
+ * while the frozen static catalog publishes STATIC_TEMPLATE_CATALOG_PAGE_COUNT
+ * batches in a single operation. */
+export function siteOpsVisibleStyleBatchQueryLimit() {
+  return (
+    Math.max(
+      SITEOPS_VISUAL_CANDIDATE_MAX_PAGES,
+      STATIC_TEMPLATE_CATALOG_PAGE_COUNT,
+    ) + 1
+  );
+}
+
 export function resolveVisualCatalogObservationCoordinates(input: {
   frozenVisualInput: Record<string, unknown> | null;
   hasAnyVisualOperation: boolean;
@@ -2379,7 +2393,7 @@ async function projectObservationOnce(
           ),
         )
         .orderBy(desc(websiteStyleSampleBatches.ordinal))
-        .limit(SITEOPS_VISUAL_CANDIDATE_MAX_PAGES + 1),
+        .limit(siteOpsVisibleStyleBatchQueryLimit()),
     () =>
       executor
         .select({

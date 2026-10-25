@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { visualSelectionBundleV7Schema } from "../contracts/siteops.js";
+import { visualSelectionBundleV7Schema, SITEOPS_VISUAL_CANDIDATE_MAX_PAGES } from "../contracts/siteops.js";
 import { siteOpsObservationV1Schema } from "../contracts/siteops-contract.js";
 import { CURATED_STATIC_TEMPLATE_CATALOG_VERSION, PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION, staticTemplatePageLength, staticTemplatePagination } from "../contracts/static-template-pagination.js";
-import { completePublishedVisualPageCount, projectSiteOpsVisualGeneration, projectStaticTemplateCatalogVisualReadiness, resolveVisualCatalogObservationCoordinates } from "../server/siteops/service.js";
-import { FROZEN_STATIC_TEMPLATE_CATALOG, STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "../server/siteops/static-template-catalog-manifest.js";
+import { completePublishedVisualPageCount, projectSiteOpsVisualGeneration, projectStaticTemplateCatalogVisualReadiness, resolveVisualCatalogObservationCoordinates, siteOpsVisibleStyleBatchQueryLimit } from "../server/siteops/service.js";
+import { FROZEN_STATIC_TEMPLATE_CATALOG, STATIC_TEMPLATE_CATALOG_PAGE_COUNT, STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "../server/siteops/static-template-catalog-manifest.js";
 
 const oldVersion = "21st-included-recommended-20260828-v2";
 function bundle(version: string, page: number) {
@@ -105,6 +105,11 @@ describe("frozen catalog pagination", () => {
     const candidates = batches.flatMap((batch, index) => Array.from({ length: staticTemplatePageLength(CURATED_STATIC_TEMPLATE_CATALOG_VERSION, index + 1) }, () => ({ batchId: batch.id })));
     expect(completePublishedVisualPageCount({ batches, candidates, pageSize: 8, catalogVersion: CURATED_STATIC_TEMPLATE_CATALOG_VERSION })).toBe(5);
     expect(completePublishedVisualPageCount({ batches: batches.slice(0, 4), candidates, pageSize: 8, catalogVersion: oldVersion })).toBe(4);
+  });
+  it("loads every published batch of the widest pool in the observation query", () => {
+    const limit = siteOpsVisibleStyleBatchQueryLimit();
+    expect(limit).toBeGreaterThanOrEqual(STATIC_TEMPLATE_CATALOG_PAGE_COUNT + 1);
+    expect(limit).toBeGreaterThanOrEqual(SITEOPS_VISUAL_CANDIDATE_MAX_PAGES + 1);
   });
   it("requires every supported template admission before advertising readiness", () => {
     const catalog = {
