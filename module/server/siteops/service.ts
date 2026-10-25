@@ -215,6 +215,7 @@ import {
 
 
 import { siteOpsTrustedFallbackPreviewFromResult } from "./trusted-fallback.js";
+import { siteOpsQuotaStateForPeriod } from "./quota-state.js";
 import {
   isSiteOpsPersistenceDatabaseError,
   safeSiteOpsPersistenceDiagnostics,
@@ -5431,7 +5432,7 @@ async function selectVisualSample(
     userId: enterpriseWorkspaceUserId(input.actor.id),
     parentBuildId,
     quotaPeriodId,
-    quotaState: "reserved",
+    quotaState: siteOpsQuotaStateForPeriod(quotaPeriodId, "reserved"),
     knowledgeSnapshotId: snapshot.id,
     knowledgeArchiveHash: snapshot.archiveHash,
     ordinal: Number(ordinalRows[0]?.ordinal ?? 0) + 1,
@@ -5746,7 +5747,7 @@ async function handleRevision(
     knowledgeArchiveHash: parent.knowledgeArchiveHash,
     parentBuildId: parent.id,
     quotaPeriodId,
-    quotaState: "reserved",
+    quotaState: siteOpsQuotaStateForPeriod(quotaPeriodId, "reserved"),
     ordinal: Number(ordinalRows[0]?.ordinal ?? 0) + 1,
     // A revision is a new immutable build. Freeze the current workflow,
     // starter and materializer as one coordinate set instead of pairing the
@@ -6207,7 +6208,7 @@ async function handleSocialPackage(
     knowledgeSnapshotId: input.project.currentKnowledgeSnapshotId,
     operationId,
     quotaPeriodId,
-    quotaState: "reserved",
+    quotaState: siteOpsQuotaStateForPeriod(quotaPeriodId, "reserved"),
     channel: input.channel,
     status: "queued",
   });
