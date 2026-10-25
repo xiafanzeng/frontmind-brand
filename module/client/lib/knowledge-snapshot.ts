@@ -5,6 +5,12 @@ import {
 
 const KNOWLEDGE_PUBLISH_REQUEST_TIMEOUT_MS = 30_000;
 const KNOWLEDGE_PUBLISH_JOB_TIMEOUT_MS = 180_000;
+export class KnowledgePublicationRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KnowledgePublicationRejectedError";
+  }
+}
 async function readErrorMessage(response: Response) {
   try {
     const payload = await response.json();
@@ -55,7 +61,15 @@ export async function syncKnowledgeBaseArchiveFromOutput(input: {
     });
     operation.assertActive();
     deadline.signal.throwIfAborted();
-    if (!response.ok) throw new Error(await readErrorMessage(response));
+    if (!response.ok) {
+      // A received rejection has an authoritative cause. Transport failures
+      // still leave publication uncertain and must be resolved by reading.
+      const message = await readErrorMessage(response);
+      if (response.status >= 400 && response.status < 500) {
+        throw new KnowledgePublicationRejectedError(message);
+      }
+      throw new Error(message);
+    }
     if (response.status === 202) {
       const accepted = await response.json();
       window.clearTimeout(timer);
@@ -80,7 +94,7 @@ export async function syncKnowledgeBaseArchiveFromOutput(input: {
         }
         if (build.status === "published") break;
         if (progress.packageState === "attention_required") {
-          throw new Error("知识库更新未完成，修改已保存，请重新更新");
+          throw new KnowledgePublicationRejectedError("知识库更新未完成，修改已保存，请重新更新");
         }
         await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
         operation.assertActive();
