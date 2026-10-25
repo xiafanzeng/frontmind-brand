@@ -125,7 +125,7 @@ const sourcePathSchema = z
   .min(1)
   .max(240)
   .regex(
-    /^(?:(?:(?:[a-zA-Z0-9_.-]+|\([a-zA-Z0-9_-]+\)|\[[a-zA-Z0-9_-]+\])\/)*(?:[a-zA-Z0-9_.-]+|\([a-zA-Z0-9_-]+\)|\[[a-zA-Z0-9_-]+\])\.(?:[cm]?[jt]sx?|css|html|json|svg|png|jpe?g|webp|avif|gif|ico|woff2?|eot|otf|ttf|mp3|mp4|ogg|wav|webm)|(?:LICENSE|NOTICE)(?:\.(?:md|txt))?)$/u,
+    /^(?:(?:(?:[a-zA-Z0-9_.,-]+(?: [a-zA-Z0-9_.,-]+)*|\([a-zA-Z0-9_-]+\)|\[[a-zA-Z0-9_-]+\])\/)*(?:[a-zA-Z0-9_.,-]+(?: [a-zA-Z0-9_.,-]+)*|\([a-zA-Z0-9_-]+\)|\[[a-zA-Z0-9_-]+\])\.(?:[cm]?[jt]sx?|css|html|json|svg|png|jpe?g|webp|avif|gif|ico|woff2?|eot|otf|ttf|mp3|mp4|ogg|wav|webm)|(?:LICENSE|NOTICE)(?:\.(?:md|txt))?)$/u,
   );
 
 const nativeSourceManifestV1Schema = z
@@ -2001,7 +2001,15 @@ function staticTailwindV3Config(files: ReadonlyMap<string, Buffer>) {
     /^(?:\s*\/\*[\s\S]*?\*\/\s*|\s*\/\/[^\r\n]*(?:\r?\n|$))+/u,
     "",
   );
-  if (/^\s*module\.exports\s*=/u.test(text)) {
+  const namedDefault =
+    /^\s*const\s+([A-Za-z_$][\w$]*)\s*(?::\s*[A-Za-z_$][\w$]*)?\s*=\s*([\s\S]+?)\s*;\s*export\s+default\s+\1\s*;?\s*$/u.exec(
+      text,
+    );
+  if (namedDefault) {
+    // Common TypeScript form: `const config: Config = {...}; export default
+    // config`. Only the captured value reaches JSON5, so no source executes.
+    text = namedDefault[2]!;
+  } else if (/^\s*module\.exports\s*=/u.test(text)) {
     text = text.replace(/^\s*module\.exports\s*=\s*/u, "");
   } else if (/^\s*export\s+default\s+/u.test(text)) {
     text = text.replace(/^\s*export\s+default\s+/u, "");
@@ -2010,6 +2018,13 @@ function staticTailwindV3Config(files: ReadonlyMap<string, Buffer>) {
   }
   text = text.replace(/\s+satisfies\s+[A-Za-z_$][\w$]*\s*;?\s*$/u, "");
   text = text.replace(/;\s*$/u, "");
+  // JavaScript permits numeric object keys while JSON5's parser requires a
+  // quoted property name. Quote only keys in object-property position; the
+  // resulting value is still parsed as inert data and never evaluated.
+  text = text.replace(
+    /(^|[,{]\s*)([0-9]+)(\s*:)/gmu,
+    `$1"$2"$3`,
+  );
   let parsed: unknown;
   try {
     parsed = JSON5.parse(text);
@@ -2712,12 +2727,15 @@ export async function normalizeTwentyFirstNativeTemplateArchive(input: {
   );
   const manifest = packageManifestFromTemplateFiles(templateFiles);
   assertTemplatePackageIsInert(manifest);
-  if (
-    [...templateFiles.keys()].some((filename) =>
-      /(?:^|\/)(?:app|pages)\/(?:[^/]+\/)*api(?:\/|$)/u.test(filename),
-    )
-  ) {
-    throw new NativeVisualSourceError("NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED");
+  // Provider repositories frequently include server-only Next.js API routes
+  // beside an otherwise static visual. They are outside the website template
+  // execution contract: do not ship or inspect them as browser source.
+  for (const filename of templateFiles.keys()) {
+    if (
+      /(?:^|\/)(?:app|pages)\/(?:[^/]+\/)*api(?:\/|$)/u.test(filename)
+    ) {
+      templateFiles.delete(filename);
+    }
   }
   const registryTemplateEntrypoint = findRegistryTemplateEntrypoint(
     templateFiles,

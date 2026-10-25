@@ -837,11 +837,19 @@ function publicVisualMetadata(value: unknown) {
       NATIVE_RUNTIME_CONTRACT_V1_SHA256 &&
     executionAdmission.data.executionShellSha256 ===
       NATIVE_RUNTIME_EXECUTION_SHELL_V1_SHA256;
+  const executionAdmissionMode =
+    staticTemplate &&
+    executionAdmissionBound &&
+    executionAdmission.success &&
+    executionAdmission.data.status === "admitted"
+      ? executionAdmission.data.admissionMode ?? null
+      : null;
   return {
     providerTitle:
       typeof metadata.title === "string" ? metadata.title.trim() : "",
     visualFamily: visualFamily.success ? visualFamily.data : null,
     executionAdmitted: !staticTemplate || executionAdmissionBound,
+    executionAdmissionMode,
     executionUnavailableReason:
       staticTemplate &&
       executionAdmission.success &&
@@ -968,6 +976,10 @@ export const staticTemplateSelectionMetadataSchema = z
           qaSha256: value.executionAdmission.qaSha256,
           browserReceiptSha256: value.executionAdmission.browserReceiptSha256,
           qaStatus: value.executionAdmission.qaStatus,
+          admissionMode: value.executionAdmission.admissionMode,
+          referencePreviewSha256:
+            value.executionAdmission.referencePreviewSha256,
+          fallbackReasonCode: value.executionAdmission.fallbackReasonCode,
         })
     ) {
       context.addIssue({

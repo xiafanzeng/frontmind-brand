@@ -6,13 +6,111 @@ import path from "node:path";
 import JSZip from "jszip";
 import sharp from "sharp";
 import { expect, it, vi } from "vitest";
+import {
+  visualSelectionBundleV7Schema,
+  type VisualSelectionBundleV7,
+} from "../contracts/siteops.js";
 import * as manifest from "../server/siteops/static-template-catalog-manifest.js";
 import { NATIVE_RUNTIME_CONTRACT_V1_SHA256, NATIVE_RUNTIME_EXECUTION_SHELL_V1_SHA256 } from "../server/siteops/native-react-source.js";
 import { PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION } from "../contracts/static-template-pagination.js";
-import { REQUIRED_STATIC_TEMPLATE_RUNTIME_MEDIA, staticTemplateRuntimeMedia } from "../server/siteops/static-template-admission-policy.js";
+import { staticTemplateRuntimeMedia } from "../server/siteops/static-template-admission-policy.js";
 
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
-it("preserves v2/v3 caches, rebinds v4 offline, and rejects self-consistent wrong admission evidence", async () => {
+
+function selectionBundleForCatalog(
+  catalog: Awaited<
+    ReturnType<
+      typeof import("../server/siteops/static-template-catalog.js").seedStaticTemplateCatalog
+    >
+  >["catalog"],
+  selectedCandidateId: string,
+): VisualSelectionBundleV7 {
+  const selected = catalog.entries.find(
+    entry => entry.candidateId === selectedCandidateId,
+  );
+  if (!selected) throw new Error("Missing selected fixture candidate");
+  const labels = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+  const candidates = catalog.entries
+    .filter(entry => entry.page === selected.page)
+    .map(entry => {
+      const admission = entry.executionAdmission;
+      return {
+        id: entry.candidateId,
+        sampleId: entry.candidateId,
+        label: labels[entry.pageIndex]!,
+        title: entry.providerName,
+        description: entry.providerDescription,
+        catalogVersion: catalog.catalogVersion,
+        catalogPosition: entry.order,
+        catalogCandidateId: entry.candidateId,
+        providerTemplateId: entry.providerTemplateId,
+        providerSlug: entry.providerSlug,
+        providerVersion: entry.providerVersion,
+        sourceOwner: entry.sourceOwner,
+        sourceRepo: entry.sourceRepo,
+        sourceCommitSha: entry.sourceCommitSha,
+        sourceSubdirectory: entry.sourceSubdirectory,
+        sourceLicense: entry.sourceLicense,
+        sourceAssetId: entry.sourceAssetId,
+        sourceArchiveSha256: entry.sourceSha256,
+        sourceArchiveBytes: entry.sourceBytes,
+        previewAssetId: entry.previewAssetId,
+        previewSha256: entry.previewSha256,
+        previewMimeType: entry.previewMimeType,
+        previewWidth: entry.previewWidth,
+        previewHeight: entry.previewHeight,
+        executionAdmission: admission.status === "admitted"
+          ? {
+              status: "admitted" as const,
+              rawSourceSha256: admission.binding.rawSourceSha256,
+              normalizedSourceSha256: admission.normalizedSourceSha256,
+              sourceTreeSha256: admission.sourceTreeSha256,
+              runtimeContractSha256: admission.runtimeContractSha256,
+              executionShellSha256: admission.executionShellSha256,
+              deliveryContractSha256: admission.deliveryContractSha256,
+              distSha256: admission.distSha256,
+              qaSha256: admission.qaSha256,
+              browserReceiptSha256: admission.browserReceiptSha256,
+              qaStatus: admission.qaStatus,
+              admissionEvidenceSha256: admission.admissionEvidenceSha256,
+              ...(admission.admissionMode !== undefined
+                ? { admissionMode: admission.admissionMode }
+                : {}),
+              ...(admission.referencePreviewSha256 !== undefined
+                ? {
+                    referencePreviewSha256:
+                      admission.referencePreviewSha256,
+                  }
+                : {}),
+              ...(admission.fallbackReasonCode !== undefined
+                ? { fallbackReasonCode: admission.fallbackReasonCode }
+                : {}),
+            }
+          : {
+              status: "unavailable" as const,
+              rawSourceSha256: admission.binding.rawSourceSha256,
+              code: admission.code,
+              reason: admission.reason,
+            },
+      };
+    });
+  return visualSelectionBundleV7Schema.parse({
+    schemaVersion: 7,
+    renderer: "frontmind_static_template_catalog_v1",
+    workflowVersion: "2.8.0",
+    catalogVersion: catalog.catalogVersion,
+    pageNumber: selected.page,
+    pageSize: catalog.pageSize,
+    pageCount: catalog.pageCount,
+    displayTarget: candidates.length,
+    candidates,
+    selectedCandidateId,
+    delegated: false,
+    degradedReasons: [],
+  });
+}
+
+it("upgrades a four-admission v4 cache to 35 v5 admissions and rejects fallback receipt tampering", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "frontmind-catalog-upgrade-"));
   const payloads = new Map<string, Buffer>();
   const definitions = manifest.FROZEN_STATIC_TEMPLATE_CATALOG;
@@ -31,23 +129,43 @@ it("preserves v2/v3 caches, rebinds v4 offline, and rejects self-consistent wron
     for (const entry of entries) zip.file(`frozen/${entry.sourceSubdirectory ?? "src"}/${entry.candidateId}.tsx`, `export const id = ${JSON.stringify(entry.candidateId)};`);
     payloads.set(url, await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" }));
   }
+  const v2AdmissionIds = ["static-template-22-hirael-agency-landing"];
+  const v4AdmissionIds = [
+    ...v2AdmissionIds,
+    "static-template-33-helpcenter-search",
+    "static-template-34-helpcenter-docs",
+    "static-template-35-helpcenter-minimal",
+  ];
   // This fixture replaces the compiler transport only; the separate admission
-  // suite runs all three curated templates through real Vite and Chromium.
+  // suite runs the three repository-local templates through real Vite and Chromium.
   const builder = vi.fn(async (input: any) => {
-    if (!manifest.STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.includes(input.definition.candidateId)) return { status: "unavailable" as const, code: "TEST_NOT_ADMITTED", reason: "Transport fixture" };
+    const admittedIds = input.catalogVersion === "21st-included-recommended-20260828-v2"
+      ? v2AdmissionIds
+      : input.catalogVersion === PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION
+        ? v4AdmissionIds
+        : manifest.STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS;
+    if (!admittedIds.includes(input.definition.candidateId)) return { status: "unavailable" as const, code: "TEST_NOT_ADMITTED", reason: "Transport fixture" };
     const normalized = input.cachedNormalizedSource ? await readFile(input.cachedNormalizedSource.path)
       : await new JSZip().file("source/binding.txt", input.rawSourceSha256).generateAsync({ type: "nodebuffer", platform: "UNIX" });
     const contract = Buffer.from("contract");
     const dist = Buffer.from("dist");
     const qa = Buffer.from(JSON.stringify({ passed: true, browser: { available: true } }));
-    // Reproduce the deployed v3 builder's incorrect #22 media binding while
-    // keeping its real artifact hashes internally consistent.
-    const runtimeMedia = input.catalogVersion === PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION
-      ? REQUIRED_STATIC_TEMPLATE_RUNTIME_MEDIA : staticTemplateRuntimeMedia(input.definition.candidateId);
+    const runtimeMedia = staticTemplateRuntimeMedia(input.definition.candidateId);
+    const isV5 = input.catalogVersion === manifest.STATIC_TEMPLATE_CATALOG_VERSION;
+    const admissionMode = input.cachedNormalizedSource
+      ? "verified_normalized_cache"
+      : input.definition.order === 1
+        ? "preview_reference_fallback"
+        : "provider_source";
+    const provenance = isV5 ? {
+      admissionMode,
+      referencePreviewSha256: admissionMode === "preview_reference_fallback" ? input.previewSha256 : null,
+      fallbackReasonCode: admissionMode === "preview_reference_fallback" ? "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED" : null,
+    } : {};
     const browserReceipt = Buffer.from(JSON.stringify({
       schemaVersion: 1, receiptKind: "frontmind_static_template_browser_admission",
       binding: { catalogVersion: input.catalogVersion, candidateId: input.definition.candidateId,
-        rawSourceSha256: input.rawSourceSha256, runtimeMedia },
+        rawSourceSha256: input.rawSourceSha256, runtimeMedia, ...provenance },
       normalizedSourceSha256: digest(normalized), sourceTreeSha256: digest(normalized),
       runtimeContractSha256: NATIVE_RUNTIME_CONTRACT_V1_SHA256,
       executionShellSha256: NATIVE_RUNTIME_EXECUTION_SHELL_V1_SHA256,
@@ -57,7 +175,7 @@ it("preserves v2/v3 caches, rebinds v4 offline, and rejects self-consistent wron
     return { status: "admitted" as const, framework: "vite_react" as const, normalizedSource: normalized,
       sourceTreeSha256: digest(normalized), runtimeContractSha256: NATIVE_RUNTIME_CONTRACT_V1_SHA256,
       executionShellSha256: NATIVE_RUNTIME_EXECUTION_SHELL_V1_SHA256,
-      contract, dist, qa, browserReceipt, qaStatus: "passed" as const };
+      contract, dist, qa, browserReceipt, qaStatus: "passed" as const, ...provenance };
   });
   const fetchFixture = async (input: any) => {
     const bytes = payloads.get(String(input));
@@ -69,7 +187,7 @@ it("preserves v2/v3 caches, rebinds v4 offline, and rejects self-consistent wron
     vi.doMock("../server/siteops/static-template-catalog-manifest.js", () => ({ ...manifest,
       STATIC_TEMPLATE_CATALOG_VERSION: "21st-included-recommended-20260828-v2", STATIC_TEMPLATE_CATALOG_PAGE_COUNT: 4,
       STATIC_TEMPLATE_CATALOG_ENTRY_COUNT: 32, FROZEN_STATIC_TEMPLATE_CATALOG: definitions.slice(0, 32),
-      STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: ["static-template-22-hirael-agency-landing"],
+      STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: v2AdmissionIds,
     }));
     const oldRuntime = await import("../server/siteops/static-template-catalog.js");
     const previous = await oldRuntime.seedStaticTemplateCatalog({ rootDir: root, fetchImpl: fetchFixture as typeof fetch, executionAdmissionBuilder: builder });
@@ -77,55 +195,125 @@ it("preserves v2/v3 caches, rebinds v4 offline, and rejects self-consistent wron
     const previous22 = previous.catalog.entries[21]!;
     vi.doMock("../server/siteops/static-template-catalog-manifest.js", () => ({ ...manifest,
       STATIC_TEMPLATE_CATALOG_VERSION: PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+      STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: v4AdmissionIds,
     }));
     vi.resetModules();
-    const v3Runtime = await import("../server/siteops/static-template-catalog.js");
+    const v4Runtime = await import("../server/siteops/static-template-catalog.js");
     const fetchNewOnly = vi.fn(async (input: any) => {
       const url = String(input);
       if (!url.includes("/xiafanzeng/frontmind-brand/") && !definitions.slice(32).some(entry => entry.previewUrl === url)) throw new Error("Old template must use verified local cache");
       return fetchFixture(input);
     });
-    const v3 = await v3Runtime.seedStaticTemplateCatalog({ rootDir: root, concurrency: 1, fetchImpl: fetchNewOnly as typeof fetch, executionAdmissionBuilder: builder });
+    const v4 = await v4Runtime.seedStaticTemplateCatalog({ rootDir: root, concurrency: 1, fetchImpl: fetchNewOnly as typeof fetch, executionAdmissionBuilder: builder });
     expect(fetchNewOnly).toHaveBeenCalledTimes(4);
+    expect(v4.catalog.entries.filter(entry => entry.executionAdmission.status === "admitted")).toHaveLength(4);
     const manifestPath = (version: string) => path.join(root, "siteops/static-template-catalog/catalogs", version, "manifest.json");
     const v2Manifest = await readFile(manifestPath(previous.catalog.catalogVersion));
-    const v3Manifest = await readFile(manifestPath(v3.catalog.catalogVersion));
+    const v4Manifest = await readFile(manifestPath(v4.catalog.catalogVersion));
+    for (const entry of JSON.parse(v4Manifest.toString()).entries.filter((candidate: any) => candidate.executionAdmission.status === "admitted")) {
+      expect(entry.executionAdmission).not.toHaveProperty("admissionMode");
+      expect(entry.executionAdmission).not.toHaveProperty("referencePreviewSha256");
+      expect(entry.executionAdmission).not.toHaveProperty("fallbackReasonCode");
+    }
     vi.doUnmock("../server/siteops/static-template-catalog-manifest.js");
     vi.resetModules();
     const current = await import("../server/siteops/static-template-catalog.js");
     builder.mockClear();
-    const offlineFetch = vi.fn(async () => { throw new Error("Verified cached v3 must need no downloads"); });
+    const offlineFetch = vi.fn(async () => { throw new Error("Verified cached v4 must need no downloads"); });
     const upgraded = await current.seedStaticTemplateCatalog({ rootDir: root, concurrency: 1, fetchImpl: offlineFetch as typeof fetch, executionAdmissionBuilder: builder });
     expect(upgraded.catalog.entries).toHaveLength(35);
-    expect(upgraded.catalog.entries.filter(entry => entry.executionAdmission.status === "admitted")).toHaveLength(4);
+    expect(upgraded.catalog.entries.filter(entry => entry.executionAdmission.status === "admitted")).toHaveLength(35);
     expect(upgraded.catalog.entries[21]?.sourceSha256).toBe(previous22.sourceSha256);
     expect(builder.mock.calls.find(([input]) => input.definition.order === 22)?.[0].cachedNormalizedSource).toMatchObject({ sha256: previous22.sourceSha256 });
     expect(builder.mock.calls.filter(([input]) => input.cachedNormalizedSource)).toHaveLength(4);
     expect(offlineFetch).not.toHaveBeenCalled();
     expect((await current.loadStaticTemplateCatalogVersion(previous.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(32);
-    expect((await current.loadStaticTemplateCatalogVersion(v3.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(35);
+    expect((await current.loadStaticTemplateCatalogVersion(v4.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(35);
     expect(await readFile(manifestPath(previous.catalog.catalogVersion))).toEqual(v2Manifest);
-    expect(await readFile(manifestPath(v3.catalog.catalogVersion))).toEqual(v3Manifest);
-    for (const entry of upgraded.catalog.entries.slice(32)) {
+    expect(await readFile(manifestPath(v4.catalog.catalogVersion))).toEqual(v4Manifest);
+    for (const entry of upgraded.catalog.entries) {
       expect(entry.executionAdmission.status).toBe("admitted");
       if (entry.executionAdmission.status !== "admitted") throw new Error("Missing required admission");
       const receipt = JSON.parse(await readFile(path.join(root, entry.executionAdmission.browserReceiptPath), "utf8"));
-      expect(receipt.binding).toMatchObject({ catalogVersion: manifest.STATIC_TEMPLATE_CATALOG_VERSION, candidateId: entry.candidateId, runtimeMedia: [] });
+      const expectedMode = v4AdmissionIds.includes(entry.candidateId)
+        ? "verified_normalized_cache"
+        : entry.order === 1
+          ? "preview_reference_fallback"
+          : "provider_source";
+      const expectedReference = expectedMode === "preview_reference_fallback" ? entry.previewSha256 : null;
+      const expectedReason = expectedMode === "preview_reference_fallback" ? "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED" : null;
+      expect(entry.executionAdmission).toMatchObject({
+        admissionMode: expectedMode,
+        referencePreviewSha256: expectedReference,
+        fallbackReasonCode: expectedReason,
+      });
+      expect(receipt.binding).toMatchObject({
+        catalogVersion: manifest.STATIC_TEMPLATE_CATALOG_VERSION,
+        candidateId: entry.candidateId,
+        runtimeMedia: staticTemplateRuntimeMedia(entry.candidateId),
+        admissionMode: expectedMode,
+        referencePreviewSha256: expectedReference,
+        fallbackReasonCode: expectedReason,
+      });
+      expect(entry.executionAdmission.admissionEvidenceSha256).toBe(
+        current.staticTemplateAdmissionEvidenceSha256({
+          ...entry.executionAdmission,
+          ...entry.executionAdmission.binding,
+        }),
+      );
     }
     const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("Healthy ensure-ready must remain offline"); }));
     const { runStaticTemplateCatalogCli } = await import("../server/siteops/static-template-catalog-cli.js");
     await runStaticTemplateCatalogCli(["--ensure-ready", "--root", root]);
-    expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({ ok: true, reused: true, entryCount: 35, admittedCount: 4 });
+    expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({ ok: true, reused: true, entryCount: 35, admittedCount: 35 });
 
-    // A buggy producer can make every file/hash/stat self-consistent while
-    // claiming the wrong candidate's media. Counts and integrity alone cannot
-    // establish that this evidence belongs to the required template.
-    const admission = upgraded.catalog.entries[32]!.executionAdmission;
+    const previousAssetRoot = process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+    process.env.FRONTMIND_DASHBOARD_ASSET_DIR = root;
+    try {
+      const { selectedStaticNativeSourceArchive } = await import(
+        "../server/siteops/manus-provider.js"
+      );
+      const v5Bundle = selectionBundleForCatalog(
+        upgraded.catalog,
+        upgraded.catalog.entries[0]!.candidateId,
+      );
+      const v5Selection = await selectedStaticNativeSourceArchive({
+        bundle: v5Bundle,
+        selectedCandidateId: v5Bundle.selectedCandidateId!,
+      });
+      expect(v5Selection.archiveSha256).toBe(
+        upgraded.catalog.entries[0]!.sourceSha256,
+      );
+
+      const v4Selected = v4.catalog.entries.find(
+        entry => entry.executionAdmission.status === "admitted",
+      )!;
+      const v4Bundle = selectionBundleForCatalog(
+        v4.catalog,
+        v4Selected.candidateId,
+      );
+      const v4Selection = await selectedStaticNativeSourceArchive({
+        bundle: v4Bundle,
+        selectedCandidateId: v4Bundle.selectedCandidateId!,
+      });
+      expect(v4Selection.archiveSha256).toBe(v4Selected.sourceSha256);
+    } finally {
+      if (previousAssetRoot === undefined) {
+        delete process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+      } else {
+        process.env.FRONTMIND_DASHBOARD_ASSET_DIR = previousAssetRoot;
+      }
+    }
+
+    // A buggy producer can rewrite the fallback receipt and every outer
+    // file/hash/stat consistently. The manifest provenance must still bind the
+    // exact deterministic reason recorded by the browser admission receipt.
+    const admission = upgraded.catalog.entries[0]!.executionAdmission;
     if (admission.status !== "admitted") throw new Error("Missing required admission");
     const receiptPath = path.join(root, admission.browserReceiptPath);
     const badReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
-    badReceipt.binding.runtimeMedia = REQUIRED_STATIC_TEMPLATE_RUNTIME_MEDIA;
+    badReceipt.binding.fallbackReasonCode = "NATIVE_TEMPLATE_SOURCE_UNSAFE";
     const badBytes = Buffer.from(JSON.stringify(badReceipt) + "\n");
     await writeFile(receiptPath, badBytes);
     admission.browserReceiptSha256 = digest(badBytes);
@@ -152,7 +340,7 @@ it("preserves v2/v3 caches, rebinds v4 offline, and rejects self-consistent wron
     });
     await expect(runStaticTemplateCatalogCli(["--ensure-ready", "--root", root])).rejects.toThrow("STATIC_TEMPLATE_CATALOG_VERSION_CONFLICT");
     expect(await readFile(receiptPath)).toEqual(badBytes);
-    expect(await readFile(manifestPath(v3.catalog.catalogVersion))).toEqual(v3Manifest);
+    expect(await readFile(manifestPath(v4.catalog.catalogVersion))).toEqual(v4Manifest);
   } finally {
     vi.restoreAllMocks(); vi.unstubAllGlobals();
     vi.doUnmock("../server/siteops/static-template-catalog-manifest.js"); vi.resetModules();

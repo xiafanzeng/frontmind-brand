@@ -4457,6 +4457,10 @@ function staticCatalogCoordinatesMatch(
         qaSha256: candidateAdmission.qaSha256,
         browserReceiptSha256: candidateAdmission.browserReceiptSha256,
         qaStatus: candidateAdmission.qaStatus,
+        admissionMode: candidateAdmission.admissionMode,
+        referencePreviewSha256:
+          candidateAdmission.referencePreviewSha256,
+        fallbackReasonCode: candidateAdmission.fallbackReasonCode,
       });
   return (
     admissionMatches &&

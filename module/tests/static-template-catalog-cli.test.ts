@@ -9,7 +9,14 @@ it("advertises initializer capabilities without loading catalog assets", async (
   await runStaticTemplateCatalogCli(["--help"]);
   expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toMatchObject({
     cliVersion: 2,
-    capabilities: ["ensure-ready-v1", "v2-to-v4-cache-reuse", "v3-to-v4-cache-reuse", "required-admission-binding-v1"],
+    capabilities: [
+      "ensure-ready-v1",
+      "v2-to-v5-cache-reuse",
+      "v3-to-v5-cache-reuse",
+      "v4-to-v5-cache-reuse",
+      "all-template-admission-v1",
+      "required-admission-binding-v1",
+    ],
     assetRootEnvironment: "FRONTMIND_DASHBOARD_ASSET_DIR",
   });
 });

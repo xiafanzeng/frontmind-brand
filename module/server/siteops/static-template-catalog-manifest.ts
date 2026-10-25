@@ -7,8 +7,9 @@ import {
  * Immutable input coordinates for the FrontMind 2.8 Template catalog.
  *
  * The first 32 rows preserve the 2026-08-28 21st projection; v3 appends three
- * FrontMind help-center layouts. V4 refreshes admission bindings without changing
- * those definitions. Customer requests never refresh or reorder them.
+ * FrontMind help-center layouts. V4 refreshes admission bindings, while v5
+ * admits every frozen entry through the same controlled compiler and browser
+ * checks. Customer requests never refresh or reorder these definitions.
  * The seed command downloads the exact immutable GitHub commit and preview for
  * every row, then records the resulting byte hashes in the active manifest.
  */
@@ -18,13 +19,6 @@ export const STATIC_TEMPLATE_CATALOG_VERSION = CURATED_STATIC_TEMPLATE_CATALOG_V
 export const STATIC_TEMPLATE_CATALOG_PAGE_SIZE = CURATED_STATIC_TEMPLATE_PAGINATION.pageSize;
 export const STATIC_TEMPLATE_CATALOG_PAGE_COUNT = CURATED_STATIC_TEMPLATE_PAGINATION.pageCount;
 export const STATIC_TEMPLATE_CATALOG_ENTRY_COUNT = CURATED_STATIC_TEMPLATE_PAGINATION.entryCount;
-
-export const STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: readonly string[] = Object.freeze([
-  "static-template-22-hirael-agency-landing",
-  "static-template-33-helpcenter-search",
-  "static-template-34-helpcenter-docs",
-  "static-template-35-helpcenter-minimal",
-]);
 
 export type FrozenStaticTemplateDefinition = Readonly<{
   order: number;
@@ -533,6 +527,13 @@ export const FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTemplateDefini
         tags: Object.freeze([...row[10]]),
       }),
     ),
+  );
+
+/** A v5 catalog is ready only when every customer-visible template has passed
+ * the controlled Vite build, static validation and real-browser admission. */
+export const STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: readonly string[] =
+  Object.freeze(
+    FROZEN_STATIC_TEMPLATE_CATALOG.map((entry) => entry.candidateId),
   );
 
 if (

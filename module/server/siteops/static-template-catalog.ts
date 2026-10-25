@@ -22,7 +22,7 @@ import sharp from "sharp";
 import { z } from "zod";
 import {
   CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
-  PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+  PRIOR_CURATED_STATIC_TEMPLATE_CATALOG_VERSIONS,
 } from "../../contracts/static-template-pagination.js";
 import { staticTemplateRuntimeMedia } from "./static-template-admission-policy.js";
 
@@ -74,6 +74,23 @@ const CANDIDATE_ID =
   /^static-template-[0-9]{2,3}-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
 const DECIMAL_BIGINT = /^(?:0|[1-9][0-9]*)$/u;
 
+export const STATIC_TEMPLATE_PREVIEW_FALLBACK_REASON_CODES = Object.freeze([
+  "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED",
+  "NATIVE_TEMPLATE_SOURCE_UNSAFE",
+  "NATIVE_TEMPLATE_ARCHIVE_INVALID",
+  "NATIVE_SOURCE_EXECUTION_UNSAFE",
+  "NATIVE_SOURCE_STATIC_MEDIA_INTEGRITY_MISMATCH",
+] as const);
+
+const admissionModeSchema = z.enum([
+  "provider_source",
+  "verified_normalized_cache",
+  "preview_reference_fallback",
+]);
+const fallbackReasonCodeSchema = z.enum(
+  STATIC_TEMPLATE_PREVIEW_FALLBACK_REASON_CODES,
+);
+
 const executionBindingSchema = z
   .object({
     catalogVersion: z.string().regex(CATALOG_VERSION),
@@ -95,12 +112,23 @@ type StaticTemplateAdmissionDigestInput = {
   qaSha256: string;
   browserReceiptSha256: string;
   qaStatus: "passed" | "passed_with_warnings";
+  admissionMode?: z.infer<typeof admissionModeSchema>;
+  referencePreviewSha256?: string | null;
+  fallbackReasonCode?: z.infer<typeof fallbackReasonCodeSchema> | null;
 };
 
 /** Canonical cross-layer binding for every cryptographic admission receipt. */
 export function staticTemplateAdmissionEvidenceSha256(
   input: StaticTemplateAdmissionDigestInput,
 ) {
+  const provenance =
+    input.admissionMode === undefined
+      ? {}
+      : {
+          admissionMode: input.admissionMode,
+          referencePreviewSha256: input.referencePreviewSha256,
+          fallbackReasonCode: input.fallbackReasonCode,
+        };
   return createHash("sha256")
     .update(
       JSON.stringify({
@@ -117,6 +145,7 @@ export function staticTemplateAdmissionEvidenceSha256(
         qaSha256: input.qaSha256,
         browserReceiptSha256: input.browserReceiptSha256,
         qaStatus: input.qaStatus,
+        ...provenance,
       }),
     )
     .digest("hex");
@@ -178,6 +207,11 @@ const admittedExecutionSchema = z
       .max(4 * 1024 * 1024),
     qaStatus: z.enum(["passed", "passed_with_warnings"]),
     admissionEvidenceSha256: z.string().regex(SHA256),
+    // Optional only so immutable v4 manifests remain readable. Current v5
+    // coordinates below require and cross-check all three provenance fields.
+    admissionMode: admissionModeSchema.optional(),
+    referencePreviewSha256: z.string().regex(SHA256).nullable().optional(),
+    fallbackReasonCode: fallbackReasonCodeSchema.nullable().optional(),
   })
   .strict();
 
@@ -368,6 +402,9 @@ export type StaticTemplateExecutionAdmissionMaterial =
       qa: Buffer;
       browserReceipt: Buffer;
       qaStatus: "passed" | "passed_with_warnings";
+      admissionMode: z.infer<typeof admissionModeSchema>;
+      referencePreviewSha256: string | null;
+      fallbackReasonCode: z.infer<typeof fallbackReasonCodeSchema> | null;
     };
 
 export type StaticTemplateExecutionAdmissionBuilder = (input: {
@@ -376,6 +413,10 @@ export type StaticTemplateExecutionAdmissionBuilder = (input: {
   rawSourcePath: string;
   rawSourceSha256: string;
   rawSourceBytes: number;
+  previewPath: string;
+  previewSha256: string;
+  previewBytes: number;
+  previewMimeType: string;
   cachedNormalizedSource?: { path: string; sha256: string; bytes: number; sourceTreeSha256: string; rawSourceSha256: string };
   signal: AbortSignal;
 }) => Promise<StaticTemplateExecutionAdmissionMaterial>;
@@ -1672,6 +1713,10 @@ async function materializeExecutionAdmission(input: {
   rawSourcePath: string;
   rawSourceSha256: string;
   rawSourceBytes: number;
+  previewPath: string;
+  previewSha256: string;
+  previewBytes: number;
+  previewMimeType: string;
   cachedNormalizedSource?: { path: string; sha256: string; bytes: number; sourceTreeSha256: string; rawSourceSha256: string };
   builder?: StaticTemplateExecutionAdmissionBuilder;
 }) {
@@ -1685,6 +1730,10 @@ async function materializeExecutionAdmission(input: {
       rawSourcePath: input.rawSourcePath,
       rawSourceSha256: input.rawSourceSha256,
       rawSourceBytes: input.rawSourceBytes,
+      previewPath: input.previewPath,
+      previewSha256: input.previewSha256,
+      previewBytes: input.previewBytes,
+      previewMimeType: input.previewMimeType,
       cachedNormalizedSource: input.cachedNormalizedSource,
       signal: controller.signal,
     });
@@ -1781,6 +1830,9 @@ async function materializeExecutionAdmission(input: {
     browserReceiptSha256: browserReceipt.sha256,
     browserReceiptBytes: browserReceipt.bytes,
     qaStatus: material.qaStatus,
+    admissionMode: material.admissionMode,
+    referencePreviewSha256: material.referencePreviewSha256,
+    fallbackReasonCode: material.fallbackReasonCode,
   } as const;
   const validatedAdmission = admittedExecutionSchema.parse({
     ...admitted,
@@ -1797,6 +1849,9 @@ async function materializeExecutionAdmission(input: {
       qaSha256: admitted.qaSha256,
       browserReceiptSha256: admitted.browserReceiptSha256,
       qaStatus: admitted.qaStatus,
+      admissionMode: admitted.admissionMode,
+      referencePreviewSha256: admitted.referencePreviewSha256,
+      fallbackReasonCode: admitted.fallbackReasonCode,
     }),
   });
   if (STATIC_TEMPLATE_CATALOG_VERSION === CURATED_STATIC_TEMPLATE_CATALOG_VERSION) {
@@ -1895,6 +1950,10 @@ async function materializeEntry(input: {
     rawSourcePath: sourceTarget,
     rawSourceSha256: sourceHash.sha256,
     rawSourceBytes: sourceHash.bytes,
+    previewPath: previewTarget,
+    previewSha256: previewHash.sha256,
+    previewBytes: previewHash.bytes,
+    previewMimeType: preview.mimeType,
     cachedNormalizedSource: input.reuseEntry?.executionAdmission.status === "admitted" ? {
       path: resolveCatalogAssetPath(input.root, input.reuseEntry.executionAdmission.normalizedSourcePath),
       sha256: input.reuseEntry.executionAdmission.normalizedSourceSha256,
@@ -2044,6 +2103,13 @@ function assertCatalogCoordinates(catalog: StaticTemplateCatalog) {
           entry.sourceFileCount !== admission.normalizedSourceFileCount ||
           entry.sourceExpandedBytes !==
             admission.normalizedSourceExpandedBytes ||
+          (catalog.catalogVersion === CURATED_STATIC_TEMPLATE_CATALOG_VERSION &&
+            (admission.admissionMode === undefined ||
+              (admission.admissionMode === "preview_reference_fallback"
+                ? admission.referencePreviewSha256 !== entry.previewSha256 ||
+                  admission.fallbackReasonCode == null
+                : admission.referencePreviewSha256 !== null ||
+                  admission.fallbackReasonCode !== null))) ||
           admission.admissionEvidenceSha256 !==
             staticTemplateAdmissionEvidenceSha256({
               catalogVersion: admission.binding.catalogVersion,
@@ -2058,6 +2124,9 @@ function assertCatalogCoordinates(catalog: StaticTemplateCatalog) {
               qaSha256: admission.qaSha256,
               browserReceiptSha256: admission.browserReceiptSha256,
               qaStatus: admission.qaStatus,
+              admissionMode: admission.admissionMode,
+              referencePreviewSha256: admission.referencePreviewSha256,
+              fallbackReasonCode: admission.fallbackReasonCode,
             }))) ||
       entry.previewAssetId !==
         `${catalog.catalogVersion}/preview/${entry.candidateId}` ||
@@ -2202,6 +2271,9 @@ function assertRequiredAdmissionBinding(
       binding?.catalogVersion !== admission.binding.catalogVersion ||
       binding?.candidateId !== admission.binding.candidateId ||
       binding?.rawSourceSha256 !== admission.binding.rawSourceSha256 ||
+      binding?.admissionMode !== admission.admissionMode ||
+      binding?.referencePreviewSha256 !== admission.referencePreviewSha256 ||
+      binding?.fallbackReasonCode !== admission.fallbackReasonCode ||
       digests.some(key => receipt[key] !== admission[key]) ||
       !Array.isArray(media) || media.length !== expectedMedia.length ||
       expectedMedia.some((expected, index) => {
@@ -3011,7 +3083,10 @@ export async function seedStaticTemplateCatalog(options: SeedOptions = {}) {
       }
     }
     let reuseCatalog: StaticTemplateCatalog | null = null;
-    for (const previousVersion of [PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION, "21st-included-recommended-20260828-v2"]) {
+    for (const previousVersion of [
+      ...PRIOR_CURATED_STATIC_TEMPLATE_CATALOG_VERSIONS,
+      "21st-included-recommended-20260828-v2",
+    ]) {
       try {
         const previous = await loadStaticTemplateCatalogVersion(previousVersion, { rootDir: root, verifyAssetHashes: true });
         if (previous?.schemaVersion === CATALOG_SCHEMA_VERSION) {
