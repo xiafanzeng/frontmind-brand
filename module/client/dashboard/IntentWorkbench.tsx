@@ -214,7 +214,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending}>
     {error && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe())}>重新读取</button></div>}
     {pending && view !== "result" && <div className="iw-panel" role="status">
-      {activeJob ? `正在${activeJob.kind === "plan" ? "生成优化方案" : "评估问题"} · ${activeJob.questionIds.length} 条问题，AI 生成可能需要几分钟…` : "正在读取优化工作台…"}
+      {activeJob?.repair ? "正在自动修复模型结果并重新校验，请稍候…" : activeJob ? `正在${activeJob.kind === "plan" ? "生成优化方案" : "评估问题"} · ${activeJob.questionIds.length} 条问题，AI 生成可能需要几分钟…` : "正在读取优化工作台…"}
       {activeJob && <><p>已有任务正在处理，完成前暂不能重复评估。</p><button onClick={() => {
         setScope(activeJob.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]); setView("evaluation");
       }}>查看当前任务</button></>}
