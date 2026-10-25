@@ -551,19 +551,25 @@ export function SimplifiedWebsiteBuilderPreview({
   );
   const templateOptions = useMemo(
     () => siteOps
-      ? liveCandidates.map((candidate, index) => ({
-          id: candidate.id,
-          name: candidate.title,
-          description: candidate.note || "真实建站模板；选择后将使用当前已发布知识库生成网站。",
-          source: "真实模板目录",
-          accent: accentOptions[index % accentOptions.length],
-          recommended: candidate.id === liveCandidates.find(
-            (item) => item.executionAdmitted !== false,
-          )?.id,
-          previewUrl: candidate.previewUrl,
-          executionAdmitted: candidate.executionAdmitted !== false,
-          executionUnavailableReason: candidate.executionUnavailableReason ?? null,
-        }))
+      ? [...liveCandidates]
+          .sort(
+            (left, right) =>
+              Number(right.executionAdmitted !== false) -
+              Number(left.executionAdmitted !== false),
+          )
+          .map((candidate, index) => ({
+            id: candidate.id,
+            name: candidate.title,
+            description: candidate.note || "真实建站模板；选择后将使用当前已发布知识库生成网站。",
+            source: "真实模板目录",
+            accent: accentOptions[index % accentOptions.length],
+            recommended: candidate.id === liveCandidates.find(
+              (item) => item.executionAdmitted !== false,
+            )?.id,
+            previewUrl: candidate.previewUrl,
+            executionAdmitted: candidate.executionAdmitted !== false,
+            executionUnavailableReason: candidate.executionUnavailableReason ?? null,
+          }))
       : templates.map((template) => ({
           ...template,
           previewUrl: null,
@@ -593,6 +599,13 @@ export function SimplifiedWebsiteBuilderPreview({
       executionUnavailableReason: "服务端尚未确认当前构建模板。",
     };
   const latestBuild = liveObservation?.builds[0] ?? null;
+  const selectedTemplatePreviewUrl = useMemo(() => {
+    if (!siteOps || !selectedTemplate.executionAdmitted || !selectedTemplate.previewUrl) return null;
+    const marker = "/style-previews/";
+    const at = selectedTemplate.previewUrl.indexOf(marker);
+    if (at === -1) return null;
+    return `${selectedTemplate.previewUrl.slice(0, at)}/template-previews/${encodeURIComponent(selectedTemplate.id)}`;
+  }, [selectedTemplate.executionAdmitted, selectedTemplate.id, selectedTemplate.previewUrl, siteOps]);
   const liveRevisionEditable = Boolean(
     latestBuild?.id
     && liveObservation
@@ -1510,8 +1523,17 @@ export function SimplifiedWebsiteBuilderPreview({
               <p className="sfp-helper">{siteOps ? "真实路由来自冻结知识版本；需要改版时可在真实预览生成后提交修改要求。" : "仅控制栏目显示，不修改知识库。"}</p>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel">
-              <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地配置示意（非真实预览）" : "即时预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个栏目{siteOps ? " · 真实效果请打开上方预览链接" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-              <MiniSitePreview assistantAccent={assistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} pageNames={enabledPages.map((page) => page.name)} showAssistant={false} showSources={showSources} siteAccent={siteAccent} siteLanguage={siteLanguage} siteName={siteName} welcome={welcome} />
+              {selectedTemplatePreviewUrl ? (
+                <>
+                  <div className="sfp-preview-heading"><span><strong>真实模板预览</strong><small>{selectedTemplate.name} · 已准入模板的实际构建；网站文案以知识库生成结果为准</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+                  <TemplatePreviewFrame device={device} previewUrl={selectedTemplatePreviewUrl} templateName={selectedTemplate.name} />
+                </>
+              ) : (
+                <>
+                  <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地配置示意（非真实预览）" : "即时预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个栏目{siteOps ? " · 真实效果请打开上方预览链接" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+                  <MiniSitePreview assistantAccent={assistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} pageNames={enabledPages.map((page) => page.name)} showAssistant={false} showSources={showSources} siteAccent={siteAccent} siteLanguage={siteLanguage} siteName={siteName} welcome={welcome} />
+                </>
+              )}
             </section>
           </div>
         )}
@@ -1542,8 +1564,17 @@ export function SimplifiedWebsiteBuilderPreview({
               </div>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel">
-              <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地助手示意（非真实预览）" : "网站内效果"}</strong><small>{siteOps ? "真实模板是否采用这些偏好，请以服务端预览为准" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-              <MiniSitePreview assistantAccent={assistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} pageNames={enabledPages.map((page) => page.name)} showAssistant showSources={showSources} siteAccent={siteAccent} siteLanguage={siteLanguage} siteName={siteName} welcome={welcome} />
+              {selectedTemplatePreviewUrl ? (
+                <>
+                  <div className="sfp-preview-heading"><span><strong>真实模板预览</strong><small>{selectedTemplate.name} · 已准入模板的实际构建；助手样式以生成结果为准</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+                  <TemplatePreviewFrame device={device} previewUrl={selectedTemplatePreviewUrl} templateName={selectedTemplate.name} />
+                </>
+              ) : (
+                <>
+                  <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地助手示意（非真实预览）" : "网站内效果"}</strong><small>{siteOps ? "真实模板是否采用这些偏好，请以服务端预览为准" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+                  <MiniSitePreview assistantAccent={assistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} pageNames={enabledPages.map((page) => page.name)} showAssistant showSources={showSources} siteAccent={siteAccent} siteLanguage={siteLanguage} siteName={siteName} welcome={welcome} />
+                </>
+              )}
             </section>
           </div>
         )}
@@ -1717,6 +1748,31 @@ function DevicePicker({ device, onChange }: { device: PreviewDevice; onChange: (
     <div className="sfp-device-picker" aria-label="预览设备">
       <button type="button" aria-label="电脑预览" aria-pressed={device === "desktop"} onClick={() => onChange("desktop")}><Monitor size={16} /></button>
       <button type="button" aria-label="手机预览" aria-pressed={device === "mobile"} onClick={() => onChange("mobile")}><Smartphone size={16} /></button>
+    </div>
+  );
+}
+
+function TemplatePreviewFrame({
+  device,
+  previewUrl,
+  templateName,
+}: {
+  device: PreviewDevice;
+  previewUrl: string;
+  templateName: string;
+}) {
+  return (
+    <div className={`sfp-site-stage sfp-template-preview-stage${device === "mobile" ? " sfp-site-stage--mobile" : ""}`}>
+      <div className="sfp-browser-bar">
+        <span><i /><i /><i /></span>
+        <p>{templateName} · 已准入模板</p>
+      </div>
+      <iframe
+        className="sfp-template-preview-frame"
+        src={previewUrl}
+        title={`${templateName} 真实模板预览`}
+        loading="lazy"
+      />
     </div>
   );
 }

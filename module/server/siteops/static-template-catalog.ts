@@ -2850,6 +2850,37 @@ export async function readStaticTemplateCatalogPreview(
   return { entry: opened.entry, bytes: await readFile(opened.path) };
 }
 
+export async function openStaticTemplateCatalogDist(
+  candidateId: string,
+  options: CatalogOptions = {},
+): Promise<{
+  entry: StaticTemplateCatalogEntry;
+  path: string;
+  stream: ReadStream;
+}> {
+  const root = assetRoot(options);
+  const entry = await getActiveStaticTemplateCatalogEntry(candidateId, options);
+  if (entry.executionAdmission.status !== "admitted") {
+    throw new StaticTemplateCatalogError(
+      "STATIC_TEMPLATE_CATALOG_EXECUTION_NOT_ADMITTED",
+    );
+  }
+  const distPath = resolveCatalogAssetPath(
+    root,
+    entry.executionAdmission.distPath,
+  );
+  const actual = await hashFile(distPath);
+  if (
+    actual.bytes !== entry.executionAdmission.distBytes ||
+    actual.sha256 !== entry.executionAdmission.distSha256
+  ) {
+    throw new StaticTemplateCatalogError(
+      "STATIC_TEMPLATE_CATALOG_DIST_HASH_MISMATCH",
+    );
+  }
+  return { entry, path: distPath, stream: createReadStream(distPath) };
+}
+
 async function acquireSeedLock(root: string) {
   const lockPath = path.join(catalogRoot(root), ".seed-lock");
   await mkdir(catalogRoot(root), { recursive: true, mode: 0o700 });

@@ -40,6 +40,7 @@ import JSZip from "jszip";
 import { and, eq, sql, type SQLWrapper } from "drizzle-orm";
 
 import { siteContentPlanV2Schema } from "../../contracts/siteops-content-plan.js";
+import { openStaticTemplateCatalogDist } from "./static-template-catalog.js";
 import { previewNavigationBridgeSource } from "./preview-routing.js";
 import { customerVisibleStyleBatchStatusCondition } from "./visual-batch-visibility.js";
 
@@ -600,11 +601,18 @@ export async function createSandboxedPreviewDocument(input: {
   return { bytes: Buffer.from(html, "utf8"), nonce };
 }
 
-export function sandboxedPreviewContentSecurityPolicy(nonce: string) {
+export function sandboxedPreviewContentSecurityPolicy(
+  nonce: string,
+  options: { frameAncestors?: string } = {},
+) {
   if (!/^[A-Za-z0-9_-]{16,64}$/u.test(nonce)) {
     throw new Error("SITEOPS_PREVIEW_NONCE_INVALID");
   }
-  return `sandbox allow-scripts; default-src 'none'; img-src data: blob:; font-src data:; style-src 'nonce-${nonce}'; style-src-attr 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; media-src data: blob:; manifest-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`;
+  const frameAncestors = options.frameAncestors ?? "'none'";
+  if (!/^'(?:none|self)'$/u.test(frameAncestors)) {
+    throw new Error("SITEOPS_PREVIEW_FRAME_ANCESTORS_INVALID");
+  }
+  return `sandbox allow-scripts; default-src 'none'; img-src data: blob:; font-src data:; style-src 'nonce-${nonce}'; style-src-attr 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; media-src data: blob:; manifest-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'none'`;
 }
 
 export function rewriteSiteOpsPreviewDocument(input: {
@@ -1122,6 +1130,95 @@ siteOpsArtifactApi.get("/builds/:buildId/source", async (req, res) => {
       localAssetId: owned.build.sourceLocalAssetId,
       expectedSha256: owned.build.sourceHash,
     });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+siteOpsArtifactApi.get("/template-previews/:sampleId", async (req, res) => {
+  try {
+    const userId = requestActor(req) ? enterpriseWorkspaceUserId(requestActor(req)!.id) : undefined;
+    if (!userId) return notFound(res);
+    const db = await requireDb();
+    const rows = await db
+      .select({
+        sourceMetadata: websiteStyleSamples.sourceMetadata,
+      })
+      .from(websiteStyleSamples)
+      .innerJoin(
+        websiteStyleSampleBatches,
+        eq(websiteStyleSampleBatches.id, websiteStyleSamples.batchId),
+      )
+      .where(
+        and(
+          eq(websiteStyleSamples.id, req.params.sampleId),
+          eq(websiteStyleSampleBatches.userId, userId),
+          ownedSiteProjectCondition(websiteStyleSampleBatches.siteProjectId, userId),
+          eq(websiteStyleSampleBatches.sourceKind, "siteops_21st"),
+          customerVisibleStyleBatchStatusCondition(),
+        ),
+      )
+      .limit(1);
+    const metadata =
+      rows[0]?.sourceMetadata &&
+      typeof rows[0].sourceMetadata === "object" &&
+      !Array.isArray(rows[0].sourceMetadata)
+        ? (rows[0].sourceMetadata as Record<string, unknown>)
+        : null;
+    const admission =
+      metadata?.executionAdmission &&
+      typeof metadata.executionAdmission === "object" &&
+      !Array.isArray(metadata.executionAdmission)
+        ? (metadata.executionAdmission as Record<string, unknown>)
+        : null;
+    const candidateId =
+      metadata?.schemaVersion === 7 &&
+      metadata.renderer === "frontmind_static_template_catalog_v1" &&
+      admission?.status === "admitted"
+        ? nonEmptyString(metadata.catalogCandidateId)
+        : "";
+    if (!candidateId) return notFound(res);
+    const opened = await openStaticTemplateCatalogDist(candidateId);
+    const archive = await streamToBuffer(opened.stream, MAX_ARCHIVE_BYTES);
+    const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
+    const entries = Object.values(zip.files).filter((entry) => !entry.dir);
+    if (entries.length < 1 || entries.length > MAX_ARCHIVE_ENTRIES) {
+      throw new Error("SITEOPS_DIST_STRUCTURE_INVALID");
+    }
+    const entry = zip.file("index.html");
+    if (!entry || entry.name.includes("\\") || entry.name.includes("..")) {
+      return notFound(res);
+    }
+    const mode = Number(entry.unixPermissions ?? 0);
+    if (mode && (mode & 0o170000) === 0o120000) {
+      throw new Error("SITEOPS_DIST_SYMLINK_REJECTED");
+    }
+    const document = await createSandboxedPreviewDocument({
+      zip,
+      entryName: entry.name,
+      previewPrefix: `/api/site-ops/template-previews/${encodeURIComponent(req.params.sampleId)}/`,
+      previewRoutingMode: "canonical_pathname",
+    });
+    res.setHeader("Cache-Control", "private, no-store, max-age=0");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    res.setHeader(
+      "Permissions-Policy",
+      "camera=(), geolocation=(), microphone=()",
+    );
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+    // The builder embeds this document in a same-origin iframe; build previews
+    // stay top-level-only.
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader(
+      "Content-Security-Policy",
+      sandboxedPreviewContentSecurityPolicy(document.nonce, {
+        frameAncestors: "'self'",
+      }),
+    );
+    res.setHeader("Content-Length", String(document.bytes.length));
+    res.send(document.bytes);
   } catch (error) {
     sendError(res, error);
   }

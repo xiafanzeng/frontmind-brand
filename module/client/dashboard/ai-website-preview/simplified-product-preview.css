@@ -3237,3 +3237,16 @@
   }
 
 }
+
+.sfp-template-preview-frame {
+  background: #fff;
+  border: 0;
+  display: block;
+  min-height: 540px;
+  width: 100%;
+}
+
+.sfp-builder-preview-panel .sfp-template-preview-frame,
+.sfp-final-preview .sfp-template-preview-frame {
+  flex: 1;
+}
