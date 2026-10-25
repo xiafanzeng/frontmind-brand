@@ -1,6 +1,10 @@
 /** Frozen V7 pagination. Older catalog artifacts retain their original shape. */
-export const CURATED_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261025-v4";
-export const PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261024-v3";
+export const CURATED_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261025-v5";
+export const PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261025-v4";
+export const PRIOR_CURATED_STATIC_TEMPLATE_CATALOG_VERSIONS = Object.freeze([
+  PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+  "frontmind-curated-20261024-v3",
+] as const);
 export const CURATED_STATIC_TEMPLATE_PAGINATION = Object.freeze({
   entryCount: 35,
   pageCount: 5,
@@ -14,7 +18,9 @@ const LEGACY_STATIC_TEMPLATE_PAGINATION = Object.freeze({
 
 export function staticTemplatePagination(catalogVersion: string | null | undefined) {
   return catalogVersion === CURATED_STATIC_TEMPLATE_CATALOG_VERSION ||
-    catalogVersion === PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION
+    PRIOR_CURATED_STATIC_TEMPLATE_CATALOG_VERSIONS.some(
+      (version) => version === catalogVersion,
+    )
     ? CURATED_STATIC_TEMPLATE_PAGINATION
     : LEGACY_STATIC_TEMPLATE_PAGINATION;
 }

@@ -560,20 +560,26 @@ export function SimplifiedWebsiteBuilderPreview({
           .map((candidate, index) => ({
             id: candidate.id,
             name: candidate.title,
-            description: candidate.note || "真实建站模板；选择后将使用当前已发布知识库生成网站。",
-            source: "真实模板目录",
+            description: candidate.executionAdmissionMode === "preview_reference_fallback"
+              ? `${candidate.note ? `${candidate.note}；` : ""}基于冻结预览图重建，不代表原仓源码的实际构建。`
+              : candidate.note || "真实建站模板；选择后将使用当前已发布知识库生成网站。",
+            source: candidate.executionAdmissionMode === "preview_reference_fallback"
+              ? "安全视觉参考"
+              : "真实可执行模板",
             accent: accentOptions[index % accentOptions.length],
             recommended: candidate.id === liveCandidates.find(
               (item) => item.executionAdmitted !== false,
             )?.id,
             previewUrl: candidate.previewUrl,
             executionAdmitted: candidate.executionAdmitted !== false,
+            executionAdmissionMode: candidate.executionAdmissionMode ?? null,
             executionUnavailableReason: candidate.executionUnavailableReason ?? null,
           }))
       : templates.map((template) => ({
           ...template,
           previewUrl: null,
           executionAdmitted: true,
+          executionAdmissionMode: null,
           executionUnavailableReason: null,
         })),
     [liveCandidates, siteOps],
@@ -596,8 +602,11 @@ export function SimplifiedWebsiteBuilderPreview({
       source: "真实 SiteOps",
       previewUrl: null,
       executionAdmitted: false,
+      executionAdmissionMode: null,
       executionUnavailableReason: "服务端尚未确认当前构建模板。",
     };
+  const selectedTemplateUsesPreviewFallback =
+    selectedTemplate.executionAdmissionMode === "preview_reference_fallback";
   const latestBuild = liveObservation?.builds[0] ?? null;
   const selectedTemplatePreviewUrl = useMemo(() => {
     if (!siteOps || !selectedTemplate.executionAdmitted || !selectedTemplate.previewUrl) return null;
@@ -629,6 +638,10 @@ export function SimplifiedWebsiteBuilderPreview({
     (deployment) => deployment.target === "global_excluding_cn"
       && ["reserved", "deploying", "verifying"].includes(deployment.status),
   ) ?? null;
+  const liveVisualRetryAction = liveObservation?.visualGeneration.status === "retryable_error"
+    ? liveObservation.visualGeneration.retryAction
+      ?? (liveObservation.visualGeneration.generatedPages === 0 ? "start" : "supplemental")
+    : null;
   const liveInteractionPending = Boolean(siteOps?.interactionPending || liveAction);
   const enabledPages = useMemo(() => pages.filter((page) => page.enabled), [pages]);
   const completedStepSet = useMemo(() => new Set(completedStepIds), [completedStepIds]);
@@ -806,6 +819,14 @@ export function SimplifiedWebsiteBuilderPreview({
     if (liveObservation.interactionState === "collecting_brief") {
       await runLiveAction("start_visual_search", { action: "start_visual_search", input: {} });
     }
+  };
+
+  const retryLiveVisualSearch = async () => {
+    if (!liveVisualRetryAction) return;
+    const action = liveVisualRetryAction === "start"
+      ? "start_visual_search"
+      : "reselect_visual";
+    await runLiveAction(action, { action, input: {} });
   };
 
   const invalidateSteps = (...stepIds: BuildStep[]) => {
@@ -1370,6 +1391,34 @@ export function SimplifiedWebsiteBuilderPreview({
                       <button data-testid="siteops-advance" type="button" onClick={() => siteOps.onRefresh?.()}>重新载入</button>
                     )}
                   </>
+                ) : liveVisualRetryAction ? (
+                  <>
+                    <CircleAlert size={20} />
+                    <span>
+                      <strong>
+                        {liveVisualRetryAction === "start"
+                          ? "真实模板首次载入未完成"
+                          : "后续模板载入未完成"}
+                      </strong>
+                      <small>
+                        {liveVisualRetryAction === "start"
+                          ? "上次载入失败，可从头重试"
+                          : `已保留 ${liveCandidates.length} 个候选，可继续载入下一页`}
+                      </small>
+                    </span>
+                    <button
+                      data-testid="siteops-visual-retry"
+                      type="button"
+                      disabled={liveInteractionPending}
+                      onClick={() => void retryLiveVisualSearch()}
+                    >
+                      {liveAction === "start_visual_search" || liveAction === "reselect_visual"
+                        ? "正在重试…"
+                        : liveVisualRetryAction === "start"
+                          ? "重新载入真实模板"
+                          : "继续载入下一页"}
+                    </button>
+                  </>
                 ) : liveObservation.interactionState === "select_snapshot" ? (
                   <>
                     <FileText size={20} />
@@ -1394,7 +1443,7 @@ export function SimplifiedWebsiteBuilderPreview({
                 ) : (
                   <>
                     <Check size={20} />
-                    <span><strong>真实模板目录已就绪</strong><small>{liveCandidates.length} 个候选，{liveCandidates.filter((candidate) => candidate.executionAdmitted !== false).length} 个可执行</small></span>
+                    <span><strong>真实模板目录已就绪</strong><small>{liveCandidates.length} 个候选，{liveCandidates.filter((candidate) => candidate.executionAdmitted !== false).length} 个可执行{liveCandidates.some((candidate) => candidate.executionAdmissionMode === "preview_reference_fallback") ? `（${liveCandidates.filter((candidate) => candidate.executionAdmissionMode === "preview_reference_fallback").length} 个安全视觉参考）` : ""}</small></span>
                   </>
                 )}
               </div>
@@ -1432,6 +1481,10 @@ export function SimplifiedWebsiteBuilderPreview({
                     <b>
                       {!template.executionAdmitted
                         ? template.executionUnavailableReason || "暂不可用于真实生成"
+                        : template.executionAdmissionMode === "preview_reference_fallback"
+                          ? template.id === effectiveSelectedTemplateId
+                            ? serverSelectedCandidateId === template.id ? "基于冻结预览图重建 · 服务端已绑定" : "基于冻结预览图重建 · 已选中"
+                            : siteOps && !templateSelectionOpen ? "基于冻结预览图重建 · 当前阶段不可重新选择" : "基于冻结预览图重建 · 可选择"
                         : template.id === effectiveSelectedTemplateId
                           ? serverSelectedCandidateId === template.id ? "服务端已绑定此模板" : "已选中，继续配置真实 brief"
                           : siteOps && !templateSelectionOpen ? "当前阶段不可重新选择" : "选择此模板"}
@@ -1532,8 +1585,8 @@ export function SimplifiedWebsiteBuilderPreview({
             <section className="sfp-preview-panel sfp-builder-preview-panel">
               {selectedTemplatePreviewUrl ? (
                 <>
-                  <div className="sfp-preview-heading"><span><strong>真实模板预览</strong><small>{selectedTemplate.name} · 已准入模板的实际构建；网站文案以知识库生成结果为准</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-                  <TemplatePreviewFrame device={device} previewUrl={selectedTemplatePreviewUrl} templateName={selectedTemplate.name} />
+                  <div className="sfp-preview-heading"><span><strong>{selectedTemplateUsesPreviewFallback ? "安全视觉参考" : "真实模板预览"}</strong><small>{selectedTemplate.name} · {selectedTemplateUsesPreviewFallback ? "基于冻结预览图重建；并非原仓实际构建" : "已准入模板的实际构建"}；网站文案以知识库生成结果为准</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+                  <TemplatePreviewFrame device={device} previewUrl={selectedTemplatePreviewUrl} referenceFallback={selectedTemplateUsesPreviewFallback} templateName={selectedTemplate.name} />
                 </>
               ) : (
                 <>
@@ -1573,8 +1626,8 @@ export function SimplifiedWebsiteBuilderPreview({
             <section className="sfp-preview-panel sfp-builder-preview-panel">
               {selectedTemplatePreviewUrl ? (
                 <>
-                  <div className="sfp-preview-heading"><span><strong>真实模板预览</strong><small>{selectedTemplate.name} · 已准入模板的实际构建；助手样式以生成结果为准</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-                  <TemplatePreviewFrame device={device} previewUrl={selectedTemplatePreviewUrl} templateName={selectedTemplate.name} />
+                  <div className="sfp-preview-heading"><span><strong>{selectedTemplateUsesPreviewFallback ? "安全视觉参考" : "真实模板预览"}</strong><small>{selectedTemplate.name} · {selectedTemplateUsesPreviewFallback ? "基于冻结预览图重建；并非原仓实际构建" : "已准入模板的实际构建"}；助手样式以生成结果为准</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+                  <TemplatePreviewFrame device={device} previewUrl={selectedTemplatePreviewUrl} referenceFallback={selectedTemplateUsesPreviewFallback} templateName={selectedTemplate.name} />
                 </>
               ) : (
                 <>
@@ -1762,22 +1815,24 @@ function DevicePicker({ device, onChange }: { device: PreviewDevice; onChange: (
 function TemplatePreviewFrame({
   device,
   previewUrl,
+  referenceFallback = false,
   templateName,
 }: {
   device: PreviewDevice;
   previewUrl: string;
+  referenceFallback?: boolean;
   templateName: string;
 }) {
   return (
     <div className={`sfp-site-stage sfp-template-preview-stage${device === "mobile" ? " sfp-site-stage--mobile" : ""}`}>
       <div className="sfp-browser-bar">
         <span><i /><i /><i /></span>
-        <p>{templateName} · 已准入模板</p>
+        <p>{templateName} · {referenceFallback ? "基于冻结预览图重建" : "真实可执行模板"}</p>
       </div>
       <iframe
         className="sfp-template-preview-frame"
         src={previewUrl}
-        title={`${templateName} 真实模板预览`}
+        title={`${templateName} ${referenceFallback ? "安全视觉参考预览" : "真实模板预览"}`}
         loading="lazy"
       />
     </div>

@@ -5042,6 +5042,15 @@ function staticTemplateExecutionAdmissionEvidence(
         browserReceiptSha256: admission.browserReceiptSha256,
         qaStatus: admission.qaStatus,
         admissionEvidenceSha256: admission.admissionEvidenceSha256,
+        ...(admission.admissionMode !== undefined
+          ? { admissionMode: admission.admissionMode }
+          : {}),
+        ...(admission.referencePreviewSha256 !== undefined
+          ? { referencePreviewSha256: admission.referencePreviewSha256 }
+          : {}),
+        ...(admission.fallbackReasonCode !== undefined
+          ? { fallbackReasonCode: admission.fallbackReasonCode }
+          : {}),
       }
     : {
         status: "unavailable",

@@ -1581,6 +1581,28 @@ export const staticTemplateExecutionAdmissionEvidenceSchema =
         browserReceiptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
         qaStatus: z.enum(["passed", "passed_with_warnings"]),
         admissionEvidenceSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+        admissionMode: z
+          .enum([
+            "provider_source",
+            "verified_normalized_cache",
+            "preview_reference_fallback",
+          ])
+          .optional(),
+        referencePreviewSha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/u)
+          .nullable()
+          .optional(),
+        fallbackReasonCode: z
+          .enum([
+            "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED",
+            "NATIVE_TEMPLATE_SOURCE_UNSAFE",
+            "NATIVE_TEMPLATE_ARCHIVE_INVALID",
+            "NATIVE_SOURCE_EXECUTION_UNSAFE",
+            "NATIVE_SOURCE_STATIC_MEDIA_INTEGRITY_MISMATCH",
+          ])
+          .nullable()
+          .optional(),
       })
       .strict(),
     z
@@ -1651,6 +1673,21 @@ export const visualCandidateV7Schema = z
         code: "custom",
         path: ["sourceArchiveSha256"],
         message: "V7 execution source hash must match its admission receipt",
+      });
+    }
+    if (
+      value.executionAdmission.status === "admitted" &&
+      value.executionAdmission.admissionMode ===
+        "preview_reference_fallback" &&
+      (value.executionAdmission.referencePreviewSha256 !==
+        value.previewSha256 ||
+        !value.executionAdmission.fallbackReasonCode)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["executionAdmission", "referencePreviewSha256"],
+        message:
+          "V7 preview fallback must bind its frozen reference and reason",
       });
     }
   });

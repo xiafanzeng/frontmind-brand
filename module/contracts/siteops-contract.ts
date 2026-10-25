@@ -83,6 +83,14 @@ export const siteOpsVisualCandidateProjectionSchema = z
       .default(null),
     selected: z.boolean().default(false),
     executionAdmitted: z.boolean().optional(),
+    executionAdmissionMode: z
+      .enum([
+        "provider_source",
+        "verified_normalized_cache",
+        "preview_reference_fallback",
+      ])
+      .nullable()
+      .optional(),
     executionUnavailableReason: z
       .string()
       .trim()

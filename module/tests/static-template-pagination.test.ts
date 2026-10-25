@@ -8,6 +8,7 @@ import { completePublishedVisualPageCount, projectSiteOpsVisualGeneration, proje
 import { FROZEN_STATIC_TEMPLATE_CATALOG, STATIC_TEMPLATE_CATALOG_PAGE_COUNT, STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "../server/siteops/static-template-catalog-manifest.js";
 
 const oldVersion = "21st-included-recommended-20260828-v2";
+const v3Version = "frontmind-curated-20261024-v3";
 function bundle(version: string, page: number) {
   const pagination = staticTemplatePagination(version);
   const candidates = Array.from({ length: staticTemplatePageLength(version, page) }, (_, index) => {
@@ -87,8 +88,10 @@ describe("frozen catalog pagination", () => {
       ...observation(oldVersion), visualCandidatePages: current.visualCandidatePages,
     }).success).toBe(false);
   });
-  it("keeps frozen v3 bundles and public observations at 35 entries and five pages", () => {
-    const version = PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION;
+  it.each([
+    ["v3", v3Version],
+    ["v4", PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION],
+  ])("keeps frozen %s bundles and public observations at 35 entries and five pages", (_label, version) => {
     expect(visualSelectionBundleV7Schema.parse(bundle(version, 5)).candidates).toHaveLength(3);
     const historical = siteOpsObservationV1Schema.parse(observation(version));
     expect(historical.visualGeneration).toMatchObject({ maxPages: 5, generatedPages: 5 });

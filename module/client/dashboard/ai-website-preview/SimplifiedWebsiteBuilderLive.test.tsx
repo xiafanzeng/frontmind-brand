@@ -115,6 +115,7 @@ function liveBuildObservation(
     visualFamily: "editorial" as const,
     selected: interactionState === "approved",
     executionAdmitted: true,
+    executionAdmissionMode: "provider_source" as const,
     executionUnavailableReason: null,
   };
   return {
@@ -190,6 +191,55 @@ function liveBuildObservation(
   };
 }
 
+function fullCatalogObservation(): SiteOpsObservationV1 {
+  const base = liveBuildObservation("awaiting_visual_selection");
+  const labels = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+  const customTitles = new Map([
+    [33, "蔚蓝帮助中心"],
+    [34, "藏青文档站"],
+    [35, "松绿极简帮助页"],
+  ]);
+  const candidates = Array.from({ length: 35 }, (_, index) => {
+    const order = index + 1;
+    return {
+      id: `33333333-3333-4333-8333-${String(order).padStart(12, "0")}`,
+      label: labels[index % 8]!,
+      title: customTitles.get(order) ?? `模板 ${order}`,
+      previewUrl: `/api/frontmind/v2/siteops/templates/preview-${order}`,
+      note: `真实模板目录中的第 ${order} 个可执行候选`,
+      visualFamily: "editorial" as const,
+      selected: false,
+      executionAdmitted: true,
+      executionAdmissionMode: order <= 32
+        ? "preview_reference_fallback" as const
+        : order === 34
+          ? "verified_normalized_cache" as const
+          : "provider_source" as const,
+      executionUnavailableReason: null,
+    };
+  });
+  return {
+    ...base,
+    visualCandidates: [],
+    visualCandidatePages: Array.from({ length: 5 }, (_, index) => ({
+      batchId: `44444444-4444-4444-8444-${String(index + 1).padStart(12, "0")}`,
+      page: index + 1,
+      candidates: candidates.slice(index * 8, Math.min((index + 1) * 8, 35)),
+    })),
+    visualGeneration: {
+      ...base.visualGeneration,
+      generatedPages: 5,
+      availablePages: 5,
+      maxPages: 5,
+      canSelectExisting: true,
+      workflowVersion: "2.9.0",
+      catalogVersion: "frontmind-curated-20261025-v5",
+      pageSize: 8,
+      pageCount: 5,
+    },
+  };
+}
+
 beforeEach(() => window.localStorage.clear());
 afterEach(cleanup);
 
@@ -255,6 +305,119 @@ describe("redesigned live website builder setup", () => {
         input: {},
       }),
     );
+  });
+
+  it("restarts the initial visual search after a retryable first-load failure", async () => {
+    const siteOps = liveSiteOps("collecting_brief");
+    const failed = {
+      ...siteOps.props.observation!,
+      project: {
+        ...siteOps.props.observation!.project,
+        status: "failed" as const,
+      },
+      interactionState: "failed" as const,
+      visualGeneration: {
+        ...siteOps.props.observation!.visualGeneration,
+        status: "retryable_error" as const,
+        retryAction: "start" as const,
+        failureCategory: "render_failed" as const,
+      },
+    };
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        siteOps={{ ...siteOps.props, observation: failed }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "重新载入真实模板" }));
+
+    await waitFor(() =>
+      expect(siteOps.onAction).toHaveBeenCalledWith({
+        action: "start_visual_search",
+        input: {},
+      }),
+    );
+  });
+
+  it("reselects the next visual page after a retryable supplemental failure", async () => {
+    const siteOps = liveSiteOps("collecting_brief");
+    const failed = {
+      ...siteOps.props.observation!,
+      project: {
+        ...siteOps.props.observation!.project,
+        status: "awaiting_visual_selection" as const,
+      },
+      interactionState: "awaiting_visual_selection" as const,
+      visualGeneration: {
+        ...siteOps.props.observation!.visualGeneration,
+        status: "retryable_error" as const,
+        generatedPages: 1,
+        canSelectExisting: true,
+        retryAction: "supplemental" as const,
+        failureCategory: "render_failed" as const,
+      },
+    };
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        siteOps={{ ...siteOps.props, observation: failed }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "继续载入下一页" }));
+
+    await waitFor(() =>
+      expect(siteOps.onAction).toHaveBeenCalledWith({
+        action: "reselect_visual",
+        input: {},
+      }),
+    );
+  });
+
+  it("shows all five admitted catalog pages and keeps the three custom templates selectable", () => {
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        siteOps={{ observation: fullCatalogObservation(), onAction: vi.fn() }}
+        storageScope="live:7:workspace-a"
+      />,
+    );
+
+    expect(screen.getAllByTestId("website-template-card")).toHaveLength(35);
+    for (const title of ["蔚蓝帮助中心", "藏青文档站", "松绿极简帮助页"]) {
+      expect(screen.getByText(title)).toBeTruthy();
+      expect((screen.getByRole("radio", { name: new RegExp(title) }) as HTMLInputElement).disabled).toBe(false);
+    }
+    expect(screen.getAllByText("安全视觉参考")).toHaveLength(32);
+    expect(screen.getAllByText("真实可执行模板")).toHaveLength(3);
+    expect(screen.getAllByText(/基于冻结预览图重建/).length).toBeGreaterThanOrEqual(32);
+    expect((screen.getByDisplayValue(
+      "33333333-3333-4333-8333-000000000001",
+    ) as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it("identifies a preview fallback without presenting it as the original repository build", () => {
+    const approved = liveBuildObservation("approved");
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={{
+          observation: {
+            ...approved,
+            visualCandidates: approved.visualCandidates.map((candidate) => ({
+              ...candidate,
+              previewUrl: `/api/site-ops/style-previews/${candidate.id}`,
+              executionAdmissionMode: "preview_reference_fallback" as const,
+            })),
+          },
+          onAction: vi.fn(),
+        }}
+        storageScope="live:7:workspace-a"
+      />,
+    );
+
+    expect(screen.getByText("安全视觉参考")).toBeTruthy();
+    expect(screen.getByText(/基于冻结预览图重建；并非原仓实际构建/)).toBeTruthy();
+    expect(screen.queryByText(/已准入模板的实际构建/)).toBeNull();
+    expect(screen.getByTitle("真实帮助中心模板 安全视觉参考预览")).toBeTruthy();
   });
 
   it("saves the real brief configuration before selecting the admitted template", async () => {
