@@ -9,14 +9,34 @@ export interface IntentWorkbenchApi {
 }
 async function request(path: string, input?: unknown, operation = captureWorkspaceRestOperation()) {
   operation.assertActive();
-  const response = await operation.fetch(`/api/modules/brand/intent${path}`, {
+  const endpoint = `/api/modules/brand/intent${path}`;
+  const response = await operation.fetch(endpoint, {
     method: input === undefined ? "GET" : "POST", credentials: "same-origin",
     headers: operation.headers(input === undefined ? {} : {"Content-Type": "application/json"}),
     body: input === undefined ? undefined : JSON.stringify(input),
+  }).catch(cause => {
+    operation.assertActive();
+    const detail = cause instanceof Error || cause instanceof DOMException ? `${cause.name}: ${cause.message}` : "网络异常";
+    throw new Error(`优化工作台请求未完成（${endpoint}，${detail}），请重新读取。`);
   });
-  const value = await response.json();
+  let value: any;
+  try {
+    value = JSON.parse(await response.text());
+  } catch (cause) {
+    operation.assertActive();
+    if (!(cause instanceof SyntaxError)) throw cause;
+    const format = response.headers.get("content-type")?.split(";")[0] ?? "未知格式";
+    throw new Error(`优化工作台接口返回非 JSON 数据（HTTP ${response.status}，${format}，${endpoint}）。请重新读取；若持续出现，请检查登录状态及服务网关。`);
+  }
   operation.assertActive();
-  if (!response.ok) throw new Error(value.error?.message ?? "优化工作台请求失败");
+  if (!response.ok) {
+    const message = typeof value?.error === "string" ? value.error : value?.error?.message ?? value?.message;
+    throw new Error(`${message ?? "优化工作台请求失败"}（HTTP ${response.status}，${endpoint}）`);
+  }
+  if (!value || !Number.isInteger(value.revision) || value.state?.version !== 1 ||
+      !["questions", "evaluations", "plans", "todos", "receipts"].every(key => Array.isArray(value.state[key])) ||
+      !Array.isArray(value.nodes))
+    throw new Error(`优化工作台接口数据结构不正确（${endpoint}），请检查服务版本后重新读取。`);
   return value as IntentWorkspace;
 }
 export const liveIntentWorkbenchApi: IntentWorkbenchApi = {
