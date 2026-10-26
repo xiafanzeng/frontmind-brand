@@ -52,7 +52,7 @@ function approvedObservation(): SiteOpsObservationV1 {
       contentInventory: {
         schemaVersion: 1,
         source: "frozen_knowledge_snapshot",
-        entries: [{ kind: "products", sourceDocumentIds: ["document-1"] }],
+        entries: [{ kind: "product", sourceDocumentIds: ["document-1"] }],
       },
       routes: [{
         id: "help",
@@ -194,6 +194,128 @@ describe("website SiteOps evaluation evidence", () => {
     expect(siteOpsWebsiteEvaluationVersion(live)).not.toBe(
       siteOpsWebsiteEvaluationVersion(observation),
     );
+  });
+
+  it("does not claim the current approved build is live when the project head belongs to an older build", () => {
+    const observation = approvedObservation();
+    const oldBuildId = "66666666-6666-4666-8666-666666666666";
+    const oldDeploymentId = "77777777-7777-4777-8777-777777777777";
+    const liveWithOlderHead = {
+      ...observation,
+      project: {
+        ...observation.project,
+        status: "live" as const,
+        canonicalHostname: "help.example.com",
+        globalLiveDeploymentId: oldDeploymentId,
+      },
+      deployments: [{
+        id: oldDeploymentId,
+        buildId: oldBuildId,
+        target: "global_excluding_cn" as const,
+        status: "active" as const,
+        publicUrl: "https://help.example.com",
+        createdAt: "2026-10-23T01:15:00.000Z",
+      }],
+      interactionState: "live" as const,
+    } satisfies SiteOpsObservationV1;
+    const judgments = buildWebsiteEvaluationJudgmentsFromSiteOps(liveWithOlderHead);
+    const release = judgments.find(
+      ({ checkId }) => checkId === "website-draft-release-state",
+    )!;
+
+    expect(release).toMatchObject({ status: "passed" });
+    expect(release.summary).toContain("已有版本在线");
+    expect(release.summary).toContain("当前已批准版本仍未部署");
+    expect(release.summary).not.toContain("进入真实 live 部署");
+    expect(judgments.find(({ checkId }) => checkId === "website-public-boundary"))
+      .toMatchObject({ status: "partial" });
+  });
+
+  it("does not pass a mainland deployment whose authoritative head points elsewhere", () => {
+    const observation = approvedObservation();
+    const deploymentId = "88888888-8888-4888-8888-888888888888";
+    const mismatchedHeadId = "99999999-9999-4999-8999-999999999999";
+    const mismatch = {
+      ...observation,
+      project: {
+        ...observation.project,
+        status: "live" as const,
+        canonicalHostname: "help.example.cn",
+        mainlandLiveDeploymentId: mismatchedHeadId,
+      },
+      domainState: {
+        domain: "help.example.cn",
+        displayDomain: "help.example.cn",
+        revision: 2,
+        ownershipStatus: "verified",
+        dnsStatus: "active",
+        icpStatus: "approved" as const,
+        icpDomainRevision: 2,
+        icpVerifiedAt: "2026-10-23T01:12:00.000Z",
+      },
+      deployments: [{
+        id: deploymentId,
+        buildId: observation.builds[0]!.id,
+        target: "mainland_cn" as const,
+        status: "active" as const,
+        publicUrl: "https://help.example.cn",
+        createdAt: "2026-10-23T01:15:00.000Z",
+      }],
+      interactionState: "live" as const,
+    } satisfies SiteOpsObservationV1;
+    const judgments = buildWebsiteEvaluationJudgmentsFromSiteOps(mismatch);
+
+    expect(judgments.find(({ checkId }) => checkId === "website-public-boundary"))
+      .toMatchObject({
+        status: "partial",
+        summary: expect.stringContaining("权威 head 未精确指向该部署"),
+      });
+    expect(judgments.find(({ checkId }) => checkId === "website-draft-release-state"))
+      .toMatchObject({
+        status: "partial",
+        summary: expect.stringContaining("当前版本未确认上线"),
+      });
+  });
+
+  it("passes a mainland deployment only when its own authoritative head matches", () => {
+    const observation = approvedObservation();
+    const deploymentId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const live = {
+      ...observation,
+      project: {
+        ...observation.project,
+        status: "live" as const,
+        canonicalHostname: "help.example.cn",
+        mainlandLiveDeploymentId: deploymentId,
+      },
+      domainState: {
+        domain: "help.example.cn",
+        displayDomain: "help.example.cn",
+        revision: 2,
+        ownershipStatus: "verified",
+        dnsStatus: "active",
+        icpStatus: "approved" as const,
+        icpDomainRevision: 2,
+        icpVerifiedAt: "2026-10-23T01:12:00.000Z",
+      },
+      deployments: [{
+        id: deploymentId,
+        buildId: observation.builds[0]!.id,
+        target: "mainland_cn" as const,
+        status: "active" as const,
+        publicUrl: "https://help.example.cn",
+        createdAt: "2026-10-23T01:15:00.000Z",
+      }],
+      interactionState: "live" as const,
+    } satisfies SiteOpsObservationV1;
+    const judgments = buildWebsiteEvaluationJudgmentsFromSiteOps(live);
+
+    expect(judgments.find(({ checkId }) => checkId === "website-public-boundary"))
+      .toMatchObject({ status: "passed" });
+    expect(judgments.find(({ checkId }) => checkId === "website-draft-release-state"))
+      .toMatchObject({ status: "passed" });
+    expect(websiteBuildEvaluationSkill.evaluate({ judgments }))
+      .toMatchObject({ score: 100, recommendation: "recommended" });
   });
 
   it("does not invent a score before a real build exists", () => {

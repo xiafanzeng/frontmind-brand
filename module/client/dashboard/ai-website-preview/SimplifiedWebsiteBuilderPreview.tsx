@@ -118,26 +118,33 @@ function sameEvaluationSubject(
   return left.kind === right.kind && left.id === right.id && left.version === right.version;
 }
 
+type WebsiteEvaluationReportState = {
+  report: EvaluationReportSnapshot;
+  persisted: boolean;
+};
+
 function recoverOrSaveWebsiteEvaluationReport(input: {
   storage: Pick<Storage, "getItem" | "setItem"> | null | undefined;
   subject: EvaluationSubjectRef;
   result: WebsiteBuildEvaluationOutput;
-}) {
+}): WebsiteEvaluationReportState {
   const resultJson = JSON.stringify(input.result);
   const recovered = listEvaluationReports(input.storage).find((report) =>
     report.result.skillId === input.result.skillId
     && sameEvaluationSubject(report.subject, input.subject)
     && JSON.stringify(report.result) === resultJson,
   );
-  if (recovered) return recovered;
+  if (recovered) return { report: recovered, persisted: true };
   const report: EvaluationReportSnapshot = {
     reportId: `website-report-${crypto.randomUUID()}`,
     createdAt: new Date().toISOString(),
     subject: input.subject,
     result: input.result,
   };
-  saveEvaluationReport(report, input.storage);
-  return report;
+  return {
+    report,
+    persisted: saveEvaluationReport(report, input.storage),
+  };
 }
 
 const LIVE_SITEOPS_STATUS_LABELS: Record<string, string> = {
@@ -571,8 +578,10 @@ export function SimplifiedWebsiteBuilderPreview({
   const [linkedRagReportId, setLinkedRagReportId] = useState<string | null>(
     () => loadLinkedRagReportId(storageScope, auditStorage),
   );
-  const [liveEvaluationReport, setLiveEvaluationReport] =
-    useState<EvaluationReportSnapshot | null>(null);
+  const [liveEvaluationReportState, setLiveEvaluationReportState] =
+    useState<WebsiteEvaluationReportState | null>(null);
+  const liveEvaluationReport = liveEvaluationReportState?.report ?? null;
+  const liveEvaluationReportPersisted = liveEvaluationReportState?.persisted === true;
   const [releaseReport, setReleaseReport] = useState<EvaluationReportSnapshot | null>(null);
   const [liveReleaseCoordinates, setLiveReleaseCoordinates] =
     useState<LiveReleaseCoordinates | null>(null);
@@ -1171,7 +1180,9 @@ export function SimplifiedWebsiteBuilderPreview({
   ];
   const scoredChecks = scoreGroups.flatMap((group) => group.checks);
   const applicableChecks = scoredChecks.filter((check) => check.status !== "not-applicable");
-  const passFailChecks = applicableChecks.filter((check) => check.status === "passed" || check.status === "failed");
+  const judgedChecks = applicableChecks.filter((check) =>
+    check.status === "passed" || check.status === "partial" || check.status === "failed",
+  );
   const linkedRagReport = linkedRagReportId ? getEvaluationReportById(linkedRagReportId, auditStorage) : null;
   const latestRagReport = findLatestEvaluationReport(
     { skillId: "enterprise-rag-evaluation" },
@@ -1209,16 +1220,19 @@ export function SimplifiedWebsiteBuilderPreview({
 
   useEffect(() => {
     if (!siteOps || websiteEvaluation.status === "not_run") {
-      setLiveEvaluationReport(null);
+      setLiveEvaluationReportState(null);
       return;
     }
-    const report = recoverOrSaveWebsiteEvaluationReport({
+    const reportState = recoverOrSaveWebsiteEvaluationReport({
       storage: auditStorage,
       subject: websiteSubject,
       result: websiteEvaluation,
     });
-    setLiveEvaluationReport((current) =>
-      current?.reportId === report.reportId ? current : report,
+    setLiveEvaluationReportState((current) =>
+      current?.report.reportId === reportState.report.reportId
+      && current.persisted === reportState.persisted
+        ? current
+        : reportState,
     );
   }, [
     auditStorage,
@@ -1268,23 +1282,27 @@ export function SimplifiedWebsiteBuilderPreview({
       );
       return;
     }
-    const report: EvaluationReportSnapshot = siteOps
-      ? liveEvaluationReport
-        && sameEvaluationSubject(liveEvaluationReport.subject, websiteSubject)
-        && JSON.stringify(liveEvaluationReport.result) === websiteEvaluationFingerprint
-        ? liveEvaluationReport
+    let report: EvaluationReportSnapshot;
+    if (siteOps) {
+      const reportState = liveEvaluationReportState
+        && sameEvaluationSubject(liveEvaluationReportState.report.subject, websiteSubject)
+        && JSON.stringify(liveEvaluationReportState.report.result) === websiteEvaluationFingerprint
+        ? liveEvaluationReportState
         : recoverOrSaveWebsiteEvaluationReport({
             storage: auditStorage,
             subject: websiteSubject,
             result: websiteEvaluation,
-          })
-      : {
-          reportId: `website-report-${crypto.randomUUID()}`,
-          createdAt: new Date().toISOString(),
-          subject: websiteSubject,
-          result: websiteEvaluation,
-        };
-    if (siteOps) setLiveEvaluationReport(report);
+          });
+      setLiveEvaluationReportState(reportState);
+      report = reportState.report;
+    } else {
+      report = {
+        reportId: `website-report-${crypto.randomUUID()}`,
+        createdAt: new Date().toISOString(),
+        subject: websiteSubject,
+        result: websiteEvaluation,
+      };
+    }
     setLiveReleaseCoordinates(
       siteOps && liveObservation && latestBuild
         ? {
@@ -1358,6 +1376,9 @@ export function SimplifiedWebsiteBuilderPreview({
         reports: [releaseReport],
         decision,
       }, auditStorage);
+      if (saved) {
+        setLiveEvaluationReportState({ report: releaseReport, persisted: true });
+      }
       closeReleaseConfirmation();
       setNotice(`${saved ? "服务端已受理发布，并记录本次发布决定" : "服务端已受理发布，但本地审计存储不可用"}；部署结果将继续同步，尚不表示已经上线。`);
       return;
@@ -1779,7 +1800,11 @@ export function SimplifiedWebsiteBuilderPreview({
                   <span className="sfp-eval-run-state" data-testid={siteOps ? "website-evaluation-status" : undefined}><i />{
                     siteOps
                       ? websiteEvaluation.status === "completed"
-                        ? liveEvaluationReport ? "真实证据评估已完成并保存" : "真实证据评估已完成"
+                        ? liveEvaluationReportPersisted
+                          ? "真实证据评估已完成并保存"
+                          : liveEvaluationReport
+                            ? "真实证据评估已完成（仅本次会话，未持久化）"
+                            : "真实证据评估已完成"
                         : websiteEvaluation.status === "pending"
                           ? "真实证据评估待补全"
                           : websiteEvaluation.status === "failed"
@@ -1813,7 +1838,9 @@ export function SimplifiedWebsiteBuilderPreview({
                   : "范围与确认人未记录"}</strong></span>
                 <span><small>执行记录</small><strong data-testid={siteOps ? "website-evaluation-report-id" : undefined}>{siteOps
                   ? liveEvaluationReport
-                    ? `可恢复报告 ${liveEvaluationReport.reportId} · 证据更新 ${liveEvaluationObservedAt ? new Date(liveEvaluationObservedAt).toLocaleString("zh-CN") : "—"}`
+                    ? liveEvaluationReportPersisted
+                      ? `可恢复报告 ${liveEvaluationReport.reportId} · 证据更新 ${liveEvaluationObservedAt ? new Date(liveEvaluationObservedAt).toLocaleString("zh-CN") : "—"}`
+                      : `本次会话评估未持久化 · 证据更新 ${liveEvaluationObservedAt ? new Date(liveEvaluationObservedAt).toLocaleString("zh-CN") : "—"}`
                     : `真实 SiteOps · ${LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus}`
                   : "本地预览 · 评估人和时间待补"}</strong></span>
               </div>
@@ -1828,7 +1855,7 @@ export function SimplifiedWebsiteBuilderPreview({
               <div className="sfp-eval-metrics" aria-label="评估摘要">
                 <span><small>配置确认</small><strong>{configurationConfirmedCount}/4</strong></span>
                 <span><small>判定覆盖率</small><strong>{judgmentCoverage}%</strong></span>
-                <span><small>已判定通过率</small><strong>{passFailChecks.length > 0 ? `${Math.round((passFailChecks.filter((check) => check.status === "passed").length / passFailChecks.length) * 100)}%` : "无法计算"}</strong></span>
+                <span><small>完全通过率</small><strong>{judgedChecks.length > 0 ? `${Math.round((judgedChecks.filter((check) => check.status === "passed").length / judgedChecks.length) * 100)}%` : "无法计算"}</strong></span>
                 <span><small>关键风险提示</small><strong>{unresolvedCriticalChecks.length}</strong></span>
               </div>
               <section className="sfp-score-formula" aria-label="加权评估分计算结果">

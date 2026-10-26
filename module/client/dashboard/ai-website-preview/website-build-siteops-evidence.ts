@@ -311,15 +311,18 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
   const currentDeployments = build
     ? observation.deployments.filter((deployment) => deployment.buildId === build.id)
     : [];
-  const authoritativeLiveHead = observation.project.globalLiveDeploymentId;
-  const activeDeployment = (
-    authoritativeLiveHead
-      ? currentDeployments.find((deployment) =>
-          deployment.id === authoritativeLiveHead && deployment.status === "active",
-        )
-      : null
-  ) ?? currentDeployments.find(
+  const globalLiveHead = observation.project.globalLiveDeploymentId ?? null;
+  const mainlandLiveHead = observation.project.mainlandLiveDeploymentId ?? null;
+  const authoritativeHeadForTarget = (
+    target: SiteOpsObservationV1["deployments"][number]["target"],
+  ) => target === "global_excluding_cn" ? globalLiveHead : mainlandLiveHead;
+  const activeDeployment = currentDeployments.find(
     (deployment) => deployment.status === "active",
+  ) ?? null;
+  const authoritativeActiveDeployment = currentDeployments.find((deployment) =>
+    deployment.status === "active"
+    && Boolean(deployment.publicUrl)
+    && authoritativeHeadForTarget(deployment.target) === deployment.id,
   ) ?? null;
   const pendingDeployment = currentDeployments.find((deployment) =>
     DEPLOYMENT_IN_PROGRESS.has(deployment.status),
@@ -334,7 +337,14 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
   const deploymentEvidence = (deployment: typeof activeDeployment) => deployment
     ? `siteops:deployment:${deployment.id}:${deployment.status}`
     : null;
-  const publicUrl = activeDeployment?.publicUrl ?? null;
+  const deploymentHeadEvidence = (deployment: typeof activeDeployment) => {
+    if (!deployment) return null;
+    const head = authoritativeHeadForTarget(deployment.target);
+    return head
+      ? `siteops:project:${deployment.target}:head:${head}`
+      : `siteops:project:${deployment.target}:head:missing`;
+  };
+  const publicUrl = authoritativeActiveDeployment?.publicUrl ?? null;
   const publicBoundaryPassed = Boolean(
     build
     && publicUrl
@@ -343,9 +353,7 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
     && allRoutesSourced
     && domain?.domain
     && domain.dnsStatus === "active"
-    && (authoritativeLiveHead === null
-      || authoritativeLiveHead === undefined
-      || authoritativeLiveHead === activeDeployment?.id),
+    && authoritativeActiveDeployment,
   );
 
   let publicBoundary: WebsiteBuildEvaluationJudgment;
@@ -370,8 +378,8 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
         buildEvidence,
         snapshotEvidence,
         domainEvidence,
-        deploymentEvidence(activeDeployment),
-        authoritativeLiveHead ? `siteops:project:global-head:${authoritativeLiveHead}` : null,
+        deploymentEvidence(authoritativeActiveDeployment),
+        deploymentHeadEvidence(authoritativeActiveDeployment),
       ),
     );
   } else if (failedDeployment && !activeDeployment) {
@@ -385,15 +393,21 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
     publicBoundary = judgment(
       "website-public-boundary",
       "partial",
-      pendingDeployment
-        ? `当前构建的 ${pendingDeployment.target} 部署处于 ${pendingDeployment.status}，尚不能确认公开访问。`
-        : domain?.dnsStatus === "active"
-          ? "域名 DNS 已 active，但当前构建尚无带公开地址的 active 部署。"
-          : "真实构建已形成，但域名、active DNS 与公开部署尚未全部完成。",
+      activeDeployment
+        ? activeDeployment.publicUrl
+          ? `当前构建存在 ${activeDeployment.target} active 部署，但对应权威 head 未精确指向该部署，不能判定当前版本已公开。`
+          : `当前构建存在 ${activeDeployment.target} active 部署，但没有公开 URL，不能判定当前版本已公开。`
+        : pendingDeployment
+          ? `当前构建的 ${pendingDeployment.target} 部署处于 ${pendingDeployment.status}，尚不能确认公开访问。`
+          : domain?.dnsStatus === "active"
+            ? "域名 DNS 已 active，但当前构建尚无带公开地址且匹配权威 head 的 active 部署。"
+            : "真实构建已形成，但域名、active DNS 与权威公开部署尚未全部完成。",
       evidence(
         buildEvidence,
         snapshotEvidence,
         domainEvidence,
+        deploymentEvidence(activeDeployment),
+        deploymentHeadEvidence(activeDeployment),
         deploymentEvidence(pendingDeployment),
         observation.aliyunConnection.verifiedAt
           ? `siteops:aliyun:verified:${observation.aliyunConnection.verifiedAt}`
@@ -486,10 +500,7 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
       "website-draft-release-state",
       "尚无真实构建，无法核对草稿、批准、部署与公开状态。",
     );
-  } else if (
-    activeDeployment?.publicUrl
-    || (observation.project.status === "live" && authoritativeLiveHead)
-  ) {
+  } else if (authoritativeActiveDeployment?.publicUrl) {
     draftReleaseState = judgment(
       "website-draft-release-state",
       "passed",
@@ -497,8 +508,22 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
       evidence(
         buildEvidence,
         domainEvidence,
+        deploymentEvidence(authoritativeActiveDeployment),
+        deploymentHeadEvidence(authoritativeActiveDeployment),
+      ),
+    );
+  } else if (activeDeployment) {
+    draftReleaseState = judgment(
+      "website-draft-release-state",
+      "partial",
+      activeDeployment.publicUrl
+        ? `构建 #${build.ordinal} 有 active 部署记录，但 ${activeDeployment.target} 权威 head 未指向该记录；当前版本未确认上线。`
+        : `构建 #${build.ordinal} 有 active 部署记录，但没有公开 URL；当前版本未确认上线。`,
+      evidence(
+        buildEvidence,
+        domainEvidence,
         deploymentEvidence(activeDeployment),
-        authoritativeLiveHead ? `siteops:project:global-head:${authoritativeLiveHead}` : null,
+        deploymentHeadEvidence(activeDeployment),
       ),
     );
   } else if (failedDeployment) {
@@ -516,11 +541,19 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
       evidence(buildEvidence, domainEvidence, deploymentEvidence(pendingDeployment)),
     );
   } else if (build.status === "approved") {
+    const hasAnotherLiveHead = Boolean(globalLiveHead || mainlandLiveHead);
     draftReleaseState = judgment(
       "website-draft-release-state",
       "passed",
-      `构建 #${build.ordinal} 已批准，但没有 active 部署记录；系统明确保持“可发布但尚未上线”。`,
-      evidence(buildEvidence, domainEvidence),
+      hasAnotherLiveHead
+        ? `已有版本在线，但权威部署 head 未绑定构建 #${build.ordinal}；当前已批准版本仍未部署。`
+        : `构建 #${build.ordinal} 已批准，但没有匹配权威 head 的 active 部署记录；系统明确保持“可发布但尚未上线”。`,
+      evidence(
+        buildEvidence,
+        domainEvidence,
+        globalLiveHead ? `siteops:project:global_excluding_cn:head:${globalLiveHead}` : null,
+        mainlandLiveHead ? `siteops:project:mainland_cn:head:${mainlandLiveHead}` : null,
+      ),
     );
   } else if (build.status === "preview_ready") {
     draftReleaseState = judgment(

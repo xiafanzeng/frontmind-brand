@@ -668,6 +668,7 @@ describe("redesigned live website builder setup", () => {
     });
     expect(screen.getByLabelText(/当前加权评估分/).textContent).not.toContain("—");
     expect(screen.getAllByText("部分通过").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("评估摘要").textContent).toContain("完全通过率29%");
     const report = listEvaluationReports(auditStorage)[0]!;
     expect(screen.getByText(new RegExp(report.reportId))).toBeTruthy();
 
@@ -685,6 +686,37 @@ describe("redesigned live website builder setup", () => {
     );
     expect(listEvaluationReports(auditStorage).map(({ reportId }) => reportId))
       .toEqual([report.reportId]);
+  });
+
+  it("keeps a completed evaluation session-only when audit storage rejects the report", async () => {
+    const storageScope = "live:7:website-evaluation-storage-failure";
+    const auditStorage = scopedEvaluationStorage(storageScope);
+    const setItem = vi.spyOn(window.Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("storage quota exceeded");
+    });
+
+    try {
+      render(
+        <SimplifiedWebsiteBuilderPreview
+          initialStep="evaluation"
+          siteOps={{ observation: liveBuildObservation("approved") }}
+          storageScope={storageScope}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId("website-evaluation-status").textContent)
+          .toContain("仅本次会话，未持久化"),
+      );
+      expect(screen.getByTestId("website-evaluation-report-id").textContent)
+        .toContain("本次会话评估未持久化");
+      expect(screen.getByTestId("website-evaluation-report-id").textContent)
+        .not.toContain("website-report-");
+      expect(screen.queryByText("真实证据评估已完成并保存")).toBeNull();
+      expect(listEvaluationReports(auditStorage)).toEqual([]);
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it("offers the established domain and release settings only after build approval", () => {
