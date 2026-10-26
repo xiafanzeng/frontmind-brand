@@ -24,6 +24,11 @@ export const ENTERPRISE_RAG_GATE_IDS = [
   "availability",
 ] as const;
 
+export const ENTERPRISE_RAG_CLAIM_IDS = Array.from(
+  { length: 30 },
+  (_, index) => `claim-${index + 1}`,
+);
+
 export type EnterpriseRagDimensionId =
   (typeof ENTERPRISE_RAG_DIMENSION_IDS)[number];
 export type EnterpriseRagGateId = (typeof ENTERPRISE_RAG_GATE_IDS)[number];
@@ -123,6 +128,55 @@ export const ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA = z.toJSONSchema(
   { target: "draft-7" },
 );
 
+/** Bind the provider-facing schema to this immutable evaluation snapshot.
+ *
+ * Draft-7 cannot express a cross-field reference from evidenceIds to the
+ * claims declared in the same object. New runs therefore reserve claim-1 to
+ * claim-30 as claim coordinates in the wire schema, while the semantic
+ * validator below still requires every referenced claim to exist and pass all
+ * frozen-answer/source checks. The legacy static schema remains exported so
+ * already-running operations can keep using the exact schema they started
+ * with.
+ */
+export function enterpriseRagJudgeWireSchema(
+  input: EnterpriseRagEvaluationFrozenInput,
+) {
+  const schema = structuredClone(ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA) as Record<
+    string,
+    any
+  >;
+  const properties = schema.properties as Record<string, any>;
+  properties.operationToken.enum = [input.operationToken];
+  properties.inputHash.enum = [input.inputHash];
+
+  const frozenEvidenceIds = Array.from(new Set(input.allowedEvidenceIds));
+  const claimIds = ENTERPRISE_RAG_CLAIM_IDS.filter(
+    (id) => !frozenEvidenceIds.includes(id),
+  );
+  const judgmentEvidenceIds = [...frozenEvidenceIds, ...claimIds];
+  for (const key of ["dimensions", "gates"] as const) {
+    properties[key].items.properties.evidenceIds.items.enum =
+      judgmentEvidenceIds;
+  }
+
+  const claims = properties.claims.items.properties as Record<string, any>;
+  claims.id.enum = claimIds;
+  const frozenEvidence = new Set(frozenEvidenceIds);
+  const sourceIds = Array.from(
+    new Set(
+      input.sources
+        .map(({ id }) => id)
+        .filter((id) => frozenEvidence.has(id)),
+    ),
+  );
+  if (sourceIds.length) {
+    claims.sourceIds.items.enum = sourceIds;
+  } else {
+    claims.sourceIds.maxItems = 0;
+  }
+  return schema;
+}
+
 export type EnterpriseRagJudgeOutput = z.infer<typeof judgeOutputSchema>;
 
 export class EnterpriseRagEvaluationValidationError extends Error {
@@ -131,6 +185,12 @@ export class EnterpriseRagEvaluationValidationError extends Error {
     this.name = "EnterpriseRagEvaluationValidationError";
   }
 }
+
+export type EnterpriseRagJudgeValidationOptions = {
+  /** Reserved claim coordinates for a bound schema. Null preserves the legacy
+   * contract, where judgments may cite only frozen input evidence. */
+  allowedClaimIds?: readonly string[] | null;
+};
 
 function exactOrderedIds(actual: readonly string[], expected: readonly string[]) {
   return (
@@ -144,6 +204,7 @@ function exactOrderedIds(actual: readonly string[], expected: readonly string[])
 export function validateEnterpriseRagJudgeOutput(
   value: unknown,
   input: EnterpriseRagEvaluationFrozenInput,
+  options: EnterpriseRagJudgeValidationOptions = {},
 ): EnterpriseRagJudgeOutput {
   if (Buffer.byteLength(JSON.stringify(value) ?? "", "utf8") > 512 * 1024) {
     throw new EnterpriseRagEvaluationValidationError(
@@ -173,19 +234,25 @@ export function validateEnterpriseRagJudgeOutput(
       "评估模型没有按锁定顺序完整返回评分项",
     );
   }
-  const allowedEvidence = new Set(input.allowedEvidenceIds);
-  for (const item of [...parsed.dimensions, ...parsed.gates]) {
-    if (item.evidenceIds.some((id) => !allowedEvidence.has(id))) {
-      throw new EnterpriseRagEvaluationValidationError(
-        "评估模型引用了未授权证据",
-      );
-    }
-  }
+  const frozenEvidence = new Set(input.allowedEvidenceIds);
+  const allowedClaimIds = options.allowedClaimIds === null
+    ? null
+    : new Set(options.allowedClaimIds ?? ENTERPRISE_RAG_CLAIM_IDS);
   const allowedSources = new Map(input.sources.map((source) => [source.id, source]));
   const claimIds = new Set<string>();
   for (const claim of parsed.claims) {
     if (claimIds.has(claim.id)) {
       throw new EnterpriseRagEvaluationValidationError("评估陈述标识重复");
+    }
+    if (allowedClaimIds && frozenEvidence.has(claim.id)) {
+      throw new EnterpriseRagEvaluationValidationError(
+        "评估陈述标识与冻结证据冲突",
+      );
+    }
+    if (allowedClaimIds && !allowedClaimIds.has(claim.id)) {
+      throw new EnterpriseRagEvaluationValidationError(
+        "评估陈述标识不在允许范围",
+      );
     }
     claimIds.add(claim.id);
     if (!input.answer.includes(claim.statement)) {
@@ -193,7 +260,11 @@ export function validateEnterpriseRagJudgeOutput(
         "评估陈述不是回答中的连续原文",
       );
     }
-    if (claim.sourceIds.some((id) => !allowedSources.has(id))) {
+    if (
+      claim.sourceIds.some(
+        (id) => !allowedSources.has(id) || !frozenEvidence.has(id),
+      )
+    ) {
       throw new EnterpriseRagEvaluationValidationError(
         "评估陈述引用了未授权来源",
       );
@@ -210,6 +281,17 @@ export function validateEnterpriseRagJudgeOutput(
     if (claim.status === "unsupported" && claim.sourceIds.length) {
       throw new EnterpriseRagEvaluationValidationError(
         "无支持陈述不得附带来源",
+      );
+    }
+  }
+  const allowedJudgmentEvidence = new Set([
+    ...frozenEvidence,
+    ...(allowedClaimIds ? claimIds : []),
+  ]);
+  for (const item of [...parsed.dimensions, ...parsed.gates]) {
+    if (item.evidenceIds.some((id) => !allowedJudgmentEvidence.has(id))) {
+      throw new EnterpriseRagEvaluationValidationError(
+        "评估模型引用了未授权证据",
       );
     }
   }

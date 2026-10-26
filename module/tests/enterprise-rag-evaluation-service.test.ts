@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ENTERPRISE_RAG_DIMENSION_IDS,
   ENTERPRISE_RAG_GATE_IDS,
+  ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA,
 } from "../contracts/enterprise-rag-evaluation-run";
 import { enterpriseQaDocumentCatalog } from "../server/enterprise-qa-answer";
 import {
@@ -21,7 +22,10 @@ import {
 } from "../server/enterprise-rag-evaluation-service";
 import type { BrandKeywordPorts } from "../server/brand-keyword-ports";
 import type { ModuleHttpCore } from "../server/http-api";
-import { registerIntentSkillPorts } from "../server/intent-skill-runtime";
+import {
+  intentHash,
+  registerIntentSkillPorts,
+} from "../server/intent-skill-runtime";
 
 const SOURCE_TASK_ID = "00000000-0000-4000-8000-000000000010";
 const SOURCE_OPERATION_ID = "00000000-0000-4000-8000-000000000011";
@@ -305,6 +309,7 @@ function harness() {
     upstreamEffort: "high",
   };
   let providerEvents: any[] = [];
+  let providerState = "running";
   const client = {
     uploadFile: vi.fn(async () => ({ fileId: "uploaded-skill" })),
     createTask: vi.fn(async () => ({ taskId: "provider-evaluation", requestId: "request" })),
@@ -330,7 +335,7 @@ function harness() {
     classifyManusV2StructuredResultEnvelope: (value: any) => value.success
       ? { kind: "accepted", value: value.value }
       : { kind: "rejected" },
-    latestManusV2TaskState: () => "running",
+    latestManusV2TaskState: () => providerState,
   } as unknown as BrandKeywordPorts);
   const core: ModuleHttpCore = {
     context: () => ({
@@ -361,13 +366,13 @@ function harness() {
         id,
         level: 4,
         rationale: "问题、回答与冻结来源一致。",
-        evidenceIds: [document.documentId],
+        evidenceIds: ["claim-1", document.documentId],
       })),
       gates: ENTERPRISE_RAG_GATE_IDS.map((id) => ({
         id,
         status: "passed",
         reason: "冻结证据支持且未发现风险。",
-        evidenceIds: [document.documentId],
+        evidenceIds: ["claim-1", document.documentId],
       })),
       claims: [{
         id: "claim-1",
@@ -379,18 +384,40 @@ function harness() {
       summary: "回答完整且有冻结来源支持。",
     };
   }
-  function completeProvider() {
-    providerEvents = [{
-      id: "provider-result",
+  function pushProviderOutput(
+    value = acceptedOutput(),
+    id = `provider-result-${providerEvents.length + 1}`,
+  ) {
+    providerState = "finished";
+    providerEvents.push({
+      id,
       type: "structured_output_result",
       timestamp: Date.now(),
-      structured_output_result: { success: true, value: acceptedOutput() },
-    }];
+      structured_output_result: { success: true, value },
+    });
+  }
+  function pushProviderAssistant(
+    value: ReturnType<typeof acceptedOutput>,
+    id = `provider-assistant-${providerEvents.length + 1}`,
+  ) {
+    providerState = "finished";
+    providerEvents.push({
+      id,
+      type: "assistant_message",
+      timestamp: Date.now(),
+      assistant_message: { content: JSON.stringify(value) },
+    });
+  }
+  function completeProvider() {
+    pushProviderOutput();
   }
   return {
     service,
     client,
     startInput,
+    acceptedOutput,
+    pushProviderAssistant,
+    pushProviderOutput,
     completeProvider,
     operationRows,
     taskRows,
@@ -410,6 +437,23 @@ describe("企业 RAG 自动评估持久化服务", () => {
       report: null,
     });
     expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    const createSchema = h.client.createTask.mock.calls[0]![0]
+      .structuredOutputSchema as any;
+    const evaluatorTask = h.taskRows.find((row) => row.operationId === REQUEST_ID);
+    const frozenInput = evaluatorTask.providerRuntime.enterpriseRagEvaluation.input;
+    expect(createSchema.properties.operationToken.enum).toEqual([
+      frozenInput.operationToken,
+    ]);
+    expect(
+      createSchema.properties.dimensions.items.properties.evidenceIds.items.enum,
+    ).toEqual(expect.arrayContaining([
+      `answer:${ANSWER_MESSAGE_ID}`,
+      frozenInput.sources[0].id,
+      "claim-1",
+    ]));
+    expect(
+      createSchema.properties.dimensions.items.properties.evidenceIds.items.enum,
+    ).not.toContain(`answer:${ANSWER_MESSAGE_ID}-recalculated`);
     const frozenSources = h.taskRows.find((row) =>
       row.operationId === REQUEST_ID).providerRuntime.enterpriseRagEvaluation.input.sources;
     expect(frozenSources).toHaveLength(2);
@@ -445,6 +489,93 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const history = await h.service.latest(SOURCE_TASK_ID, TURN_ID);
     expect(history.latest?.report?.reportId).toBe(completed.report?.reportId);
     expect(history.history).toHaveLength(1);
+  });
+
+  it("首次证据 ID 被改写时只修复一次，并用同一绑定 schema 写入唯一报告", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const invalid = h.acceptedOutput();
+    for (const item of [...invalid.dimensions, ...invalid.gates]) {
+      item.evidenceIds = [`answer:${ANSWER_MESSAGE_ID}-recalculated`];
+    }
+    h.pushProviderOutput(invalid, "provider-invalid-result");
+
+    const pending = await h.service.observe(REQUEST_ID);
+    expect(pending.status).toBe("result_pending");
+    expect(pending.report).toBeNull();
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    const repairRequest = h.client.sendMessage.mock.calls[0]![0];
+    expect(repairRequest.prompt).toContain(`answer:${ANSWER_MESSAGE_ID}`);
+    expect(repairRequest.prompt).toContain("禁止重算、缩写或改写");
+    expect(repairRequest.structuredOutputSchema).toEqual(
+      h.client.createTask.mock.calls[0]![0].structuredOutputSchema,
+    );
+
+    h.pushProviderOutput(h.acceptedOutput(), "provider-repaired-result");
+    const completed = await h.service.observe(REQUEST_ID);
+    expect(completed.status).toBe("completed");
+    expect(completed.report?.result.score).toBe(100);
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.persistedEvents).toHaveLength(1);
+  });
+
+  it("自动修复后仍引用未知证据时失败且不写入报告", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const invalid = h.acceptedOutput();
+    invalid.gates[0].evidenceIds = ["claim-30"];
+    h.pushProviderOutput(invalid, "provider-invalid-result");
+    await h.service.observe(REQUEST_ID);
+
+    h.pushProviderOutput(invalid, "provider-invalid-repair");
+    const failed = await h.service.observe(REQUEST_ID);
+    expect(failed.status).toBe("failed");
+    expect(failed.error?.code).toBe("EVALUATION_REPAIR_FAILED");
+    expect(failed.report).toBeNull();
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.persistedEvents).toHaveLength(0);
+  });
+
+  it("assistant-message fallback 也拒绝 bound schema 范围外的 claim", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const invalid = h.acceptedOutput();
+    invalid.claims[0].id = "claim-31";
+    for (const item of [...invalid.dimensions, ...invalid.gates]) {
+      item.evidenceIds = ["claim-31"];
+    }
+    h.pushProviderAssistant(invalid, "provider-invalid-assistant");
+
+    const pending = await h.service.observe(REQUEST_ID);
+    expect(pending.status).toBe("result_pending");
+    expect(pending.report).toBeNull();
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.persistedEvents).toHaveLength(0);
+  });
+
+  it("继续接受使用 legacy schemaHash 启动的在途评估", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const operation = h.operationRows.find((row) => row.id === REQUEST_ID);
+    operation.schemaHash = intentHash(ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA);
+    const invalid = h.acceptedOutput();
+    invalid.gates[0].evidenceIds = ["legacy-invented-evidence"];
+    h.pushProviderOutput(invalid, "legacy-invalid-result");
+    const pending = await h.service.observe(REQUEST_ID);
+    expect(pending.status).toBe("result_pending");
+    expect(
+      h.client.sendMessage.mock.calls[0]![0].structuredOutputSchema,
+    ).toEqual(ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA);
+
+    const legacyValid = h.acceptedOutput();
+    const frozenSourceId = legacyValid.claims[0]!.sourceIds[0]!;
+    for (const item of [...legacyValid.dimensions, ...legacyValid.gates]) {
+      item.evidenceIds = [frozenSourceId];
+    }
+    h.pushProviderOutput(legacyValid, "legacy-repaired-result");
+    const completed = await h.service.observe(REQUEST_ID);
+    expect(completed.status).toBe("completed");
+    expect(completed.report?.result.score).toBe(100);
   });
 
   it("拒绝不属于源 QA 任务的 turn，且不会创建付费模型任务", async () => {
