@@ -25,7 +25,7 @@ export async function fetchPublicPage(raw,{signal,dnsLookup=lookup,request=https
   if(!resolved.length||resolved.some(row=>!publicAddress(row.address)))throw new Error('REPORT_RESEARCH_ADDRESS_DENIED');
   const ip=resolved[0].address;
   const response=await new Promise((resolve,reject)=>{
-   const req=request(url,{method:'GET',signal,timeout:20000,headers:{'User-Agent':'FrontMind-Report-Research/1.0','Accept':'text/html,text/plain,application/xhtml+xml'},lookup:(_host,_options,callback)=>callback(null,ip,4)},res=>{
+   const req=request(url,{method:'GET',signal,timeout:20000,headers:{'User-Agent':'FrontMind-Report-Research/1.0','Accept':'text/html,text/plain,application/xhtml+xml'},lookup:(_host,options,callback)=>options.all?callback(null,[{address:ip,family:4}]):callback(null,ip,4)},res=>{
     if([301,302,303,307,308].includes(res.statusCode)){res.resume();resolve({redirect:res.headers.location});return;}
     if(res.statusCode<200||res.statusCode>=300){res.resume();reject(new Error(`REPORT_RESEARCH_HTTP_${res.statusCode}`));return;}
     if(!/^(?:text\/(?:html|plain)|application\/xhtml\+xml)(?:;|$)/i.test(res.headers['content-type']??'')){res.resume();reject(new Error('REPORT_RESEARCH_CONTENT_TYPE_DENIED'));return;}
