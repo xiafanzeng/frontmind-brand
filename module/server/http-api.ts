@@ -67,6 +67,32 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   try {res.setHeader("Cache-Control","no-store");res.json(await createIntentWorkbenchService(core,req).poll());}
   catch {res.status(503).json({error:{code:"INTENT_UNAVAILABLE",message:"优化工作台暂不可用，请确认数据库迁移已完成后重新读取"}});}
  });
+ // API-backed question-template flow. Credentials stay server-side; never pass tokens to the browser.
+ const recommendQuestionTemplates = (path:string) => async (req:Request,res:import("express").Response) => {
+  res.setHeader("Cache-Control","no-store");
+  const token=(core.environment.MOLIZHISHU_TOKEN ?? core.environment.MOLIZHISHU_API_KEY ?? "").trim();
+  if(!token){res.status(503).json({error:{code:"MOLIZHISHU_NOT_CONFIGURED",message:"模力指数 API 尚未配置，请由部署人员设置服务端 MOLIZHISHU_TOKEN。"}});return;}
+  const companyName=typeof req.body?.companyName === "string" ? req.body.companyName.trim() : typeof req.body?.company_name === "string" ? req.body.company_name.trim() : "";
+  if(!companyName || companyName.length>120){res.status(400).json({error:{code:"INVALID_COMPANY_NAME",message:"请填写有效的企业名称。"}});return;}
+  if(path.endsWith("recommend-questions")){
+   const words=Array.isArray(req.body?.coreWords)?req.body.coreWords:Array.isArray(req.body?.core_words)?req.body.core_words:[];
+   if(!words.length || words.length>100 || words.some((word:unknown)=>typeof word!=="string"||!word.trim()||word.length>120)){res.status(400).json({error:{code:"INVALID_CORE_WORDS",message:"请选择一个或多个有效核心词。"}});return;}
+  }
+  const base=(core.environment.MOLIZHISHU_API_BASE_URL ?? "https://business-api.molizhishu.com").replace(/\/+$/, "").trim();
+  const normalizedBase=base;
+  try{
+   const response=await fetch(`${normalizedBase}/api/business/question-templates/${path}`,{method:"POST",headers:{Authorization:`Bearer ${token}`,Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify(req.body),signal:AbortSignal.timeout(30_000)});
+   const text=await response.text();let payload:unknown;try{payload=JSON.parse(text);}catch{payload={message:"上游接口返回非 JSON 内容。"};}
+   const record=payload&&typeof payload==="object"?payload as Record<string,unknown>:{};
+   if(!response.ok||record.success===false){res.status(response.ok?502:response.status).json({error:{code:"MOLIZHISHU_UPSTREAM_ERROR",message:typeof record.message==="string"?record.message:"模力指数接口暂时无法完成请求。"}});return;}
+   res.status(200).json(payload);
+  }catch(error){
+   const timeout=error instanceof Error && error.name==="TimeoutError";
+   res.status(502).json({error:{code:timeout?"MOLIZHISHU_TIMEOUT":"MOLIZHISHU_UNAVAILABLE",message:timeout?"模力指数接口请求超时，请稍后重试。":"无法连接模力指数接口，请检查服务端网络与配置。"}});
+  }
+ };
+ router.post("/question-templates/recommend-core-words",recommendQuestionTemplates("recommend-core-words"));
+ router.post("/question-templates/recommend-questions",recommendQuestionTemplates("recommend-questions"));
  router.get("/capabilities",(req,res)=>{
   const context=core.context(req);
   res.setHeader("Cache-Control","no-store");
