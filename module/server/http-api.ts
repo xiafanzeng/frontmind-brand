@@ -3,6 +3,9 @@ import type { MySql2Database } from "drizzle-orm/mysql2";
 import {z} from "zod";
 // 包名导入保持运行时从模块自身 dist 加载；相对导入会被 Dashboard 构建内联进 bundle，破坏 workflow 清单路径解析。
 import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
+import {createResponseLogicEvaluationRouter} from "@frontmind/module-brand/server/response-logic-evaluation-api";
+import {createResponseLogicJudgeRouter} from "@frontmind/module-brand/server/response-logic-judge-api";
+import {createResponseLogicOptimizationRouter} from "@frontmind/module-brand/server/response-logic-optimization-api";
 import {
  createEnterpriseRagEvaluationService,
  EnterpriseRagEvaluationError,
@@ -94,6 +97,12 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  };
  router.post("/question-templates/recommend-core-words",recommendQuestionTemplates("recommend-core-words"));
  router.post("/question-templates/recommend-questions",recommendQuestionTemplates("recommend-questions"));
+ // Response-logic evaluation/judge/optimizer — mounted under /api/modules/brand/response-logic
+ // Core host auth middleware (frontmindUser) is already applied upstream.
+ router.use("/response-logic/evaluation", createResponseLogicEvaluationRouter(core as never));
+ router.use("/response-logic/evaluation/judge", createResponseLogicJudgeRouter(core as never));
+ router.use("/response-logic/optimization", createResponseLogicOptimizationRouter(core as never));
+
  router.get("/capabilities",(req,res)=>{
   const context=core.context(req);
   res.setHeader("Cache-Control","no-store");
