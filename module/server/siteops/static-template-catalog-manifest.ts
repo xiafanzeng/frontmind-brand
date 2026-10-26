@@ -6,11 +6,11 @@ import {
 /**
  * Immutable input coordinates for the FrontMind 2.8 Template catalog.
  *
- * The 35-row library preserves the immutable v3-v5 coordinates; v6 published a
- * six-template selection from it. V7 narrows the live catalog to the single
- * FrontMind 蔚蓝帮助中心 layout. Stable candidate ids keep their original
- * library positions even though display order differs per version. Customer
- * requests never refresh these definitions.
+ * The 35-row library preserves the immutable v3-v5 coordinates. V6 publishes
+ * a deliberately smaller six-template set: FrontMind's three help-center
+ * layouts first, followed by three selected Hirael layouts. Stable candidate
+ * ids keep their original library positions even though v6 display order is
+ * different. Customer requests never refresh these definitions.
  * The seed command downloads the exact immutable GitHub commit and preview for
  * every row, then records the resulting byte hashes in the active manifest.
  */
@@ -530,8 +530,13 @@ export const HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTem
     ),
   );
 
-const V7_CANDIDATE_IDS = Object.freeze([
+const V6_CANDIDATE_IDS = Object.freeze([
   "static-template-33-helpcenter-search",
+  "static-template-34-helpcenter-docs",
+  "static-template-35-helpcenter-minimal",
+  "static-template-15-hirael-nexacore",
+  "static-template-21-hirael-mindloop",
+  "static-template-22-hirael-agency-landing",
 ] as const);
 
 const HISTORICAL_DEFINITIONS_BY_ID = new Map(
@@ -543,7 +548,7 @@ const HISTORICAL_DEFINITIONS_BY_ID = new Map(
 
 export const FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTemplateDefinition[] =
   Object.freeze(
-    V7_CANDIDATE_IDS.map((candidateId, index) => {
+    V6_CANDIDATE_IDS.map((candidateId, index) => {
       const definition = HISTORICAL_DEFINITIONS_BY_ID.get(candidateId);
       if (!definition) {
         throw new Error("STATIC_TEMPLATE_CATALOG_SELECTED_DEFINITION_MISSING");
@@ -552,18 +557,16 @@ export const FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTemplateDefini
     }),
   );
 
-/** The rolling v6 catalog exposed exactly these six admitted entries. */
+/** The rolling v4 catalog exposed exactly these four admitted entries. */
 export const ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: readonly string[] =
   Object.freeze([
+    "static-template-22-hirael-agency-landing",
     "static-template-33-helpcenter-search",
     "static-template-34-helpcenter-docs",
     "static-template-35-helpcenter-minimal",
-    "static-template-15-hirael-nexacore",
-    "static-template-21-hirael-mindloop",
-    "static-template-22-hirael-agency-landing",
   ]);
 
-/** A v7 catalog is ready only when every customer-visible template has passed
+/** A v6 catalog is ready only when every customer-visible template has passed
  * the controlled Vite build, static validation and real-browser admission. */
 export const STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: readonly string[] =
   Object.freeze(

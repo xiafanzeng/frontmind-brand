@@ -109,10 +109,9 @@ export const siteOpsVisualCandidatePageProjectionSchema = z
       .array(siteOpsVisualCandidateProjectionSchema)
       .refine(
         (candidates) =>
-          candidates.length === 1 || candidates.length === 3 ||
-          candidates.length === 6 || candidates.length === 8 ||
+          candidates.length === 3 || candidates.length === 6 || candidates.length === 8 ||
           candidates.length === SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE,
-        "Visual candidate page must contain 1, 3, 6 or 8 static or 9 historical candidates",
+        "Visual candidate page must contain 3, 6 or 8 static or 9 historical candidates",
       ),
   })
   .strict();
