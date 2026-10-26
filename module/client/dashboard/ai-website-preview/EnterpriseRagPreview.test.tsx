@@ -47,6 +47,7 @@ function liveRuntime(overrides: Partial<NonNullable<Parameters<typeof Enterprise
     onAsk: vi.fn(async () => true),
     onStop: vi.fn(async () => true),
     onRetryKnowledge: vi.fn(),
+    onStartNewConversation: vi.fn(),
     onOpenKnowledge: vi.fn(),
     ...overrides,
   };
@@ -144,7 +145,38 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByText("服务端原始回答")).toBeTruthy();
   });
 
+  it("clears the previous answer notice when a new empty conversation becomes active", async () => {
+    const page = render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          question: "旧问题",
+          questionId: "old-question",
+          answer: "旧回答",
+          answerId: "old-answer",
+        })}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/已载入真实企业问答结果/)).toBeTruthy(),
+    );
+
+    page.rerender(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({ question: "", answer: "" })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText(/已载入真实企业问答结果/)).toBeNull(),
+    );
+  });
+
   it("shows the frozen task version and never substitutes a newer publication", () => {
+    const startNewConversation = vi.fn();
     render(
       <EnterpriseRagPreview
         onOpenWebsite={vi.fn()}
@@ -164,6 +196,7 @@ describe("enterprise RAG evidence-based review UI", () => {
             sourceFileName: "当前资料.zip",
             documentCount: 20,
           },
+          onStartNewConversation: startNewConversation,
         })}
       />,
     );
@@ -171,6 +204,10 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByText("本任务冻结知识快照")).toBeTruthy();
     expect(screen.getByText(/知识版本 v3/)).toBeTruthy();
     expect(screen.getByText(/项目已发布 v9；本会话仍使用冻结的 v3/)).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "使用 v9 新建问答" }),
+    );
+    expect(startNewConversation).toHaveBeenCalledTimes(1);
     expect(screen.getByText("历史资料.zip")).toBeTruthy();
     expect(screen.queryByText("当前资料.zip")).toBeNull();
   });

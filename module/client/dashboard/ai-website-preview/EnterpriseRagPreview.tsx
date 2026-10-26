@@ -50,6 +50,7 @@ export type EnterpriseRagLiveRuntime = {
   onRetryPending: () => Promise<boolean>;
   onStop: () => Promise<boolean>;
   onRetryKnowledge: () => void;
+  onStartNewConversation: () => void;
   onOpenKnowledge: () => void;
 };
 type Props = {
@@ -154,7 +155,11 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
     setDimensions(emptyDimensions());
     setGates(emptyGates());
     setMode("manual");
-    if (live.answer) setNotice("已载入真实企业问答结果；质量评分需人工核验后生成。");
+    setNotice(
+      live.answer
+        ? "已载入真实企业问答结果；质量评分需人工核验后生成。"
+        : "",
+    );
   }, [liveAnswerKey, live]);
   const result = scoreEvaluation({ dimensions, gates });
   const issues = mode === "sample" && activeCase ? activeCase.issues : manualIssues(dimensions, gates);
@@ -281,9 +286,9 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
             <div className="erag-stats"><div><strong>{live ? live.knowledgeBase ? 1 : 0 : previewKnowledgeCollectionCount}</strong><small>{live ? historicalKnowledge ? "任务冻结快照" : "发布快照" : "知识集合"}</small></div><div><strong>{live ? live.knowledgeBase?.documentCount ?? 0 : previewKnowledgeFragmentCount}</strong><small>{live ? "知识文档" : "示例知识片段"}</small></div><div><strong>{currentSources.length}</strong><small>当前来源</small></div></div>
             <div className="rag-knowledge-row"><span>{live ? live.knowledgeBase?.sourceFileName || knowledgeVersion : activeCase ? KNOWLEDGE_VERSION : "实际来源待录入"}</span><button onClick={() => setDrawer("evidence")}>查看知识与依据 <ArrowRight size={14} /></button></div>
             {live && <p className="rag-muted">知识版本 {knowledgeVersion} · 问答模型 {live.providerLabel}</p>}
-            {hasNewerPublication && <p className="rag-muted">项目已发布 v{live?.currentKnowledgeBase?.version}；本会话仍使用冻结的 {knowledgeVersion}。</p>}
+            {hasNewerPublication && <div className="sfp-notice" role="status"><p>项目已发布 v{live?.currentKnowledgeBase?.version}；本会话仍使用冻结的 {knowledgeVersion}。</p><div className="rag-panel-actions"><button className="sfp-button sfp-button--primary" disabled={live?.busy} onClick={live?.onStartNewConversation}>使用 v{live?.currentKnowledgeBase?.version} 新建问答</button></div></div>}
           </section>
-          <section className="sfp-panel erag-test-card"><div className="erag-card-heading"><div><span className="erag-card-icon"><Bot size={18} /></span><strong>回答示例试用</strong></div>{live ? <span className="rag-muted">服务端原始回答</span> : <button className="rag-text-button" onClick={openAnswer}>{answer ? "编辑回答" : "录入回答"}</button>}</div>
+          <section className="sfp-panel erag-test-card"><div className="erag-card-heading"><div><span className="erag-card-icon"><Bot size={18} /></span><strong>回答示例试用</strong></div>{live ? <div className="rag-panel-actions"><span className="rag-muted">服务端原始回答</span>{live.taskId && <button className="rag-text-button" disabled={live.busy} onClick={live.onStartNewConversation}>新建问答</button>}</div> : <button className="rag-text-button" onClick={openAnswer}>{answer ? "编辑回答" : "录入回答"}</button>}</div>
             {!live && <label className="rag-case-picker">示例场景<select aria-label="选择评估示例" value={activeCase?.id ?? "custom"} onChange={(event) => { const item = RAG_SAMPLE_CASES.find((item) => item.id === event.target.value); if (item) selectCase(item); }}><option value="custom" disabled>自定义问题</option>{RAG_SAMPLE_CASES.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}
             <div className="erag-test-thread"><p className="erag-user-message">{question || (live ? "输入一个企业相关问题开始真实问答。" : "")}</p><article><header><Sparkles size={16} /><strong>{websiteDraft?.assistant.name || "企业助手"}</strong><small>{live ? live.running ? "真实回答生成中" : "真实企业问答" : activeCase ? "合成回答" : "人工录入"}</small></header><p data-testid={live ? "rag-answer" : undefined}>{answer || (live && live.busy ? historicalKnowledge ? "正在读取本任务冻结知识并生成回答…" : "正在读取当前发布知识并生成回答…" : live ? "尚无待评估回答。请提交真实问题。" : "尚无待评估回答。请录入一条回答进行人工评审。")}</p>{currentSources.length > 0 && <div className="erag-citations">{currentSources.map((source, index) => <button data-testid={live ? "rag-source" : undefined} key={`${"kind" in source ? source.kind : "source"}:${source.id}`} onClick={() => setDrawer("evidence")}>[{index + 1}] {source.title}</button>)}</div>}</article></div>
             <form className="erag-composer" onSubmit={submitQuestion}><input data-testid={live ? "rag-question-input" : undefined} aria-label={live ? "输入企业 RAG 问题" : "输入企业 RAG 示例问题"} placeholder={live ? "输入访客问题，基于已发布知识回答" : "输入访客问题，或选择上方示例"} value={input} disabled={Boolean(live) && !canAsk} onChange={(event) => setInput(event.currentTarget.value)} /><button data-testid={live ? "rag-submit" : undefined} type="submit" disabled={Boolean(live) && (!canAsk || !input.trim())}><Send size={16} />{live ? live.busy ? "回答中…" : "发送问题" : "试用问题"}</button>{live?.running && <button type="button" className="sfp-button sfp-button--ghost" onClick={() => void live.onStop()}>停止</button>}</form>

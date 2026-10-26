@@ -1,9 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { finalReplyIds } from "../lib/final-reply";
 import {
   brandHost,
   ConversationPurposeProvider,
   projectWorkspaceUrl,
+  setWorkbenchTaskQuery,
   useConversation,
 } from "../host";
 import { useEnterpriseQaController } from "../use-enterprise-qa-controller";
@@ -81,6 +82,23 @@ function EnterpriseRagLiveWorkspace({
     onOpenWebsiteAssistant ??
     (() => navigateWithinWorkspace("/?view=website&step=assistant"));
 
+  const startNewConversation = useCallback(() => {
+    if (
+      !allowConversationCreation ||
+      controller.busy ||
+      creating.current
+    )
+      return;
+    creating.current = true;
+    const conversationId = workspace.createConversation({
+      title: "企业问答",
+      reuseEmpty: false,
+      purpose: "enterprise_qa",
+      workbenchAgentId: "enterprise-qa",
+    });
+    setWorkbenchTaskQuery(conversationId);
+  }, [allowConversationCreation, controller.busy, workspace]);
+
   useEffect(() => {
     if (
       !allowConversationCreation ||
@@ -89,18 +107,12 @@ function EnterpriseRagLiveWorkspace({
       creating.current
     )
       return;
-    creating.current = true;
-    workspace.createConversation({
-      title: "企业问答",
-      reuseEmpty: false,
-      purpose: "enterprise_qa",
-      workbenchAgentId: "enterprise-qa",
-    });
+    startNewConversation();
   }, [
     allowConversationCreation,
     workspace.hydrated,
     workspace.activeConversation,
-    workspace,
+    startNewConversation,
   ]);
   useEffect(() => {
     if (workspace.activeConversation) creating.current = false;
@@ -156,6 +168,7 @@ function EnterpriseRagLiveWorkspace({
       retryCurrentPublication();
       if (localTaskId) retryTaskSource();
     },
+    onStartNewConversation: startNewConversation,
     onOpenKnowledge: () => navigateWithinWorkspace("/?view=knowledge"),
   };
 

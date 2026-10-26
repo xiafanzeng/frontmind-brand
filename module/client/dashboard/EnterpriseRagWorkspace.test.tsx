@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => {
     retryCurrent: vi.fn(),
     retryTask: vi.fn(),
     createConversation: vi.fn(),
+    setWorkbenchTaskQuery: vi.fn(),
     received: null as null | Record<string, unknown>,
     workbenchProps: null as null | Record<string, unknown>,
   };
@@ -79,6 +80,7 @@ vi.mock("../host", () => ({
   ),
   brandHost: () => ({ requestWorkspaceNavigation: vi.fn() }),
   projectWorkspaceUrl: (path: string) => path,
+  setWorkbenchTaskQuery: mocks.setWorkbenchTaskQuery,
   useConversation: () => ({
     hydrated: true,
     activeConversation: mocks.active,
@@ -168,6 +170,7 @@ beforeEach(() => {
   mocks.received = null;
   mocks.workbenchProps = null;
   vi.clearAllMocks();
+  mocks.createConversation.mockReturnValue("new-conversation");
 });
 
 afterEach(cleanup);
@@ -192,6 +195,28 @@ describe("connected redesigned enterprise RAG workspace", () => {
       sources: [{ id: "source-1", title: "任务实际引用资料" }],
       onRetryPending: mocks.retryPending,
     });
+  });
+
+  it("lets a historical task start a fresh conversation on the current publication", () => {
+    render(<EnterpriseRagWorkspace />);
+
+    act(() => {
+      (
+        mocks.received?.live as {
+          onStartNewConversation: () => void;
+        }
+      ).onStartNewConversation();
+    });
+
+    expect(mocks.createConversation).toHaveBeenCalledWith({
+      title: "企业问答",
+      reuseEmpty: false,
+      purpose: "enterprise_qa",
+      workbenchAgentId: "enterprise-qa",
+    });
+    expect(mocks.setWorkbenchTaskQuery).toHaveBeenCalledWith(
+      "new-conversation",
+    );
   });
 
   it("prefers the task response snapshot while the task runtime source is loading", () => {
