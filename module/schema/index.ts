@@ -20,6 +20,8 @@ import {
   varchar,
 } from "drizzle-orm/mysql-core";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
+import type { ConfirmedResponseLogic, ResponseLogicAppliedModelResult, ResponseLogicDraft, ResponseLogicPublicationMutation } from "../contracts/response-logic.js";
+import type { ResponseLogicRuleEvaluation } from "../contracts/response-logic-evaluation.js";
 
 
 export type KnowledgeDocumentRecord = {
@@ -2101,7 +2103,90 @@ const brandIntentWorkspaces = mysqlTable("brand_intent_workspaces", {
   updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
 }, table=>[index("brand_intent_owner_project_idx").on(table.ownerUserId, table.projectId)]);
 
-return { brandIntentWorkspaces, jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles };
+const responseLogicEntries = mysqlTable(
+  "response_logic_entries",
+  {
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => core.currentEnterpriseProjectId() ?? sql`NULL`),
+    id: varchar("id", { length: 36 }).primaryKey(),
+    userId: int("userId")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    questionId: varchar("questionId", { length: 191 }).notNull(),
+    groupId: varchar("groupId", { length: 128 }).notNull(),
+    groupTitle: varchar("groupTitle", { length: 255 }).notNull(),
+    question: text("question").notNull(),
+    intent: text("intent").notNull(),
+    summary: text("summary").notNull(),
+    conversationId: varchar("conversationId", { length: 191 }),
+    lastTaskId: varchar("lastTaskId", { length: 255 }),
+    skillName: varchar("skillName", { length: 128 })
+      .default("response-logic-builder")
+      .notNull(),
+    skillVersion: varchar("skillVersion", { length: 64 })
+      .default("1")
+      .notNull(),
+    skillContentHash: varchar("skillContentHash", { length: 64 }),
+    draft: json("draft").$type<ResponseLogicDraft>().notNull(),
+    confirmed: json("confirmed").$type<ConfirmedResponseLogic>(),
+    appliedModelResult: json("appliedModelResult").$type<ResponseLogicAppliedModelResult>(),
+    lastPublicationMutation: json("lastPublicationMutation").$type<ResponseLogicPublicationMutation>(),
+    version: int("version").default(0).notNull(),
+    revision: int("revision", { unsigned: true }).default(1).notNull(),
+    status: mysqlEnum("status", ["draft", "confirmed"])
+      .default("draft")
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("response_logic_entries_user_question_uq").on(
+      table.userId,
+      table.questionId,
+    ),
+    index("response_logic_entries_user_status_idx").on(
+      table.userId,
+      table.status,
+    ),
+    uniqueIndex("response_logic_entries_user_conversation_uq").on(
+      table.userId,
+      table.conversationId,
+    ),
+  ],
+);
+
+/**
+ * Persisted rule-evaluation history for response-logic drafts. The physical
+ * CREATE TABLE lands through the Core drizzle migration flow (module
+ * definitions feed Core's schema.ts). Until that migration is deployed, the
+ * evaluation API degrades honestly via its persistence-unavailable state
+ * instead of pretending to store results.
+ */
+const responseLogicEvaluations = mysqlTable(
+  "response_logic_evaluations",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    userId: int("userId")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    questionId: varchar("questionId", { length: 191 }).notNull(),
+    recordRevision: int("recordRevision", { unsigned: true }).notNull(),
+    confirmedVersion: int("confirmedVersion"),
+    sourceFingerprint: varchar("sourceFingerprint", { length: 64 }).notNull(),
+    ruleVersion: varchar("ruleVersion", { length: 32 }).notNull(),
+    evaluation: json("evaluation").$type<ResponseLogicRuleEvaluation>().notNull(),
+    status: mysqlEnum("status", ["completed", "failed"]).default("completed").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    index("response_logic_evaluations_user_question_idx").on(
+      table.userId,
+      table.questionId,
+      table.createdAt,
+    ),
+  ],
+);
+
+return { brandIntentWorkspaces, jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles, responseLogicEntries, responseLogicEvaluations };
 }
 export type BrandSchema = ReturnType<typeof createBrandSchema>;
 
@@ -2164,3 +2249,8 @@ export type JenovaBrandTrackingTurn = BrandSchema["jenovaBrandTrackingTurns"]["$
 export type BrandIntentWorkspace = BrandSchema["brandIntentWorkspaces"]["$inferSelect"];
 
 export type InsertBrandIntentWorkspace = BrandSchema["brandIntentWorkspaces"]["$inferInsert"];
+
+export type ResponseLogicEntry = BrandSchema["responseLogicEntries"]["$inferSelect"];
+export type InsertResponseLogicEntry = BrandSchema["responseLogicEntries"]["$inferInsert"];
+export type ResponseLogicEvaluation = BrandSchema["responseLogicEvaluations"]["$inferSelect"];
+export type InsertResponseLogicEvaluation = BrandSchema["responseLogicEvaluations"]["$inferInsert"];
