@@ -696,13 +696,17 @@ export function SimplifiedWebsiteBuilderPreview({
     ].includes(liveObservation.interactionState),
   );
   const liveConfigurationEditable = templateSelectionOpen || liveRevisionEditable;
-  const latestGlobalDeployment = liveObservation?.deployments.find(
-    (deployment) => deployment.target === "global_excluding_cn" && deployment.status === "active",
-  ) ?? null;
   const authoritativeGlobalHeadId =
     liveObservation?.project.globalLiveDeploymentId
-    ?? latestGlobalDeployment?.id
     ?? null;
+  const latestGlobalDeployment = authoritativeGlobalHeadId
+    ? liveObservation?.deployments.find(
+        (deployment) =>
+          deployment.id === authoritativeGlobalHeadId
+          && deployment.target === "global_excluding_cn"
+          && deployment.status === "active",
+      ) ?? null
+    : null;
   const pendingGlobalDeployment = liveObservation?.deployments.find(
     (deployment) => deployment.target === "global_excluding_cn"
       && ["reserved", "deploying", "verifying"].includes(deployment.status),

@@ -874,6 +874,38 @@ describe("redesigned live website builder setup", () => {
         siteOps={{
           observation: {
             ...approved,
+            project: {
+              ...approved.project,
+              globalLiveDeploymentId: "88888888-8888-4888-8888-888888888888",
+            },
+            deployments: [{
+              id: "77777777-7777-4777-8777-777777777777",
+              buildId: approved.builds[0]!.id,
+              target: "global_excluding_cn",
+              status: "active",
+              publicUrl: "https://help.example.com",
+              createdAt: "2026-10-23T01:15:00.000Z",
+            }],
+          },
+          onAction: vi.fn(),
+        }}
+        storageScope="live:7:workspace-a"
+      />,
+    );
+    release = screen.getByRole("button", { name: "进入发布确认" }) as HTMLButtonElement;
+    expect(release.disabled).toBe(false);
+    expect(screen.queryByText("已公开 · https://help.example.com")).toBeNull();
+
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="evaluation"
+        siteOps={{
+          observation: {
+            ...approved,
+            project: {
+              ...approved.project,
+              globalLiveDeploymentId: "77777777-7777-4777-8777-777777777777",
+            },
             deployments: [{
               id: "77777777-7777-4777-8777-777777777777",
               buildId: approved.builds[0]!.id,
@@ -890,5 +922,6 @@ describe("redesigned live website builder setup", () => {
     );
     release = screen.getByRole("button", { name: "当前构建已在线" }) as HTMLButtonElement;
     expect(release.disabled).toBe(true);
+    expect(screen.getByText("已公开 · https://help.example.com")).toBeTruthy();
   });
 });
