@@ -74,12 +74,12 @@ function page(title: string, body: string) {
 
 function metricsHtml(document: BrandReportDocument) {
   const metrics = calculateBrandReportMetrics(document.monitoring);
-  return `<div class="metrics"><div class="metric"><strong>${metrics.samples}</strong><span>实际采集回答</span></div><div class="metric"><strong>${percentage(metrics.mentionRate)}</strong><span>品牌提及率</span></div><div class="metric"><strong>${percentage(metrics.firstRecommendationRate)}</strong><span>首位推荐率</span></div><div class="metric"><strong>${metrics.citations}</strong><span>引用记录</span></div></div><div class="method">指标来自本轮已确认的两个问题；每个平台、每个问题采集 5 次。提及率 = 提及品牌的回答数 ÷ 全部回答数；首位推荐率 = 排名为 1 的回答数 ÷ 全部回答数。未提供排名的回答不计为首位。该样本反映本轮采集情况，不代表平台整体表现。</div>`;
+  return `<div class="metrics"><div class="metric"><strong>${metrics.samples}</strong><span>实际采集回答</span></div><div class="metric"><strong>${percentage(metrics.mentionRate)}</strong><span>品牌提及率</span></div><div class="metric"><strong>${percentage(metrics.firstRecommendationRate)}</strong><span>首位出现占比</span></div><div class="metric"><strong>${metrics.citations}</strong><span>引用记录</span></div></div><div class="method">指标来自本轮已确认的两个问题；每个平台、每个问题采集 5 次。提及率 = 提及品牌的回答数 ÷ 全部回答数；首位出现占比 = 供应商返回品牌排序为 1 的回答数 ÷ 全部回答数。仅反映出现顺序，不代表正面评价或推荐。未提供排名的回答不计为首位。该样本反映本轮采集情况，不代表平台整体表现。</div>`;
 }
 
 function platformHtml(document: BrandReportDocument) {
   const metrics = calculateBrandReportMetrics(document.monitoring);
-  return `<h3>各平台品牌提及情况</h3>${metrics.platforms.map((platform) => `<div class="bar-row"><span>${escapeHtml(platform.label)}</span><div class="bar-track"><div class="bar" style="width:${platform.mentionRate.toFixed(4)}%"></div></div><strong>${percentage(platform.mentionRate)}</strong></div>`).join("")}<div class="table-scroll"><table><thead><tr><th>平台</th><th>回答数</th><th>提及回答</th><th>首位推荐</th><th>引用记录</th></tr></thead><tbody>${metrics.platforms.map((platform) => `<tr><td>${escapeHtml(platform.label)}</td><td>${platform.samples}</td><td>${platform.mentions}</td><td>${platform.firstRecommendations}</td><td>${platform.citations}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<h3>各平台品牌提及情况</h3>${metrics.platforms.map((platform) => `<div class="bar-row"><span>${escapeHtml(platform.label)}</span><div class="bar-track"><div class="bar" style="width:${platform.mentionRate.toFixed(4)}%"></div></div><strong>${percentage(platform.mentionRate)}</strong></div>`).join("")}<div class="table-scroll"><table><thead><tr><th>平台</th><th>回答数</th><th>提及回答</th><th>首位出现</th><th>引用记录</th></tr></thead><tbody>${metrics.platforms.map((platform) => `<tr><td>${escapeHtml(platform.label)}</td><td>${platform.samples}</td><td>${platform.mentions}</td><td>${platform.firstRecommendations}</td><td>${platform.citations}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 function sourceHtml(document: BrandReportDocument) {
@@ -159,7 +159,7 @@ export async function renderBriefingPptx(input: BrandReportDocument): Promise<Bu
     const showMetrics = [0, 2, 10, 12].includes(page.topicIndex) && !page.continuation;
     let y = 2.3;
     if (showMetrics) {
-      const values = [[String(metrics.samples), "采集回答"], [percentage(metrics.mentionRate), "品牌提及率"], [percentage(metrics.firstRecommendationRate), "首位推荐率"], [String(metrics.citations), "引用记录"]];
+      const values = [[String(metrics.samples), "采集回答"], [percentage(metrics.mentionRate), "品牌提及率"], [percentage(metrics.firstRecommendationRate), "首位出现占比"], [String(metrics.citations), "引用记录"]];
       values.forEach(([value, label], position) => {
         const x = 0.62 + position * 3.05;
         slide.addShape(pptx.ShapeType.roundRect, { x, y, w: 2.86, h: 0.83, rectRadius: 0.08, fill: { color: "FFFFFF" }, line: { color: "DDE5EF", width: 0.7 } });
@@ -186,7 +186,7 @@ export async function renderBriefingPptx(input: BrandReportDocument): Promise<Bu
     slide.addShape(pptx.ShapeType.line, { x: 0.62, y: 7.06, w: 12, h: 0, line: { color: "DDE5EF", width: 0.6 } });
     addText(`${page.sourceStageIds.join(" / ")} · 规划目标为建议值，以复测为准`, { x: 0.62, y: 7.13, w: 10.4, h: 0.19, fontSize: 8, color: "64748B", margin: 0 });
     addText(`${index + 1} / ${pages.length}`, { x: 11.65, y: 7.12, w: 0.9, h: 0.21, fontSize: 9, color: "64748B", margin: 0, align: "right" });
-    slide.addNotes(`品牌：${document.brandName}\n生成时间：${document.generatedAt}\n${page.title}\n${page.lead}\n${page.bullets.join("\n")}\n研究依据：${page.sourceStageIds.join(", ")}\n指标口径：提及或首位回答数除以本轮全部采集回答数。\n${page.sourceStageIds.flatMap((id) => document.stages.find((stage) => stage.id === id)?.sources.map((source) => `${source.title}: ${source.url}`) ?? []).join("\n")}`);
+    slide.addNotes(`品牌：${document.brandName}\n生成时间：${document.generatedAt}\n${page.title}\n${page.lead}\n${page.bullets.join("\n")}\n研究依据：${page.sourceStageIds.join(", ")}\n指标口径：提及或首位回答数除以本轮全部采集回答数。首位仅指供应商返回的出现顺序，不代表正面评价或推荐。\n${page.sourceStageIds.flatMap((id) => document.stages.find((stage) => stage.id === id)?.sources.map((source) => `${source.title}: ${source.url}`) ?? []).join("\n")}`);
   });
   const bytes = await pptx.write({ outputType: "nodebuffer" });
   return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes as ArrayBuffer);
