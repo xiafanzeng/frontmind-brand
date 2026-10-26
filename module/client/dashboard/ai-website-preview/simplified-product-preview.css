@@ -216,7 +216,8 @@
 }
 
 .sfp-live-status,
-.sfp-live-start {
+.sfp-live-start,
+.sfp-siteops-release-entry {
   align-items: center;
   background: #f8f5fa;
   border: 1px solid #e2d6e9;
@@ -231,6 +232,21 @@
 
 .sfp-live-start {
   margin: 0 0 18px;
+}
+
+.sfp-siteops-release-entry {
+  background: #fff;
+}
+
+.sfp-siteops-release-entry > span {
+  align-items: center;
+  color: var(--sfp-ink);
+  display: inline-flex;
+  gap: 8px;
+}
+
+.sfp-siteops-release-entry > span > svg {
+  color: var(--sfp-accent);
 }
 
 .sfp-live-status > span,
@@ -270,7 +286,8 @@
 }
 
 .sfp-live-status > a,
-.sfp-live-start > button {
+.sfp-live-start > button,
+.sfp-siteops-release-entry > button {
   align-items: center;
   background: var(--sfp-accent);
   border: 1px solid var(--sfp-accent);
@@ -287,6 +304,15 @@
 .sfp-live-start > button:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+.sfp-siteops-view-switch {
+  box-sizing: border-box;
+  display: flex;
+  margin: 16px auto 12px;
+  max-width: 1480px;
+  padding: 0 clamp(18px, 3vw, 38px);
+  width: 100%;
 }
 
 .sfp-spin {
@@ -2981,13 +3007,15 @@
   }
 
   .sfp-live-status,
-  .sfp-live-start {
+  .sfp-live-start,
+  .sfp-siteops-release-entry {
     align-items: stretch;
     flex-direction: column;
   }
 
   .sfp-live-status > a,
-  .sfp-live-start > button {
+  .sfp-live-start > button,
+  .sfp-siteops-release-entry > button {
     justify-content: center;
   }
 

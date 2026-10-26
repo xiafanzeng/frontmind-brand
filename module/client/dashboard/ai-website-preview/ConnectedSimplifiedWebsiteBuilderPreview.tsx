@@ -1,3 +1,4 @@
+import { useState } from "react";
 import ConnectedSiteOpsConversationPanel from "../siteops/ConnectedSiteOpsConversationPanel";
 import { useLocation } from "wouter";
 import { useRuntimeContext } from "../../host";
@@ -15,8 +16,9 @@ export type ConnectedSimplifiedWebsiteBuilderPreviewProps = {
 
 /**
  * Production transport for the redesigned website builder. The established
- * SiteOps controller still owns idempotency, polling, uploads and retries;
- * only its view is replaced by the newer four-step product experience.
+ * SiteOps controller still owns idempotency, polling, uploads and retries.
+ * The controller can switch between the four-step view and its established
+ * Aliyun/domain/release UI without mounting a second transport.
  */
 export default function ConnectedSimplifiedWebsiteBuilderPreview({
   initialStep,
@@ -24,6 +26,7 @@ export default function ConnectedSimplifiedWebsiteBuilderPreview({
   onStepChange,
   storageScope: explicitStorageScope,
 }: ConnectedSimplifiedWebsiteBuilderPreviewProps) {
+  const [showSiteOpsRelease, setShowSiteOpsRelease] = useState(false);
   const [, navigate] = useLocation();
   const runtime = useRuntimeContext();
   const storageScope = explicitStorageScope
@@ -39,17 +42,33 @@ export default function ConnectedSimplifiedWebsiteBuilderPreview({
   });
 
   return (
-    <ConnectedSiteOpsConversationPanel
-      render={(siteOps) => (
-        <SimplifiedWebsiteBuilderPreview
-          key={storageScope}
-          initialStep={initialStep}
-          onOpenRag={openRag}
-          onStepChange={changeStep}
-          siteOps={siteOps}
-          storageScope={storageScope}
-        />
+    <>
+      {showSiteOpsRelease && (
+        <div className="sfp-siteops-view-switch">
+          <button
+            type="button"
+            className="siteops-secondary-button"
+            onClick={() => setShowSiteOpsRelease(false)}
+          >
+            返回四步建站
+          </button>
+        </div>
       )}
-    />
+      <ConnectedSiteOpsConversationPanel
+        render={showSiteOpsRelease
+          ? undefined
+          : (siteOps) => (
+              <SimplifiedWebsiteBuilderPreview
+                key={storageScope}
+                initialStep={initialStep}
+                onOpenRag={openRag}
+                onOpenSiteOpsRelease={() => setShowSiteOpsRelease(true)}
+                onStepChange={changeStep}
+                siteOps={siteOps}
+                storageScope={storageScope}
+              />
+            )}
+      />
+    </>
   );
 }

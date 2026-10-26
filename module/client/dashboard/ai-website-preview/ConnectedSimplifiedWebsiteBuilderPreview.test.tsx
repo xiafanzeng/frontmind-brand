@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -12,7 +12,13 @@ vi.mock("../siteops/ConnectedSiteOpsConversationPanel", () => ({
     render: renderView,
   }: {
     render?: (props: unknown) => ReactNode;
-  }) => <>{renderView?.(mocks.liveSiteOps)}</>,
+  }) => (
+    <>
+      {renderView
+        ? renderView(mocks.liveSiteOps)
+        : <div data-testid="established-siteops-panel">域名与发布设置</div>}
+    </>
+  ),
 }));
 
 vi.mock("../../host", () => ({
@@ -26,7 +32,15 @@ vi.mock("../../host", () => ({
 vi.mock("./SimplifiedWebsiteBuilderPreview", () => ({
   SimplifiedWebsiteBuilderPreview: (props: Record<string, unknown>) => {
     mocks.received = props;
-    return <div data-testid="designed-website-builder" />;
+    return (
+      <button
+        type="button"
+        data-testid="designed-website-builder"
+        onClick={() => (props.onOpenSiteOpsRelease as (() => void) | undefined)?.()}
+      >
+        四步建站
+      </button>
+    );
   },
 }));
 
@@ -49,10 +63,25 @@ describe("connected redesigned website builder", () => {
     expect(mocks.received).toMatchObject({
       initialStep: "assistant",
       onOpenRag,
+      onOpenSiteOpsRelease: expect.any(Function),
       onStepChange,
       siteOps: mocks.liveSiteOps,
       storageScope: "live:42:workspace-1",
     });
+  });
+
+  it("switches the same connected controller to SiteOps release settings and back", () => {
+    const view = render(<ConnectedSimplifiedWebsiteBuilderPreview />);
+    const page = within(view.container);
+
+    fireEvent.click(page.getByTestId("designed-website-builder"));
+
+    expect(page.queryByTestId("designed-website-builder")).toBeNull();
+    expect(page.getByTestId("established-siteops-panel")).toBeTruthy();
+    fireEvent.click(page.getByRole("button", { name: "返回四步建站" }));
+
+    expect(page.queryByTestId("established-siteops-panel")).toBeNull();
+    expect(page.getByTestId("designed-website-builder")).toBeTruthy();
   });
 
   it("honors the host workspace scope instead of sharing drafts across projects", () => {

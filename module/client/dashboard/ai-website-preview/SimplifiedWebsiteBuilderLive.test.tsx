@@ -649,6 +649,39 @@ describe("redesigned live website builder setup", () => {
     expect(screen.getByText(/服务端已受理发布/).textContent).toContain("尚不表示已经上线");
   });
 
+  it("offers the established domain and release settings only after build approval", () => {
+    const onOpenSiteOpsRelease = vi.fn();
+    const onAction = vi.fn(async () => undefined);
+    const page = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="evaluation"
+        onOpenSiteOpsRelease={onOpenSiteOpsRelease}
+        siteOps={{
+          observation: liveBuildObservation("awaiting_visual_selection"),
+          onAction,
+        }}
+        storageScope="live:7:workspace-a"
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "打开域名与发布设置" })).toBeNull();
+
+    page.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="evaluation"
+        onOpenSiteOpsRelease={onOpenSiteOpsRelease}
+        siteOps={{
+          observation: liveBuildObservation("approved"),
+          onAction,
+        }}
+        storageScope="live:7:workspace-a"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "打开域名与发布设置" }));
+
+    expect(onOpenSiteOpsRelease).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the authoritative live head after a task reset hides the old deployment row", async () => {
     const headId = "88888888-8888-4888-8888-888888888888";
     const approved = liveBuildObservation("approved");
