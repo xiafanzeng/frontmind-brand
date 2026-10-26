@@ -1489,6 +1489,10 @@ router.post("/adopt-result", async (request, res) => {
       source: result.source,
       structuredDraft: result.structuredDraft,
       expectedOperationRevision: parsed.data.operationRevision,
+      // Reject adoption of results generated against a question text that
+      // has since changed: the ledger revision from the resolver read above
+      // is re-verified under lock inside the adopt transaction.
+      expectedQuestionScope: configuredQuestion.writeScope,
     });
     res.json({
       status: "adopted",
@@ -1674,6 +1678,9 @@ router.post("/materials", async (request, res) => {
       userId: workspaceUserId,
       questionId: parsed.data.questionId,
       expectedRevision: parsed.data.expectedRevision,
+      // Re-verify the question currency from the resolver read under the
+      // ledger row lock: a question edit in between fails with 409.
+      expectedQuestionScope: configuredQuestion.writeScope,
       addAttachments,
       removeFileIds,
     });

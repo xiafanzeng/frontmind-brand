@@ -1,6 +1,7 @@
 import type { Request } from "express";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import { sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { intentSkillPorts } from "./intent-skill-runtime.js";
 import { resolveBrandIntentQuestion, toConfiguredIntentQuestion, type BrandQuestionResolverPorts } from "./brand-question-resolver.js";
 import { createResponseLogicService } from "./response-logic-service.js";
@@ -58,13 +59,11 @@ export function brandResponseLogicOwnerPredicate(userId: number) {
 }
 
 /**
- * Brand questions live in the brand_intent_workspaces JSON ledger, so the
- * service's relational question lock can never match a row. Every Brand API
- * handler verifies the question through the ledger resolver BEFORE calling
- * the service; this deliberately never-matching lock keeps the service on
- * its managed-legacy (no-row) path. It still queries a real table inside
- * the caller's transaction — `WHERE 1 = 0 ... FOR UPDATE` acquires no row
- * locks.
+ * Fallback-only relational question-lock stubs: when the ledger loaders
+ * above are present (they always are in this runtime) these are never
+ * consulted. They exist so the shared service keeps compiling and its
+ * port-absent legacy path stays intact for tests that build the service
+ * directly. The never-matching predicate acquires no row locks by itself.
  */
 export const brandResponseLogicQuestionLockTable = mysqlTable("response_logic_entries", {
   id: varchar("id", { length: 191 }),
@@ -166,7 +165,63 @@ export function assembleResponseLogicCore(input: {
       constructor(code: string, message: string) { super(message); this.code = code; }
     } as never,
     lockCustomerProjectBusinessWrite: bkp.lockCustomerProjectBusinessWrite as never,
-    workspaceQuestionTable: () => brandResponseLogicQuestionLockTable as never, // Brand ledger: question checks run via getDashboardQuestion at the API layer
+    // Brand questions live in the brand_intent_workspaces JSON ledger. These
+    // two loaders are the authoritative question lookups for every write lock
+    // and the pre-dispatch readiness check: the ledger row is read under
+    // lockCustomerProjectBusinessWrite and its own FOR UPDATE inside the
+    // caller's transaction, and the ledger revision is the scope currency —
+    // every intent-workbench mutation bumps it, so a question edit between
+    // the API-layer resolver read and this in-transaction read fails the
+    // expectedScope comparison with CONFLICT. The never-matching relational
+    // stubs below remain only as the port-absent fallback path.
+    loadQuestionForWrite: async (executor: never, userId: number, questionId: string) => {
+      const projectId = bkp.currentEnterpriseProjectId();
+      const workspaceKey = createHash("sha256")
+        .update(`${userId}:${projectId ?? "personal"}`, "utf-8")
+        .digest("hex");
+      const result = await (executor as {
+        execute(query: unknown): Promise<unknown>;
+      }).execute(
+        sql`SELECT revision, payload FROM brand_intent_workspaces
+            WHERE workspace_key = ${workspaceKey}
+            AND owner_user_id = ${userId}
+            AND project_id <=> ${projectId}
+            FOR UPDATE`,
+      );
+      const rows = Array.isArray((result as unknown[] | null)?.[0])
+        ? (result as unknown[][])[0]
+        : [];
+      const row = (rows as unknown as Array<{ payload: unknown; revision: number }>)[0];
+      if (!row) return null;
+      const payload = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
+      const questions = Array.isArray((payload as { questions?: unknown })?.questions)
+        ? (payload as { questions: Array<{ id?: string }> }).questions
+        : [];
+      return questions.some(question => question?.id === questionId)
+        ? {
+            status: "selected",
+            selectionApprovalStatus: "approved",
+            locked: true,
+            revision: Number(row.revision ?? 0),
+            contractId: null,
+            quotaPeriodId: "brand-intent",
+          }
+        : null;
+    },
+    loadQuestionForReadiness: async (userId: number, questionId: string) => {
+      const resolved = await resolveQuestion(userId, bkp.currentEnterpriseProjectId(), questionId);
+      return resolved
+        ? {
+            status: "selected",
+            selectionApprovalStatus: "approved",
+            locked: true,
+            revision: resolved.writeScope.revision,
+            contractId: null,
+            quotaPeriodId: "brand-intent",
+          }
+        : null;
+    },
+    workspaceQuestionTable: () => brandResponseLogicQuestionLockTable as never,
     workspaceQuestionOwnerPredicate: brandQuestionLockNoMatchPredicate as never,
     enterpriseOwnerPredicate: ((_table: never, userId: number) =>
       brandResponseLogicOwnerPredicate(userId)) as never,

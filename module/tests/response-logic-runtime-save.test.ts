@@ -86,8 +86,11 @@ describe("brand response-logic runtime save (real drizzle construction, in-memor
       revision: 1,
       enterpriseProjectId: null,
     });
-    // The question lock stayed on its never-matching path inside the tx.
-    expect(fake.sqlLog.some(sql => sql.includes("1 = 0"))).toBe(true);
+    // The question lock read the ledger row FOR UPDATE inside the tx.
+    expect(
+      fake.sqlLog.some(sql =>
+        sql.toLowerCase().includes("brand_intent_workspaces") && sql.toLowerCase().includes("for update")),
+    ).toBe(true);
   });
 
   it("lists only the owning workspace and hides the record from other users", async () => {
@@ -124,5 +127,53 @@ describe("brand response-logic runtime save (real drizzle construction, in-memor
     expect(updated).toMatchObject({ questionId: QUESTION_ID, revision: 2 });
     const reread = await runtime.getResponseLogicEntry(USER, QUESTION_ID);
     expect(reread).toMatchObject({ revision: 2, questionId: QUESTION_ID });
+  });
+
+  it("accepts a save whose question scope matches the current ledger revision", async () => {
+    const { runtime } = createHarness();
+    const record = await runtime.responseLogicService.saveResponseLogicEntry({
+      userId: USER,
+      value: saveValue,
+      expectedQuestionScope: { revision: 5, contractId: null, quotaPeriodId: "brand-intent" },
+    });
+    expect(record).toMatchObject({ questionId: QUESTION_ID, revision: 1 });
+  });
+
+  it("rejects a save based on a question context the ledger has since moved past (Q1→Q2 race)", async () => {
+    const { fake, runtime } = createHarness();
+    // Request A resolved the question at ledger revision 5 ...
+    const resolvedScope = { revision: 5, contractId: null, quotaPeriodId: "brand-intent" };
+    // ... request B edits the question (every intent-workbench command bumps
+    // the ledger revision) and commits before A saves.
+    fake.ledgerRows[0].revision = 6;
+    fake.ledgerRows[0].payload = {
+      version: 1,
+      questions: [{ id: QUESTION_ID, question: "修改后的新问题文本", intent: "", category: "" }],
+    };
+    await expect(
+      runtime.responseLogicService.saveResponseLogicEntry({
+        userId: USER,
+        value: saveValue,
+        expectedQuestionScope: resolvedScope,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fake.entries).toHaveLength(0);
+    // A fresh resolve after the edit saves normally with the new scope.
+    await expect(
+      runtime.responseLogicService.saveResponseLogicEntry({
+        userId: USER,
+        value: { ...(saveValue as object), question: "修改后的新问题文本" } as never,
+        expectedQuestionScope: { revision: 6, contractId: null, quotaPeriodId: "brand-intent" },
+      }),
+    ).resolves.toMatchObject({ questionId: QUESTION_ID, revision: 1 });
+  });
+
+  it("rejects a save whose question no longer exists in the ledger", async () => {
+    const { fake, runtime } = createHarness();
+    fake.ledgerRows[0].payload = { version: 1, questions: [] };
+    await expect(
+      runtime.responseLogicService.saveResponseLogicEntry({ userId: USER, value: saveValue }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fake.entries).toHaveLength(0);
   });
 });

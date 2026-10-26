@@ -110,6 +110,11 @@ export function createResponseLogicRecordRouter(
       const record = await rlRuntime.responseLogicService.saveResponseLogicEntry({
         userId: context.accountUserId,
         value,
+        // Currency of the question context this save is based on: the ledger
+        // revision from the resolver read above is re-verified under the
+        // ledger row lock inside the save transaction — a question edit that
+        // landed in between bumps the revision and the save fails with 409.
+        expectedQuestionScope: configuredQuestion.writeScope,
       });
       res.setHeader("Cache-Control", "no-store");
       res.json({ record });

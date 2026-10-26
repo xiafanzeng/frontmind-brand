@@ -152,5 +152,5 @@ export function createFakeMysqlClient(input: { ledger: FakeLedgerRow[]; localAss
     },
   };
 
-  return { client, entries, sqlLog };
+  return { client, entries, sqlLog, ledgerRows: input.ledger };
 }

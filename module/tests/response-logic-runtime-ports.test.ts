@@ -58,8 +58,18 @@ function absorbingDb() {
     }) as unknown as { then: Promise<unknown>["then"] } & Record<string, any>;
     return chain;
   };
+  // The ledger question lock reads brand_intent_workspaces via raw execute;
+  // serve one row so the lock finds the question and the save can proceed to
+  // its final re-select (NOT_FOUND) exactly as before.
+  const ledgerResult = [
+    [{ payload: JSON.stringify({ version: 1, questions: [{ id: "t:1" }] }), revision: 5 }],
+    [{ name: "payload" }, { name: "revision" }],
+  ];
+  const execute = async (config?: unknown) =>
+    JSON.stringify(config)?.includes("brand_intent_workspaces") ? ledgerResult : [];
   const tx = new Proxy({} as Record<string, any>, {
     get(_target, prop) {
+      if (prop === "execute") return execute;
       return (..._args: unknown[]) => query();
     },
   });
@@ -68,7 +78,7 @@ function absorbingDb() {
     select: () => query(),
     insert: () => query(),
     update: () => query(),
-    execute: async () => [],
+    execute,
   } as never;
 }
 

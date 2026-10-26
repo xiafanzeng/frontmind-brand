@@ -18,12 +18,33 @@ export interface ResponseLogicPorts {
   lockCustomerProjectBusinessWrite(tx: IntentTransaction, userId: number): Promise<unknown>;
   workspaceQuestionTable(): any;
   workspaceQuestionOwnerPredicate(userId: number): SQL;
+  /**
+   * Brand-only override: resolve the question through the Brand JSON ledger
+   * instead of a relational question table. When present it is the
+   * authoritative question lookup for every write lock; the implementation
+   * locks the ledger row FOR UPDATE inside the caller's transaction, so the
+   * scope comparison is current as of that lock.
+   */
+  loadQuestionForWrite?(executor: IntentTransaction, userId: number, questionId: string): Promise<ResponseLogicQuestionRow | null>;
+  /** Brand-only override for the pre-dispatch readiness lookup (unlocked). */
+  loadQuestionForReadiness?(userId: number, questionId: string): Promise<ResponseLogicQuestionRow | null>;
   enterpriseOwnerPredicate(table: IntentSchema["responseLogicEntries"], userId: number): SQL;
   enterpriseProjectIdForOwner(userId: number): string | null;
   credentialMayServeAccount(tx: IntentTransaction, userId: number, credentialId: string): Promise<boolean>;
   /** Must check/claim the upstream resource in this exact transaction. */
   claimUpstreamTask(tx: IntentTransaction, input: { userId: number; apiCredentialId: string; taskId: string; now: Date }): Promise<void>;
 }
+
+/** Structural shape both the relational question table and the Brand ledger
+ * loader present to the lifecycle/scope checks. */
+export type ResponseLogicQuestionRow = {
+  status: string;
+  selectionApprovalStatus: string;
+  locked: boolean;
+  revision: number;
+  contractId: string | null;
+  quotaPeriodId: string | null;
+};
 
 export type ResponseLogicQuestionWriteScope = {
   revision: number;
@@ -62,21 +83,35 @@ async function lockResponseLogicQuestionForWrite(input: {
   questionId: string;
   expectedScope?: ResponseLogicQuestionWriteScope;
 }) {
-  const rows = await input.executor
-    .select()
-    .from(workspaceQuestionTable())
-    .where(
-      and(
-        eq(workspaceQuestionTable().id, input.questionId),
-        workspaceQuestionOwnerPredicate(input.userId),
-      ),
-    )
-    .limit(1)
-    .for("update");
-  const question = rows[0];
-  // Managed legacy templates can predate workspace_questions. When a row does
-  // exist, it is the authoritative lifecycle lock for every write path.
+  // Brand (ledger loader) or Intent (relational table): both return the
+  // lifecycle/scope row; the ledger implementation holds the ledger row
+  // FOR UPDATE inside this transaction.
+  const question = ports.loadQuestionForWrite
+    ? await ports.loadQuestionForWrite(input.executor, input.userId, input.questionId)
+    : (
+        await input.executor
+          .select()
+          .from(workspaceQuestionTable())
+          .where(
+            and(
+              eq(workspaceQuestionTable().id, input.questionId),
+              workspaceQuestionOwnerPredicate(input.userId),
+            ),
+          )
+          .limit(1)
+          .for("update")
+      )[0];
+  // With the ledger loader a miss means the question was deleted or never
+  // belonged to this workspace: fail closed for every caller.
   if (!question) {
+    if (ports.loadQuestionForWrite) {
+      throw new AuthServiceError(
+        "CONFLICT",
+        "当前问题已变更或不再属于有效范围，请刷新后重试",
+      );
+    }
+    // Managed legacy templates can predate workspace_questions. When a row does
+    // exist, it is the authoritative lifecycle lock for every write path.
     if (input.expectedScope) {
       throw new AuthServiceError("CONFLICT", "当前问题已不存在，请刷新后重试");
     }
@@ -454,17 +489,20 @@ async function requireResponseLogicProviderReadiness(input: {
   expectedOperationRevision: number;
 }): Promise<ResponseLogicProviderReadiness> {
   const db = await requireDb();
-  const questionRows = await db
-    .select()
-    .from(workspaceQuestionTable())
-    .where(
-      and(
-        eq(workspaceQuestionTable().id, input.questionId),
-        workspaceQuestionOwnerPredicate(input.userId),
-      ),
-    )
-    .limit(1);
-  const question = questionRows[0];
+  const question = ports.loadQuestionForReadiness
+    ? await ports.loadQuestionForReadiness(input.userId, input.questionId)
+    : (
+        await db
+          .select()
+          .from(workspaceQuestionTable())
+          .where(
+            and(
+              eq(workspaceQuestionTable().id, input.questionId),
+              workspaceQuestionOwnerPredicate(input.userId),
+            ),
+          )
+          .limit(1)
+      )[0];
   if (
     !question ||
     question.status !== "selected" ||
@@ -1048,6 +1086,7 @@ async function adoptResponseLogicModelResult(input: {
   source: "structured_output" | "assistant_markdown";
   structuredDraft: ResponseLogicStructuredDraft;
   expectedOperationRevision: number;
+  expectedQuestionScope?: ResponseLogicQuestionWriteScope;
 }): Promise<{ record: ResponseLogicRecordDto; adopted: boolean }> {
   const db = await requireDb();
   const now = new Date();
@@ -1058,6 +1097,7 @@ async function adoptResponseLogicModelResult(input: {
       executor: tx,
       userId: input.userId,
       questionId: input.questionId,
+      expectedScope: input.expectedQuestionScope,
     });
     const rows = await tx
       .select()
@@ -1153,6 +1193,7 @@ async function updateResponseLogicDraftMaterials(input: {
   userId: number;
   questionId: string;
   expectedRevision: number;
+  expectedQuestionScope?: ResponseLogicQuestionWriteScope;
   addAttachments: ResponseLogicAttachment[];
   removeFileIds: string[];
 }): Promise<ResponseLogicRecordDto> {
@@ -1164,6 +1205,7 @@ async function updateResponseLogicDraftMaterials(input: {
       executor: tx,
       userId: input.userId,
       questionId: input.questionId,
+      expectedScope: input.expectedQuestionScope,
     });
     const rows = await tx
       .select()
