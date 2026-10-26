@@ -16,7 +16,8 @@ description: Evaluate one frozen enterprise RAG answer against its frozen eviden
 - 不得联网，不得使用记忆中的企业事实，不得补造来源，不得猜测缺失正文。
 - `source.content=null` 表示正文不可供本次核验；它不能充分支持任何事实。
 - `source.citedByAnswer=true` 才表示回答实际向用户展示了该引用。语料中存在依据不等于回答已经引用；若陈述只能由 `citedByAnswer=false` 的资料支持，必须将引用门禁判为 `failed`，引用维度最高为 2。
-- 每个 `evidenceIds` 只能逐字选自 `input.allowedEvidenceIds`，不得创建、改写或引用列表以外的 ID。
+- 每个维度和门禁的 `evidenceIds` 只能逐字选自 `input.allowedEvidenceIds`，或引用本次 JSON 中实际存在的 `claims[].id`。不得重算、缩写、改写冻结 ID，也不得引用不存在或未通过下述核验的 claim。
+- `claims[].id` 使用 `claim-1` 至 `claim-30`，不得与 `input.allowedEvidenceIds` 冲突。claim ID 只定位回答中的陈述；它不能代替 `claims[].sourceIds` 对冻结来源的绑定。
 - `claims[].sourceIds` 只能引用同时存在于 `input.sources[].id` 和 `input.allowedEvidenceIds` 的 ID。`supported` 必须有至少一个正文可读取且直接支持该陈述的冻结来源；`unsupported` 的 `sourceIds` 必须为空数组。
 - 这是独立的企业 RAG 回答评估。不要读取、推断或混入 `website-build-evaluation` 的网站建设检查项、网站报告、发布结论或分数。
 
@@ -74,24 +75,24 @@ description: Evaluate one frozen enterprise RAG answer against its frozen eviden
   "operationToken": "与 input.operationToken 完全一致",
   "inputHash": "与 input.inputHash 完全一致",
   "dimensions": [
-    {"id":"intent","level":0,"rationale":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"correctness","level":0,"rationale":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"completeness","level":0,"rationale":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"citations","level":0,"rationale":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"clarity","level":0,"rationale":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"boundaries","level":0,"rationale":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]}
+    {"id":"intent","level":0,"rationale":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"correctness","level":0,"rationale":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"completeness","level":0,"rationale":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"citations","level":0,"rationale":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"clarity","level":0,"rationale":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"boundaries","level":0,"rationale":"具体理由","evidenceIds":["claim-1"]}
   ],
   "gates": [
-    {"id":"facts","status":"failed","reason":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"citations","status":"failed","reason":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"permissions","status":"failed","reason":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"safety","status":"failed","reason":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"unknown","status":"failed","reason":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"injection","status":"failed","reason":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]},
-    {"id":"availability","status":"failed","reason":"具体理由","evidenceIds":["仅来自 input.allowedEvidenceIds"]}
+    {"id":"facts","status":"failed","reason":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"citations","status":"failed","reason":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"permissions","status":"failed","reason":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"safety","status":"failed","reason":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"unknown","status":"failed","reason":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"injection","status":"failed","reason":"具体理由","evidenceIds":["claim-1"]},
+    {"id":"availability","status":"failed","reason":"具体理由","evidenceIds":["claim-1"]}
   ],
   "claims": [
-    {"id":"claim-1","statement":"answer 中连续原文","status":"supported","sourceIds":["冻结来源 ID"],"rationale":"具体核验理由"}
+    {"id":"claim-1","statement":"answer 中连续原文","status":"unsupported","sourceIds":[],"rationale":"具体核验理由"}
   ],
   "summary": "本次回答质量的简明结论"
 }
@@ -105,7 +106,7 @@ description: Evaluate one frozen enterprise RAG answer against its frozen eviden
 
 1. `operationToken` 与 `inputHash` 已从输入原样复制，没有截断、重算或改写。
 2. 六个维度、七个门禁都恰好一次且严格保持规定顺序；分值和状态均在允许范围。
-3. 每个维度和门禁的 `evidenceIds` 非空，且每个值都存在于 `input.allowedEvidenceIds`。
+3. 每个维度和门禁的 `evidenceIds` 非空；每个值要么逐字存在于 `input.allowedEvidenceIds`，要么是本次输出中实际存在且已通过核验的 `claims[].id`。没有重算或改写任何冻结 ID。
 4. 每个 `claim.statement` 都能用 `input.answer.includes(statement)` 逐字验证；每个 `sourceIds` 都是允许的冻结来源；没有把 `content=null` 的来源判为充分支持。
 5. claims 与六维、七门禁结论一致：无支持陈述已触发事实/引用失败及相应降级，部分支持陈述已触发引用失败且没有满分。
 6. 输出没有网站建设评分、发布权限、额外字段、Markdown 或自然语言包裹。
