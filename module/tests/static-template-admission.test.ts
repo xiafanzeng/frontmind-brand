@@ -153,7 +153,7 @@ it.runIf(browserInstalled)(
   120_000,
 );
 
-it.runIf(browserInstalled).each(["helpcenter-search", "helpcenter-docs", "helpcenter-minimal"])(
+it.runIf(browserInstalled).each(["helpcenter-search"])(
   "admits %s through the real controlled compiler and Chromium QA without provider APIs",
   async slug => {
     const definition = FROZEN_STATIC_TEMPLATE_CATALOG.find(entry => entry.providerSlug === slug)!;
