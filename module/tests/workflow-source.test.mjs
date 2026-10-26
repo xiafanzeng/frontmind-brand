@@ -9,6 +9,7 @@ import ts from "typescript";
 import { packageSocraticKnowledgeBaseSkill, socraticKnowledgeBaseSkillEntries } from "../workflows/build-knowledge-base-workflow.mjs";
 import { buildKeywordWorkflow } from "../workflows/build-keyword-workflow.mjs";
 import { generateKnowledgeBaseWorkingSetPolicy } from "../workflows/generate-knowledge-base-working-set-policy.mjs";
+import { buildEnterpriseRagEvaluationWorkflow } from "../workflows/build-rag-evaluation-workflow.mjs";
 import { canonicalKnowledgeBaseSkillArchiveHash } from "../dist/contracts/knowledge-base-skill-archive-hash.js";
 
 const source = fileURLToPath(new URL("../workflows/socratic-kb-builder", import.meta.url));
@@ -155,4 +156,27 @@ test("rebuilt keyword archives retain identical bytes across different build clo
     assert.ok(Object.values(archive.files).every(entry => !entry.dir));
     assert.ok(Object.values(archive.files).every(entry => entry.date.toISOString() === "2020-01-01T00:00:00.000Z"));
   }
+}));
+
+test("enterprise RAG evaluator builds the exact isolated evidence-bound Skill", async () => fixture(async root => {
+  const sourcePath = fileURLToPath(new URL("../workflows/evaluate-enterprise-rag/SKILL.md", import.meta.url));
+  const outputRoot = path.join(root, "dist/workflows/evaluate-enterprise-rag");
+  const result = await buildEnterpriseRagEvaluationWorkflow({ sourcePath, outputRoot });
+  const [sourceBytes, builtBytes] = await Promise.all([
+    fs.readFile(sourcePath),
+    fs.readFile(result.outputPath),
+  ]);
+  assert.deepEqual(builtBytes, sourceBytes);
+  const skill = builtBytes.toString("utf8");
+  for (const id of ["intent", "correctness", "completeness", "citations", "clarity", "boundaries"]) {
+    assert.match(skill, new RegExp(`\\b${id}\\b`, "u"));
+  }
+  for (const id of ["facts", "citations", "permissions", "safety", "unknown", "injection", "availability"]) {
+    assert.match(skill, new RegExp(`\\b${id}\\b`, "u"));
+  }
+  assert.match(skill, /input\.allowedEvidenceIds/u);
+  assert.match(skill, /不可信数据/u);
+  assert.match(skill, /不得联网/u);
+  assert.match(skill, /JSON 解析器实际解析/u);
+  assert.match(skill, /不要读取、推断或混入 `website-build-evaluation`/u);
 }));

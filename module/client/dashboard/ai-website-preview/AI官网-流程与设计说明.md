@@ -187,7 +187,7 @@ RAG 回答质量不再进入网站建设总分。网站页面只显示显式关�
 
 ### 6.2 两个独立 Skill 与共享结果协议
 
-`enterprise-rag-evaluation` 与 `website-build-evaluation` 是两个可独立调用、独立测试、独立升版的评分 Skill。前者接收上游已经形成的六维判断、七项风险判断及证据定位；后者接收七项网站检查判断，以及仅作关系引用的 RAG 报告 ID。原始问题、回答、知识资料或网站草稿的理解与判断生成属于上游 Agent、工作流或人工评审职责，不由这两个纯评分 Skill 自动完成。两者共享 `EvaluationResult` 协议，包含：
+`enterprise-rag-evaluation` 与 `website-build-evaluation` 是两个可独立调用、独立测试、独立升版的评分 Skill。前者接收上游已经形成的六维判断、七项风险判断及证据定位；后者接收七项网站检查判断，以及仅作关系引用的 RAG 报告 ID。评分 Skill 本身保持纯计算边界。真实企业问答现在由独立的服务端 `evaluate-enterprise-rag` 裁判工作流读取指定问答轮次及其完整冻结知识语料，生成受证据约束的判断，再调用前者计算并持久化不可变报告；只有用户明确点击才创建模型评估任务，页面加载只读取已有记录。网站建设评估仍为独立流程，不混入 RAG 分数。两者共享 `EvaluationResult` 协议，包含：
 
 - `skillId`、`version` 与结果 `status`；
 - `score`、`coverage`、`recommendation` 与 `summary`；

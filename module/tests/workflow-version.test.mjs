@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {packageSocraticKnowledgeBaseSkill} from '../workflows/build-knowledge-base-workflow.mjs';
+import {buildEnterpriseRagEvaluationWorkflow,ENTERPRISE_RAG_EVALUATION_WORKFLOW} from '../workflows/build-rag-evaluation-workflow.mjs';
 import {createKnowledgeBaseSkillRuntime} from '../dist/server/knowledge-base-skill-runtime.js';
 
 test('a workflow upgrade preserves exact old pins and never substitutes the new alias',async()=>{
@@ -27,5 +28,23 @@ test('a workflow upgrade preserves exact old pins and never substitutes the new 
   assert.equal(current.instructions.includes('Synthetic workflow version'),true);
   await fs.unlink(path.join(root,'runtime',`socratic-kb-builder-v5-${old.contentHash}.skill`));
   await assert.rejects(create().loadKnowledgeBaseSkillArchive({version:'5',contentHash:old.contentHash}));
+ } finally {await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('enterprise RAG evaluator publishes its declared version and follows source updates',async()=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'brand-rag-evaluation-workflow-'));
+ try {
+  const sourcePath=path.join(root,'SKILL.md');
+  await fs.copyFile(fileURLToPath(new URL('../workflows/evaluate-enterprise-rag/SKILL.md',import.meta.url)),sourcePath);
+  const outputRoot=path.join(root,'dist/workflows/evaluate-enterprise-rag');
+  const first=await buildEnterpriseRagEvaluationWorkflow({sourcePath,outputRoot});
+  const initial=await fs.readFile(first.outputPath,'utf8');
+  assert.equal(ENTERPRISE_RAG_EVALUATION_WORKFLOW.version,'1.0.0');
+  assert.match(initial,/^---\r?\nname: evaluate-enterprise-rag\r?\nversion: 1\.0\.0\r?\n/u);
+  await fs.appendFile(sourcePath,'\nSynthetic evaluator revision.\n');
+  await buildEnterpriseRagEvaluationWorkflow({sourcePath,outputRoot});
+  const updated=await fs.readFile(first.outputPath,'utf8');
+  assert.notEqual(updated,initial);
+  assert.match(updated,/Synthetic evaluator revision\./u);
  } finally {await fs.rm(root,{recursive:true,force:true});}
 });

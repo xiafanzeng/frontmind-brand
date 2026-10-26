@@ -56,6 +56,15 @@ function activeConversation() {
         id: "answer-1",
         role: "assistant",
         content: "真实回答",
+        generalChat: {
+          schemaVersion: 1,
+          kind: "assistant_projection",
+          isFinalAnswer: true,
+          turnId: "turn-1",
+          agentTaskId: "task-frozen",
+          providerEventId: "provider-event-1",
+          serverOwned: true,
+        },
         enterpriseQaAnswer: {
           sources: [
             {
@@ -187,6 +196,7 @@ describe("connected redesigned enterprise RAG workspace", () => {
       providerLabel: "XTY Codex",
       knowledgeBinding: "frozen_task",
       taskId: "task-frozen",
+      turnId: "turn-1",
       conversationReady: true,
       question: "真实问题",
       answer: "真实回答",

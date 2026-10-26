@@ -20,6 +20,11 @@
 .rag-verdict.is-pending > strong { color:#946413; }
 .rag-verdict.is-danger,.rag-eval-root .erag-evaluation-score.is-danger { border-color:#e9b8c2; background:#fff4f5; }
 .rag-verdict.is-danger > strong,.rag-eval-root .erag-evaluation-score.is-danger > span,.rag-danger-text { color:#a1324d; }
+.rag-automatic-evaluation { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border:1px solid #d9c9e5; border-radius:10px; background:#fbf8fd; }
+.rag-automatic-evaluation > div { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.rag-automatic-evaluation strong { color:var(--sfp-ink); }
+.rag-automatic-evaluation small { color:var(--sfp-muted); font-size:var(--sfp-type-caption); overflow-wrap:anywhere; }
+.rag-automatic-evaluation .sfp-button { flex:0 0 auto; min-height:40px; }
 .rag-status-row { display:flex; gap:12px; flex-wrap:wrap; font-size:var(--sfp-type-caption); color:var(--sfp-muted); }
 .rag-status-row span { display:inline-flex; align-items:center; gap:4px; }
 .rag-eval-root .rag-dimensions { gap:8px; }
@@ -79,11 +84,12 @@
 .rag-evidence blockquote { margin:10px 0 0; border-left:3px solid #d9c9e5; padding-left:12px; color:#535868; }
 .rag-evidence details { margin-top:10px; }
 .rag-evidence summary { cursor:pointer; color:var(--sfp-accent); }
+.rag-provenance p { margin:6px 0; overflow-wrap:anywhere; }
 .rag-formula,.rag-proposed-answer { padding:14px; border-radius:10px; background:var(--sfp-accent-soft); }
 .rag-drawer li { margin:10px 0; }
 @container sfp (min-width:961px) { .rag-eval-root .erag-layout { grid-template-columns:minmax(460px,1fr) minmax(420px,.86fr); } .rag-eval-root .erag-left-column { grid-template-rows:auto minmax(0,1fr); } }
 @container sfp (max-width:960px) { .rag-eval-root .erag-left-column { grid-template-rows:auto auto; } .rag-eval-root .erag-test-thread { min-height:0; } }
-@container sfp (max-width:560px) { .rag-toolbar { flex-wrap:wrap; } .rag-eval-root .erag-composer { flex-direction:column; } .rag-eval-root .erag-composer button { justify-content:center; min-height:42px; } .rag-case-list > button,.rag-testset-heading { flex-direction:column; align-items:flex-start; } .rag-panel-actions > div { grid-template-columns:1fr; } .rag-drawer-body,.rag-drawer > header { padding:16px; } }
+@container sfp (max-width:560px) { .rag-toolbar { flex-wrap:wrap; } .rag-eval-root .erag-composer { flex-direction:column; } .rag-eval-root .erag-composer button { justify-content:center; min-height:42px; } .rag-case-list > button,.rag-testset-heading,.rag-automatic-evaluation { flex-direction:column; align-items:stretch; } .rag-panel-actions > div { grid-template-columns:1fr; } .rag-drawer-body,.rag-drawer > header { padding:16px; } }
 @container sfp (max-width:400px) { .rag-eval-root .rag-dimensions { grid-template-columns:1fr; } .rag-knowledge-row { flex-wrap:wrap; } }
 
 /* 完整对话层与验收报告口径（对齐《企业 RAG 问答 Evaluation 需求与验收逻辑说明》v1.0） */

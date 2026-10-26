@@ -1,11 +1,11 @@
-import type { EvaluationResult, EvaluationSkill } from "./evaluation-skill-contract";
+import type { EvaluationResult, EvaluationSkill } from "./evaluation-skill-contract.js";
 import {
   RAG_DIMENSIONS,
   RAG_GATES,
   RAG_RULE_VERSION,
   scoreEvaluation,
   type EvaluationInput,
-} from "./rag-evaluation";
+} from "./rag-evaluation.js";
 
 export const ENTERPRISE_RAG_EVALUATION_SKILL_ID = "enterprise-rag-evaluation";
 export const ENTERPRISE_RAG_EVALUATION_SKILL_VERSION = "1.0.0";
