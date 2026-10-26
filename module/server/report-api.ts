@@ -17,6 +17,19 @@ export function createBrandReportRouter(core:ModuleHttpCore):Router{
  router.get('/:id',async(req,res)=>{try{res.json(await service(req).observe(req.params.id));}catch(e){error(res,e);}});
  router.post('/:id/confirm',async(req,res)=>{try{res.json(await service(req).confirm(req.params.id,req.body));}catch(e){error(res,e);}});
  router.post('/:id/retry',async(req,res)=>{try{res.json(await service(req).retry(req.params.id));}catch(e){error(res,e);}});
+ router.post('/:id/stop',async(req,res)=>{try{res.json(await service(req).stop(req.params.id));}catch(e){error(res,e);}});
+ router.get('/:id/process',async(req,res)=>{try{
+  const after=z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).parse(req.query.after??0);
+  res.json(await service(req).processView(req.params.id,after));
+ }catch(e){error(res,e);}});
+ router.get('/:id/intermediate',async(req,res)=>{try{
+  const file=z.string().min(1).max(300).parse(req.query.file);
+  const document=await service(req).intermediateDocument(req.params.id,file);
+  res.setHeader('Content-Type','text/plain; charset=utf-8');
+  res.setHeader('X-Content-Type-Options','nosniff');
+  res.setHeader('Content-Security-Policy',"sandbox; default-src 'none'");
+  res.send(document.text);
+ }catch(e){error(res,e);}});
  router.get('/:id/files/:file',async(req,res)=>{try{
   const {info,bytes,brandName}=await service(req).artifact(req.params.id,req.params.file);
   res.setHeader('Content-Type',`${info.mimeType}${info.mimeType==='text/html'?'; charset=utf-8':''}`);

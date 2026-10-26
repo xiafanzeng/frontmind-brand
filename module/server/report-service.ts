@@ -7,12 +7,18 @@ import {chromium} from 'playwright';
 import {z} from 'zod';
 import type {ModuleHttpCore} from './http-api.js';
 import {intentHash,intentSkillPorts} from './intent-skill-runtime.js';
-import {REPORT_STAGES,type ReportWorkspace,type ReportRunView,type ReportProduct,type ReportPhase,type ReportArtifactId} from '../contracts/report-run.js';
+import {REPORT_STAGES,type ReportWorkspace,type ReportRunView,type ReportProduct,type ReportPhase,type ReportArtifactId,type ReportProcessView} from '../contracts/report-run.js';
 import type {BrandReportDocument,BrandReportStage} from '../contracts/brand-report.js';
 import {renderPanoramaHtml,renderBriefingHtml,renderBriefingPptx,validateBrandReportDocument} from './report-renderer.js';
 import {reportMonitorAttempts,reportMonitorClient,ReportMonitorError,type ReportMonitorAttempt} from './report-monitor.js';
-import {reportModelArchive,reportWorkflowFingerprint,reportModelWireSchema,validateReportModelOutput,type ReportModelInput} from './report-model.js';
+import {reportModelArchive,reportWorkflowFingerprint,validateReportModelOutput,type ReportModelInput} from './report-model.js';
 
+import {reportHarnessConfig,runReportHarness,reportHarnessDocuments,reportHarnessDocument,closeReportHarness} from './report-harness.js';
+import {appendReportEvent,readReportEvents,type ReportEventInput} from './report-process.js';
+
+const ENGINE='deepseek-harness-v1';
+const stoppedPhases=['completed','failed','cancelled','awaiting_confirmation'];
+const runningControllers=new Map<string,AbortController>();
 const OP='brand_report_workflow_v1';
 const RUNTIME='brandReport';
 const LEASE=180_000;
@@ -22,7 +28,7 @@ type Actor={id:number;role:string};
 type Artifact={id:ReportArtifactId;label:string;mimeType:string;sizeBytes:number;sha256:string};
 type Job={id:string;stageId:string;attempt:number;phase:'queued'|'uploading'|'create_unknown'|'running';input:ReportModelInput;providerTaskId?:string;startedAt:string;resumedAt?:string;createClaimedAt?:number;recoverMissingCreate?:boolean;repairId?:string;baselineEvents?:string[];repairClaimedAt?:number;repairSent?:boolean};
 type Runtime={
- version:1;revision:number;actorId:number;brandName:string;context:{profile:unknown;knowledge?:unknown};inputHash:string;workflowHash:string;
+ engine?:typeof ENGINE;sessionId?:string;version:1;revision:number;actorId:number;brandName:string;context:{profile:unknown;knowledge?:unknown};inputHash:string;workflowHash:string;
  credentialId:string;credentialVersion:number;model:string;phase:ReportPhase;resumePhase?:ReportPhase;
  stages:BrandReportStage[];products:ReportProduct[];attempts:ReportMonitorAttempt[];
  confirmation?:{productId:string;questions:[string,string];platforms:string[];confirmedAt:string};
@@ -42,11 +48,11 @@ function runtime(owned:Owned):Runtime{
 }
 export function reportView(owned:Owned):ReportRunView {
  const r=runtime(owned);
- return {id:owned.operation.id,brandName:r.brandName,createdAt:r.createdAt,updatedAt:r.updatedAt,revision:r.revision,phase:r.phase,
+ return {id:owned.operation.id,brandName:r.brandName,createdAt:r.createdAt,updatedAt:r.updatedAt,revision:r.revision,phase:r.error?.code==='REPORT_STOPPED_BY_USER'?'cancelled':r.phase,
   currentStage:r.phase==='monitoring'?'诊断采集':r.phase==='rendering'?'生成报告':r.job?.stageId??REPORT_STAGES[r.stages.length]?.[0]??'汇报编制',
   stages:r.stages.map(({id,title,summary})=>({id,title,summary})),products:r.products,questions:r.confirmation?.questions??[],platforms:r.confirmation?.platforms??[],
   sampleCount:r.attempts.filter(a=>a.status==='completed').length,expectedSamples:r.attempts.length,
-  error:r.error??null,canRetry:r.phase==='failed'&&!['MONITOR_FAILED','SAMPLE_FAILED'].includes(r.error?.code??''),artifacts:r.artifacts.map(({sha256:_hash,...item})=>item)};
+  error:r.error??null,engine:r.engine??'legacy',model:r.model,canStop:!['completed','failed','cancelled'].includes(r.phase),canRetry:r.engine===ENGINE&&r.phase==='failed'&&!['MONITOR_FAILED','SAMPLE_FAILED','REPORT_STOPPED_BY_USER'].includes(r.error?.code??''),artifacts:r.artifacts.map(({sha256:_hash,...item})=>item)};
 }
 const startSchema=z.object({clientRequestId:z.string().uuid(),includeKnowledge:z.boolean(),profileHash:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 const confirmSchema=z.object({expectedRevision:z.number().int().nonnegative(),productId:z.string().min(1).max(80),platforms:z.array(z.enum(['doubao','yuanbao','qianwen'])).min(1).max(3)}).strict();
@@ -75,7 +81,7 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    if(intentHash(r)===before)return value;
    if(publicStateHash(r)!==beforePublic){r.revision++;r.updatedAt=iso();}
    await tx.update(model.agentTasks).set({providerRuntime:{...object(task.providerRuntime),[RUNTIME]:r},providerState:r.phase,updatedAt:new Date()}).where(eq(model.agentTasks.id,task.id));
-   await tx.update(model.agentOperations).set({status:r.phase==='completed'?'succeeded':r.phase==='failed'?'attention_required':'running',errorCode:r.error?.code??null,updatedAt:new Date()}).where(eq(model.agentOperations.id,id));
+   await tx.update(model.agentOperations).set({status:r.phase==='completed'?'succeeded':r.phase==='cancelled'?'cancelled':r.phase==='failed'?'attention_required':'running',errorCode:r.error?.code??null,updatedAt:new Date()}).where(eq(model.agentOperations.id,id));
    return value;
   });
  }
@@ -97,7 +103,7 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
  }
  async function workspace():Promise<ReportWorkspace&{profileHash:string}>{
   const [info,runs]=await Promise.all([company(),list()]);
-  runs.filter(o=>!['completed','awaiting_confirmation','failed'].includes(runtime(o).phase)).forEach(o=>schedule(o.operation.id));
+  runs.filter(o=>!stoppedPhases.includes(runtime(o).phase)).forEach(o=>schedule(o.operation.id));
   return {company:{name:info.name,summary:info.profile.summary,ready:info.ready},profileHash:info.profileHash,knowledge:{available:!!info.snapshot,documentCount:Number(info.snapshot?.documentCount??0)},runs:runs.map(reportView)};
  }
  async function start(value:unknown){
@@ -109,31 +115,34 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
   if(input.includeKnowledge&&!info.snapshot)throw new BrandReportError('KNOWLEDGE_MISSING','所选知识库已变化，请重新选择资料。');
   const frozen={profile:info.profile,...(input.includeKnowledge?{knowledge:object(info.snapshot.documents)}:{})};
   if(Buffer.byteLength(JSON.stringify(frozen))>6*1024*1024)throw new BrandReportError('SOURCE_TOO_LARGE','本轮资料超过处理范围，请先整理企业资料。');
-  const [credential,status,workflowHash]=await Promise.all([model.getDecryptedCredentialForUser(context.accountUserId),model.getApiCredentialStatus(context.accountUserId),reportWorkflowFingerprint()]);
-  if(!credential||credential.status!=='active'||status.status!=='active')throw new BrandReportError('MODEL_UNAVAILABLE','模型服务暂不可用，请检查账户配置。',503);
+  let config:ReturnType<typeof reportHarnessConfig>;
+  try{config=reportHarnessConfig(core.environment);}catch{throw new BrandReportError('MODEL_UNAVAILABLE','DeepSeek 报告执行服务尚未配置，请联系维护人员。',503);}
+  const workflowHash=await reportWorkflowFingerprint();
   if(!assetRoot||!path.isAbsolute(assetRoot))throw new BrandReportError('REPORT_STORAGE_UNAVAILABLE','报告持久化目录尚未配置。',503);
   const db=await core.database();let operationId=input.clientRequestId;
   await db.transaction(async(tx:any)=>{
    await model.lockAccountRecord(tx,context.accountUserId);await model.lockCustomerProjectBusinessWrite(tx,context.accountUserId,actor);
    const concurrent=(await tx.select({operation:model.agentOperations,task:model.agentTasks}).from(model.agentOperations).innerJoin(model.agentTasks,
     and(eq(model.agentTasks.operationId,model.agentOperations.id),sql`${model.agentTasks.createMarker}=CONCAT('brand-report:',${model.agentOperations.id})`))
-    .where(scope).orderBy(desc(model.agentOperations.createdAt)).limit(40) as Owned[]).find(o=>!['completed','failed'].includes(runtime(o).phase));
+    .where(scope).orderBy(desc(model.agentOperations.createdAt)).limit(40) as Owned[]).find(o=>!['completed','failed','cancelled'].includes(runtime(o).phase));
    if(concurrent){operationId=concurrent.operation.id;return;}
    if(await find(input.clientRequestId,tx))return;
    const inputHash=intentHash({context:frozen,workflowHash,includeKnowledge:input.includeKnowledge});
-   const r:Runtime={version:1,revision:0,actorId:actor.id,brandName:info.name,context:frozen,inputHash,workflowHash,
-    credentialId:credential.id,credentialVersion:credential.version,model:credential.upstreamModel,phase:'researching',stages:[],products:[],attempts:[],stageAttempts:{},artifacts:[],createdAt:iso(),updatedAt:iso()};
-   await tx.insert(model.agentOperations).values({id:operationId,enterpriseProjectId:context.enterpriseProjectId,provider:credential.provider,scope:'managed_user',accountUserId:context.accountUserId,presalesProjectId:null,
-    operationType:OP,idempotencyKeyHash:intentHash([OP,context.accountUserId,context.enterpriseProjectId,operationId]),requestHash:inputHash,contractName:OP,contractRevision:1,schemaHash:intentHash('brand-report-v1'),apiCredentialId:credential.id,credentialVersion:credential.version,publicProfile:credential.agentProfile,upstreamModel:credential.upstreamModel,status:'queued'});
+   const r:Runtime={engine:ENGINE,version:1,revision:0,actorId:actor.id,brandName:info.name,context:frozen,inputHash,workflowHash,
+    credentialId:'server:brand-report:deepseek',credentialVersion:1,model:config.model,phase:'researching',stages:[],products:[],attempts:[],stageAttempts:{},artifacts:[],createdAt:iso(),updatedAt:iso()};
+   await tx.insert(model.agentOperations).values({id:operationId,enterpriseProjectId:context.enterpriseProjectId,provider:'deepseek',scope:'managed_user',accountUserId:context.accountUserId,presalesProjectId:null,
+    operationType:OP,idempotencyKeyHash:intentHash([OP,context.accountUserId,context.enterpriseProjectId,operationId]),requestHash:inputHash,contractName:OP,contractRevision:2,schemaHash:intentHash('brand-report-deepseek-v1'),apiCredentialId:'server:brand-report:deepseek',credentialVersion:1,publicProfile:'brand-report-server',upstreamModel:config.model,status:'queued'});
    await tx.insert(model.agentTasks).values({id:randomUUID(),operationId,providerTaskId:null,providerRequestId:null,createMarker:`brand-report:${operationId}`,title:`品牌报告 · ${info.name}`,providerState:'researching',providerRuntime:{[RUNTIME]:r}});
   });schedule(operationId);return reportView(await requireOwned(operationId));
  }
  async function confirm(id:string,value:unknown){
   assertActor();const input=confirmSchema.parse(value);
+  let confirmed=false;
   if(new Set(input.platforms).size!==input.platforms.length)throw new BrandReportError('PLATFORMS_DUPLICATE','请勿重复选择平台。',400);
   if(!reportMonitorClient(core.environment).configured)throw new BrandReportError('MONITOR_NOT_CONFIGURED','诊断采集服务尚未配置，请联系维护人员。',503);
   await mutate(id,async(r,tx)=>{
    await model.lockCustomerProjectBusinessWrite(tx,context.accountUserId,actor);
+   if(r.engine!==ENGINE||r.phase==='cancelled'||r.error?.code==='REPORT_STOPPED_BY_USER')throw new BrandReportError('REPORT_STOPPED','这份历史报告已停止，请新建报告。');
    if(r.confirmation){
     if(r.confirmation.productId===input.productId&&intentHash([...r.confirmation.platforms].sort())===intentHash([...input.platforms].sort()))return;
     throw new BrandReportError('CONFIRMATION_FROZEN','本轮诊断范围已经确认，请使用新的报告任务调整范围。');
@@ -142,42 +151,69 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    const product=r.products.find(p=>p.id===input.productId);if(!product)throw new BrandReportError('PRODUCT_INVALID','请选择本轮研究得到的核心产品。',400);
    r.confirmation={productId:product.id,questions:[product.question,`${r.brandName}有什么缺点和问题？`],platforms:input.platforms,confirmedAt:iso()};
    r.attempts=reportMonitorAttempts(id,r.confirmation.questions,r.confirmation.platforms);r.phase='monitoring';delete r.error;
-  });schedule(id);return reportView(await requireOwned(id));
+   confirmed=true;
+  });
+  if(confirmed)await appendReportEvent(directory(id),'monitoring',{kind:'status',message:'诊断范围已确认，开始按所选问题和平台采集真实回答。'});
+  schedule(id);return reportView(await requireOwned(id));
  }
  async function retry(id:string){
   assertActor();await mutate(id,async(r,tx)=>{
    await model.lockCustomerProjectBusinessWrite(tx,context.accountUserId,actor);
+   if(r.engine!==ENGINE||r.phase==='cancelled'||r.error?.code==='REPORT_STOPPED_BY_USER')throw new BrandReportError('REPORT_STOPPED','已停止或旧版任务保留为历史记录，请新建报告。');
    if(r.phase!=='failed')return;
-   if(['MONITOR_FAILED','SAMPLE_FAILED'].includes(r.error?.code??''))throw new BrandReportError('MONITOR_TERMINAL','采集服务已确认该任务失败，已有结果已保存，请联系维护人员处理失败样本。');
-   if(r.error?.code==='MODEL_TIMEOUT'&&r.job)r.job.resumedAt=iso();
-   // Older versions lost the provider error code. Only an explicit retry may
-   // ask the private runner to reconcile this exact task; it must prove 404
-   // itself before replaying the original task/intent identity.
-   if(r.error?.code==='REPORT_EXECUTION_FAILED'&&r.job?.phase==='create_unknown'&&!r.job.providerTaskId){
-    r.job.recoverMissingCreate=true;r.job.resumedAt=iso();
-   }
-   if(r.error?.code==='MODEL_SCHEMA_REJECTED'&&r.job)r.job.resumedAt=iso();
+   if(['MONITOR_FAILED','SAMPLE_FAILED'].includes(r.error?.code??''))throw new BrandReportError('MONITOR_TERMINAL','采集服务已确认任务失败，已有结果已保存，请核对失败样本。');
    if(r.error?.code==='MONITOR_TIMEOUT')r.monitorResumedAt=iso();
-   // Completed samples and ambiguous POST markers remain intact. Only a proven failed model run gets a new stage task.
-   if(r.error?.code==='MODEL_FAILED'||r.error?.code==='MODEL_OUTPUT_INVALID'){delete r.job;}
-   for(const a of r.attempts)if(a.status==='failed'&&a.taskId){a.status='submitted';a.nextPollAt=0;}
+   // Explicit retry resumes the saved harness session and exact stage identity;
+   // it never changes monitoring idempotency keys or replays completed stages.
+   if(r.job){r.job.phase='queued';r.job.resumedAt=iso();}
    r.phase=r.resumePhase??'researching';delete r.error;delete r.lease;delete r.nextPollAt;
   });schedule(id);return reportView(await requireOwned(id));
+ }
+ async function stop(id:string){
+  let stopped=false;
+  assertActor();await mutate(id,async(r,tx)=>{
+   await model.lockCustomerProjectBusinessWrite(tx,context.accountUserId,actor);
+   if(['completed','cancelled'].includes(r.phase))return;
+   r.phase='cancelled';r.error={code:'REPORT_STOPPED_BY_USER',message:'本轮已停止，已完成的研究和采集记录已保留。'};
+   delete r.lease;delete r.nextPollAt;
+   stopped=true;
+  });
+  if(!stopped)return reportView(await requireOwned(id));
+  runningControllers.get(id)?.abort(new Error('REPORT_STOPPED_BY_USER'));
+  await closeReportHarness(directory(id));
+  await appendReportEvent(directory(id),'stop',{kind:'status',message:'本轮报告已停止。已发出的采集请求可能仍由平台完成，系统不会继续提交新请求。'});
+  return reportView(await requireOwned(id));
+ }
+ async function processView(id:string,after:number):Promise<ReportProcessView>{
+  const r=runtime(await requireOwned(id));
+  const events=await readReportEvents(directory(id),after,201);
+  const page=events.slice(0,200);
+  return {events:page,nextCursor:page.at(-1)?.seq??after,hasMore:events.length>200,intermediate:await reportHarnessDocuments(directory(id)),
+   documents:r.stages.map(({id,title,summary,markdown,sources})=>({id,title,summary,markdown,sources}))};
+ }
+ async function intermediateDocument(id:string,file:string){
+  await requireOwned(id);return reportHarnessDocument(directory(id),file);
  }
  async function observe(id:string){const owned=await requireOwned(id);schedule(id);return reportView(owned);}
  async function fail(id:string,owner:string,phase:ReportPhase,error:unknown){
   const known=error instanceof BrandReportError||error instanceof ReportMonitorError;
-  const code=known?error.code:'REPORT_EXECUTION_FAILED';
-  const message=known?error.message:'当前步骤未能完成，已保留本轮进度。请恢复重试；若仍失败，请联系维护人员查看任务记录。';
+  let diagnostic=error instanceof Error?error.message:String(error);
+  for(const [key,value] of Object.entries(core.environment))if(/KEY|TOKEN|SECRET|PASSWORD/i.test(key)&&value&&value.length>5)diagnostic=diagnostic.replaceAll(value,'[REDACTED]');
+  diagnostic=diagnostic.replace(/Bearer\s+[^\s"',]+/gi,'Bearer [REDACTED]').replace(/sk-[a-zA-Z0-9_-]+/g,'[REDACTED]').slice(0,2000);
+  const harnessCode=diagnostic.match(/^REPORT_HARNESS_[A-Z0-9_]+/)?.[0];
+  const code=known?error.code:harnessCode??'REPORT_EXECUTION_FAILED';
+  const message=known?error.message:/\b401\b|\b403\b/.test(diagnostic)?'DeepSeek 连接认证未通过，请维护人员检查服务器凭据。':/\b429\b|CAPACITY/.test(diagnostic)?'模型或报告执行资源暂时繁忙，已保留进度，可以稍后恢复。':/TIMEOUT|INTERRUPTED/.test(diagnostic)?'模型执行超时或中断，已有过程和文件已保存，可以恢复当前阶段。':'当前步骤未能完成，已保留本轮进度。请恢复重试；若仍失败，请联系维护人员查看任务记录。';
   await mutate(id,r=>{r.resumePhase=phase;r.phase='failed';r.error={code,message};delete r.lease;},owner);
-  console.error('[BrandReport]',id,code,error instanceof Error?error.name:'unknown');
+  await appendReportEvent(directory(id),phase,{kind:'error',message});
+  console.error('[BrandReport]',id,code,diagnostic);
  }
  async function advance(id:string){
   const owner=randomUUID();let acquired:Runtime|undefined;
-  await mutate(id,r=>{if(['completed','failed','awaiting_confirmation'].includes(r.phase)||(r.lease?.expiresAt??0)>Date.now()||(r.nextPollAt??0)>Date.now())return;
+  await mutate(id,r=>{if(stoppedPhases.includes(r.phase)||(r.lease?.expiresAt??0)>Date.now()||(r.nextPollAt??0)>Date.now())return;
    r.lease={owner,expiresAt:Date.now()+LEASE};acquired=structuredClone(r);});
   if(!acquired)return;const r:Runtime=acquired;
   try{
+   if(r.engine!==ENGINE)throw new BrandReportError('REPORT_LEGACY_STOPPED','旧版执行已停用，已有研究保留为历史记录。请新建 DeepSeek 报告。');
    if(r.workflowHash!==await reportWorkflowFingerprint())throw new BrandReportError('WORKFLOW_VERSION_CHANGED','工作流版本已更新，原报告的阶段结果已保留。请完成旧版本兼容处理后恢复。');
    if(r.phase==='monitoring'){await monitor(id,owner,r);return;}
    if(r.phase==='rendering'){await render(id,owner,r);return;}
@@ -190,15 +226,27 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
   const client=reportMonitorClient(core.environment);
   const pending=r.attempts.find(a=>a.status!=='completed'&&(a.nextPollAt??0)<=Date.now());
   if(!pending){if(r.attempts.every(a=>a.status==='completed'))await mutate(id,state=>{state.phase='analyzing';},owner);return;}
+  const saveReceipt=async(update:(attempt:ReportMonitorAttempt)=>void)=>{
+   try{await mutate(id,state=>{update(state.attempts.find(a=>a.consumerTaskId===pending.consumerTaskId)!);},owner);}
+   catch(error){
+    if(!(error instanceof BrandReportError)||error.code!=='REPORT_LEASE_CHANGED')throw error;
+    // A stop can race an already dispatched supplier request. Preserve its
+    // receipt under the cancelled parent without scheduling any new action.
+    await mutate(id,state=>{if(state.phase==='cancelled'){const attempt=state.attempts.find(a=>a.consumerTaskId===pending.consumerTaskId);if(attempt)update(attempt);}});
+    throw error;
+   }
+  };
   if(!pending.taskId){
    await mutate(id,state=>{const a=state.attempts.find(a=>a.consumerTaskId===pending.consumerTaskId)!;a.status='submitting';a.submittedAt??=iso();},owner);
    // The supplier documents consumerTaskId as idempotent. An ambiguous retry uses the exact original key and body.
    const taskId=await client.submit(pending,r.brandName);
-   await mutate(id,state=>{const a=state.attempts.find(a=>a.consumerTaskId===pending.consumerTaskId)!;a.taskId=taskId;a.status='submitted';a.nextPollAt=Date.now()+300_000;},owner);
+   await saveReceipt(a=>{a.taskId=taskId;a.status='submitted';a.nextPollAt=Date.now()+300_000;});
+   await appendReportEvent(directory(id),'monitoring',{kind:'tool_end',message:`${pending.platform}的采集请求已受理。`,toolCallId:pending.consumerTaskId});
   }else{
    if(Date.now()-Math.max(Date.parse(pending.submittedAt??r.createdAt),Date.parse(r.monitorResumedAt??r.createdAt))>4*60*60_000)throw new BrandReportError('MONITOR_TIMEOUT','采集等待时间较长，已保留供应商任务。请检查服务状态后恢复。');
    const sample=await client.poll(pending,r.brandName);
-   await mutate(id,state=>{const a=state.attempts.find(a=>a.consumerTaskId===pending.consumerTaskId)!;a.nextPollAt=Date.now()+30_000;if(sample){a.sample=sample;a.status='completed';}},owner);
+   await saveReceipt(a=>{a.nextPollAt=Date.now()+30_000;if(sample){a.sample=sample;a.status='completed';}});
+   if(sample)await appendReportEvent(directory(id),'monitoring',{kind:'artifact',message:`${pending.platform}的一份真实回答已保存。`,toolCallId:pending.consumerTaskId});
   }
  }
  async function reserveJob(id:string,owner:string,r:Runtime):Promise<Job>{
@@ -213,67 +261,33 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
  }
  async function runModel(id:string,owner:string,r:Runtime){
   const job=r.job??await reserveJob(id,owner,r);
-  const credential=await model.getDecryptedCredentialForAccountById(context.accountUserId,r.credentialId);
-  if(!credential||credential.version!==r.credentialVersion)throw new BrandReportError('MODEL_CREDENTIAL_UNAVAILABLE','原报告使用的模型凭据暂不可用，请检查服务配置。',503);
-  const client=model.createCredentialAgentClient(credential,{accountUserId:context.accountUserId,operationId:id,localTaskId:job.id,intentId:job.id});
-  const setJob=async(change:Partial<Job>)=>{await mutate(id,async(state,tx)=>{
-   if(state.job?.id!==job.id)throw new BrandReportError('JOB_CHANGED','报告执行阶段已变化。');Object.assign(state.job,change);
-   await tx.update(model.agentTasks).set({providerState:state.job.phase,...(change.providerTaskId?{providerTaskId:change.providerTaskId}:{}),updatedAt:new Date()}).where(eq(model.agentTasks.id,job.id));
-  },owner);Object.assign(job,change);};
-  const createInput=(fileId:string)=>({title:`FrontMind report ${id} ${job.stageId} ${job.attempt}`,prompt:`读取附件SKILL.md与input.json，完成${job.stageId}阶段。真实检索、深入分析、输出完整结构化结果。\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({operationToken:job.input.operationToken})}`,attachments:[{file_id:fileId,filename:'brand-report-stage.zip'}],agentProfile:credential.upstreamModel,locale:'zh-CN',interactiveMode:false,structuredOutputSchema:reportModelWireSchema(job.stageId)});
-  const uploadArchive=async()=>client.uploadFile({filename:'brand-report-stage.zip',bytes:await reportModelArchive(job.input),contentType:'application/zip',observer:{onCandidateCreated:async({fileId}:{fileId:string})=>model.recordUpstreamResource({userId:context.accountUserId,apiCredentialId:r.credentialId,kind:'file',upstreamId:fileId})}});
-  const create=async(fileId:string,recover=false)=>{
-   try{return await (recover?client.recoverMissingCreate!(createInput(fileId)):client.createTask(createInput(fileId)));}
-   catch(error){
-    // This adapter code is raised before dispatch. Neither a generic HTTP 400
-    // nor an ambiguous response proves that a model task was never created.
-    if(error instanceof model.ManusV2ApiError&&error.code==='XTY_STRUCTURED_OUTPUT_SCHEMA_INVALID'&&error.outcomeUnknown===false){
-     await setJob({phase:'queued',createClaimedAt:undefined,recoverMissingCreate:undefined});
-     throw new BrandReportError('MODEL_SCHEMA_REJECTED','研究结果格式在发送前被模型执行器拒绝，任务尚未创建。修复后可恢复原阶段。');
-    }
-    throw error;
-   }
+  if(job.phase!=='queued')throw new BrandReportError('HARNESS_INTERRUPTED','执行进程已中断，已有过程与文件已保留。点击恢复后从当前阶段继续。');
+  const controller=new AbortController();runningControllers.set(id,controller);
+  const emit=async(event:ReportEventInput)=>{
+   controller.signal.throwIfAborted();
+   await appendReportEvent(directory(id),job.stageId,event);
   };
-  const acceptCreated=async(created:{taskId:string})=>{
-   await setJob({phase:'running',providerTaskId:created.taskId,recoverMissingCreate:undefined});
-   await model.recordUpstreamResource({userId:context.accountUserId,apiCredentialId:r.credentialId,kind:'task',upstreamId:created.taskId});
-  };
-  if(job.phase==='queued'||job.phase==='uploading'){
-   await setJob({phase:'uploading'});
-   const uploaded=await uploadArchive();
-   await setJob({phase:'create_unknown',createClaimedAt:Date.now()});
-   await acceptCreated(await create(uploaded.fileId));return;
-  }
-  if(!job.providerTaskId){
-   const found=await client.findCreatedTask({title:`FrontMind report ${id} ${job.stageId} ${job.attempt}`,operationToken:job.input.operationToken,createdAfterSeconds:Math.floor(Date.parse(job.startedAt)/1000)-60,createdBeforeSeconds:Math.floor(Date.now()/1000)+60});
-   if(found.matches.length>1)throw new BrandReportError('MODEL_CREATE_AMBIGUOUS','模型任务标识有多个匹配，请联系维护人员核对；不会重复创建。');
-   if(!found.unique){
-    if(job.recoverMissingCreate&&credential.provider==='xty_codex'&&client.recoverMissingCreate){
-     // The Xty helper performs its own authenticated GET and only creates on
-     // XTY_NOT_FOUND (404), retaining localTaskId and intentId = job.id. An
-     // unavailable runner or a conflicting existing command is never absence.
-     const uploaded=await uploadArchive();await acceptCreated(await create(uploaded.fileId,true));return;
-    }
-    if(Date.now()-(job.createClaimedAt??Date.parse(job.startedAt))>180_000)throw new BrandReportError('MODEL_CREATE_UNKNOWN','模型任务创建结果未确认。恢复时会查询原任务，不重复提交。');return;
-   }
-   await setJob({phase:'running',providerTaskId:String(found.unique.id),recoverMissingCreate:undefined});
-  }
-  if(Date.now()-Date.parse(job.resumedAt??job.startedAt)>2*60*60_000)throw new BrandReportError('MODEL_TIMEOUT','当前研究阶段等待时间较长，已保留原任务，请恢复查看。');
-  const allEvents=await client.listAllMessages({taskId:job.providerTaskId,order:'asc'});
-  const events=allEvents.filter((e:any)=>!(job.baselineEvents??[]).includes(e.id));
-  const ordered=model.orderManusV2EventsByProviderRank(events,'newest_first');
-  const structured=ordered.find((e:any)=>e.type==='structured_output_result') as any;
-  let value:unknown,invalid:string|undefined;
-  if(structured){const result=model.classifyManusV2StructuredResultEnvelope(structured.structured_output_result);if(result.kind==='accepted')value=result.value;}
-  const status=model.latestManusV2TaskState(events)??(await client.taskDetail(job.providerTaskId)).status;
-  if(value===undefined&&['completed','finished','stopped'].includes(status)){
-   const message=ordered.find((e:any)=>e.type==='assistant_message'&&typeof e.assistant_message?.content==='string') as any;
-   if(message){try{value=JSON.parse(String(message.assistant_message.content).trim().replace(/^```(?:json)?\s*\n/u,'').replace(/\n```$/u,''));}catch{invalid='最终结果不是完整JSON';}}
-  }
-  if(value!==undefined){
-   let result:ReturnType<typeof validateReportModelOutput>|undefined;
-   try{result=validateReportModelOutput(value,job.input);}catch(error){invalid=error instanceof z.ZodError?'结构化字段或研究内容不完整':error instanceof Error?error.message:'研究结果校验失败';}
-   if(result){const validated=result;
+  let beating=false;
+  const heartbeat=setInterval(()=>{
+   if(beating)return;beating=true;
+   void mutate(id,state=>{
+    if(state.phase==='cancelled')throw new Error('REPORT_STOPPED_BY_USER');
+   },owner).catch(error=>controller.abort(error)).finally(()=>{beating=false;});
+  },20_000);heartbeat.unref();
+  try{
+   await mutate(id,async(state,tx)=>{
+    if(state.job?.id!==job.id)throw new BrandReportError('JOB_CHANGED','报告阶段已变化。');
+    state.job.phase='running';
+    await tx.update(model.agentTasks).set({providerState:'running'}).where(eq(model.agentTasks.id,job.id));
+   },owner);
+   await emit({kind:'status',message:`开始 ${job.stageId==='briefing'?'汇报编制':REPORT_STAGES.find(s=>s[0]===job.stageId)?.[1]??job.stageId} · DeepSeek Flash`});
+   const value=await runReportHarness({directory:directory(id),jobId:job.id,input:job.input,
+    archive:await reportModelArchive(job.input),environment:core.environment,signal:controller.signal,onEvent:emit,recovery:Boolean(job.resumedAt||(!r.job&&r.stages.length)),
+    onSession:async(sessionId:string)=>{await mutate(id,state=>{state.sessionId=sessionId;},owner);}});
+   controller.signal.throwIfAborted();
+   let validated:ReturnType<typeof validateReportModelOutput>;
+   try{validated=validateReportModelOutput(value,job.input);}
+   catch{throw new BrandReportError('MODEL_OUTPUT_INVALID','本阶段内容尚未通过完整性检查，研究文件和过程已保留。可恢复修订当前阶段。');}
    await mutate(id,async(state,tx)=>{
     if(state.job?.id!==job.id)throw new BrandReportError('JOB_CHANGED','报告阶段已变化。');
     if('stage' in validated){state.stages.push(validated.stage as BrandReportStage);if(job.stageId==='S4')state.products=validated.products;
@@ -281,20 +295,14 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
     else{state.briefingSlides=validated.slides as BrandReportDocument['briefingSlides'];state.phase='rendering';}
     delete state.job;delete state.error;
     await tx.update(model.agentTasks).set({providerState:'completed',updatedAt:new Date()}).where(eq(model.agentTasks.id,job.id));
-   },owner);return;
-  }}
-  if(['error','failed','cancelled'].includes(status))throw new BrandReportError('MODEL_FAILED','当前研究阶段执行失败。可恢复此阶段，已完成的阶段会保留。');
-  if(['completed','finished','stopped'].includes(status)){
-   if(!job.repairId){
-    const repairId=randomUUID();await setJob({repairId,repairClaimedAt:Date.now(),baselineEvents:allEvents.map((e:any)=>e.id)});
-    const repairClient=model.createCredentialAgentClient(credential,{accountUserId:context.accountUserId,operationId:id,localTaskId:job.id,intentId:repairId});
-    await repairClient.sendMessage({taskId:job.providerTaskId,prompt:`本阶段结果未通过校验：${invalid??'缺少结构化结果'}。读取原附件，补齐内容并返回完整JSON；不得改变operationToken=${job.input.operationToken}和inputHash=${job.input.inputHash}，不得制造来源。`,structuredOutputSchema:reportModelWireSchema(job.stageId)});await setJob({repairSent:true});return;
-   }
-   if(Date.now()-(job.repairClaimedAt??0)>120_000)throw new BrandReportError('MODEL_OUTPUT_INVALID',`本阶段结果未通过检查：${invalid??'缺少完整研究结果'}。请恢复此阶段。`);
-  }
+   },owner);
+   await emit({kind:'artifact',message:`${job.stageId==='briefing'?'汇报内容':REPORT_STAGES.find(s=>s[0]===job.stageId)?.[1]??job.stageId}已保存，可展开阅读。`});
+  }finally{clearInterval(heartbeat);if(runningControllers.get(id)===controller)runningControllers.delete(id);}
  }
  function directory(id:string){if(!assetRoot||!path.isAbsolute(assetRoot))throw new BrandReportError('REPORT_STORAGE_UNAVAILABLE','报告存储不可用。',503);return path.join(assetRoot,'brand-reports',intentHash([context.accountUserId,context.enterpriseProjectId]),z.string().uuid().parse(id));}
  async function render(id:string,owner:string,r:Runtime){
+  await closeReportHarness(directory(id));
+  await appendReportEvent(directory(id),'rendering',{kind:'status',message:'研究与汇报内容已完成，正在排版全景报告和汇报报告。'});
   if(!r.confirmation||!r.briefingSlides||r.attempts.some(a=>a.status!=='completed'||!a.sample))throw new BrandReportError('REPORT_INCOMPLETE','诊断证据尚不完整，不能生成最终报告。');
   const doc:BrandReportDocument={schemaVersion:'brand-report-v1',brandName:r.brandName,generatedAt:iso(),overview:r.stages.find(s=>s.id==='S4')!.summary,stages:r.stages,
    monitoring:{confirmedAt:r.confirmation.confirmedAt,questions:r.confirmation.questions,platforms:r.confirmation.platforms,samples:r.attempts.map(a=>a.sample!)},briefingSlides:r.briefingSlides};
@@ -312,6 +320,7 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
   const dir=path.join(directory(id),owner);await mkdir(dir,{recursive:true,mode:0o700});
   for(const f of files){const target=path.join(dir,f.id),temp=`${target}.${owner}.tmp`;await writeFile(temp,f.bytes,{mode:0o600});await rename(temp,target);}
   await mutate(id,state=>{state.document=doc;state.artifactGeneration=owner;state.artifacts=files.map(({bytes:_bytes,...f})=>f);state.phase='completed';delete state.error;},owner);
+  await appendReportEvent(directory(id),'completed',{kind:'artifact',message:'两份报告已生成，HTML、PDF、PPTX 和完整证据包已保存。'});
  }
  async function artifact(id:string,file:string){
   const owned=await requireOwned(id),r=runtime(owned);if(r.phase!=='completed'||!artifactIds.has(file as ReportArtifactId))throw new BrandReportError('REPORT_FILE_NOT_FOUND','报告文件尚未生成。',404);
@@ -320,7 +329,7 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
   return {info,bytes,brandName:r.brandName};
  }
  function schedule(id:string){const prior=active.get(id);if(prior)return prior;const task=advance(id).catch(error=>console.error('[BrandReport advance]',id,error instanceof Error?error.name:'unknown')).finally(()=>active.delete(id));active.set(id,task);return task;}
- return {workspace,start,confirm,retry,observe,artifact,advance,schedule};
+ return {workspace,start,confirm,retry,stop,processView,intermediateDocument,observe,artifact,advance,schedule};
 }
 
 /** Resume persisted work after process restarts without relying on a browser tab. */
@@ -333,7 +342,7 @@ export function startBrandReportWorker(core:ModuleHttpCore){
    const rows=await db.select({operation:model.agentOperations,task:model.agentTasks}).from(model.agentOperations).innerJoin(model.agentTasks,
     and(eq(model.agentTasks.operationId,model.agentOperations.id),sql`${model.agentTasks.createMarker}=CONCAT('brand-report:',${model.agentOperations.id})`))
     .where(and(eq(model.agentOperations.operationType,OP),sql`${model.agentOperations.status} IN ('queued','running','result_pending')`,sql`${model.agentTasks.providerState} IN ('researching','monitoring','analyzing','rendering')`)).limit(30) as Owned[];
-   for(const row of rows){const r=runtime(row);if(['awaiting_confirmation','completed','failed'].includes(r.phase))continue;
+   for(const row of rows){const r=runtime(row);if(stoppedPhases.includes(r.phase))continue;
     const owner=Number(row.operation.accountUserId),project=row.operation.enterpriseProjectId??null;
     await model.runWithStoredEnterpriseProjectScope(owner,project,async()=>{
      const context:Context={accountUserId:owner,actorUserId:owner,enterpriseProjectId:project,businessOwnerId:String(owner),businessActorId:String(owner)};
