@@ -72,13 +72,14 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   res.setHeader("Cache-Control","no-store");
   const token=(core.environment.MOLIZHISHU_TOKEN ?? core.environment.MOLIZHISHU_API_KEY ?? "").trim();
   if(!token){res.status(503).json({error:{code:"MOLIZHISHU_NOT_CONFIGURED",message:"模力指数 API 尚未配置，请由部署人员设置服务端 MOLIZHISHU_TOKEN。"}});return;}
-  const companyName=typeof req.body?.companyName === "string" ? req.body.companyName.trim() : typeof req.body?.company_name === "string" ? req.body.company_name.trim() : "";
-  if(!companyName || companyName.length>120){res.status(400).json({error:{code:"INVALID_COMPANY_NAME",message:"请填写有效的企业名称。"}});return;}
+  // 线上实测契约：两个 recommend 端点部署在 business.molizhishu.com，企业字段名为 brand。
+  const brand=typeof req.body?.brand === "string" ? req.body.brand.trim() : "";
+  if(!brand || brand.length>120){res.status(400).json({error:{code:"INVALID_BRAND",message:"请填写有效的企业名称。"}});return;}
   if(path.endsWith("recommend-questions")){
    const words=Array.isArray(req.body?.coreWords)?req.body.coreWords:Array.isArray(req.body?.core_words)?req.body.core_words:[];
    if(!words.length || words.length>100 || words.some((word:unknown)=>typeof word!=="string"||!word.trim()||word.length>120)){res.status(400).json({error:{code:"INVALID_CORE_WORDS",message:"请选择一个或多个有效核心词。"}});return;}
   }
-  const base=(core.environment.MOLIZHISHU_API_BASE_URL ?? "https://business-api.molizhishu.com").replace(/\/+$/, "").trim();
+  const base=(core.environment.MOLIZHISHU_API_BASE_URL ?? "https://business.molizhishu.com").replace(/\/+$/, "").trim();
   const normalizedBase=base;
   try{
    const response=await fetch(`${normalizedBase}/api/business/question-templates/${path}`,{method:"POST",headers:{Authorization:`Bearer ${token}`,Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify(req.body),signal:AbortSignal.timeout(30_000)});
