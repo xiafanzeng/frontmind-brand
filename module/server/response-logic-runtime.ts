@@ -43,6 +43,45 @@ const responseLogicEntries = mysqlTable("response_logic_entries", {
   uniqueIndex("response_logic_entries_user_conversation_uq").on(table.userId, table.conversationId),
 ]);
 import { buildDirectorySkillArchive, buildDeterministicTaskAttachmentArchive } from "@frontmind/module-contracts/task-attachment-package";
+import { mysqlTable as _mysqlTable, varchar as _varchar, int as _int, mysqlEnum as _mysqlEnum, timestamp as _timestamp, uniqueIndex as _uniqueIndex, index as _index } from "drizzle-orm/mysql-core";
+
+/**
+ * Standalone drizzle table for provider_file_leases (no FK callbacks).
+ * Same column shapes as Core's drizzle/schema.ts:426 — used to check which
+ * files have already been uploaded to the upstream provider.
+ */
+const providerFileLeases = _mysqlTable("provider_file_leases", {
+  id: _varchar("id", { length: 36 }).primaryKey(),
+  localAssetId: _varchar("local_asset_id", { length: 36 }).notNull(),
+  apiCredentialId: _varchar("api_credential_id", { length: 36 }).notNull(),
+  credentialVersion: _int("credential_version", { unsigned: true }).notNull(),
+  providerFileId: _varchar("provider_file_id", { length: 512 }),
+  providerRequestId: _varchar("provider_request_id", { length: 512 }),
+  uploadState: _mysqlEnum("upload_state", ["reserved","uploading","uploaded","expired","failed","outcome_unknown"]).notNull(),
+  expiresAt: _timestamp("expiresAt"),
+  createdAt: _timestamp("created_at").defaultNow().notNull(),
+  updatedAt: _timestamp("updated_at").defaultNow().notNull(),
+});
+
+/** Core file-content-retention.ts:282 — explicit expiry or upload-time + retention. */
+const FILE_CONTENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (Core default)
+function _retentionTimestamp(value: Date | string | number | null | undefined): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const d = value instanceof Date ? value : new Date(value);
+  const ts = d.getTime();
+  return Number.isFinite(ts) ? ts : undefined;
+}
+function fileResourceContentExpiry(resource: { uploadedAt?: Date | string | number | null; contentExpiresAt?: Date | string | number | null }): number | undefined {
+  const explicit = _retentionTimestamp(resource.contentExpiresAt);
+  if (explicit !== undefined) return explicit;
+  const origin = _retentionTimestamp(resource.uploadedAt);
+  return origin === undefined ? undefined : origin + FILE_CONTENT_RETENTION_MS;
+}
+function isFileResourceContentExpired(resource: { uploadedAt?: Date | string | number | null; contentExpiresAt?: Date | string | number | null; contentDeletedAt?: Date | string | number | null }, now = Date.now()): boolean {
+  if (_retentionTimestamp(resource.contentDeletedAt) !== undefined) return true;
+  const expiresAt = fileResourceContentExpiry(resource);
+  return expiresAt !== undefined && expiresAt <= now;
+}
 import { assertUpstreamPromptBudget } from "@frontmind/module-contracts/upstream-prompt-budget";
 
 /**
@@ -190,10 +229,10 @@ export function assembleResponseLogicCore(input: {
     generalExecutionActivity: (() => ({})) as never,
     orderExecutionTimeline: ((events: unknown[]) => events) as never,
     projectBusinessExecution: () => { throw new Error("EXECUTION_PROJECTION_NOT_AVAILABLE_IN_BRAND"); },
-    localAssets: undefined,
-    providerFileLeases: undefined,
-    fileResourceContentExpiry: () => null,
-    isFileResourceContentExpired: () => false,
+    localAssets: bkp.localAssets as never,
+    providerFileLeases: providerFileLeases as never,
+    fileResourceContentExpiry: fileResourceContentExpiry as never,
+    isFileResourceContentExpired: isFileResourceContentExpired as never,
     redactSensitivePayload: ((value: unknown) => {
       if (!value || typeof value !== "object") return value;
       const REDACTED = "[REDACTED]";
