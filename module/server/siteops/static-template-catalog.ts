@@ -2096,7 +2096,11 @@ function assertCatalogCoordinates(catalog: StaticTemplateCatalog) {
     const entry = catalog.entries[index]!;
     const admission = entry.executionAdmission;
     const definition = strictDefinitions
-      ? strictDefinitions[index]
+      ? (strictCurrent
+          ? strictDefinitions[index]
+          : strictDefinitions.find(
+              (item) => item.candidateId === entry.candidateId,
+            ))
       : undefined;
     if (entry.sourceSubdirectory) {
       if (
@@ -2229,13 +2233,7 @@ function assertCatalogCoordinates(catalog: StaticTemplateCatalog) {
   if (
     catalog.catalogVersion ===
       PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION &&
-    !HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG.every((definition) =>
-      catalog.entries.some(
-        (entry) =>
-          entry.candidateId === definition.candidateId &&
-          entry.executionAdmission.status === "admitted",
-      ),
-    )
+    !catalog.entries.every((entry) => entry.executionAdmission.status === "admitted")
   ) {
     throw new StaticTemplateCatalogError(
       "STATIC_TEMPLATE_CATALOG_REQUIRED_ADMISSION_MISSING",
