@@ -6,6 +6,7 @@ import {
 } from "./EnterpriseRagPreview";
 import {
   EVALUATION_REPORT_STORAGE_KEY,
+  findLatestEvaluationReport,
   listEvaluationReports,
 } from "./evaluation-report-store";
 import { previewRagAnswer } from "./preview-copy";
@@ -330,6 +331,50 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(records.getByText("服务端自动评估记录")).toBeTruthy();
     expect(records.getByText(/报告：evaluation-report-1/)).toBeTruthy();
     expect(records.getByText(/人工复核不改变服务端自动报告/)).toBeTruthy();
+  });
+
+  it("mirrors a completed server report into the scoped audit for explicit website linking", async () => {
+    const run = completedAutomaticRun();
+    const latest = vi
+      .spyOn(liveEnterpriseRagEvaluationApi, "latest")
+      .mockResolvedValue({ latest: run, history: [run] });
+    const scope = "live:7:workspace-a";
+    render(
+      <EnterpriseRagPreview
+        storageScopeKey={scope}
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          taskId: "task-1",
+          turnId: "turn-1",
+          question: "你们支持哪些部署方式？",
+          questionId: "question-1",
+          answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
+          answerId: "answer-1",
+          sources: [{ id: "source-1", title: "部署说明", kind: "published_knowledge" }],
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(latest).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93"),
+    );
+    const scopedStorage = scopedEvaluationStorage(scope);
+    // The website builder links through exactly this query, so it must find the
+    // server report without requiring a separate manual review.
+    const mirrored = findLatestEvaluationReport(
+      { skillId: "enterprise-rag-evaluation" },
+      scopedStorage,
+    );
+    expect(mirrored?.reportId).toBe("evaluation-report-1");
+    expect(mirrored?.subject).toEqual({
+      kind: "rag-answer",
+      id: "turn-1",
+      version: "rag-eval-1.2",
+    });
+    expect(mirrored?.result.score).toBe(93);
+    expect(listEvaluationReports()).toEqual([]);
   });
 
   it("keeps polling when the provider remains running before it completes", async () => {
