@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EnterpriseRagPreview,
@@ -10,6 +10,8 @@ import {
 } from "./evaluation-report-store";
 import { previewRagAnswer } from "./preview-copy";
 import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
+import { liveEnterpriseRagEvaluationApi } from "../enterprise-rag-evaluation-api";
+import type { EnterpriseRagEvaluationRunDto } from "../../../contracts/enterprise-rag-evaluation-run";
 
 const historyKey = "frontmind-rag-reviews-v1";
 const dimensionLabels = ["需求满足", "正确与有据", "信息完整", "引用与时效", "清晰可行动", "边界与安全"];
@@ -53,6 +55,97 @@ function liveRuntime(overrides: Partial<NonNullable<Parameters<typeof Enterprise
   };
 }
 
+function completedAutomaticRun(): EnterpriseRagEvaluationRunDto {
+  const dimensionIds = ["intent", "correctness", "completeness", "citations", "clarity", "boundaries"] as const;
+  const gateIds = ["facts", "citations", "permissions", "safety", "unknown", "injection", "availability"] as const;
+  const levels = [4, 4, 3, 3, 4, 4] as const;
+  const scores = [20, 25, 11.25, 11.25, 15, 10];
+  const maxScores = [20, 25, 15, 15, 15, 10];
+  return {
+    operationId: "evaluation-operation-1",
+    sourceQaTaskId: "task-1",
+    turnId: "turn-1",
+    status: "completed",
+    createdAt: "2026-10-26T01:00:00.000Z",
+    updatedAt: "2026-10-26T01:01:00.000Z",
+    error: null,
+    report: {
+      reportId: "evaluation-report-1",
+      sourceQaTaskId: "task-1",
+      sourceTurnId: "turn-1",
+      conversationId: "conversation-1",
+      questionMessageId: "question-1",
+      answerMessageId: "answer-1",
+      questionHash: "a".repeat(64),
+      answerHash: "b".repeat(64),
+      knowledgeBase: {
+        snapshotId: "snapshot-live",
+        version: 7,
+        sourceFileName: "企业知识库.zip",
+        documentCount: 12,
+        contentHash: "c".repeat(64),
+      },
+      evaluator: {
+        skillId: "enterprise-rag-evaluation",
+        skillVersion: "1.0.0",
+        ruleVersion: "rag-eval-1.2",
+        judgeVersion: "1.0.0",
+        provider: "xty_codex",
+        model: "gpt-5.6-sol",
+        effort: "high",
+        skillHash: "d".repeat(64),
+        outputHash: "e".repeat(64),
+      },
+      judgments: {
+        operationToken: "evaluation-operation-1",
+        inputHash: "f".repeat(64),
+        dimensions: dimensionIds.map((id, index) => ({
+          id,
+          level: levels[index],
+          rationale: `${id} 已依据冻结资料完成核验。`,
+          evidenceIds: ["source-1", "answer-1"],
+        })),
+        gates: gateIds.map((id) => ({
+          id,
+          status: "passed" as const,
+          reason: `${id} 未发现阻断风险。`,
+          evidenceIds: ["source-1", "answer-1"],
+        })),
+        claims: [{
+          id: "claim-1",
+          statement: "支持私有化部署",
+          status: "supported",
+          sourceIds: ["source-1"],
+          rationale: "冻结资料直接支持该陈述。",
+        }],
+        summary: "回答有据、完整且不存在关键风险。",
+      },
+      result: {
+        skillId: "enterprise-rag-evaluation",
+        version: "1.0.0",
+        status: "completed",
+        score: 93,
+        coverage: 100,
+        recommendation: "recommended",
+        summary: "回答有据、完整且不存在关键风险。",
+        dimensions: dimensionIds.map((id, index) => ({
+          id,
+          label: dimensionLabels[index],
+          status: levels[index] === 4 ? "passed" as const : "partial" as const,
+          score: scores[index],
+          maxScore: maxScores[index],
+          summary: `${id} 已完成。`,
+          evidenceIds: ["source-1", "answer-1"],
+        })),
+        risks: [],
+        relatedReportIds: [],
+      },
+      createdAt: "2026-10-26T01:00:00.000Z",
+      completedAt: "2026-10-26T01:01:00.000Z",
+    },
+  };
+}
+
 function evaluation() {
   return within(screen.getByRole("region", { name: "回答质量评估" }));
 }
@@ -69,11 +162,15 @@ function confirmReview() {
   fireEvent.click(dialog.getByRole("button", { name: "保存评审并计算" }));
 }
 
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+});
 
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  window.sessionStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -143,6 +240,292 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(evidence.getByText(/知识版本：v7/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "编辑回答" })).toBeNull();
     expect(screen.getByText("服务端原始回答")).toBeTruthy();
+  });
+
+  it("only starts a paid automatic evaluation after the explicit button click", async () => {
+    const run = completedAutomaticRun();
+    const latest = vi
+      .spyOn(liveEnterpriseRagEvaluationApi, "latest")
+      .mockResolvedValue({ latest: null, history: [] });
+    const start = vi
+      .spyOn(liveEnterpriseRagEvaluationApi, "start")
+      .mockResolvedValue(run);
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          taskId: "task-1",
+          turnId: "turn-1",
+          question: "你们支持哪些部署方式？",
+          questionId: "question-1",
+          answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
+          answerId: "answer-1",
+          sources: [{ id: "source-1", title: "部署说明", kind: "published_knowledge" }],
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(latest).toHaveBeenCalledWith({
+      sourceQaTaskId: "task-1",
+      turnId: "turn-1",
+    }));
+    expect(start).not.toHaveBeenCalled();
+    expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain(
+      "页面加载只读取已有记录",
+    );
+
+    fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({
+      sourceQaTaskId: "task-1",
+      turnId: "turn-1",
+      clientRequestId: expect.any(String),
+    }));
+    await waitFor(() =>
+      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain(
+        "自动评估已完成",
+      ),
+    );
+    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93");
+    expect(screen.getAllByTestId("rag-evaluation-dimension")).toHaveLength(6);
+
+    fireEvent.click(screen.getByRole("button", { name: "查看回答依据" }));
+    expect(screen.getAllByTestId("rag-evaluation-gate")).toHaveLength(7);
+    expect(screen.getByTestId("rag-auto-evaluation-report").textContent).toContain(
+      "evaluation-report-1",
+    );
+  });
+
+  it("recovers the immutable latest automatic report on refresh without posting again", async () => {
+    const run = completedAutomaticRun();
+    const latest = vi
+      .spyOn(liveEnterpriseRagEvaluationApi, "latest")
+      .mockResolvedValue({ latest: run, history: [run] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start");
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          taskId: "task-1",
+          turnId: "turn-1",
+          question: "你们支持哪些部署方式？",
+          questionId: "question-1",
+          answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
+          answerId: "answer-1",
+          sources: [{ id: "source-1", title: "部署说明", kind: "published_knowledge" }],
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(latest).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93"),
+    );
+    expect(start).not.toHaveBeenCalled();
+    expect(screen.getByText("真实回答 · 服务端自动评估")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
+    const records = within(screen.getByRole("dialog", { name: "评估记录" }));
+    expect(records.getByText("服务端自动评估记录")).toBeTruthy();
+    expect(records.getByText(/报告：evaluation-report-1/)).toBeTruthy();
+    expect(records.getByText(/人工复核不改变服务端自动报告/)).toBeTruthy();
+  });
+
+  it("keeps polling when the provider remains running before it completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const completed = completedAutomaticRun();
+      const running: EnterpriseRagEvaluationRunDto = {
+        ...completed,
+        status: "running",
+        report: null,
+        updatedAt: "2026-10-26T01:00:10.000Z",
+      };
+      vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({
+        latest: running,
+        history: [],
+      });
+      const observe = vi
+        .spyOn(liveEnterpriseRagEvaluationApi, "observe")
+        .mockResolvedValueOnce({
+          ...running,
+          updatedAt: "2026-10-26T01:00:20.000Z",
+        })
+        .mockResolvedValueOnce(completed);
+      render(
+        <EnterpriseRagPreview
+          onOpenWebsite={vi.fn()}
+          onOpenWebsiteAssistant={vi.fn()}
+          live={liveRuntime({
+            taskId: "task-1",
+            turnId: "turn-1",
+            question: "你们支持哪些部署方式？",
+            questionId: "question-1",
+            answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
+            answerId: "answer-1",
+          })}
+        />,
+      );
+
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      await act(async () => {
+        vi.advanceTimersByTime(2_500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(observe).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain("自动评估中");
+
+      await act(async () => {
+        vi.advanceTimersByTime(2_500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(observe).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain("自动评估已完成");
+      expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses the same client request id after an unknown POST outcome", async () => {
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({
+      latest: null,
+      history: [],
+    });
+    const start = vi
+      .spyOn(liveEnterpriseRagEvaluationApi, "start")
+      .mockRejectedValueOnce(new Error("网络结果未知，请重试确认。"))
+      .mockResolvedValueOnce(completedAutomaticRun());
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          taskId: "task-1",
+          turnId: "turn-1",
+          question: "你们支持哪些部署方式？",
+          questionId: "question-1",
+          answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
+          answerId: "answer-1",
+        })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText(/网络结果未知/)).toBeTruthy());
+    const firstId = start.mock.calls[0][0].clientRequestId;
+
+    fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    expect(start.mock.calls[1][0].clientRequestId).toBe(firstId);
+    await waitFor(() =>
+      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain("自动评估已完成"),
+    );
+  });
+
+  it("shows the durable server failure instead of a generic submitted notice", async () => {
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({
+      latest: null,
+      history: [],
+    });
+    const completed = completedAutomaticRun();
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue({
+      ...completed,
+      status: "failed",
+      report: null,
+      error: {
+        code: "EVALUATION_ATTENTION_REQUIRED",
+        message: "上游任务创建结果不确定，需要管理员确认后再继续。",
+      },
+    });
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          taskId: "task-1",
+          turnId: "turn-1",
+          question: "你们支持哪些部署方式？",
+          questionId: "question-1",
+          answer: "支持私有化部署。",
+          answerId: "answer-1",
+        })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+    await waitFor(() =>
+      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain(
+        "上游任务创建结果不确定",
+      ),
+    );
+    expect(screen.getByRole("alert").textContent).toContain("需要管理员确认");
+    expect(screen.queryByText(/自动评估已提交/)).toBeNull();
+  });
+
+  it("replaces the submitted notice when polling observes a server failure", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({
+        latest: null,
+        history: [],
+      });
+      const completed = completedAutomaticRun();
+      const running: EnterpriseRagEvaluationRunDto = {
+        ...completed,
+        status: "running",
+        report: null,
+      };
+      const failed: EnterpriseRagEvaluationRunDto = {
+        ...running,
+        status: "failed",
+        error: {
+          code: "EVALUATION_ATTENTION_REQUIRED",
+          message: "上游任务创建结果不确定，需要管理员确认后再继续。",
+        },
+      };
+      vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue(running);
+      vi.spyOn(liveEnterpriseRagEvaluationApi, "observe").mockResolvedValue(failed);
+      render(
+        <EnterpriseRagPreview
+          onOpenWebsite={vi.fn()}
+          onOpenWebsiteAssistant={vi.fn()}
+          live={liveRuntime({
+            taskId: "task-1",
+            turnId: "turn-1",
+            question: "你们支持哪些部署方式？",
+            questionId: "question-1",
+            answer: "支持私有化部署。",
+            answerId: "answer-1",
+          })}
+        />,
+      );
+
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      expect(screen.getByText(/自动评估已提交/)).toBeTruthy();
+
+      await act(async () => {
+        vi.advanceTimersByTime(2_500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByRole("alert").textContent).toContain("需要管理员确认");
+      expect(screen.queryByText(/自动评估已提交/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears the previous answer notice when a new empty conversation becomes active", async () => {

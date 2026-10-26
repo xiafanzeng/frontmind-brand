@@ -457,7 +457,7 @@
 
 ## 17. 独立 Skill 与共享结果协议
 
-企业 RAG 评估以可独立调用、独立测试、独立升版的 `enterprise-rag-evaluation` 评分 Skill 提供。它接收上游已经形成的六维判断、七项风险判断及证据定位，按锁定的 RAG 规则计算结果；原始问题、回答和知识资料的理解与判断生成属于上游 Agent、工作流或人工评审职责。该 Skill 不读取网站建设评分项，也不返回发布权限。
+企业 RAG 评估以可独立调用、独立测试、独立升版的 `enterprise-rag-evaluation` 评分 Skill 提供。它接收上游已经形成的六维判断、七项风险判断及证据定位，按锁定的 RAG 规则计算结果。真实企业问答由独立的服务端 `evaluate-enterprise-rag` 裁判工作流绑定指定任务、对话轮次及当时的完整冻结知识语料，生成受证据约束的判断后再调用该评分 Skill，并把结果保存为不可变报告；人工复核保留为次要记录。该 Skill 与服务端裁判均不读取网站建设评分项，也不返回发布权限。
 
 网站建设使用另一项 `website-build-evaluation` Skill，输入是上游形成的七项网站检查判断与显式关联的报告 ID，而不是未经判断的原始网站草稿。两个 Skill 共享 `EvaluationResult` 协议，字段为 `skillId`、`version`、`status`、`score`、`coverage`、`recommendation`、`summary`、`dimensions`、`risks` 和 `relatedReportIds`。协议明确不包含 `canPublish`、`publishAllowed`、`blockingRelease` 或 `canConfirm` 等字段。
 
@@ -537,7 +537,7 @@ EvaluationRun
 
 ### 21.1 已实现的规则层
 
-`rag-evaluation.ts` 已把六维权重、等级、关键风险、未完成判断与场景汇总从 UI 组件中独立出来；`enterprise-rag-evaluation-skill.ts` 再将其转换为共享 `EvaluationResult`。这些模块消费已有判断并计算分数，不自行理解回答、检索资料或充当 LLM 裁判。
+`rag-evaluation.ts` 已把六维权重、等级、关键风险、未完成判断与场景汇总从 UI 组件中独立出来；`enterprise-rag-evaluation-skill.ts` 再将其转换为共享 `EvaluationResult`。这两个模块仍只消费已有判断并计算分数，不自行理解回答或充当 LLM 裁判；理解与核验由独立的 `evaluate-enterprise-rag` 服务端工作流完成，双方通过严格合同衔接。
 
 - 六维固定权重为 `20／25／15／15／15／10`，等级为 `0–4`；逐维保留理由、证据定位和适用标记。
 - 等级为空、理由缺失或没有非空证据定位的适用维度不计为已判定；保留分母，计算单题权重覆盖率和可能得分上下界。缺失或重复维度不能被静默剔除。

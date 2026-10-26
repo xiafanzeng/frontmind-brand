@@ -151,6 +151,7 @@ function EnterpriseRagLiveWorkspace({
     currentKnowledgeBase: currentPublication.knowledgeBase ?? null,
     knowledgeBinding,
     taskId: localTaskId ?? undefined,
+    turnId: answerMessage?.generalChat?.turnId,
     conversationReady: Boolean(active?.purpose === "enterprise_qa"),
     question: userMessage?.content ?? "",
     questionId: userMessage?.id,

@@ -5,6 +5,9 @@ import { chromium } from "playwright";
  * invokes their real controllers and may open/create a conversation or SiteOps
  * project. It does not generate, revise, reset, delete, or publish a website.
  * Add --execute-rag to submit one real question.
+ * Add --execute-rag-evaluation plus FRONTMIND_ACCEPTANCE_ALLOW_PAID=1 to run
+ * one real evaluator against the displayed completed answer. Set
+ * FRONTMIND_ACCEPTANCE_RAG_CONVERSATION_ID to target an existing conversation.
  * Add --execute-site plus FRONTMIND_ACCEPTANCE_ALLOW_PAID=1 to create one real
  * website build from a pre-build project.
  * Add --execute-site-revision plus the same paid guard to submit a safe
@@ -23,6 +26,7 @@ if (!baseUrl) {
 }
 
 const executeRag = process.argv.includes("--execute-rag");
+const executeRagEvaluation = process.argv.includes("--execute-rag-evaluation");
 const executeSite = process.argv.includes("--execute-site");
 const executeSiteRevision = process.argv.includes("--execute-site-revision");
 if (executeSite && executeSiteRevision) {
@@ -31,11 +35,11 @@ if (executeSite && executeSiteRevision) {
   );
 }
 if (
-  (executeSite || executeSiteRevision)
+  (executeRagEvaluation || executeSite || executeSiteRevision)
   && process.env.FRONTMIND_ACCEPTANCE_ALLOW_PAID !== "1"
 ) {
   throw new Error(
-    "Real website generation or revision requires FRONTMIND_ACCEPTANCE_ALLOW_PAID=1",
+    "Real RAG evaluation, website generation, or revision requires FRONTMIND_ACCEPTANCE_ALLOW_PAID=1",
   );
 }
 
@@ -258,14 +262,24 @@ try {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
+  let evaluationPostCount = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/modules/brand/rag-evaluations"
+    ) evaluationPostCount += 1;
+  });
 
-  if (!executeRag && !executeSite && !executeSiteRevision) {
+  if (!executeRag && !executeRagEvaluation && !executeSite && !executeSiteRevision) {
     log(
       "INFO stateful smoke: live controllers may open/create a RAG conversation and SiteOps project; no question, build, revision, reset, delete, or publish will be submitted",
     );
   }
 
-  await page.goto(pageUrl("enterprise-qa"), { waitUntil: "domcontentloaded" });
+  const ragConversationId = process.env.FRONTMIND_ACCEPTANCE_RAG_CONVERSATION_ID;
+  await page.goto(pageUrl("enterprise-qa", ragConversationId
+    ? { workbenchTask: ragConversationId }
+    : {}), { waitUntil: "domcontentloaded" });
   await expectVisible(
     page.getByTestId("enterprise-rag-live-root"),
     "The live Enterprise RAG route did not render the redesigned surface",
@@ -335,6 +349,87 @@ try {
       "The real RAG answer completed without a source reference",
     );
     log("PASS real Enterprise RAG answer and source");
+  }
+
+  if (executeRagEvaluation) {
+    const answer = page.getByTestId("rag-answer");
+    const source = page.getByTestId("rag-source").first();
+    await expectVisible(answer, "The real RAG answer is missing before evaluation");
+    await expectVisible(source, "The real RAG source is missing before evaluation");
+    const answerText = compactLine((await answer.textContent()) ?? "", 500);
+    if (!answerText || answerText.includes("尚无待评估回答")) {
+      throw new Error(
+        "Real RAG evaluation requires a completed answer; set FRONTMIND_ACCEPTANCE_RAG_CONVERSATION_ID or use --execute-rag",
+      );
+    }
+    if (evaluationPostCount !== 0) {
+      throw new Error("Opening the Enterprise RAG page unexpectedly started a paid evaluation");
+    }
+    const trigger = page.getByTestId("rag-auto-evaluate");
+    await expectVisible(trigger, "The real RAG automatic-evaluation button is missing");
+    if (await trigger.isDisabled()) {
+      throw new Error("The displayed completed RAG answer cannot start automatic evaluation");
+    }
+    await trigger.click();
+    await page.waitForFunction(
+      ({ statusTestId }) => {
+        const text = document.querySelector(
+          `[data-testid="${statusTestId}"]`,
+        )?.textContent ?? "";
+        return text.includes("自动评估已完成") || text.includes("自动评估失败");
+      },
+      { statusTestId: "rag-auto-evaluation-status" },
+      { timeout: timeoutMs },
+    );
+    const automaticStatus = compactLine(
+      (await page.getByTestId("rag-auto-evaluation-status").textContent()) ?? "",
+      500,
+    );
+    if (!automaticStatus.includes("自动评估已完成")) {
+      throw new Error(`The real RAG evaluator did not complete: ${automaticStatus}`);
+    }
+    if (evaluationPostCount !== 1) {
+      throw new Error(`Expected exactly one paid evaluator POST, observed ${evaluationPostCount}`);
+    }
+    const scoreText = compactLine(
+      (await page.getByTestId("rag-evaluation-score").textContent()) ?? "",
+      100,
+    );
+    if (!/\b\d{1,3}\s*\/\s*100\b/u.test(scoreText)) {
+      throw new Error(`The completed evaluator did not render a numeric score: ${scoreText}`);
+    }
+    if (await page.getByTestId("rag-evaluation-dimension").count() !== 6) {
+      throw new Error("The completed evaluator did not render exactly six dimensions");
+    }
+    await page.getByRole("button", { name: "查看回答依据" }).click();
+    const report = page.getByTestId("rag-auto-evaluation-report");
+    await expectVisible(report, "The immutable automatic-evaluation report is missing");
+    const reportText = compactLine((await report.textContent()) ?? "", 4_000);
+    if (await page.getByTestId("rag-evaluation-gate").count() !== 7) {
+      throw new Error("The completed evaluator did not render exactly seven gates");
+    }
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expectVisible(
+      page.getByTestId("rag-auto-evaluation-status"),
+      "The automatic-evaluation status did not recover after reload",
+    );
+    await page.waitForFunction(
+      ({ statusTestId }) => document.querySelector(
+        `[data-testid="${statusTestId}"]`,
+      )?.textContent?.includes("自动评估已完成") === true,
+      { statusTestId: "rag-auto-evaluation-status" },
+      { timeout: Math.min(timeoutMs, 60_000) },
+    );
+    await page.getByRole("button", { name: "查看回答依据" }).click();
+    const recoveredReport = page.getByTestId("rag-auto-evaluation-report");
+    await expectVisible(recoveredReport, "The persisted evaluator report did not recover after reload");
+    if (compactLine((await recoveredReport.textContent()) ?? "", 4_000) !== reportText) {
+      throw new Error("The evaluator report changed after a full page reload");
+    }
+    if (evaluationPostCount !== 1) {
+      throw new Error("Reloading the page unexpectedly started another paid evaluation");
+    }
+    log(`PASS real Enterprise RAG evaluation, immutable report, and reload recovery: ${scoreText}`);
   }
 
   await page.goto(pageUrl("website"), { waitUntil: "domcontentloaded" });
