@@ -45,6 +45,8 @@ type SiteLanguage = "zh-CN" | "en-US";
 export type SimplifiedWebsiteBuilderPreviewProps = {
   initialStep?: BuildStep;
   onOpenRag?: () => void;
+  /** Opens the established SiteOps UI for Aliyun, domain and release controls. */
+  onOpenSiteOpsRelease?: () => void;
   onStepChange?: (step: BuildStep) => void;
   /** Real SiteOps state/actions supplied by the connected production adapter. */
   siteOps?: SiteOpsConversationPanelProps;
@@ -488,6 +490,7 @@ function MiniSitePreview({
 export function SimplifiedWebsiteBuilderPreview({
   initialStep = "template",
   onOpenRag,
+  onOpenSiteOpsRelease,
   onStepChange,
   siteOps,
   storageScope,
@@ -1372,6 +1375,17 @@ export function SimplifiedWebsiteBuilderPreview({
               打开真实网站预览<ExternalLink size={15} />
             </a>
           )}
+        </div>
+      )}
+      {siteOps && liveBuildApproved && onOpenSiteOpsRelease && (
+        <div className="sfp-siteops-release-entry">
+          <span>
+            <Globe2 size={18} aria-hidden="true" />
+            <strong>构建已批准，可继续配置域名并上线</strong>
+          </span>
+          <button type="button" onClick={onOpenSiteOpsRelease}>
+            打开域名与发布设置
+          </button>
         </div>
       )}
 
