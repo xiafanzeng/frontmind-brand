@@ -144,10 +144,12 @@ describe("enterprise QA controller", () => {
     expect(mocks.fetch.mock.calls[0][0]).toBe(
       "/api/frontmind/v2/tasks/task-existing/messages",
     );
-    expect(mocks.context?.activeConversation?.messages.at(-1)?.generalChatDispatch).toMatchObject({
-      purpose: "enterprise_qa",
-      localTaskId: "task-existing",
-    });
+    expect(
+      mocks.context?.activeConversation?.messages.at(-1)?.generalChatDispatch,
+    ).toMatchObject({ localTaskId: "task-existing" });
+    expect(
+      mocks.context?.activeConversation?.messages.at(-1)?.generalChatDispatch,
+    ).not.toHaveProperty("purpose");
     expect(JSON.parse(mocks.fetch.mock.calls[0][1].body)).not.toHaveProperty(
       "purpose",
     );
