@@ -61,13 +61,18 @@ export async function resolveBrandIntentQuestion(
     .digest("hex");
 
   // Read the ledger row scoped to this user + project
-  const rows = await db.execute(
+  const result = await db.execute(
     sql`SELECT payload, revision FROM brand_intent_workspaces
         WHERE workspace_key = ${workspaceKey}
         AND owner_user_id = ${input.accountUserId}
         AND project_id <=> ${input.enterpriseProjectId}
         LIMIT 1`,
   );
+  // drizzle's mysql2 execute() resolves to the raw driver tuple [rows, fields];
+  // unwrap rows the same way intent-workbench-service's rows() helper does.
+  const rows = Array.isArray((result as unknown[] | null)?.[0])
+    ? ((result as unknown[][])[0] as unknown[])
+    : [];
   const row = (rows as unknown as Array<{ payload: string | Record<string, unknown>; revision: number }>)[0];
   if (!row) return null;
 
