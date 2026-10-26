@@ -345,6 +345,9 @@ importers:
       '@types/sanitize-html':
         specifier: ^2.16.0
         version: 2.16.1
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       jsdom:
         specifier: 26.1.0
         version: 26.1.0
