@@ -5,6 +5,7 @@
 /* Workbench children keep the same flex parent as the integrated Dashboard. */
 .brand-page--knowledge{display:contents}
 .brand-page--enterprise-qa{display:block;overflow:auto}
+.brand-page--reports{overflow:auto}
 
 /* Synthetic product previews remain scrollable without changing live workbench layout. */
 .brand-standalone--preview .brand-page--enterprise-qa{display:block;overflow:auto}

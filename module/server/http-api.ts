@@ -3,6 +3,7 @@ import type { MySql2Database } from "drizzle-orm/mysql2";
 import {z} from "zod";
 // 包名导入保持运行时从模块自身 dist 加载；相对导入会被 Dashboard 构建内联进 bundle，破坏 workflow 清单路径解析。
 import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
+import {createBrandReportRouter} from "@frontmind/module-brand/server/report-api";
 import {
  createEnterpriseRagEvaluationService,
  EnterpriseRagEvaluationError,
@@ -19,6 +20,7 @@ export interface ModuleHttpCore {
 /** Add new module-owned APIs here. Mounted in both Dashboard and the development subdomain. */
 export function createModuleHttpApi(core:ModuleHttpCore):Router {
  const router=Router();
+ router.use('/reports',createBrandReportRouter(core));
  const ragEvaluationCoordinate=z.object({
   sourceQaTaskId:z.string().uuid(),
   turnId:z.string().uuid(),
@@ -98,7 +100,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   const context=core.context(req);
   res.setHeader("Cache-Control","no-store");
   res.json({module:"brand",apiVersion:1,workspaceId:context.enterpriseProjectId,
-   features:["knowledge", "keywords", "intent-workbench", "enterprise-qa", "enterprise-rag-evaluation", "siteops"]});
+   features:["reports", "knowledge", "keywords", "intent-workbench", "enterprise-qa", "enterprise-rag-evaluation", "siteops"]});
  });
  return router;
 }
