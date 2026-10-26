@@ -164,6 +164,40 @@ export function assembleResponseLogicCore(input: {
     buildDeterministicTaskAttachmentArchive: (input: never) => buildDeterministicTaskAttachmentArchive(input),
     buildDirectorySkillArchive: (input: never) => buildDirectorySkillArchive(input),
 
+    // ── Service error classes + methods (hoisted from responseLogicService) ──
+    ResponseLogicConfirmedError: responseLogicService.ResponseLogicConfirmedError,
+    ResponseLogicProviderReadinessError: responseLogicService.ResponseLogicProviderReadinessError,
+    ResponseLogicPublicationRequestConflictError: responseLogicService.ResponseLogicPublicationRequestConflictError,
+    ResponseLogicResultAdoptionError: responseLogicService.ResponseLogicResultAdoptionError,
+    ResponseLogicRevisionConflictError: responseLogicService.ResponseLogicRevisionConflictError,
+    ResponseLogicTaskActiveError: responseLogicService.ResponseLogicTaskActiveError,
+    ResponseLogicTaskSupersededError: responseLogicService.ResponseLogicTaskSupersededError,
+    adoptResponseLogicModelResult: responseLogicService.adoptResponseLogicModelResult,
+    assertResponseLogicRecordEditable: responseLogicService.assertResponseLogicRecordEditable,
+    recordResponseLogicTaskStart: responseLogicService.recordResponseLogicTaskStart,
+    releaseResponseLogicTaskBinding: responseLogicService.releaseResponseLogicTaskBinding,
+    requireResponseLogicProviderReadiness: responseLogicService.requireResponseLogicProviderReadiness,
+    updateResponseLogicDraftMaterials: responseLogicService.updateResponseLogicDraftMaterials,
+
+    // ── BrandKeywordPorts additions ──
+    getEnterpriseProjectScope: bkp.getEnterpriseProjectScope,
+    enterpriseAccountOwnerPredicate: bkp.enterpriseAccountOwnerPredicate,
+    readStoredPresalesFile: bkp.readStoredPresalesFile,
+    manusV2EventOperationToken: bkp.manusV2EventOperationToken,
+
+    // ── Execution / security ports (Brand doesn't have these yet — honest stubs) ──
+    projectGeneralExecution: () => { throw new Error("EXECUTION_PROJECTION_NOT_AVAILABLE_IN_BRAND"); },
+    generalExecutionActivity: (() => ({})) as never,
+    orderExecutionTimeline: ((events: unknown[]) => events) as never,
+    projectBusinessExecution: () => { throw new Error("EXECUTION_PROJECTION_NOT_AVAILABLE_IN_BRAND"); },
+    localAssets: undefined,
+    providerFileLeases: undefined,
+    fileResourceContentExpiry: () => null,
+    isFileResourceContentExpired: () => false,
+    redactSensitivePayload: ((value: unknown) => value) as never,
+    redactSensitiveText: ((value: string) => value) as never,
+    safeErrorForLog: ((error: unknown) => error) as never,
+
     // ── Database ──
     getDb: db as never,
   };

@@ -101,7 +101,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  // router factory (response-logic-api.ts, 2,236 lines) with runtime ports
  // assembled from BrandKeywordPorts + Brand ledger question resolver.
  const rlRuntime = assembleResponseLogicCore({ getDb: () => core.database() });
- router.use("/response-logic", createResponseLogicApi(rlRuntime as never) as unknown as Router);
+ router.use("/response-logic", createResponseLogicApi(rlRuntime as never).router);
 
  router.get("/capabilities",(req,res)=>{
   const context=core.context(req);
