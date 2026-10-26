@@ -35,12 +35,14 @@ function createHarness(options: {
   const actorUserId = options.actorUserId ?? 42;
   const runtime = {
     assertServiceCapability: vi.fn(),
+    getDashboardQuestion: vi.fn(),
     responseLogicService: {
       listResponseLogicEntries: vi.fn(),
       saveResponseLogicEntry: vi.fn(),
     },
   } as unknown as ResponseLogicRuntimeCore & {
     assertServiceCapability: ReturnType<typeof vi.fn>;
+    getDashboardQuestion: ReturnType<typeof vi.fn>;
     responseLogicService: {
       listResponseLogicEntries: ReturnType<typeof vi.fn>;
       saveResponseLogicEntry: ReturnType<typeof vi.fn>;
@@ -135,6 +137,7 @@ describe("response-logic record list/save routes", () => {
     const harness = createHarness({ accountUserId: 7 });
     const url = await harness.start();
     try {
+      harness.runtime.getDashboardQuestion.mockResolvedValue({ questionId: "t:1" });
       harness.runtime.responseLogicService.saveResponseLogicEntry.mockResolvedValue({
         questionId: "t:1",
         revision: 4,
@@ -152,6 +155,26 @@ describe("response-logic record list/save routes", () => {
       expect(call.value.questionId).toBe("t:1");
       expect(call.value.expectedRevision).toBe(0);
       expect(call.value.publish).toBe(false);
+      expect(harness.runtime.getDashboardQuestion).toHaveBeenCalledWith(7, "t:1");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("rejects a save for a question the caller's ledger does not resolve", async () => {
+    const harness = createHarness({});
+    const url = await harness.start();
+    try {
+      harness.runtime.getDashboardQuestion.mockResolvedValue(null);
+      const response = await fetch(`${url}/response-logic`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(validSaveBody),
+      });
+      expect(response.status).toBe(422);
+      const payload = await response.json();
+      expect(payload.error.code).toBe("RESPONSE_LOGIC_QUESTION_NOT_CONFIGURED");
+      expect(harness.runtime.responseLogicService.saveResponseLogicEntry).not.toHaveBeenCalled();
     } finally {
       await harness.close();
     }
@@ -180,6 +203,7 @@ describe("response-logic record list/save routes", () => {
     const harness = createHarness({});
     const url = await harness.start();
     try {
+      harness.runtime.getDashboardQuestion.mockResolvedValue({ questionId: "t:1" });
       harness.runtime.responseLogicService.saveResponseLogicEntry.mockRejectedValue(
         Object.assign(new Error("应答逻辑 t:1 已更新到 R5"), {
           code: "CONFLICT",
@@ -204,6 +228,7 @@ describe("response-logic record list/save routes", () => {
     const harness = createHarness({});
     const url = await harness.start();
     try {
+      harness.runtime.getDashboardQuestion.mockResolvedValue({ questionId: "t:1" });
       harness.runtime.responseLogicService.saveResponseLogicEntry.mockRejectedValueOnce(
         Object.assign(new Error("db down"), { code: "DATABASE_UNAVAILABLE" }),
       );

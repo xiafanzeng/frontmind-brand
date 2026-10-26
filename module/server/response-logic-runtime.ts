@@ -1,5 +1,6 @@
 import type { Request } from "express";
 import type { MySql2Database } from "drizzle-orm/mysql2";
+import { sql } from "drizzle-orm";
 import { intentSkillPorts } from "./intent-skill-runtime.js";
 import { resolveBrandIntentQuestion, toConfiguredIntentQuestion, type BrandQuestionResolverPorts } from "./brand-question-resolver.js";
 import { createResponseLogicService } from "./response-logic-service.js";
@@ -42,6 +43,36 @@ const responseLogicEntries = mysqlTable("response_logic_entries", {
   index("response_logic_entries_user_status_idx").on(table.userId, table.status),
   uniqueIndex("response_logic_entries_user_conversation_uq").on(table.userId, table.conversationId),
 ]);
+
+/**
+ * Ownership filter for every response_logic_entries query the service issues.
+ * `userId` is already the workspace-resolved owner id (Core's
+ * enterpriseWorkspaceUserId maps enterprise actors onto the project owner),
+ * so a single equality against userId is the complete workspace isolation.
+ * Must be a real drizzle SQL chunk: the service embeds it directly in
+ * .where()/and(), and a non-SQL value would either throw at query build or
+ * leak rows across workspaces.
+ */
+export function brandResponseLogicOwnerPredicate(userId: number) {
+  return sql`${responseLogicEntries.userId} = ${userId}`;
+}
+
+/**
+ * Brand questions live in the brand_intent_workspaces JSON ledger, so the
+ * service's relational question lock can never match a row. Every Brand API
+ * handler verifies the question through the ledger resolver BEFORE calling
+ * the service; this deliberately never-matching lock keeps the service on
+ * its managed-legacy (no-row) path. It still queries a real table inside
+ * the caller's transaction — `WHERE 1 = 0 ... FOR UPDATE` acquires no row
+ * locks.
+ */
+export const brandResponseLogicQuestionLockTable = mysqlTable("response_logic_entries", {
+  id: varchar("id", { length: 191 }),
+});
+export function brandQuestionLockNoMatchPredicate(_userId: number) {
+  return sql`1 = 0`;
+}
+
 import { buildDirectorySkillArchive, buildDeterministicTaskAttachmentArchive } from "@frontmind/module-contracts/task-attachment-package";
 import { mysqlTable as _mysqlTable, varchar as _varchar, int as _int, mysqlEnum as _mysqlEnum, timestamp as _timestamp, uniqueIndex as _uniqueIndex, index as _index } from "drizzle-orm/mysql-core";
 
@@ -135,13 +166,10 @@ export function assembleResponseLogicCore(input: {
       constructor(code: string, message: string) { super(message); this.code = code; }
     } as never,
     lockCustomerProjectBusinessWrite: bkp.lockCustomerProjectBusinessWrite as never,
-    workspaceQuestionTable: () => responseLogicEntries as never, // Brand ledger: table check bypassed via resolver
-    workspaceQuestionOwnerPredicate: () => { throw new Error("BRAND_LEDGER_QUESTIONS_USE_RESOLVER_NOT_TABLE"); },
-    enterpriseOwnerPredicate: (table: never, userId: number) => {
-      // Use the current enterprise project scope from the Brand keyword ports
-      const projectId = bkp.currentEnterpriseProjectId();
-      return { queryChunks: [], params: [userId, projectId] } as never;
-    },
+    workspaceQuestionTable: () => brandResponseLogicQuestionLockTable as never, // Brand ledger: question checks run via getDashboardQuestion at the API layer
+    workspaceQuestionOwnerPredicate: brandQuestionLockNoMatchPredicate as never,
+    enterpriseOwnerPredicate: ((_table: never, userId: number) =>
+      brandResponseLogicOwnerPredicate(userId)) as never,
     enterpriseProjectIdForOwner: (userId: number) => bkp.currentEnterpriseProjectId(),
     credentialMayServeAccount: async () => true, // Brand credential model doesn't have account-level restrictions
     claimUpstreamTask: async () => {}, // upstream_resources handled via recordUpstreamResource

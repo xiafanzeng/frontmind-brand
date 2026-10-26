@@ -90,6 +90,23 @@ export function createResponseLogicRecordRouter(
       const context = core.context(req);
       await rlRuntime.assertServiceCapability(context.accountUserId, "responseLogic");
       const value = saveResponseLogicSchema.strict().parse(req.body ?? {});
+      // Trusted question ownership check through the Brand ledger resolver —
+      // the same gate every other response-logic handler applies. Brand
+      // questions live in brand_intent_workspaces, so the service's
+      // relational lock can never validate them (see response-logic-runtime).
+      const configuredQuestion = await rlRuntime.getDashboardQuestion(
+        context.accountUserId,
+        value.questionId,
+      );
+      if (!configuredQuestion) {
+        res.status(422).json({
+          error: {
+            code: "RESPONSE_LOGIC_QUESTION_NOT_CONFIGURED",
+            message: "当前问题尚未由管理员配置",
+          },
+        });
+        return;
+      }
       const record = await rlRuntime.responseLogicService.saveResponseLogicEntry({
         userId: context.accountUserId,
         value,
