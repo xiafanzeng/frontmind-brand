@@ -18,6 +18,7 @@ import {
 import type { ResponseLogicRecordDto } from "../contracts/response-logic.js";
 import type { CoreRequest, ManusV2MessageEvent, ResponseLogicApiPorts } from "./response-logic-core-ports.js";
 import { buildDirectorySkillArchive } from "./directory-skill-archive.js";
+import { brandQuestionHash } from "./brand-question-resolver.js";
 
 /**
  * LLM-as-Judge evaluation of one response-logic draft.
@@ -109,6 +110,7 @@ function judgeIdempotencyKey(input: {
   sourceFingerprint: string;
   skillContentHash: string;
   knowledgeFingerprint: string;
+  questionHash?: string;
 }) {
   return createHash("sha256")
     .update(
@@ -120,6 +122,7 @@ function judgeIdempotencyKey(input: {
         input.sourceFingerprint,
         input.skillContentHash,
         input.knowledgeFingerprint,
+        input.questionHash ?? "",
       ]),
       "utf8",
     )
@@ -557,7 +560,13 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
 
       // Question text/intent for the Judge turn-input (the LLM is the sole
       // formal scorer — the rule engine never feeds this request).
+      // questionHash binds the idempotency key to the CURRENT question text:
+      // when a Brand user optimizes the question, old tasks are invalidated.
       const configuredQuestion = await core.getDashboardQuestion(workspaceUserId, parsed.data.questionId);
+      const currentQuestionHash = brandQuestionHash(
+        configuredQuestion?.question ?? record.question,
+        configuredQuestion?.intent ?? record.intent ?? "",
+      );
 
       // Knowledge snapshot
       const knowledgeSnapshot = await core.getLatestKnowledgeSnapshot(workspaceUserId);
@@ -625,6 +634,7 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
         sourceFingerprint: fingerprint,
         skillContentHash: skillArchive.contentHash,
         knowledgeFingerprint,
+        questionHash: currentQuestionHash,
       });
 
       // Create task
@@ -704,6 +714,7 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
         recordRevision: record.revision,
         sourceFingerprint: fingerprint,
         knowledgeFingerprint,
+        questionHash: currentQuestionHash,
         judgeVersion: "1",
       });
     } catch (error) {

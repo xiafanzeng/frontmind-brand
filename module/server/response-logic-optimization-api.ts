@@ -13,6 +13,7 @@ import {
 import type { CoreRequest } from "./response-logic-core-ports.js";
 import type { JudgeOutput } from "../contracts/response-logic-judge.js";
 import { buildDirectorySkillArchive } from "./directory-skill-archive.js";
+import { brandQuestionHash } from "./brand-question-resolver.js";
 import {
   createJudgeContextResolver,
   judgeError,
@@ -114,6 +115,7 @@ function optimizationIdempotencyKey(input: {
   judgeTaskId: string;
   skillContentHash: string;
   knowledgeFingerprint: string;
+  questionHash?: string;
 }) {
   return createHash("sha256")
     .update(
@@ -126,6 +128,7 @@ function optimizationIdempotencyKey(input: {
         input.judgeTaskId,
         input.skillContentHash,
         input.knowledgeFingerprint,
+        input.questionHash ?? "",
       ]),
       "utf8",
     )
@@ -345,7 +348,12 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
       }
 
       // ---- Build optimizer inputs ----
+      // questionHash binds the optimizer to the CURRENT question text.
       const configuredQuestion = await core.getDashboardQuestion(workspaceUserId, parsed.data.questionId);
+      const currentQuestionHash = brandQuestionHash(
+        configuredQuestion?.question ?? record.question,
+        configuredQuestion?.intent ?? record.intent ?? "",
+      );
       const knowledgeFingerprint = knowledgeFingerprintOf(knowledgeSnapshot);
 
       let evidenceUploadFilename: string | null = null;
@@ -402,6 +410,7 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
         judgeTaskId: parsed.data.judgeTaskId,
         skillContentHash: skillArchive.contentHash,
         knowledgeFingerprint,
+        questionHash: currentQuestionHash,
       });
 
       const client = core.createCredentialAgentClient(requestCredential, {
