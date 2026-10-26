@@ -354,3 +354,121 @@
   outline: 2px solid var(--module-accent, #5e6174);
   outline-offset: 2px;
 }
+
+/* Two-stage API question-template flow. Reuses the keyword table design tokens. */
+:where(.brand-keyword-workspace) .qt-api-flow .panel-head p {
+  margin: 4px 0 0;
+  color: var(--dashboard-muted, #716a80);
+  font-size: 13px;
+  line-height: 20px;
+}
+:where(.brand-keyword-workspace) .qt-company-field {
+  display: block;
+  color: var(--ink, #171321);
+  font-size: 13px;
+  font-weight: var(--fm-weight-semibold, 600);
+}
+:where(.brand-keyword-workspace) .qt-company-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+:where(.brand-keyword-workspace) .qt-company-input {
+  box-sizing: border-box;
+  flex: 1 1 300px;
+  max-width: 420px;
+  min-height: var(--fm-control-height, 40px);
+  padding: 8px 14px;
+  border: 1px solid #d0d5dd;
+  border-radius: var(--fm-control-radius, 8px);
+  background: #fff;
+  color: var(--ink, #171321);
+  font-size: 14px;
+  line-height: 22px;
+}
+:where(.brand-keyword-workspace) .qt-company-input:focus-visible {
+  border-color: var(--purple-2, #5b2a86);
+  box-shadow: 0 0 0 3px rgba(91, 42, 134, 0.12);
+  outline: none;
+}
+:where(.brand-keyword-workspace) .qt-company-input::placeholder {
+  color: #98a2b3;
+}
+:where(.brand-keyword-workspace) .qt-step-tabs {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line, #e8e1ee);
+  border-radius: 10px;
+  background: #f8f5fb;
+}
+:where(.brand-keyword-workspace) .qt-step-tabs button {
+  min-height: 32px;
+  padding: 4px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dashboard-muted, #716a80);
+  font-size: 13px;
+  font-weight: var(--fm-weight-semibold, 600);
+  cursor: pointer;
+}
+:where(.brand-keyword-workspace) .qt-step-tabs button[aria-selected="true"] {
+  background: #fff;
+  color: var(--purple-2, #5b2a86);
+  box-shadow: var(--shadow-soft, 0 10px 26px rgba(33, 19, 58, 0.055));
+}
+:where(.brand-keyword-workspace) .qt-step-tabs button:disabled {
+  color: #b9b2c4;
+  cursor: default;
+}
+:where(.brand-keyword-workspace) .qt-error {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border: 1px solid #f0c8c8;
+  border-radius: 10px;
+  background: #fdf3f3;
+  color: #96313d;
+  font-size: 13px;
+  line-height: 21px;
+}
+:where(.brand-keyword-workspace) .qt-empty {
+  margin: 12px 0 0;
+  padding: 14px 16px;
+  border: 1px dashed var(--line, #e8e1ee);
+  border-radius: 12px;
+  background: #faf8fc;
+  color: var(--dashboard-muted, #716a80);
+  font-size: 13px;
+  line-height: 22px;
+}
+:where(.brand-keyword-workspace) .qt-selected-summary {
+  margin: 12px 0 0;
+  color: var(--dashboard-muted, #716a80);
+  font-size: 13px;
+  line-height: 21px;
+}
+:where(.brand-keyword-workspace) .qt-api-flow .keyword-table {
+  min-width: 560px;
+}
+:where(.brand-keyword-workspace) .qt-api-flow .keyword-table .qt-heat-cell {
+  min-width: 88px;
+  color: var(--dashboard-muted, #716a80);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+:where(.brand-keyword-workspace) .qt-api-flow .keyword-start-actions {
+  margin-top: 16px;
+}
+:where(.brand-keyword-workspace) .qt-spin {
+  animation: qt-rotate 0.9s linear infinite;
+}
+@keyframes qt-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
