@@ -609,7 +609,7 @@ describe("redesigned live website builder setup", () => {
     fireEvent.click(screen.getByRole("button", { name: /建设评估/ }));
     expect(screen.getByRole("button", { name: "查找 RAG 评估" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "查找 RAG 评估" }));
-    expect(screen.getByText(/尚无已保存的企业 RAG 评估快照/)).toBeTruthy();
+    expect(screen.getByText(/尚无可关联的企业 RAG 评估快照/)).toBeTruthy();
   });
 
   it("shows the true approved build and records publish audit only after the server accepts it", async () => {
