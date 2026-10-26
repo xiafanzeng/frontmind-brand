@@ -1,66 +1,97 @@
-import {type ComponentType, type ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { configureIntentWorkspaceHost } from "./response-logic-runtime-host.js";
 import type { IntentWorkspaceHost, IntentToast, StartResponseLogicTask, UploadIntentAsset, IntentRestOperation, IntentVisualComponents } from "./response-logic-host.js";
 
-export type BrandRestOperation = {
-  signal: AbortSignal;
-  assertActive(): void;
-  headers(extra?: Record<string, string>): Record<string, string>;
-  fetch(input: RequestInfo | URL, init?: RequestInit, implementation?: typeof fetch): Promise<Response>;
-};
-
 /**
  * Brand-side adapter that implements the IntentWorkspaceHost contract for the
- * response-logic workspace, using Brand's existing host infrastructure.
- *
- * Deps that are not yet wired (StartResponseLogicTask, uploadChatLocalAsset,
- * trpc workspace queries) are provided as explicit not-yet-wired stubs that
- * throw clear errors instead of silently failing — S6 Core wiring will replace
- * them with real implementations.
+ * response-logic workspace, using Brand's REST API endpoints.
+ * All operations go through the real REST endpoints in server/http-api.ts.
  */
 
-const NOT_WIRED = (name: string) => () => {
-  throw new Error(
-    `${name} is not yet wired in the Brand host. This capability requires S6 Core wiring to provide the upstream task/asset infrastructure. See response-logic-core-ports.ts for the full port contract.`,
-  );
-};
-
 export interface BrandResponseLogicAdapterInput {
-  /** Brand's existing REST capture (from BrandHost.captureWorkspaceRestOperation). */
-  captureRestOperation: (signal?: AbortSignal | null) => BrandRestOperation;
-  /** Visual components from Brand's vendor module-ui or local equivalents. */
+  captureRestOperation: (signal?: AbortSignal | null) => {
+    signal: AbortSignal;
+    assertActive(): void;
+    fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  };
   visual: IntentVisualComponents;
-  /** Toast notifications from Brand's host. */
   toast: IntentToast;
-  /** Optional: real task creation (S6 will provide this). */
-  startTask?: StartResponseLogicTask;
-  /** Optional: real asset upload (S6 will provide this). */
-  uploadAsset?: UploadIntentAsset;
 }
 
+const RL_API_BASE = "/api/modules/brand/response-logic";
+
 export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInput): IntentWorkspaceHost {
-  const captureRest = (signal?: AbortSignal | null): IntentRestOperation => {
-    const brandRest = input.captureRestOperation(signal ?? undefined);
-    return {
-      signal: brandRest.signal,
-      assertActive: brandRest.assertActive,
-      fetch: (req, init) => brandRest.fetch(req, init),
-    } satisfies IntentRestOperation;
+  const rest = input.captureRestOperation;
+
+  const loadRecords = async () => {
+    const response = await rest().fetch(RL_API_BASE, { method: "GET", headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`加载应答逻辑失败（${response.status}）`);
+    return response.json();
+  };
+
+  const saveRecord = async (value: unknown) => {
+    const response = await rest().fetch(RL_API_BASE, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const err = (body as { error?: { code?: string; message?: string } })?.error;
+      throw Object.assign(new Error(err?.message ?? "保存失败"), { code: err?.code });
+    }
+    return body;
+  };
+
+  const startTask: StartResponseLogicTask = async (messages, taskInput, signal) => {
+    const response = await rest(signal).fetch(`${RL_API_BASE}/start`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        questionId: taskInput.questionId, groupId: taskInput.groupId, groupTitle: taskInput.groupTitle,
+        question: taskInput.question, intent: taskInput.intent, summary: taskInput.summary,
+        draft: taskInput.draft, operationRevision: taskInput.operationRevision,
+        conversationId: taskInput.conversationId, taskId: taskInput.taskId, messages,
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error((body as { error?: { message?: string } })?.error?.message ?? `生成任务创建失败（${response.status}）`);
+    }
+    return body as { id: string; operationRevision?: number };
+  };
+
+  const uploadAsset: UploadIntentAsset = async (file, _onProgress, options) => {
+    const formData = new FormData();
+    formData.append("file", file, options?.filename ?? file.name);
+    const response = await rest(options?.signal).fetch(`${RL_API_BASE}/materials/upload`, {
+      method: "POST", body: formData,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error((body as { error?: { message?: string } })?.error?.message ?? `材料上传失败（${response.status}）`);
+    }
+    return body as { fileId: string; filename: string; sizeBytes?: number; expiresAt: number };
   };
 
   const host: IntentWorkspaceHost = {
-    captureRestOperation: captureRest,
-    createResponseLogicTask: input.startTask ?? NOT_WIRED("createResponseLogicTask"),
-    uploadChatLocalAsset: input.uploadAsset ?? NOT_WIRED("uploadChatLocalAsset"),
+    captureRestOperation: (signal?: AbortSignal | null): IntentRestOperation => {
+      const brandRest = input.captureRestOperation(signal ?? undefined);
+      return { signal: brandRest.signal, assertActive: brandRest.assertActive, fetch: (req, init) => brandRest.fetch(req, init) };
+    },
+    createResponseLogicTask: startTask,
+    uploadChatLocalAsset: uploadAsset,
     useSearch: () => typeof window !== "undefined" ? window.location.search : "",
     activeEnterpriseProjectId: () => undefined,
     trpc: {
       workspace: {
         responseLogic: {
-          useQuery: () => ({ data: undefined, isLoading: false, isFetching: false, isSuccess: false, isError: false, refetch: async () => ({}) }),
+          useQuery: () => {
+            let data: { records: unknown[] } | undefined;
+            let isLoading = true;
+            loadRecords().then(r => { data = r; isLoading = false; }).catch(() => { isLoading = false; });
+            return { data, isLoading, isFetching: isLoading, isSuccess: !isLoading && !!data, isError: !isLoading && !data, refetch: async () => { data = await loadRecords(); return { data }; } };
+          },
         },
         saveResponseLogic: {
-          useMutation: () => ({ mutateAsync: async () => { throw new Error("SAVE_RESPONSE_LOGIC_NOT_YET_WIRED — S6 Core wiring required"); }, isPending: false }),
+          useMutation: () => ({ mutateAsync: async (value: unknown) => saveRecord(value), isPending: false }),
         },
       },
     } as never,

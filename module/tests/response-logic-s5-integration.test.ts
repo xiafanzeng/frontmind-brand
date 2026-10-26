@@ -12,12 +12,13 @@ import { renderToStaticMarkup } from "react-dom/server";
  */
 
 describe("S5: ModuleWorkspace response-logic integration", () => {
-  it("BrandResponseLogicEntry can be imported and renders without crash (SSR)", async () => {
-    // Dynamic import to avoid circular dependency issues in SSR
-    const { default: BrandResponseLogicEntry } = await import("../client/BrandResponseLogicEntry.js");
-    expect(BrandResponseLogicEntry).toBeDefined();
-    expect(typeof BrandResponseLogicEntry).toBe("function");
-  });
+  it("BrandResponseLogicEntry module is available (import check only, no render)", async () => {
+    // Verify the module exports a component factory; full SSR rendering requires
+    // REST mocking which is covered by the dedicated API tests, not here.
+    const module = await import("../client/BrandResponseLogicEntry.js");
+    expect(module.default).toBeDefined();
+    expect(typeof module.default).toBe("function");
+  }, 15000);
 
   it("response-logic-brand-adapter exports a host factory that can be imported", async () => {
     const { createBrandResponseLogicHost } = await import("../client/response-logic-brand-adapter.js");

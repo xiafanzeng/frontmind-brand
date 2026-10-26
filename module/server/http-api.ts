@@ -104,6 +104,30 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  router.use("/response-logic/evaluation", createResponseLogicEvaluationRouter(rlRuntime as never));
  router.use("/response-logic/evaluation/judge", createResponseLogicJudgeRouter(rlRuntime as never));
  router.use("/response-logic/optimization", createResponseLogicOptimizationRouter(rlRuntime as never));
+ // First-generation task creation (builder skill)
+ router.post("/response-logic/start", async (req, res) => {
+  try {
+   res.setHeader("Cache-Control", "no-store");
+   const ctx = core.context(req);
+   // The runtime core assembles the real ports; generation uses the builder skill
+   // through the same credential/task infrastructure as judge/optimizer.
+   res.status(501).json({ error: { code: "GENERATION_NOT_YET_IMPLEMENTED", message: "首次生成任务创建端点待 S6-3 实现。当前已接通：列表、保存、规则评估、Judge 四维评估、优化器。" } });
+  } catch { res.status(503).json({ error: { code: "RESPONSE_LOGIC_UNAVAILABLE", message: "应答逻辑服务暂不可用" } }); }
+ });
+ // Generation task status polling
+ router.get("/response-logic/tasks/:taskId/status", async (req, res) => {
+  try {
+   res.setHeader("Cache-Control", "no-store");
+   res.status(501).json({ error: { code: "GENERATION_NOT_YET_IMPLEMENTED", message: "生成任务状态查询待 S6-3 实现" } });
+  } catch { res.status(503).json({ error: { code: "RESPONSE_LOGIC_UNAVAILABLE", message: "应答逻辑服务暂不可用" } }); }
+ });
+ // Material upload
+ router.post("/response-logic/materials/upload", async (req, res) => {
+  try {
+   res.setHeader("Cache-Control", "no-store");
+   res.status(501).json({ error: { code: "UPLOAD_NOT_YET_IMPLEMENTED", message: "材料上传端点待 S6-3 实现" } });
+  } catch { res.status(503).json({ error: { code: "RESPONSE_LOGIC_UNAVAILABLE", message: "应答逻辑服务暂不可用" } }); }
+ });
  // Basic CRUD for response-logic records (list + save)
  router.get("/response-logic", async (req, res) => {
   try {
