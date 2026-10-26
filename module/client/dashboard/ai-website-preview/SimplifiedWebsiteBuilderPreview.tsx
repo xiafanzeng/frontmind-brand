@@ -28,13 +28,22 @@ import { usePreviewDialog } from "./qa-widget/usePreviewDialog";
 import {
   findLatestEvaluationReport,
   getEvaluationReportById,
+  listEvaluationReports,
+  saveEvaluationReport,
   savePublishDecisionWithReports,
   type EvaluationReportSnapshot,
+  type EvaluationSubjectRef,
 } from "./evaluation-report-store";
 import {
   websiteBuildEvaluationSkill,
   type WebsiteBuildEvaluationCheckStatus,
+  type WebsiteBuildEvaluationOutput,
 } from "./website-build-evaluation-skill";
+import {
+  buildWebsiteEvaluationJudgmentsFromSiteOps,
+  siteOpsWebsiteEvaluationObservedAt,
+  siteOpsWebsiteEvaluationVersion,
+} from "./website-build-siteops-evidence";
 import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
 import "./simplified-product-preview.css";
 
@@ -93,6 +102,43 @@ type EvaluationCheck = {
   actionLabel?: string;
   onAction?: () => void;
 };
+
+const WEBSITE_CHECK_STATUS_LABELS: Record<WebsiteBuildEvaluationCheckStatus, string> = {
+  passed: "已通过",
+  partial: "部分通过",
+  failed: "未通过",
+  pending: "待执行",
+  not_applicable: "不适用",
+};
+
+function sameEvaluationSubject(
+  left: EvaluationSubjectRef,
+  right: EvaluationSubjectRef,
+) {
+  return left.kind === right.kind && left.id === right.id && left.version === right.version;
+}
+
+function recoverOrSaveWebsiteEvaluationReport(input: {
+  storage: Pick<Storage, "getItem" | "setItem"> | null | undefined;
+  subject: EvaluationSubjectRef;
+  result: WebsiteBuildEvaluationOutput;
+}) {
+  const resultJson = JSON.stringify(input.result);
+  const recovered = listEvaluationReports(input.storage).find((report) =>
+    report.result.skillId === input.result.skillId
+    && sameEvaluationSubject(report.subject, input.subject)
+    && JSON.stringify(report.result) === resultJson,
+  );
+  if (recovered) return recovered;
+  const report: EvaluationReportSnapshot = {
+    reportId: `website-report-${crypto.randomUUID()}`,
+    createdAt: new Date().toISOString(),
+    subject: input.subject,
+    result: input.result,
+  };
+  saveEvaluationReport(report, input.storage);
+  return report;
+}
 
 const LIVE_SITEOPS_STATUS_LABELS: Record<string, string> = {
   loading: "正在连接真实建站服务",
@@ -525,6 +571,8 @@ export function SimplifiedWebsiteBuilderPreview({
   const [linkedRagReportId, setLinkedRagReportId] = useState<string | null>(
     () => loadLinkedRagReportId(storageScope, auditStorage),
   );
+  const [liveEvaluationReport, setLiveEvaluationReport] =
+    useState<EvaluationReportSnapshot | null>(null);
   const [releaseReport, setReleaseReport] = useState<EvaluationReportSnapshot | null>(null);
   const [liveReleaseCoordinates, setLiveReleaseCoordinates] =
     useState<LiveReleaseCoordinates | null>(null);
@@ -611,6 +659,15 @@ export function SimplifiedWebsiteBuilderPreview({
   const selectedTemplateUsesPreviewFallback =
     selectedTemplate.executionAdmissionMode === "preview_reference_fallback";
   const latestBuild = liveObservation?.builds[0] ?? null;
+  const liveWebsiteJudgments = useMemo(
+    () => liveObservation
+      ? buildWebsiteEvaluationJudgmentsFromSiteOps(liveObservation)
+      : null,
+    [liveObservation],
+  );
+  const liveEvaluationObservedAt = liveObservation
+    ? siteOpsWebsiteEvaluationObservedAt(liveObservation)
+    : null;
   const selectedTemplatePreviewUrl = useMemo(() => {
     if (!siteOps || !selectedTemplate.executionAdmitted || !selectedTemplate.previewUrl) return null;
     const marker = "/style-previews/";
@@ -677,7 +734,7 @@ export function SimplifiedWebsiteBuilderPreview({
     ? {
         kind: "website-build",
         id: latestBuild.id,
-        version: `r${liveObservation.project.revision}:${liveObservation.project.currentKnowledgeSnapshotId ?? "unbound"}`,
+        version: siteOpsWebsiteEvaluationVersion(liveObservation),
       }
     : {
         kind: "website-build",
@@ -1003,7 +1060,7 @@ export function SimplifiedWebsiteBuilderPreview({
     goTo(steps[stepIndex + 1].id);
   };
 
-  const websiteQualityChecks: EvaluationCheck[] = [
+  const defaultWebsiteQualityChecks: EvaluationCheck[] = [
     {
       id: "website-content-structure",
       title: "版本、目标问题覆盖与信息结构",
@@ -1039,7 +1096,7 @@ export function SimplifiedWebsiteBuilderPreview({
     },
   ];
 
-  const trustBoundaryChecks: EvaluationCheck[] = [
+  const defaultTrustBoundaryChecks: EvaluationCheck[] = [
     {
       id: "website-facts-evidence",
       title: "企业事实与证据",
@@ -1064,7 +1121,7 @@ export function SimplifiedWebsiteBuilderPreview({
     },
   ];
 
-  const flowAndPublishChecks: EvaluationCheck[] = [
+  const defaultFlowAndPublishChecks: EvaluationCheck[] = [
     {
       id: "website-flow-recovery",
       title: "建站流程、反馈与失败恢复",
@@ -1086,6 +1143,27 @@ export function SimplifiedWebsiteBuilderPreview({
     },
   ];
 
+  const liveJudgmentsById = new Map(
+    (liveWebsiteJudgments ?? []).map((item) => [item.checkId, item]),
+  );
+  const applyLiveJudgments = (checks: EvaluationCheck[]) => checks.map((check) => {
+    const liveJudgment = liveJudgmentsById.get(
+      check.id as Parameters<typeof websiteBuildEvaluationSkill.evaluate>[0]["judgments"][number]["checkId"],
+    );
+    if (!liveJudgment) return check;
+    return {
+      ...check,
+      detail: liveJudgment.summary,
+      status: liveJudgment.status === "not_applicable"
+        ? "not-applicable" as const
+        : liveJudgment.status,
+      statusLabel: WEBSITE_CHECK_STATUS_LABELS[liveJudgment.status],
+    };
+  });
+  const websiteQualityChecks = applyLiveJudgments(defaultWebsiteQualityChecks);
+  const trustBoundaryChecks = applyLiveJudgments(defaultTrustBoundaryChecks);
+  const flowAndPublishChecks = applyLiveJudgments(defaultFlowAndPublishChecks);
+
   const scoreGroups = [
     { id: "content-experience", label: "网站内容与体验", checks: websiteQualityChecks },
     { id: "facts-public-boundary", label: "企业事实与公开边界", checks: trustBoundaryChecks },
@@ -1105,7 +1183,7 @@ export function SimplifiedWebsiteBuilderPreview({
     return "pending";
   };
   const websiteEvaluation = websiteBuildEvaluationSkill.evaluate({
-    judgments: scoredChecks.map((check) => ({
+    judgments: liveWebsiteJudgments ?? scoredChecks.map((check) => ({
       checkId: check.id as Parameters<typeof websiteBuildEvaluationSkill.evaluate>[0]["judgments"][number]["checkId"],
       status: toSkillStatus(check.status),
       summary: check.detail,
@@ -1127,6 +1205,30 @@ export function SimplifiedWebsiteBuilderPreview({
   }[websiteEvaluation.recommendation];
   const recommendationDetail = websiteEvaluation.summary;
   const recommendationBadge = "仅作建议，不限制发布";
+  const websiteEvaluationFingerprint = JSON.stringify(websiteEvaluation);
+
+  useEffect(() => {
+    if (!siteOps || websiteEvaluation.status === "not_run") {
+      setLiveEvaluationReport(null);
+      return;
+    }
+    const report = recoverOrSaveWebsiteEvaluationReport({
+      storage: auditStorage,
+      subject: websiteSubject,
+      result: websiteEvaluation,
+    });
+    setLiveEvaluationReport((current) =>
+      current?.reportId === report.reportId ? current : report,
+    );
+  }, [
+    auditStorage,
+    siteOps,
+    websiteEvaluation.status,
+    websiteEvaluationFingerprint,
+    websiteSubject.id,
+    websiteSubject.kind,
+    websiteSubject.version,
+  ]);
 
   const linkLatestRagReport = () => {
     if (!latestRagReport) {
@@ -1166,12 +1268,23 @@ export function SimplifiedWebsiteBuilderPreview({
       );
       return;
     }
-    const report: EvaluationReportSnapshot = {
-      reportId: `website-report-${crypto.randomUUID()}`,
-      createdAt: new Date().toISOString(),
-      subject: websiteSubject,
-      result: websiteEvaluation,
-    };
+    const report: EvaluationReportSnapshot = siteOps
+      ? liveEvaluationReport
+        && sameEvaluationSubject(liveEvaluationReport.subject, websiteSubject)
+        && JSON.stringify(liveEvaluationReport.result) === websiteEvaluationFingerprint
+        ? liveEvaluationReport
+        : recoverOrSaveWebsiteEvaluationReport({
+            storage: auditStorage,
+            subject: websiteSubject,
+            result: websiteEvaluation,
+          })
+      : {
+          reportId: `website-report-${crypto.randomUUID()}`,
+          createdAt: new Date().toISOString(),
+          subject: websiteSubject,
+          result: websiteEvaluation,
+        };
+    if (siteOps) setLiveEvaluationReport(report);
     setLiveReleaseCoordinates(
       siteOps && liveObservation && latestBuild
         ? {
@@ -1284,7 +1397,11 @@ export function SimplifiedWebsiteBuilderPreview({
         </header>
         <div className="sfp-check-list">
           {checks.map((check) => (
-            <article key={check.id} className={`is-${check.status}`}>
+            <article
+              key={check.id}
+              className={`is-${check.status}`}
+              data-testid={siteOps ? "website-evaluation-check" : undefined}
+            >
               <span>{check.status === "passed" ? <Check size={17} /> : <CircleAlert size={17} />}</span>
               <div>
                 <div className="sfp-check-title">
@@ -1659,10 +1776,21 @@ export function SimplifiedWebsiteBuilderPreview({
               <div className="sfp-section-heading">
                 <div><h2>建设检查与评估</h2><p>网站专属检查按 40/40/20 加权；RAG 评估独立关联，不参与网站得分。</p></div>
                 <aside className="sfp-eval-heading-meta">
-                  <span className="sfp-eval-run-state"><i />质量评估未完成</span>
+                  <span className="sfp-eval-run-state" data-testid={siteOps ? "website-evaluation-status" : undefined}><i />{
+                    siteOps
+                      ? websiteEvaluation.status === "completed"
+                        ? liveEvaluationReport ? "真实证据评估已完成并保存" : "真实证据评估已完成"
+                        : websiteEvaluation.status === "pending"
+                          ? "真实证据评估待补全"
+                          : websiteEvaluation.status === "failed"
+                            ? "真实证据评估输入异常"
+                            : "等待真实 SiteOps 证据"
+                      : "质量评估未完成"
+                  }</span>
                   <span
                     className={`sfp-eval-score ${(weightedScore ?? 0) >= 85 ? "is-high" : (weightedScore ?? 0) >= 70 ? "is-medium" : "is-low"}`}
                     aria-label={`当前加权评估分：${weightedScore ?? "未形成"}，满分 100 分，${scoreIsProvisional ? "暂定结果" : "最终分"}`}
+                    data-testid={siteOps ? "website-evaluation-score" : undefined}
                   >
                     <span><strong>{weightedScore ?? "—"}</strong><small>/100</small></span>
                     <em>{scoreIsProvisional ? "暂定结果" : "最终分"}</em>
@@ -1673,9 +1801,21 @@ export function SimplifiedWebsiteBuilderPreview({
                 <span><small>项目</small><strong>FrontMind AI 专用官网</strong></span>
                 <span><small>被测对象</small><strong>{siteOps ? latestBuild ? `真实构建 #${latestBuild.ordinal}` : "真实建站项目" : "当前本地网站草稿"}</strong></span>
                 <span><small>草稿与知识版本</small><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "等待真实知识版本" : `${previewKnowledgeCollectionCount} 个示例集合 · 正式版本未绑定`}</strong></span>
-                <span><small>页面与问题范围</small><strong>{enabledPages.length} 个栏目 · 目标问题清单待补</strong></span>
-                <span><small>公开范围</small><strong>范围与确认人未记录</strong></span>
-                <span><small>执行记录</small><strong>{siteOps ? `真实 SiteOps · ${LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus}` : "本地预览 · 评估人和时间待补"}</strong></span>
+                <span><small>页面与问题范围</small><strong>{siteOps
+                  ? `${liveObservation?.brief?.routes.length ?? 0} 个真实路由 · ${new Set(liveObservation?.brief?.routes.flatMap((route) => route.sourceDocumentIds) ?? []).size} 个知识来源`
+                  : `${enabledPages.length} 个栏目 · 目标问题清单待补`}</strong></span>
+                <span><small>公开范围</small><strong>{siteOps
+                  ? latestGlobalDeployment?.publicUrl
+                    ? `已公开 · ${latestGlobalDeployment.publicUrl}`
+                    : liveObservation?.domainState?.displayDomain
+                      ? `${liveObservation.domainState.displayDomain} · DNS ${liveObservation.domainState.dnsStatus ?? "未确认"} · 尚无 active 公开部署`
+                      : "未选择域名 · 尚无 active 公开部署"
+                  : "范围与确认人未记录"}</strong></span>
+                <span><small>执行记录</small><strong data-testid={siteOps ? "website-evaluation-report-id" : undefined}>{siteOps
+                  ? liveEvaluationReport
+                    ? `可恢复报告 ${liveEvaluationReport.reportId} · 证据更新 ${liveEvaluationObservedAt ? new Date(liveEvaluationObservedAt).toLocaleString("zh-CN") : "—"}`
+                    : `真实 SiteOps · ${LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus}`
+                  : "本地预览 · 评估人和时间待补"}</strong></span>
               </div>
               <div className="sfp-eval-summary is-pending">
                 <CircleAlert size={22} />

@@ -15,6 +15,7 @@ import {
   WEBSITE_DRAFT_STORAGE_KEY,
 } from "./SimplifiedWebsiteBuilderPreview";
 import {
+  listEvaluationReports,
   listPublishDecisions,
   saveEvaluationReport,
 } from "./evaluation-report-store";
@@ -647,6 +648,43 @@ describe("redesigned live website builder setup", () => {
     acceptPublish?.();
     await waitFor(() => expect(listPublishDecisions(auditStorage)).toHaveLength(1));
     expect(screen.getByText(/服务端已受理发布/).textContent).toContain("尚不表示已经上线");
+  });
+
+  it("evaluates real SiteOps evidence and restores the same immutable report after reload", async () => {
+    const storageScope = "live:7:website-evaluation-recovery";
+    const auditStorage = scopedEvaluationStorage(storageScope);
+    const siteOps = { observation: liveBuildObservation("approved") };
+    const first = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="evaluation"
+        siteOps={siteOps}
+        storageScope={storageScope}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("真实证据评估已完成并保存")).toBeTruthy();
+      expect(listEvaluationReports(auditStorage)).toHaveLength(1);
+    });
+    expect(screen.getByLabelText(/当前加权评估分/).textContent).not.toContain("—");
+    expect(screen.getAllByText("部分通过").length).toBeGreaterThan(0);
+    const report = listEvaluationReports(auditStorage)[0]!;
+    expect(screen.getByText(new RegExp(report.reportId))).toBeTruthy();
+
+    first.unmount();
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="evaluation"
+        siteOps={siteOps}
+        storageScope={storageScope}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(new RegExp(report.reportId))).toBeTruthy(),
+    );
+    expect(listEvaluationReports(auditStorage).map(({ reportId }) => reportId))
+      .toEqual([report.reportId]);
   });
 
   it("offers the established domain and release settings only after build approval", () => {

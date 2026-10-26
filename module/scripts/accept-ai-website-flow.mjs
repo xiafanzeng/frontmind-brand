@@ -12,7 +12,10 @@ import { chromium } from "playwright";
  * website build from a pre-build project.
  * Add --execute-site-revision plus the same paid guard to submit a safe
  * revision when a preview_ready/approved/live build already exists. Neither
- * website path resets, deletes, or publishes. Credentials are accepted only
+ * website path resets, deletes, or publishes. An existing completed build is
+ * also evaluated from its persisted SiteOps evidence; the script verifies the
+ * same immutable report is restored after a full reload without a paid write.
+ * Credentials are accepted only
  * through environment variables and are never printed. Template selection
  * defaults to /help|帮助中心/ and can be narrowed with
  * FRONTMIND_ACCEPTANCE_TEMPLATE_PATTERN. Site/assistant fields can be set with
@@ -139,6 +142,79 @@ async function waitForNewBuildPreview(page, previousOrdinal) {
   );
 }
 
+async function verifyWebsiteEvaluation(page, readPaidOperationCount) {
+  const paidOperationsBefore = readPaidOperationCount();
+  const evaluationStep = page
+    .getByRole("list", { name: "网站建设流程" })
+    .getByRole("button", { name: /建设评估$/u });
+  await evaluationStep.click();
+  const status = page.getByTestId("website-evaluation-status");
+  await expectVisible(status, "The real website-evaluation status is missing");
+  await page.waitForFunction(
+    ({ statusTestId }) => document.querySelector(
+      `[data-testid="${statusTestId}"]`,
+    )?.textContent?.includes("真实证据评估已完成") === true,
+    { statusTestId: "website-evaluation-status" },
+    { timeout: Math.min(timeoutMs, 60_000) },
+  );
+  const scoreText = compactLine(
+    (await page.getByTestId("website-evaluation-score").textContent()) ?? "",
+    100,
+  );
+  if (!/\b\d{1,3}(?:\.\d+)?\s*\/\s*100\b/u.test(scoreText)) {
+    throw new Error(`The real website evaluation did not render a numeric score: ${scoreText}`);
+  }
+  if (await page.getByTestId("website-evaluation-check").count() !== 7) {
+    throw new Error("The real website evaluation did not render exactly seven checks");
+  }
+  await page.waitForFunction(
+    ({ reportTestId }) => document.querySelector(
+      `[data-testid="${reportTestId}"]`,
+    )?.textContent?.includes("website-report-") === true,
+    { reportTestId: "website-evaluation-report-id" },
+    { timeout: Math.min(timeoutMs, 60_000) },
+  );
+  const reportText = compactLine(
+    (await page.getByTestId("website-evaluation-report-id").textContent()) ?? "",
+    500,
+  );
+  const reportId = reportText.match(/website-report-[A-Za-z0-9-]+/u)?.[0];
+  if (!reportId) {
+    throw new Error(`The real website evaluation did not persist a report ID: ${reportText}`);
+  }
+  if (readPaidOperationCount() !== paidOperationsBefore) {
+    throw new Error("Opening the website evaluation unexpectedly started a paid operation");
+  }
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expectVisible(
+    page.getByTestId("website-builder-live-root"),
+    "The live website route did not recover after evaluation reload",
+  );
+  await waitForSiteOpsObservation(page);
+  await page
+    .getByRole("list", { name: "网站建设流程" })
+    .getByRole("button", { name: /建设评估$/u })
+    .click();
+  await page.waitForFunction(
+    ({ reportTestId, expectedReportId }) => document.querySelector(
+      `[data-testid="${reportTestId}"]`,
+    )?.textContent?.includes(expectedReportId) === true,
+    {
+      reportTestId: "website-evaluation-report-id",
+      expectedReportId: reportId,
+    },
+    { timeout: Math.min(timeoutMs, 60_000) },
+  );
+  if (await page.getByTestId("website-evaluation-check").count() !== 7) {
+    throw new Error("The restored website evaluation did not render exactly seven checks");
+  }
+  if (readPaidOperationCount() !== paidOperationsBefore) {
+    throw new Error("Reloading the website evaluation unexpectedly started a paid operation");
+  }
+  log(`PASS real website evaluation, seven checks, immutable report, and reload recovery: ${scoreText}`);
+}
+
 async function configureDesignFields(page, { revision }) {
   const marker = acceptanceMarker();
   const siteNameInput = page.getByTestId("website-site-name");
@@ -263,11 +339,20 @@ try {
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
   let evaluationPostCount = 0;
+  let siteOpsPaidMutationCount = 0;
   page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
     if (
       request.method() === "POST" &&
-      new URL(request.url()).pathname === "/api/modules/brand/rag-evaluations"
+      pathname === "/api/modules/brand/rag-evaluations"
     ) evaluationPostCount += 1;
+    if (
+      request.method() === "POST"
+      && (
+        pathname.includes("workspace.siteOps.actFast")
+        || pathname.includes("workspace.siteOps.sendMessage")
+      )
+    ) siteOpsPaidMutationCount += 1;
   });
 
   if (!executeRag && !executeRagEvaluation && !executeSite && !executeSiteRevision) {
@@ -451,6 +536,17 @@ try {
   }
   log(`PASS redesigned website route with live SiteOps state: ${openedSiteOps.statusText}`);
 
+  const openedBuildCanBeEvaluated = Boolean(
+    openedSiteOps.previewUrl
+    && /真实预览已生成|网站已通过构建检查|网站已发布/u.test(openedSiteOps.statusText),
+  );
+  if (openedBuildCanBeEvaluated && !executeSite && !executeSiteRevision) {
+    await verifyWebsiteEvaluation(
+      page,
+      () => evaluationPostCount + siteOpsPaidMutationCount,
+    );
+  }
+
   if (executeSite || executeSiteRevision) {
     const initialBuild = openedSiteOps;
     let submittedConfiguration;
@@ -532,6 +628,10 @@ try {
     await verifyGeneratedPreview(context, nextBuild.previewUrl, submittedConfiguration);
     log(
       `PASS real SiteOps ${executeSiteRevision ? "revision" : "generation"} produced newer build #${nextBuild.ordinal}; assistant name/welcome and theme are generation preferences and were not asserted`,
+    );
+    await verifyWebsiteEvaluation(
+      page,
+      () => evaluationPostCount + siteOpsPaidMutationCount,
     );
   }
 
