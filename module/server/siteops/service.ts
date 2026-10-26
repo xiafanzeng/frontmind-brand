@@ -2244,8 +2244,12 @@ export function projectSiteOpsCurrentResetCycle<
   const boundary = input.currentTaskStartedAt.getTime();
   const newerMessage = (row: SiteOpsResetCycleMessageRow) =>
     row.sentAt.getTime() > boundary;
+  // The reset epoch is truncated to whole seconds (to align with the boundary
+  // message), so an artifact created inside that same second still belongs to
+  // the fresh cycle; a same-second pre-reset artifact is either cancelled by
+  // the restart or sorted behind by its older admission revision.
   const newerArtifact = (row: SiteOpsResetCycleArtifactRow) =>
-    row.createdAt.getTime() > boundary;
+    row.createdAt.getTime() >= boundary;
   const currentArtifact = (row: SiteOpsResetCycleArtifactRow) =>
     newerArtifact(row) &&
     !["cancelled", "superseded"].includes(String(row.status ?? ""));
