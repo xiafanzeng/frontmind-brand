@@ -458,6 +458,12 @@ describe("企业 RAG 自动评估持久化服务", () => {
       row.operationId === REQUEST_ID).providerRuntime.enterpriseRagEvaluation.input.sources;
     expect(frozenSources).toHaveLength(2);
     expect(frozenSources.map((source: any) => source.citedByAnswer)).toEqual([true, false]);
+    expect(
+      createSchema.properties.claims.items.properties.sourceIds.items.enum,
+    ).toEqual(frozenSources.map((source: any) => source.id));
+    expect(h.client.createTask.mock.calls[0]![0].prompt).toContain(
+      "claims[].sourceIds 是更窄的来源集合",
+    );
 
     const lostResponseRetry = await h.service.start({
       ...h.startInput,
@@ -519,6 +525,69 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(h.persistedEvents).toHaveLength(1);
   });
 
+  it("assistant fallback 改写来源尾字符时给出精确候选并在唯一 repair 后完成", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const invalid = h.acceptedOutput();
+    const allowedSourceId = invalid.claims[0].sourceIds[0]!;
+    const rewrittenSourceId = `${allowedSourceId}6`;
+    invalid.claims[0].sourceIds = [rewrittenSourceId];
+    h.pushProviderAssistant(invalid, "provider-invalid-source-assistant");
+
+    const pending = await h.service.observe(REQUEST_ID);
+    expect(pending.status).toBe("result_pending");
+    expect(pending.report).toBeNull();
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    const repairRequest = h.client.sendMessage.mock.calls[0]![0];
+    expect(repairRequest.prompt).toContain(
+      "claims[0].sourceIds[0] 不在冻结白名单中",
+    );
+    expect(repairRequest.prompt).toContain(
+      `唯一一处字符编辑可达的合法 ID 是 \"${allowedSourceId}\"`,
+    );
+    expect(repairRequest.prompt).not.toContain(rewrittenSourceId);
+    expect(repairRequest.prompt).toContain(
+      "不要从上一轮错误 JSON 复制任何 ID",
+    );
+    expect(repairRequest.structuredOutputSchema).toEqual(
+      h.client.createTask.mock.calls[0]![0].structuredOutputSchema,
+    );
+    expect(h.persistedEvents).toHaveLength(0);
+
+    h.pushProviderAssistant(h.acceptedOutput(), "provider-repaired-source-assistant");
+    const completed = await h.service.observe(REQUEST_ID);
+    expect(completed.status).toBe("completed");
+    expect(completed.report?.result.score).toBe(100);
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.persistedEvents).toHaveLength(1);
+  });
+
+  it("assistant fallback 的来源尾字符在 repair 后仍错误时严格失败且不写报告", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const invalid = h.acceptedOutput();
+    const rewrittenSourceId = `${invalid.claims[0].sourceIds[0]!}6`;
+    invalid.claims[0].sourceIds = [rewrittenSourceId];
+    h.pushProviderAssistant(invalid, "provider-invalid-source-assistant");
+    await h.service.observe(REQUEST_ID);
+
+    const invalidRepair = h.acceptedOutput();
+    invalidRepair.claims[0].sourceIds = [rewrittenSourceId];
+    invalidRepair.dimensions.find(({ id }) => id === "correctness")!
+      .evidenceIds.push(rewrittenSourceId);
+    invalidRepair.gates.find(({ id }) => id === "facts")!
+      .evidenceIds.push(rewrittenSourceId);
+    h.pushProviderAssistant(invalidRepair, "provider-invalid-source-repair-assistant");
+
+    const failed = await h.service.observe(REQUEST_ID);
+    expect(failed.status).toBe("failed");
+    expect(failed.error?.code).toBe("EVALUATION_REPAIR_FAILED");
+    expect(failed.error?.message).toContain("陈述引用了未授权来源");
+    expect(failed.report).toBeNull();
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.persistedEvents).toHaveLength(0);
+  });
+
   it("自动修复后仍引用未知证据时失败且不写入报告", async () => {
     const h = harness();
     await h.service.start(h.startInput);
@@ -566,6 +635,12 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(
       h.client.sendMessage.mock.calls[0]![0].structuredOutputSchema,
     ).toEqual(ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA);
+    expect(h.client.sendMessage.mock.calls[0]![0].prompt).toContain(
+      "维度和门禁的 evidenceIds 只能逐字引用冻结证据 ID，不得引用 claim ID",
+    );
+    expect(h.client.sendMessage.mock.calls[0]![0].prompt).not.toContain(
+      "还可以引用本次 JSON 中实际存在",
+    );
 
     const legacyValid = h.acceptedOutput();
     const frozenSourceId = legacyValid.claims[0]!.sourceIds[0]!;
