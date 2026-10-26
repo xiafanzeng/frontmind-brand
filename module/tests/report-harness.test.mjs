@@ -7,6 +7,8 @@ import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {EventEmitter} from 'node:events';
+import {PassThrough} from 'node:stream';
 import {readDocument,writeDocument,listDocuments} from '../workflows/report-harness/safe-files.mjs';
 import {publicAddress,publicResearchUrl,searchResults,fetchPublicPage} from '../workflows/report-harness/research.mjs';
 import {publicEvents} from '../workflows/report-harness/events.mjs';
@@ -38,6 +40,16 @@ test('research excludes private IPs, business APIs, credentials and internal fro
 test('search parses observed results and preserves source URLs',()=>{
  assert.deepEqual(searchResults('<li class="b_algo"><h2><a href="https://example.org/about">真实官网</a></h2><p>公开信息</p></li>'),[{title:'真实官网',url:'https://example.org/about',snippet:'真实官网 公开信息'}]);
  assert.deepEqual(searchResults('captcha'),[]);
+});
+
+test('pinned public DNS supports both Node lookup callback modes',async()=>{
+ for(const all of [false,true]){
+  const page=await fetchPublicPage('https://example.org/about',{dnsLookup:async()=>[{address:'8.8.8.8'}],request:(_url,options,receive)=>{
+   options.lookup('example.org',{all},(error,address,family)=>{assert.equal(error,null);if(all)assert.deepEqual(address,[{address:'8.8.8.8',family:4}]);else{assert.equal(address,'8.8.8.8');assert.equal(family,4);}});
+   const request=new EventEmitter();request.end=()=>{const response=new PassThrough();response.statusCode=200;response.headers={'content-type':'text/html'};receive(response);response.end('<h1>Observed public page</h1>');};return request;
+  }});
+  assert.equal(page.html,'<h1>Observed public page</h1>');
+ }
 });
 
 test('public event projection hides reasoning and pairs tool calls with official callId',()=>{
