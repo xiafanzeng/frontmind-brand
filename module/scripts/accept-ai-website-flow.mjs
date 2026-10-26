@@ -85,6 +85,15 @@ async function expectVisible(locator, message, timeout = 30_000) {
   });
 }
 
+async function expectEnabled(locator, message, timeout = 60_000) {
+  await expectVisible(locator, message, timeout);
+  const deadline = Date.now() + timeout;
+  while (await locator.isDisabled()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await locator.page().waitForTimeout(500);
+  }
+}
+
 function compactLine(value, maximumLength) {
   return value.replace(/\s+/gu, " ").trim().slice(0, maximumLength);
 }
@@ -402,17 +411,22 @@ try {
   if (executeRag) {
     const input = page.getByTestId("rag-question-input");
     const submit = page.getByTestId("rag-submit");
-    if (await submit.isDisabled()) {
-      throw new Error(
-        "Real RAG is unavailable: publish the knowledge base and verify model readiness first",
-      );
-    }
+    await expectEnabled(
+      input,
+      "Real RAG did not become ready: publish the knowledge base and verify model readiness first",
+      Math.min(timeoutMs, 60_000),
+    );
     const question =
       process.env.FRONTMIND_ACCEPTANCE_QUESTION ??
       "FrontMind 可以帮企业做什么？请给出知识来源。";
     const answer = page.getByTestId("rag-answer");
     const prior = (await answer.textContent())?.trim() ?? "";
     await input.fill(question);
+    await expectEnabled(
+      submit,
+      "The ready RAG composer did not enable submission after entering a question",
+      Math.min(timeoutMs, 30_000),
+    );
     await submit.click();
     await page.waitForFunction(
       ({ testId, previous }) => {
