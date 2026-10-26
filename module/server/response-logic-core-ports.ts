@@ -1,97 +1,73 @@
-/**
- * Core port contracts for the response-logic feature running inside the
- * brand module. Extracted from the intent module's task-ports.ts (S2 of
- * the intent→brand migration); only the types needed by the response-logic
- * service layer, rule evaluation API, and (future) judge/optimizer are
- * declared here. Brand's Core wiring provides the implementations.
- */
+import type * as Execution from "@frontmind/module-contracts/execution";
+import type * as Archives from "@frontmind/module-contracts/task-attachment-package";
+import type { IntentDatabase } from "./response-logic-service.js";
+import type { Request, Response } from "express";
+import type { createResponseLogicService } from "./response-logic-service.js";
+export type CredentialHandle = { id: string; userId: number; version: number; credentialRef: string; fingerprint: string; status: "active" | "retired"; verifiedAt: Date | null; agentProfile: "frontmind-base"|"frontmind-pro"; provider: "manus"|"zhipu"|"xty_codex"; upstreamModel: string; upstreamEffort: string | null };
+export type ManusV2MessageEvent = Record<string, unknown> & {id:string; type:string;timestamp:number;providerOriginalRank?:number};
+export type CoreProviderError = Error & { status:number|null;code:string;retryable:boolean;outcomeUnknown:boolean;operation:string;transportCause?:unknown;transportPhase?:unknown;transportAttempt?:unknown;transportElapsedMs?:unknown;transportBytesWritten?:unknown;retryAfterMs:number|null };
+export type CoreRequest = Request & {frontmindUser?: {id:number};frontmindCredential?: never};
+type Port = (...args: any[]) => any;
+export interface IntentExecutionClient {
+ createTask(input:{prompt:string;attachments:Array<{file_id:string;filename:string}>;title:string;agentProfile?:string;locale:string;interactiveMode:boolean;structuredOutputSchema:Record<string,unknown>}):Promise<{taskId:string;raw:Record<string,unknown>}>;
+ sendMessage(input:{taskId:string;prompt:string;attachments:Array<{file_id:string;filename:string}>;structuredOutputSchema:Record<string,unknown>}):Promise<{taskId:string;raw:Record<string,unknown>}>;
+ listAllMessages(input:{taskId:string;order:"desc"|"asc"}):Promise<ManusV2MessageEvent[]>;
+ uploadFile(input:{filename:string;bytes:Buffer;contentType:string;fileCreateRetryPolicy?:"response_logic_pre_dispatch_only";observer?:{onCandidateCreated(input:{fileId:string}):Promise<void>}}):Promise<{fileId:string;requestId?:string|null;detail:{expiresAt:number}}>;
+}
+export interface EvidenceSnapshot {version:number;sourceFileName:string;documents:Array<{path:string;title:string;content:string;kind?:"overview"|"leaf"|"evidence"|"report"|"index"|"other";branchId?:string;branchTitle?:string;order?:number;customerVisible?:boolean}>;assets:Array<{path:string;mimeType:string;size:number;caption?:string;alt?:string;branchId?:string;sourcePageUrl?:string;ownership?:"first_party"|"third_party"|"unknown"}>}
+export interface ConfiguredIntentQuestion {questionId:string;groupId:string;groupTitle:string;question:string;intent:string;summary:string;writeScope:{revision:number;contractId:string|null;quotaPeriodId:string}};
 
-import type { ResponseLogicRecordDto } from "../contracts/response-logic.js";
-import type { RuleEvaluationEnvelope } from "../contracts/response-logic-evaluation.js";
-
-export type CoreRequest = {
-  frontmindUser?: { id: number; role: string };
-  frontmindCredential?: { id: string; apiKey?: string };
-  [key: string]: unknown;
-};
-
-export type CredentialHandle = {
-  id: string;
-  userId: number;
-  version: number;
-  credentialRef: string;
-  fingerprint: string;
-  status: "active" | "retired";
-  verifiedAt: Date | null;
-  agentProfile: string;
-  provider: string;
-  upstreamModel: string;
-  upstreamEffort: string | null;
-};
-
-export type ManusV2MessageEvent = {
-  id: string;
-  type: string;
-  timestamp: number;
-  [key: string]: unknown;
-};
-
-export type CoreProviderError = Error & { code: string };
-
-export type ConfiguredIntentQuestion = {
-  questionId: string;
-  groupId: string;
-  groupTitle: string;
-  question: string;
-  intent: string;
-  summary: string;
-  writeScope: {
-    revision: number;
-    contractId: string | null;
-    quotaPeriodId: string;
-  };
-};
-
-export type EvidenceSnapshot = {
-  id: string;
-  version: number;
-  sourceFileName: string;
-  documents: Array<{ path: string; title: string; content: string; kind?: string }>;
-} | null;
-
-/**
- * The full port surface the response-logic API family needs from the host.
- * Brand's Core adapter assembles this from BrandKeywordPorts (already
- * available) plus the response-logic service instance.
- */
-export type ResponseLogicApiPorts = {
-  enterpriseWorkspaceUserId(userId: number): number;
-  assertServiceCapability(userId: number, capability: string): Promise<void>;
-  ServiceEntitlementError: new (code: string, message: string, statusCode?: number) => Error & { code: string; statusCode: number };
-  sendAiBillingError(res: unknown, error: unknown): boolean;
-  getDashboardQuestion(userId: number, questionId: string): Promise<ConfiguredIntentQuestion | null>;
-  getResponseLogicEntry(userId: number, questionId: string): Promise<ResponseLogicRecordDto | null>;
-  getLatestKnowledgeSnapshot(userId: number): Promise<EvidenceSnapshot>;
-  getResponseLogicEntryRecord(userId: number, questionId: string): Promise<ResponseLogicRecordDto | null>;
-  credentialForRequest(request: unknown): CredentialHandle | undefined;
-  getFrontMindCredentials(request: unknown): { credentialRef?: string };
-  getCredentialForUpstreamResource(userId: number, kind: string, upstreamId: string): Promise<CredentialHandle | null>;
-  createCredentialAgentClient(credential: CredentialHandle, options?: { baseUrl?: string; accountUserId?: number; intentId?: string; rateLimitScope?: string }): {
-    uploadFile(input: { filename: string; bytes: Buffer; contentType?: string }): Promise<{ fileId: string }>;
-    createTask(input: Record<string, unknown>): Promise<{ taskId: string; raw: unknown }>;
-    sendMessage(input: Record<string, unknown>): Promise<{ taskId: string; raw: unknown }>;
-    listAllMessages(input: { taskId: string; order: string }): Promise<ManusV2MessageEvent[]>;
-  };
-  getUpstreamBaseUrl(request: unknown): string;
-  toUpstreamAgentProfile(profile: string): string;
-  recordUpstreamResource(input: { userId: number; apiCredentialId: string; kind: string; upstreamId: string }): Promise<void>;
-  classifyManusV2StructuredResultEnvelope(input: unknown): { kind: string; code?: string; value?: unknown };
-  latestManusV2TaskState(events: readonly unknown[]): string | null;
-  orderManusV2EventsByProviderRank(events: readonly unknown[], direction: string): unknown[];
-  ManusV2ApiError: new (operation: string, status: number | null, code: string, retryable: boolean, outcomeUnknown: boolean) => Error & { outcomeUnknown: boolean };
-  assertUpstreamPromptBudget(value: string): string;
-  buildDeterministicTaskAttachmentArchive(input: { name: string; entrypoint: string; files: Array<{ path: string; content: string }>; metadata?: Record<string, unknown> }): Promise<{ bytes: Buffer; contentHash: string }>;
-  buildDirectorySkillArchive(input: { name: string; version: string; directoryCandidates: readonly string[]; files: readonly string[] }): Promise<{ bytes: Buffer; contentHash: string }>;
-  getDb(): Promise<unknown>;
-  [key: string]: unknown;
-};
+type CoreError = new (...args: any[]) => CoreProviderError;
+type ResponseService = ReturnType<typeof createResponseLogicService>;
+export interface ResponseLogicApiPorts {
+ credentialForRequest(request:Request): CredentialHandle | undefined;
+ projectGeneralExecution: Port;
+ generalExecutionActivity: typeof Execution.generalExecutionActivity;
+ orderExecutionTimeline: typeof Execution.orderExecutionTimeline;
+ projectBusinessExecution: typeof Execution.projectBusinessExecution;
+ enterpriseWorkspaceUserId(userId:number):number;
+ getEnterpriseProjectScope():{actorUserId:number;ownerUserId:number;enterpriseProjectId:string}|undefined;
+ enterpriseAccountOwnerPredicate: Port;
+ sendAiBillingError: Port;
+ localAssets: any;
+ providerFileLeases: any;
+ getCredentialForUpstreamResource(userId:number,kind:"task"|"file",id:string):Promise<CredentialHandle|null>;
+ recordUpstreamResource: Port;
+ createCredentialAgentClient(credential:CredentialHandle,options?:{baseUrl?:string;accountUserId?:number;intentId?:string;rateLimitScope?:string}):IntentExecutionClient;
+ fileResourceContentExpiry: Port;
+ isFileResourceContentExpired: Port;
+ getDashboardQuestion(userId:number,questionId:string):Promise<ConfiguredIntentQuestion|null>;
+ getLatestKnowledgeSnapshot(userId:number):Promise<EvidenceSnapshot|null>;
+ getFrontMindCredentials(request:Request):{credentialRef?:string};
+ getUpstreamBaseUrl(request:Request):string;
+ toUpstreamAgentProfile(profile:"frontmind-base"|"frontmind-pro"):string;
+ ResponseLogicConfirmedError: ResponseService["ResponseLogicConfirmedError"];
+ ResponseLogicProviderReadinessError: ResponseService["ResponseLogicProviderReadinessError"];
+ ResponseLogicPublicationRequestConflictError: ResponseService["ResponseLogicPublicationRequestConflictError"];
+ ResponseLogicResultAdoptionError: ResponseService["ResponseLogicResultAdoptionError"];
+ ResponseLogicRevisionConflictError: ResponseService["ResponseLogicRevisionConflictError"];
+ ResponseLogicTaskActiveError: ResponseService["ResponseLogicTaskActiveError"];
+ ResponseLogicTaskSupersededError: ResponseService["ResponseLogicTaskSupersededError"];
+ adoptResponseLogicModelResult: ResponseService["adoptResponseLogicModelResult"];
+ assertResponseLogicRecordEditable: ResponseService["assertResponseLogicRecordEditable"];
+ getResponseLogicEntry: ResponseService["getResponseLogicEntry"];
+ recordResponseLogicTaskStart: ResponseService["recordResponseLogicTaskStart"];
+ releaseResponseLogicTaskBinding: ResponseService["releaseResponseLogicTaskBinding"];
+ requireResponseLogicProviderReadiness: ResponseService["requireResponseLogicProviderReadiness"];
+ updateResponseLogicDraftMaterials: ResponseService["updateResponseLogicDraftMaterials"];
+ assertServiceCapability: Port;
+ ServiceEntitlementError: new (...args:any[]) => Error & {code:string;statusCode:number};
+ redactSensitivePayload: Port;
+ redactSensitiveText: Port;
+ safeErrorForLog: Port;
+ buildDeterministicTaskAttachmentArchive: typeof Archives.buildDeterministicTaskAttachmentArchive;
+ buildDirectorySkillArchive: typeof Archives.buildDirectorySkillArchive;
+ assertUpstreamPromptBudget(value:string):string;
+ getDb():Promise<IntentDatabase|null>;
+ readStoredPresalesFile: Port;
+ classifyManusV2StructuredResultEnvelope: Port;
+ latestManusV2TaskState(events:readonly ManusV2MessageEvent[]):string|null;
+ ManusV2ApiError: CoreError;
+ manusV2EventOperationToken: Port;
+ orderManusV2EventsByProviderRank: (events: readonly ManusV2MessageEvent[], direction: "oldest_first" | "newest_first") => ManusV2MessageEvent[];
+}

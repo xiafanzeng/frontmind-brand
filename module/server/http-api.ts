@@ -3,10 +3,8 @@ import type { MySql2Database } from "drizzle-orm/mysql2";
 import {z} from "zod";
 // 包名导入保持运行时从模块自身 dist 加载；相对导入会被 Dashboard 构建内联进 bundle，破坏 workflow 清单路径解析。
 import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
-import {createResponseLogicEvaluationRouter} from "@frontmind/module-brand/server/response-logic-evaluation-api";
-import {createResponseLogicJudgeRouter} from "@frontmind/module-brand/server/response-logic-judge-api";
-import {createResponseLogicOptimizationRouter} from "@frontmind/module-brand/server/response-logic-optimization-api";
 import {assembleResponseLogicCore} from "@frontmind/module-brand/server/response-logic-runtime";
+import {createResponseLogicApi} from "@frontmind/module-brand/server/response-logic-api";
 import {
  createEnterpriseRagEvaluationService,
  EnterpriseRagEvaluationError,
@@ -98,57 +96,12 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  };
  router.post("/question-templates/recommend-core-words",recommendQuestionTemplates("recommend-core-words"));
  router.post("/question-templates/recommend-questions",recommendQuestionTemplates("recommend-questions"));
- // Response-logic evaluation/judge/optimizer — mounted under /api/modules/brand/response-logic
- // Runtime ports assembled from BrandKeywordPorts + Brand ledger question resolver.
+ // Response-logic full API — generation, materials, adopt, task status,
+ // evaluation, judge, optimizer — all mounted via the original Intent
+ // router factory (response-logic-api.ts, 2,236 lines) with runtime ports
+ // assembled from BrandKeywordPorts + Brand ledger question resolver.
  const rlRuntime = assembleResponseLogicCore({ getDb: () => core.database() });
- router.use("/response-logic/evaluation", createResponseLogicEvaluationRouter(rlRuntime as never));
- router.use("/response-logic/evaluation/judge", createResponseLogicJudgeRouter(rlRuntime as never));
- router.use("/response-logic/optimization", createResponseLogicOptimizationRouter(rlRuntime as never));
- // First-generation task creation (builder skill)
- router.post("/response-logic/start", async (req, res) => {
-  try {
-   res.setHeader("Cache-Control", "no-store");
-   const ctx = core.context(req);
-   // The runtime core assembles the real ports; generation uses the builder skill
-   // through the same credential/task infrastructure as judge/optimizer.
-   res.status(501).json({ error: { code: "GENERATION_NOT_YET_IMPLEMENTED", message: "首次生成任务创建端点待 S6-3 实现。当前已接通：列表、保存、规则评估、Judge 四维评估、优化器。" } });
-  } catch { res.status(503).json({ error: { code: "RESPONSE_LOGIC_UNAVAILABLE", message: "应答逻辑服务暂不可用" } }); }
- });
- // Generation task status polling
- router.get("/response-logic/tasks/:taskId/status", async (req, res) => {
-  try {
-   res.setHeader("Cache-Control", "no-store");
-   res.status(501).json({ error: { code: "GENERATION_NOT_YET_IMPLEMENTED", message: "生成任务状态查询待 S6-3 实现" } });
-  } catch { res.status(503).json({ error: { code: "RESPONSE_LOGIC_UNAVAILABLE", message: "应答逻辑服务暂不可用" } }); }
- });
- // Material upload
- router.post("/response-logic/materials/upload", async (req, res) => {
-  try {
-   res.setHeader("Cache-Control", "no-store");
-   res.status(501).json({ error: { code: "UPLOAD_NOT_YET_IMPLEMENTED", message: "材料上传端点待 S6-3 实现" } });
-  } catch { res.status(503).json({ error: { code: "RESPONSE_LOGIC_UNAVAILABLE", message: "应答逻辑服务暂不可用" } }); }
- });
- // Basic CRUD for response-logic records (list + save)
- router.get("/response-logic", async (req, res) => {
-  try {
-   res.setHeader("Cache-Control", "no-store");
-   const ctx = core.context(req);
-   const records = await rlRuntime.responseLogicService.listResponseLogicEntries(ctx.accountUserId);
-   res.json({ records });
-  } catch { res.status(503).json({ error: { code: "RESPONSE_LOGIC_UNAVAILABLE", message: "应答逻辑服务暂不可用" } }); }
- });
- router.post("/response-logic", async (req, res) => {
-  try {
-   res.setHeader("Cache-Control", "no-store");
-   const ctx = core.context(req);
-   const record = await rlRuntime.responseLogicService.saveResponseLogicEntry({ userId: ctx.accountUserId, value: req.body });
-   res.json({ record });
-  } catch (error) {
-   const code = (error as { code?: string }).code;
-   if (code === "CONFLICT") { res.status(409).json({ error: { code: "REVISION_CONFLICT", message: "版本冲突，请刷新后重试" } }); return; }
-   res.status(503).json({ error: { code: "RESPONSE_LOGIC_SAVE_FAILED", message: "保存应答逻辑失败" } });
-  }
- });
+ router.use("/response-logic", createResponseLogicApi(rlRuntime as never) as unknown as Router);
 
  router.get("/capabilities",(req,res)=>{
   const context=core.context(req);
