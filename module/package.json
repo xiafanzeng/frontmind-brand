@@ -6,7 +6,7 @@
   "scripts": {
     "build": "pnpm generate:policy && tsc -p tsconfig.build.json && pnpm build:workflows",
     "typecheck": "pnpm generate:policy && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
-    "build:workflows": "pnpm generate:policy && node workflows/build-keyword-workflow.mjs --output dist/workflows/generate-brand-question-universe && node workflows/build-knowledge-base-workflow.mjs && node workflows/build-siteops-workflows.mjs && node workflows/build-intent-workflow.mjs && node workflows/build-rag-evaluation-workflow.mjs",
+    "build:workflows": "pnpm generate:policy && node workflows/build-keyword-workflow.mjs --output dist/workflows/generate-brand-question-universe && node workflows/build-knowledge-base-workflow.mjs && node workflows/build-siteops-workflows.mjs && node workflows/build-intent-workflow.mjs && node workflows/build-rag-evaluation-workflow.mjs && node workflows/build-report-workflow.mjs",
     "test": "node --test tests/workflow-version.test.mjs tests/workflow-source.test.mjs && vitest run --config vitest.config.ts",
     "accept:ai-website": "node scripts/accept-ai-website-flow.mjs",
     "generate:policy": "node workflows/generate-knowledge-base-working-set-policy.mjs",
@@ -104,7 +104,8 @@
     "@alicloud/credentials": "2.4.7",
     "@alicloud/esa20240910": "3.14.0",
     "@alicloud/openapi-client": "0.4.15",
-    "@modelcontextprotocol/sdk": "1.30.0"
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "pptxgenjs": "4.0.1"
   },
   "devDependencies": {
     "typescript": "5.9.3",

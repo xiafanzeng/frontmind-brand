@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>{{BRAND_NAME}} AI智能品牌优化方案报告</title>
+<style id="frontmind-base-layout-final">
+@page { size: A4; margin: 1.0cm 1.1cm 1.2cm 1.1cm; @bottom-center { content: "FrontMind · AI 智能品牌优化方案 · " counter(page); font-size: 7.5pt; color: #9AA3AF; font-family:"Noto Sans SC","Microsoft YaHei",sans-serif; } }
+:root { --navy:#3D0A63; --navy2:#57068C; --blue:#7A1FA2; --blue2:#8B139C; --blue3:#A659C9; --blue-light:#F5ECFA; --gold:#B8842B; --gold2:#D9A441; --gold-light:#FBF4E6; --red:#B42318; --red-bg:#FEF3F2; --green:#147A45; --green-bg:#EAF8F0; --orange:#B65C00; --orange-bg:#FFF7E8; --ink:#1C2533; --muted:#6B6480; --line:#E6D8F2; --soft:#FAF6FD; --grad:linear-gradient(135deg,#57068C 0%,#8B139C 100%); }
+* { box-sizing:border-box; } body { margin:0; color:var(--ink); background:#fff; font-family:"Noto Sans SC","Source Han Sans SC","Microsoft YaHei",Arial,sans-serif; font-size:9.2pt; line-height:1.52; orphans:3; widows:3; } p { margin:0 0 4px 0; text-align:justify; } ul { margin:2px 0 5px 16px; padding:0; } code { font-family:inherit; font-size:.96em; }
+
+/* ============ COVER ============ */
+.cover-page { min-height:271mm; background:radial-gradient(circle at 88% 10%,rgba(217,164,65,.20),rgba(217,164,65,0) 30%),linear-gradient(150deg,#3D0A63 0%,#57068C 52%,#8B139C 100%); color:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:44px; page-break-after:always; position:relative; overflow:hidden; }
+.cover-page::before { content:""; position:absolute; left:-60px; bottom:-60px; width:240px; height:240px; border-radius:50%; background:rgba(255,255,255,.05); }
+.cover-brand { font-size:12pt; letter-spacing:3px; opacity:.92; margin-bottom:22px; font-weight:700; color:#EDE6FA; }
+.cover-divider { width:78px; height:3px; background:var(--gold2); margin-bottom:26px; border-radius:3px; }
+.cover-title-en { font-size:10.4pt; opacity:.74; letter-spacing:1.4px; margin-bottom:14px; color:#DAD0F2; }
+.cover-title-zh { font-size:24pt; line-height:1.4; font-weight:900; letter-spacing:1px; margin-bottom:32px; }
+.cover-meta { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; max-width:700px; }
+.cover-meta-item { min-width:120px; border:1px solid rgba(255,255,255,.22); background:rgba(255,255,255,.10); border-radius:12px; padding:12px 15px; }
+.cover-meta-item .value { display:block; color:#fff; font-size:15pt; font-weight:900; white-space:nowrap; } .cover-meta-item .label { display:block; margin-top:3px; color:#fff; font-size:8.8pt; font-weight:700; } .cover-meta-item .sublabel { display:block; margin-top:2px; color:rgba(255,255,255,.72); font-size:7.6pt; }
+.cover-footer { position:absolute; left:38px; right:38px; bottom:30px; font-size:8.3pt; color:rgba(255,255,255,.76); }
+
+/* ============ SECTION DIVIDER（独立整页分隔页）============ */
+/* 说明：每个分部的分隔页必须单独占一整页，标题块垂直居中，上下留白；
+   正文从下一页开始。不得被压缩成一行小标题并入正文。 */
+.divider-page { page-break-before:always; break-before:page; page-break-after:always; break-after:page; break-inside:avoid; page-break-inside:avoid; min-height:250mm; height:250mm; background:#fff; color:var(--ink); display:flex; flex-direction:column; justify-content:center; align-items:flex-start; padding:0 18mm; margin:0; position:relative; overflow:hidden; }
+.divider-no { font-size:64pt; font-weight:900; color:var(--navy2); line-height:1; margin:0 0 6mm; }
+.divider-en { font-size:11pt; letter-spacing:2.2px; color:var(--blue); margin:0 0 3mm; text-transform:uppercase; }
+.divider-title { font-size:26pt; font-weight:900; line-height:1.25; max-width:none; color:var(--navy2); }
+.divider-gold { width:64px; height:4px; background:var(--gold2); border-radius:3px; margin:6mm 0; }
+.divider-desc { font-size:10.5pt; color:var(--muted); max-width:150mm; line-height:1.7; }
+
+/* ============ REPORT PAGE ============ */
+.report-page { page-break-before:auto; break-before:auto; position:relative; margin:0 0 5mm; }
+/* 分隔页之后的正文始终从新一页开始（配合 .divider-page 的 page-break-after:always） */
+.divider-page + .report-page { page-break-before:always; break-before:page; }
+.toc-page { page-break-after:always; break-after:page; }
+.executive-page { page-break-after:always; break-after:page; }
+.report-page:first-of-type { page-break-before:auto; }
+.page-title { background:var(--grad); color:#fff; padding:10px 18px; border-radius:8px; font-size:12pt; font-weight:900; box-shadow:0 2px 8px rgba(87,6,140,.18); margin:0 0 10px; display:flex; align-items:center; gap:10px; }
+.page-title .sec-tag { font-size:7.5pt; font-weight:800; letter-spacing:.05em; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.3); border-radius:999px; padding:2px 8px; white-space:nowrap; }
+.page-kicker { color:var(--muted); margin:-2px 0 8px; font-size:8.5pt; }
+
+/* ============ TOC ============ */
+.toc-page { padding-top:4px; } .toc-header { text-align:center; margin-bottom:18px; } .toc-title { color:var(--navy); font-size:18pt; font-weight:900; letter-spacing:4px; } .toc-subtitle-line { width:60px; height:3px; background:var(--gold2); margin:8px auto 0; border-radius:3px; }
+.toc-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px 24px; } .toc-section { break-inside:avoid; } .toc-item-main { color:var(--navy); font-weight:900; border-bottom:1.5px solid var(--line); padding:5px 0 3px; font-size:9.6pt; } .toc-item-sub { color:#5C5670; font-size:8.6pt; padding:2px 0 2px 12px; border-bottom:1px dotted #ECE6F5; }
+
+h2 { color:var(--navy); font-size:10.8pt; font-weight:900; margin:10px 0 6px; padding-bottom:3px; border-bottom:2px solid var(--gold2); break-after:avoid; } h3 { color:var(--blue); font-size:10.2pt; font-weight:900; margin:9px 0 5px; padding-left:7px; border-left:3px solid var(--blue3); break-after:avoid; } h4 { margin:0 0 4px; color:var(--navy); font-size:9.8pt; font-weight:900; }
+
+.data-cards { display:flex; gap:7px; margin:7px 0 9px; break-inside:avoid; } .data-card { flex:1; text-align:center; border-radius:9px; padding:9px 7px 8px; border:1px solid transparent; position:relative; overflow:hidden; background:#fff; } .data-card::before { content:""; position:absolute; left:0; right:0; top:0; height:3px; } .card-purple { background:var(--blue-light); border-color:#CFC2EE; } .card-purple::before{background:var(--blue);} .card-purple .number{color:var(--blue);} .card-blue{background:var(--blue-light);border-color:#CFC2EE}.card-blue::before{background:var(--blue2)}.card-blue .number{color:var(--blue2)} .card-green{background:var(--green-bg);border-color:#BCE4CB}.card-green::before{background:var(--green)}.card-green .number{color:var(--green)} .card-red{background:var(--red-bg);border-color:#F5B9B2}.card-red::before{background:var(--red)}.card-red .number{color:var(--red)} .card-gold{background:var(--gold-light);border-color:#EAD6A7}.card-gold::before{background:var(--gold2)}.card-gold .number{color:var(--gold)} .number{display:block;font-size:15.5pt;font-weight:900;line-height:1.2;overflow-wrap:anywhere}.label{display:block;margin-top:4px;font-weight:800;color:#394150}.sublabel{display:block;margin-top:1px;color:var(--muted);font-size:7.7pt}
+
+table { width:100%; border-collapse:separate; border-spacing:0; margin:5px 0 8px; font-size:8.5pt; border:1px solid var(--line); border-radius:7px; overflow:hidden; page-break-inside:auto; } thead { display:table-header-group; } tr { page-break-inside:avoid; break-inside:avoid; } th { background:var(--grad); color:#fff; padding:5px 6px; text-align:center; font-weight:900; } th:first-child,td:first-child{text-align:left} td{padding:5px 6px;border-top:1px solid #EDE8F6;text-align:center;vertical-align:middle} tr:nth-child(even) td{background:#FAF8FE}.long-table td{font-size:8.25pt;line-height:1.48}.compact-table{font-size:8pt}.config-table td:first-child{font-weight:900;color:var(--navy);width:130px}
+
+.key-finding,.warning-box,.strategy-box,.insight-card,.evidence-file-card,.source-stage-block{break-inside:auto}.chart-card{break-inside:avoid}
+.key-finding{background:linear-gradient(135deg,#F3EFFC,#E9E1F8);border-left:4px solid var(--blue);border-radius:0 8px 8px 0;padding:8px 12px;margin:6px 0 9px}.key-finding strong{color:var(--navy)}
+.warning-box{background:var(--orange-bg);border-left:4px solid var(--orange);border-radius:0 8px 8px 0;padding:8px 12px;margin:6px 0 9px}
+.strategy-box{background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 11px;margin:6px 0 9px;box-shadow:0 1px 5px rgba(16,24,40,.04)}.risk-sample{background:#FAF8FE}
+.consulting-grid{display:grid;gap:8px;margin:6px 0 9px}.consulting-grid.two{grid-template-columns:1fr 1fr}.insight-card{border:1px solid var(--line);border-radius:9px;padding:8px 11px;background:#fff;box-shadow:0 1px 5px rgba(16,24,40,.04)}.insight-card h4{color:var(--blue)}.insight-card p{margin-bottom:1px}
+.logic-flow{display:grid;grid-template-columns:1fr 34px 1fr 34px 1fr;align-items:stretch;gap:8px;margin:15px 0 4px;break-inside:avoid}.flow-node{background:var(--blue-light);border:1px solid #CFC2EE;border-radius:10px;padding:10px;text-align:center;color:var(--navy)}.flow-node strong{display:block;font-size:10pt}.flow-node span{display:block;margin-top:3px;color:#4B5563;font-size:8.2pt}.flow-arrow{display:flex;align-items:center;justify-content:center;color:var(--gold2);font-size:18pt;font-weight:900}
+.positioning-statement{color:var(--navy);font-size:11.5pt;font-weight:900;background:#F3EFFC;border-left:5px solid var(--blue);border-radius:0 10px 10px 0;padding:13px 15px;margin:8px 0 12px}
+.chart-grid{display:grid;grid-template-columns:1.35fr .9fr;gap:11px;margin:10px 0 14px;align-items:start}.chart-card{border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff;box-shadow:0 1px 6px rgba(16,24,40,.04)}.chart-card:nth-child(3){grid-column:1 / span 2}.bubble-card{padding:13px}.svg-chart{width:100%;height:auto;display:block}.chart-caption{text-align:center;color:var(--muted);font-size:8pt;margin:5px 0 0}.bubble-legend{margin-top:8px}
+.citation-chart-group{display:flex;gap:11px;align-items:stretch;margin:10px 0 14px}.citation-chart-group--paired{break-before:auto;page-break-before:auto;break-inside:avoid;page-break-inside:avoid}.citation-chart-group--paired>.citation-chart-item{flex:1 1 0;min-width:0}.citation-chart-group--paired>.citation-chart-item:first-child{flex-grow:1.35}.citation-chart-group--stacked{display:block;break-inside:auto;page-break-inside:auto}.citation-chart-group--stacked>.citation-chart-item{width:100%;margin:0 0 9px}.citation-chart-item{break-inside:avoid;page-break-inside:avoid;overflow:hidden}.citation-chart-item .svg-chart{max-height:92mm}
+.evidence-file-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:9px 0 13px}.evidence-file-card{border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:#fff}.evidence-file-card strong{color:var(--navy)}.evidence-file-card p{color:#4B5563;font-size:8.8pt;margin:3px 0}.evidence-file-card span{color:var(--muted);font-size:8pt}
+.visual-evidence-gallery{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:7px 0 12px;break-inside:avoid}.visual-evidence-card{border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden;break-inside:avoid}.visual-evidence-media{height:39mm;background:#F7F4FB;display:flex;align-items:center;justify-content:center;padding:7px}.visual-evidence-media img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain}.visual-evidence-copy{padding:7px 9px}.visual-evidence-copy strong{display:block;color:var(--navy);font-size:8.8pt}.visual-evidence-copy p{margin:2px 0 0;color:var(--muted);font-size:7.8pt;line-height:1.45;text-align:left}.visual-evidence-gap{background:var(--soft);border:1px dashed #CFC2EE;border-radius:9px;padding:9px 11px;color:var(--muted);margin:6px 0 10px}
+.tag-negative{display:inline-block;color:var(--red);background:var(--red-bg);border:1px solid #F5B9B2;border-radius:999px;padding:2px 8px;margin:2px;font-size:8.3pt;font-weight:800}.td-highlight{color:var(--red);font-weight:900}.td-good{color:var(--green);font-weight:900}.td-purple{color:var(--blue);font-weight:900}.muted{color:var(--muted);font-style:italic}.client-ready-report-final-0 .no-client{display:none}
+.takeaway{background:var(--gold-light);border:1px solid #EAD6A7;border-left:4px solid var(--gold2);border-radius:0 8px 8px 0;padding:8px 11px;margin:7px 0 9px}.takeaway strong{color:var(--gold)}
+</style>
+</head>
+<body class="client-ready-report-final-0">
+<div class="cover-page">
+  <div class="cover-brand">{{REPORT_BRAND_LINE}}</div>
+  <div class="cover-divider"></div>
+  <div class="cover-title-en">GEO Diagnostic &amp; Strategy Report on AI Search Visibility &amp; Brand Asset</div>
+  <div class="cover-title-zh">{{BRAND_NAME}}<br/>AI智能品牌优化方案报告</div>
+  <div class="cover-meta">{{KPI_CARDS}}</div>
+  <div class="cover-footer">{{REPORT_SCOPE}} ｜ {{REPORT_DATE}}</div>
+</div>
+
+<section class="report-page toc-page">
+  <div class="toc-header"><div class="toc-title">目 录</div><div class="toc-subtitle-line"></div></div>
+  <div class="toc-grid">{{TOC_ITEMS}}</div>
+</section>
+
+<section class="report-page executive-page">
+  <div class="page-title">经营层摘要：结论、判断与优先级</div>
+  <p class="page-kicker">本页用一页给出全报告的核心结论、判断链与优先行动，供决策层快速对齐。</p>
+  {{EXECUTIVE_SUMMARY}}
+</section>
+
+<!-- ============ 第一部分 ============ -->
+<div class="divider-page">
+  <div class="divider-no">01</div>
+  <div class="divider-en">Scope &amp; Diagnostic Lens</div>
+  <div class="divider-title">报告范围与诊断口径</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">界定本次诊断的对象、样本口径与指标边界，并以品牌事实为底座，确保后续所有判断都建立在统一、可核验的基础之上。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第一部分</span>报告范围与诊断口径</div>
+  <p class="page-kicker">本页只呈现客户需要理解的诊断对象、样本口径和指标边界，内部工作流产物不进入正文。</p>
+  {{REPORT_SCOPE_BLOCK}}
+</section>
+<section class="report-page">
+  <div class="page-title">品牌事实与可引用资产</div>
+  {{SECTION_BRAND_FACTS}}
+</section>
+
+<!-- ============ 第二部分 ============ -->
+<div class="divider-page">
+  <div class="divider-no">02</div>
+  <div class="divider-en">Market Trends &amp; Category Opportunity</div>
+  <div class="divider-title">市场趋势与品类机会</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">先判断市场机会，再决定品牌应该占据的位置。本部分通过趋势评分、机会矩阵与增长叙事，锁定值得优先抢占的品类增长点。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第二部分</span>市场趋势与品类机会</div>
+  <p class="page-kicker">先判断市场机会，再决定品牌应该占据的位置。</p>
+  <h2>市场机会摘要</h2>
+  {{MARKET_OPPORTUNITY_SUMMARY}}
+  <h2>机会优先级矩阵</h2>
+  {{OPPORTUNITY_PRIORITY_TABLE}}
+</section>
+<section class="report-page">
+  <div class="page-title">趋势评分与机会含义</div>
+  {{TREND_RADAR_TABLE}}
+</section>
+<section class="report-page">
+  <div class="page-title">品类增长叙事与机会解读</div>
+  {{SECTION_CATEGORY_TRENDS}}
+</section>
+
+<!-- ============ 第三部分 ============ -->
+<div class="divider-page">
+  <div class="divider-no">03</div>
+  <div class="divider-en">Brand Positioning &amp; Competitive Strategy</div>
+  <div class="divider-title">品牌定位与竞争战略</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">把市场机会、用户意图、竞品心智和品牌事实压缩为一个可被 AI 识别、引用和推荐的定位选择，并以价值三角与差异化矩阵支撑。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第三部分</span>品牌定位与竞争战略</div>
+  <p class="page-kicker">把市场机会、用户意图、竞品心智和品牌事实压缩为可被 AI 识别、引用和推荐的定位选择。</p>
+  <h2>核心定位声明</h2>
+  {{POSITIONING_STATEMENT_CARD}}
+  <h2>价值主张三角</h2>
+  {{VALUE_TRIANGLE_TABLE}}
+</section>
+<section class="report-page">
+  <div class="page-title">竞争卡位与差异化矩阵</div>
+  {{DIFFERENTIATION_MATRIX}}
+</section>
+<section class="report-page">
+  <div class="page-title">定位支撑与证据链</div>
+  {{SECTION_POSITIONING}}
+</section>
+
+<!-- ============ 第四部分 用户意图（前置） ============ -->
+<div class="divider-page">
+  <div class="divider-no">04</div>
+  <div class="divider-en">User Intent &amp; Question Path</div>
+  <div class="divider-title">用户意图与问题路径</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">在明确定位之后，先回答"用户会怎么问、为什么问"，把真实搜索/咨询意图拆解为可被内容资产承接的问题路径。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第四部分</span>用户意图与问题路径</div>
+  <p class="page-kicker">先明确用户的真实意图与问题分层，再据此设计问答与内容资产。</p>
+  {{SECTION_MARKETING_ATLAS}}
+</section>
+
+<!-- ============ 第五部分 问答架构 ============ -->
+<div class="divider-page">
+  <div class="divider-no">05</div>
+  <div class="divider-en">Q&amp;A Architecture &amp; Content Coverage</div>
+  <div class="divider-title">问答架构与内容承接</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">把固定监控问题转化为标准答案，并以 12 周内容编排和标题钩子形成可持续的内容承接路径。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第五部分</span>问答架构与内容承接</div>
+  <p class="page-kicker">从标准答案出发，形成连续 12 周的内容编排与标题钩子。</p>
+  {{SECTION_QA_ARCHITECTURE}}
+</section>
+
+<!-- ============ 第六部分 AI 可见性诊断（前移至语义资产审计之前） ============ -->
+<div class="divider-page">
+  <div class="divider-no">06</div>
+  <div class="divider-en">AI Visibility Diagnosis</div>
+  <div class="divider-title">AI 可见性诊断</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">用固定问题监控数据检验品牌在主流 AI 平台上的真实可见度、提及率与竞品占位情况，作为后续语义与内容资产补齐的事实依据。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第六部分</span>AI 可见性诊断</div>
+  <p class="page-kicker">用固定问题监控数据检验品牌在真实 AI 回答中的可见度表现。</p>
+  {{AI_MONITORING_BRIEF}}
+
+  <div class="key-finding"><strong>核心发现：</strong>{{CORE_FINDING}}</div>
+  <h2>固定问题与指标口径</h2>
+  {{FIXED_QUESTIONS_TABLE}}
+</section>
+<section class="report-page">
+  <div class="page-title">平台可见性图表</div>
+  {{AI_VISIBILITY_CHARTS}}
+</section>
+<section class="report-page">
+  <div class="page-title">AI 诊断结论与品牌缺口分解</div>
+  <p class="page-kicker">把监控结果进一步解释为平台差异、竞品占位、语义缺口与修复优先级。</p>
+  {{SECTION_DIAGNOSTIC}}
+</section>
+
+
+<!-- ============ 第七部分 语义资产审计 ============ -->
+<div class="divider-page">
+  <div class="divider-no">07</div>
+  <div class="divider-en">Semantic Asset Audit</div>
+  <div class="divider-title">语义资产审计</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">评估品牌在 AI 语义空间中的资产完备度，识别需要补齐的实体、属性与关系，使品牌更易被模型理解与召回。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第七部分</span>语义资产审计</div>
+  <p class="page-kicker">评估品牌语义资产完备度，识别需补齐的实体与关系。</p>
+  {{SEMANTIC_DIMENSION_CHART}}
+  {{SECTION_SEMANTIC_ASSET}}
+  {{UPLOADED_CITATION_ANALYSIS}}
+</section>
+
+<!-- ============ 第八部分 话语与视觉资产 ============ -->
+<div class="divider-page">
+  <div class="divider-no">08</div>
+  <div class="divider-en">Verbal &amp; Visual Assets</div>
+  <div class="divider-title">话语资产与视觉资产</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">统一品牌的话语 token 与视觉符号体系，保证跨平台、跨内容的一致性表达，强化品牌在 AI 与用户心智中的识别度。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第八部分</span>话语资产与视觉资产</div>
+  <p class="page-kicker">统一品牌话语 token 与视觉符号体系。</p>
+  <h2>话语资产</h2>
+  {{SECTION_VERBAL}}
+  <h2>视觉资产</h2>
+  {{VISUAL_EVIDENCE_GALLERY}}
+  {{SECTION_VISUAL}}
+</section>
+
+<!-- ============ 第九部分 风险管理 ============ -->
+<div class="divider-page">
+  <div class="divider-no">09</div>
+  <div class="divider-en">Risk Management</div>
+  <div class="divider-title">风险管理</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">基于负向直问样本识别信任建立路径上的阻断因素，并将其转化为 FAQ、证据页与运营修复任务，守住品牌信任边界。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第九部分</span>风险管理</div>
+  <p class="page-kicker">基于负向直问识别信任阻断因素并给出修复方向。</p>
+  {{REPUTATION_ANALYSIS}}
+</section>
+
+<!-- ============ 第十部分 GEO 战略选择（最后） ============ -->
+<div class="divider-page">
+  <div class="divider-no">10</div>
+  <div class="divider-en">GEO Strategy Choices</div>
+  <div class="divider-title">GEO 战略选择</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">在完成趋势、定位、内容资产与 AI 可见性诊断后，把全部判断收口为明确的 GEO 战略选择与优先行动清单。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第十部分</span>GEO 战略选择</div>
+  <p class="page-kicker">把前述全部判断收口为可执行的 GEO 战略选择。</p>
+  <h2>战略选择表</h2>
+  {{STRATEGIC_CHOICES}}
+</section>
+<section class="report-page">
+  <div class="page-title">优先行动清单</div>
+  {{RECOMMENDED_ACTIONS_TABLE}}
+  <h2>行动设计原则</h2>
+  {{SECTION_ENABLEMENT}}
+</section>
+
+<!-- ============ 第十一部分 GEO 业务流程 ============ -->
+<div class="divider-page">
+  <div class="divider-no">11</div>
+  <div class="divider-en">GEO Business Workflow</div>
+  <div class="divider-title">GEO 业务流程</div>
+  <div class="divider-gold"></div>
+  <div class="divider-desc">以泳道式业务流程图呈现从策略洞察、答案蓝图、AI 官网基建、语义资产生产、信源分发、监控复测到验收迭代的全链路闭环。</div>
+</div>
+<section class="report-page">
+  <div class="page-title"><span class="sec-tag">第十一部分</span>GEO 业务流程</div>
+  <p class="page-kicker">品牌方与服务方的职责分工与协作闭环，把前述全部策略落地为可持续运营的 GEO 业务流程。</p>
+  {{GEO_WORKFLOW_DIAGRAM}}
+</section>
+
+</body>
+</html>
