@@ -5,6 +5,7 @@ import {z} from "zod";
 import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
 import {assembleResponseLogicCore} from "@frontmind/module-brand/server/response-logic-runtime";
 import {createResponseLogicApi} from "@frontmind/module-brand/server/response-logic-api";
+import {createResponseLogicRecordRouter} from "@frontmind/module-brand/server/response-logic-record-api";
 import {createBrandReportRouter} from "@frontmind/module-brand/server/report-api";
 import {
  createEnterpriseRagEvaluationService,
@@ -103,13 +104,17 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  // router factory (response-logic-api.ts, 2,236 lines) with runtime ports
  // assembled from BrandKeywordPorts + Brand ledger question resolver.
  const rlRuntime = assembleResponseLogicCore({ getDb: () => core.database() });
+ // Record list/save first (exact "/" match, falls through for everything
+ // else), then the full migrated router: generation, materials, adopt, task
+ // status, evaluation, judge, optimizer.
+ router.use("/response-logic", createResponseLogicRecordRouter(core, rlRuntime));
  router.use("/response-logic", createResponseLogicApi(rlRuntime as never).router);
 
  router.get("/capabilities",(req,res)=>{
   const context=core.context(req);
   res.setHeader("Cache-Control","no-store");
   res.json({module:"brand",apiVersion:1,workspaceId:context.enterpriseProjectId,
-   features:["reports", "knowledge", "keywords", "intent-workbench", "enterprise-qa", "enterprise-rag-evaluation", "siteops"]});
+   features:["reports", "knowledge", "keywords", "intent-workbench", "response-logic", "enterprise-qa", "enterprise-rag-evaluation", "siteops"]});
  });
  return router;
 }

@@ -24,11 +24,31 @@
 
 企业 RAG 自动评估使用 `POST /api/modules/brand/rag-evaluations`（显式创建）、`GET /api/modules/brand/rag-evaluations/:operationId`（轮询）和带 `sourceQaTaskId`、`turnId` 查询参数的集合 `GET`（恢复与历史）。客户端只提交服务器拥有的任务/轮次坐标，不提交或覆盖问题、回答、知识正文和评分；服务端从已完成问答任务重建冻结输入。页面加载禁止自动调用写接口。
 
-## 3. AI 流程边界
+## 3. 应答逻辑 API
+
+应答逻辑（按问题生成/评估/Judge/优化/采用）从 Intent 模块迁移而来，全部端点挂在模块命名空间前缀 `/api/modules/brand/response-logic`（`module/client/response-logic-api-base.ts` 是唯一的前缀常量；客户端不得使用完整 Dashboard 的顶层 `/api/response-logic` 挂载，该挂载在 Brand 容器不存在）：
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /response-logic` | 记录列表（`{records}`；`server/response-logic-record-api.ts`） |
+| `POST /response-logic` | 保存记录（`{record}`；revision CAS，冲突返回 409 `RESPONSE_LOGIC_REVISION_CONFLICT`） |
+| `POST /response-logic/start`、`/turn` | 首次生成与对话式继续 |
+| `GET /response-logic/tasks/:taskId/status` | 生成任务轮询 |
+| `POST /response-logic/adopt-result` | 采用模型生成结果 |
+| `POST /response-logic/materials` | 材料绑定/变更（含 `addAssetIds`） |
+| `GET/POST /response-logic/evaluation[/latest]` | 规则评估（`latest` 404=无历史；评估历史表未部署时降级为即时计算 `persisted:false`） |
+| `POST /response-logic/evaluation/judge`、`GET .../judge/tasks/:taskId/status` | Judge 四维评估任务与轮询 |
+| `POST /response-logic/optimization`、`GET .../optimization/tasks/:taskId/status` | 优化任务与轮询 |
+
+认证与问题归属：所有处理器要求登录，经 `core.context(req)` 取服务器验证的账户与企业项目，再以 `assertServiceCapability(userId,"responseLogic")` 校验能力；问题按 `server/brand-question-resolver.ts` 从 `brand_intent_workspaces` 账本按认证身份解析当前文本（问题 ID 归属不匹配返回 422 `RESPONSE_LOGIC_QUESTION_NOT_CONFIGURED`），客户端不能提供用户或问题文本作为身份依据。
+
+材料上传不使用模块命名空间，而是复用 Core 的本地资产端点 `POST /api/frontmind/v2/assets`：请求体为文件原始字节（`Content-Type: application/octet-stream`），头 `X-FrontMind-Mime`、`X-FrontMind-Filename`（URL 编码）、`X-FrontMind-Size`（与实际字节数一致）；响应 `localAssetId`（`asset_` 前缀）即后续 `POST /response-logic/materials` 绑定所用的文件 ID。上传材料的预览/内容读取用 `GET /api/frontmind/v2/assets/:localAssetId/content`（同源 Cookie 认证，服务端校验资产归属）。注意完整 Dashboard 的 `/api/frontmind/v1/*` 挂载在任何模块容器都不存在，模块代码不得引用。
+
+## 4. AI 流程边界
 
 业务工作流、提示、输入输出契约和确认/恢复规则在模块代码。通用 OpenAI Agents 执行进程、持久化会话、沙箱、认证与统一账务由宿主复用；没有为五仓复制五套通用引擎。修改本模块业务不需要修改该引擎；修改通用执行器自身需要主仓发布。
 
-## 4. 发布和验收
+## 5. 发布和验收
 
 1. delivery 导出准确线上源码。
 2. Pro 修改模块真实代码并返回协议 ZIP。

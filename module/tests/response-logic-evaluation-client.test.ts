@@ -59,8 +59,8 @@ const jsonResponse = (status: number, body: unknown) =>
     headers: { "content-type": "application/json" },
   });
 
-const latestUrl = "/api/response-logic/evaluation/latest?questionId=q1";
-const postUrl = "/api/response-logic/evaluation";
+const latestUrl = "/api/modules/brand/response-logic/evaluation/latest?questionId=q1";
+const postUrl = "/api/modules/brand/response-logic/evaluation";
 
 const postEnvelope = (persisted: boolean) =>
   jsonResponse(200, {

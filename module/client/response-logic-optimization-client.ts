@@ -1,4 +1,5 @@
 import { captureWorkspaceRestOperation } from "./response-logic-runtime-host.js";
+import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
 import {
   optimizationEnvelopeSchema,
   type OptimizationEnvelope,
@@ -41,7 +42,7 @@ async function readJson(response: Response): Promise<unknown> {
   try { return await response.json(); } catch { return null; }
 }
 
-/** POST /api/response-logic/optimization — start an optimization task for a completed judge task. */
+/** POST {RESPONSE_LOGIC_API_BASE}/optimization — start an optimization task for a completed judge task. */
 export async function startOptimizationGeneration(input: {
   questionId: string;
   expectedRevision?: number;
@@ -54,7 +55,7 @@ export async function startOptimizationGeneration(input: {
   judgeTaskId: string;
   knowledgeFingerprint: string;
 }> {
-  const response = await optimizationFetch("/api/response-logic/optimization", {
+  const response = await optimizationFetch(`${RESPONSE_LOGIC_API_BASE}/optimization`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -80,7 +81,7 @@ export async function startOptimizationGeneration(input: {
   };
 }
 
-/** GET /api/response-logic/optimization/tasks/:taskId/status — poll task status. */
+/** GET {RESPONSE_LOGIC_API_BASE}/optimization/tasks/:taskId/status — poll task status. */
 export async function pollOptimizationTask(input: {
   questionId: string;
   expectedRevision: number;
@@ -97,7 +98,7 @@ export async function pollOptimizationTask(input: {
     judgeTaskId: input.judgeTaskId,
   });
   const response = await optimizationFetch(
-    `/api/response-logic/optimization/tasks/${encodeURIComponent(input.taskId)}/status?${query}`,
+    `${RESPONSE_LOGIC_API_BASE}/optimization/tasks/${encodeURIComponent(input.taskId)}/status?${query}`,
     { method: "GET", headers: { Accept: "application/json" } },
     input.signal,
   );

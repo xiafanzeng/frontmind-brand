@@ -1,5 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import { configureIntentWorkspaceHost } from "./response-logic-runtime-host.js";
+import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
 import type { IntentWorkspaceHost, IntentToast, StartResponseLogicTask, UploadIntentAsset, IntentRestOperation, IntentVisualComponents } from "./response-logic-host.js";
 
 /**
@@ -18,7 +19,7 @@ export interface BrandResponseLogicAdapterInput {
   toast: IntentToast;
 }
 
-const RL_API_BASE = "/api/modules/brand/response-logic";
+const RL_API_BASE = RESPONSE_LOGIC_API_BASE;
 
 export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInput): IntentWorkspaceHost {
   const rest = input.captureRestOperation;
@@ -58,17 +59,35 @@ export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInp
     return body as { id: string; operationRevision?: number };
   };
 
-  const uploadAsset: UploadIntentAsset = async (file, _onProgress, options) => {
-    const formData = new FormData();
-    formData.append("file", file, options?.filename ?? file.name);
-    const response = await rest(options?.signal).fetch(`${RL_API_BASE}/materials/upload`, {
-      method: "POST", body: formData,
+  const uploadAsset: UploadIntentAsset = async (file, onProgress, options) => {
+    // Core's authenticated local-asset endpoint (same contract as the Intent
+    // standalone host): raw octet-stream body plus the three X-FrontMind-*
+    // headers; the declared size must match the streamed bytes exactly.
+    const response = await rest(options?.signal).fetch("/api/frontmind/v2/assets", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-FrontMind-Mime": options?.mimeType || file.type || "application/octet-stream",
+        "X-FrontMind-Filename": encodeURIComponent(options?.filename ?? file.name),
+        "X-FrontMind-Size": String(file.size),
+      },
+      body: file,
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error((body as { error?: { message?: string } })?.error?.message ?? `材料上传失败（${response.status}）`);
+    const payload = body as {
+      localAssetId?: string; filename?: string; bytes?: number; expiresAt?: number;
+      error?: { message?: string };
+    };
+    if (!response.ok || !payload.localAssetId?.startsWith("asset_")) {
+      throw new Error(payload.error?.message ?? `材料上传失败（${response.status}）`);
     }
-    return body as { fileId: string; filename: string; sizeBytes?: number; expiresAt: number };
+    onProgress?.(100);
+    return {
+      fileId: payload.localAssetId,
+      filename: payload.filename ?? file.name,
+      sizeBytes: payload.bytes,
+      expiresAt: payload.expiresAt ?? 0,
+    };
   };
 
   const host: IntentWorkspaceHost = {

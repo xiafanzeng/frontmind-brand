@@ -70,7 +70,7 @@ describe("judge client", () => {
     expect(result.taskId).toBe("judge-task-001");
     expect(result.recordRevision).toBe(3);
     expect(result.sourceFingerprint).toBe("fp-abc");
-    expect(calls[0].url).toBe("/api/response-logic/evaluation/judge");
+    expect(calls[0].url).toBe("/api/modules/brand/response-logic/evaluation/judge");
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({ questionId: "q1", expectedRevision: 3 });
   });
 

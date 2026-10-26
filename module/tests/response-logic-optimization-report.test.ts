@@ -57,7 +57,7 @@ describe("optimization client", () => {
     const result = await startOptimizationGeneration({ questionId: "q1", expectedRevision: 5, judgeTaskId: "judge-1" });
     expect(result.taskId).toBe("opt-task-001");
     const start = calls[0]!;
-    expect(start.url).toBe("/api/response-logic/optimization");
+    expect(start.url).toBe("/api/modules/brand/response-logic/optimization");
     expect(JSON.parse(String(start.init?.body))).toEqual({
       questionId: "q1", expectedRevision: 5, judgeTaskId: "judge-1",
     });

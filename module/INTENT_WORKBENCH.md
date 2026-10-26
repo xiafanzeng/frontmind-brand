@@ -43,11 +43,11 @@
 
 意图优化列表按新截图布局：顶部生成问题折叠区、搜索/类别/应答状态筛选、问题/分类/应答状态/操作表格。每行操作顺序为“查看词条评估 → 进入应答逻辑 → 修改问题 → 删除问题”。分数进入首个操作后展示，再生成方案和执行，保留既有知识差异对比和批量评估。
 
-本轮仅实现首个评估入口。其余三个操作、生成问题及新增问题由同学所属宿主注入：`ModuleWorkspace.intentCatalogIntegration` 传递 `onOpenAnswer`（进入应答）、`onEditQuestion`（修改）、`onDeleteQuestion`（删除）、`onAddQuestion`（新增）、`generationPanel`（生成面板）以及按问题 ID 映射的 `answerStatuses`（`published` 已有正式应答 / `pending` 待制作）。回调收到原始完整问题记录，以 ID 对齐，不能按显示行号匹配。没有宿主回调时对应按钮禁用；没有应答状态数据时显示“暂未同步”。本包不包含同学的应答逻辑源码，不伪造已发布应答。
+「进入应答逻辑」由本包应答逻辑源码承接：独立壳路由含 `response-logic` 页面（“应答逻辑”），点击后保存当前问题上下文并切换到 `BrandResponseLogicEntry` 挂载的应答逻辑工作台（问题内容在工作台内由服务端从 Brand 账本按认证身份重新解析，不信任前端传入文本）。应答逻辑的 REST 端点、材料上传契约与权限边界见 [API 开发说明](API_DEVELOPMENT.md)。修改问题、删除问题、新增问题与生成问题面板仍由宿主经 `ModuleWorkspace.intentCatalogIntegration` 注入（`onEditQuestion`、`onDeleteQuestion`、`onAddQuestion`、`generationPanel` 及按问题 ID 映射的 `answerStatuses`）；当前独立壳尚未注入这些回调，对应按钮禁用、应答状态显示“暂未同步”。回调收到原始完整问题记录，以 ID 对齐，不能按显示行号匹配。本包不伪造已发布应答。
 
-真实 React 业务入口为 `module/client/ModuleWorkspace.tsx` 的 `keywords` / `intent` 页面。现有 `keywords` 入口直接消费工作台，因此不只是 standalone 页面。`ManagedKeywordTables` 新增可选批量回调，未提供时保持原有宿主的单条选择行为。
+真实 React 业务入口为 `module/client/ModuleWorkspace.tsx` 的 `keywords` / `intent` / `response-logic` 页面。现有 `keywords` 入口直接消费工作台，因此不只是 standalone 页面。`ManagedKeywordTables` 新增可选批量回调，未提供时保持原有宿主的单条选择行为。
 
-`standalone/App.tsx` 增加“优化问题”视图，只负责独立开发导航。Dashboard 现有 `ModuleWorkspace` 的 `keywords` 引用会获得工作台；Dashboard 新增独立 `intent` 导航仍需要宿主装配，宿主源码不在本包，不宣称已完成生产集成。
+`standalone/App.tsx` 增加“优化问题”与“应答逻辑”视图；应答逻辑视图必须从优化问题列表携带问题进入，直接访问时显示引导提示。Dashboard 现有 `ModuleWorkspace` 的 `keywords` 引用会获得工作台；Dashboard 新增独立 `intent` 导航仍需要宿主装配，宿主源码不在本包，不宣称已完成生产集成。
 
 本地运行 `corepack pnpm@10.4.1 dev`，访问 `/?view=keywords` 或 `/?view=intent`。开发模式明确展示“合成演示数据”提示，通过 `standalone/intent-preview.ts` 在 localStorage 保存演示交互。正式构建使用真实模块 REST 接口，不把演示适配器用于正式业务。
 

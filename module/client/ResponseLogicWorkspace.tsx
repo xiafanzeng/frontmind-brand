@@ -1,4 +1,5 @@
 import { BusinessExecutionActivity, captureWorkspaceRestOperation, useSearch, activeEnterpriseProjectId, FilePreview, ImagePreview, Button, trpc, createResponseLogicTask, uploadChatLocalAsset, toast, loadPreviewAdapter } from "./response-logic-runtime-host.js";
+import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
 import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
 import type { IntentMessage as Message } from "./response-logic-host.js";
 import {
@@ -239,7 +240,7 @@ export async function fetchResponseLogicTaskStatus(input: {
   let response: Response;
   try {
     response = await rest.fetch(
-      `/api/response-logic/tasks/${encodeURIComponent(input.taskId)}/status?${query.toString()}`,
+      `${RESPONSE_LOGIC_API_BASE}/tasks/${encodeURIComponent(input.taskId)}/status?${query.toString()}`,
       {
         method: "GET",
         credentials: "include",
@@ -335,7 +336,8 @@ export async function fetchResponseLogicStructuredDraft(input: {
 }
 
 function responseLogicAttachmentUrl(fileId: string) {
-  return `/api/frontmind/v1/files/${encodeURIComponent(fileId)}`;
+  // Uploaded material files are local v2 assets; see response-logic-workspace.ts.
+  return `/api/frontmind/v2/assets/${encodeURIComponent(fileId)}/content`;
 }
 
 function responseLogicChatAttachment(
@@ -784,7 +786,7 @@ export async function adoptResponseLogicModelResultRequest(input: {
   const rest = captureWorkspaceRestOperation();
   let response: Response;
   try {
-    response = await rest.fetch("/api/response-logic/adopt-result", {
+    response = await rest.fetch(`${RESPONSE_LOGIC_API_BASE}/adopt-result`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
@@ -838,7 +840,7 @@ export async function updateResponseLogicMaterialsRequest(input: {
   const rest = captureWorkspaceRestOperation();
   let response: Response;
   try {
-    response = await rest.fetch("/api/response-logic/materials", {
+    response = await rest.fetch(`${RESPONSE_LOGIC_API_BASE}/materials`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",

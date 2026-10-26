@@ -1,4 +1,5 @@
 import { captureWorkspaceRestOperation } from "./response-logic-runtime-host.js";
+import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
 import {
   judgeEvaluationEnvelopeSchema,
   type JudgeEvaluationEnvelope,
@@ -41,7 +42,7 @@ async function readJson(response: Response): Promise<unknown> {
   try { return await response.json(); } catch { return null; }
 }
 
-/** POST /api/response-logic/evaluation/judge — start an async Judge task. */
+/** POST {RESPONSE_LOGIC_API_BASE}/evaluation/judge — start an async Judge task. */
 export async function startJudgeEvaluation(input: {
   questionId: string;
   expectedRevision?: number;
@@ -52,7 +53,7 @@ export async function startJudgeEvaluation(input: {
   sourceFingerprint: string;
   knowledgeFingerprint: string;
 }> {
-  const response = await judgeFetch("/api/response-logic/evaluation/judge", {
+  const response = await judgeFetch(`${RESPONSE_LOGIC_API_BASE}/evaluation/judge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -76,7 +77,7 @@ export async function startJudgeEvaluation(input: {
   };
 }
 
-/** GET /api/response-logic/evaluation/judge/tasks/:taskId/status — poll task status. */
+/** GET {RESPONSE_LOGIC_API_BASE}/evaluation/judge/tasks/:taskId/status — poll task status. */
 export async function pollJudgeTask(input: {
   questionId: string;
   expectedRevision: number;
@@ -91,7 +92,7 @@ export async function pollJudgeTask(input: {
     expectedRevision: String(input.expectedRevision),
   });
   const response = await judgeFetch(
-    `/api/response-logic/evaluation/judge/tasks/${encodeURIComponent(input.taskId)}/status?${query}`,
+    `${RESPONSE_LOGIC_API_BASE}/evaluation/judge/tasks/${encodeURIComponent(input.taskId)}/status?${query}`,
     { method: "GET", headers: { Accept: "application/json" } },
     input.signal,
   );

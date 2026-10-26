@@ -1,6 +1,17 @@
 # 品牌建设：能力与验收记录
 
-## 记录基线
+## 2026-10-27 增补：意图优化工作台与应答逻辑
+
+在上述 2026-09-17 基线之后，模块新增两项能力，按“源码已包含 / 本地验证 / 真实业务验收”三态记录：
+
+| 能力 | 源码能力 | 主要源码 | 本地验证 | 真实业务验收 |
+|---|---|---|---|---|
+| 意图优化工作台（优化问题） | 已包含：优化清单、规则/模型评估、方案生成与执行、撤销、知识变更对比；清单 API 挂 `/api/modules/brand/intent`。 | `module/server/intent-workbench-service.ts`；`module/server/intent-skill-runtime.ts`；`module/workflows/optimize-intent/`；`module/schema/20261020_intent_workbench.sql` | 模块测试与构建通过（见交付记录）。 | 开发域名页面与清单读写已可用；供应商模型评估按账户配置另行验收。 |
+| 应答逻辑（自 Intent 迁移） | 已包含：记录列表/保存、首次生成与继续、任务轮询、材料上传（Core v2/assets）与绑定、规则评估、Judge 四维评估、优化器、逐栏采用与 revision CAS；问题解析走 `brand-question-resolver`，端点挂 `/api/modules/brand/response-logic`。 | `module/server/response-logic-*.ts`；`module/client/response-logic-*.ts(x)`、`ResponseLogicWorkspace.tsx`；`module/workflows/response-logic-{builder,evaluator,optimizer}.skill/` | 迁移自 Intent 的测试套件与本轮新增接线测试、typecheck、build 通过；`response_logic_evaluations` 评估历史表迁移未部署（评估即时计算 `persisted:false` 降级可用）。 | **未验收**：待部署后从真实问题列表进入工作台，完成生成、评估、Judge、优化、采用与冲突的浏览器端到端验证。 |
+
+应答逻辑与“优化问题”的边界：优化问题管理候选问题清单（加入/评估/改写/执行）；应答逻辑在既有 Question+Intent 之上生成与优化四栏应答内容。两者共享 Brand 账本作为问题唯一权威源，应答逻辑不修改问题本身。
+
+## 记录基线（2026-09-17）
 
 - 模块：`brand`。
 - 审阅的业务源码：[`db76fd87f7832e3f6e82dd8f3c3f7b42beed1d12`](https://github.com/xiafanzeng/frontmind-brand/tree/db76fd87f7832e3f6e82dd8f3c3f7b42beed1d12)。

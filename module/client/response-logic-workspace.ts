@@ -106,7 +106,11 @@ type LogicTextField = keyof Omit<LogicDraft, "images" | "attachments">;
 type LogicImage = ResponseLogicImage;
 
 function responseLogicAttachmentUrl(fileId: string) {
-  return `/api/frontmind/v1/files/${encodeURIComponent(fileId)}`;
+  // Uploaded material files are local v2 assets (asset_… ids). The legacy
+  // /api/frontmind/v1 mount only exists in the full Dashboard, never in the
+  // Brand module container; the v2 content endpoint is cookie-authenticated
+  // and enforces asset ownership server-side.
+  return `/api/frontmind/v2/assets/${encodeURIComponent(fileId)}/content`;
 }
 
 function sameDraftContent(

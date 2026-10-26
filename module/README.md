@@ -7,9 +7,9 @@
 
 ## 业务代码
 
-知识库、词库、企业问答、品牌跟踪、模板检索、建站、DNS、域名授权、网站产物和发布状态。页面在 `client/`，业务服务在 `server/`，表定义在 `schema/`，后台处理在 `worker/`，有效工作流在 `workflows/`（各目录按实际业务存在）。
+知识库、词库、企业问答、品牌跟踪、模板检索、建站、DNS、域名授权、网站产物和发布状态；意图优化工作台（优化问题）；应答逻辑（按问题生成、评估、Judge、优化、采用与版本管理，源自 Intent 模块迁移）。页面在 `client/`，业务服务在 `server/`，表定义在 `schema/`，后台处理在 `worker/`，有效工作流在 `workflows/`（各目录按实际业务存在）。
 
-重点入口：`server/siteops/`（阿里云/OAuth/DNS/部署/产物）、`server/twenty-first-service.ts`（模板 API）、`server/jenova-brand-tracking-client.ts` 和 `server/jenova-brand-tracking-service.ts`（跟踪请求/恢复）、`server/enterprise-qa-*.ts`（问答提示与校验）。
+重点入口：`server/siteops/`（阿里云/OAuth/DNS/部署/产物）、`server/twenty-first-service.ts`（模板 API）、`server/jenova-brand-tracking-client.ts` 和 `server/jenova-brand-tracking-service.ts`（跟踪请求/恢复）、`server/enterprise-qa-*.ts`（问答提示与校验）、`server/intent-workbench-service.ts`（优化问题清单/评估/执行）、`server/response-logic-api.ts` 与 `server/response-logic-record-api.ts`（应答逻辑任务与记录）、`server/brand-question-resolver.ts`（应答逻辑的可信问题解析，问题唯一权威源为 `brand_intent_workspaces` 账本）。应答逻辑的 REST 契约见 [API 开发说明](API_DEVELOPMENT.md)。
 
 新增后端 API 从 **`server/http-api.ts`** 开始，挂在 `/api/modules/brand/`。此注册函数由真实开发环境和主仓共同装载；在本模块命名空间新增路径不需要修改主仓的逐接口允许清单。现有 API 地址保留。
 

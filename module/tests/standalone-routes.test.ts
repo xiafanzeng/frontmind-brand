@@ -12,6 +12,11 @@ describe("brand standalone business routes", () => {
     ]);
   });
 
+  it("resolves the response-logic workbench instead of falling back to knowledge", () => {
+    expect(resolveStandaloneBrandPage("response-logic")).toBe("response-logic");
+    expect(standaloneBrandPages.map(([id]) => id)).toContain("response-logic");
+  });
+
   it("keeps old preview links as canonical live-route aliases", () => {
     expect(resolveStandaloneBrandPage("enterprise-rag")).toBe("enterprise-qa");
     expect(resolveStandaloneBrandPage("website-builder")).toBe("website");

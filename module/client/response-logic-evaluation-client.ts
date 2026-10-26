@@ -1,4 +1,5 @@
 import { captureWorkspaceRestOperation } from "./response-logic-runtime-host.js";
+import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
 import {
   ruleEvaluationEnvelopeSchema,
   ruleEvaluationLatestEnvelopeSchema,
@@ -80,7 +81,7 @@ export async function fetchLatestResponseLogicRuleEvaluation(input: {
   const query = new URLSearchParams({ questionId: input.questionId });
   const response = await evaluationFetch(
     input,
-    `/api/response-logic/evaluation/latest?${query.toString()}`,
+    `${RESPONSE_LOGIC_API_BASE}/evaluation/latest?${query.toString()}`,
     { method: "GET" },
   );
   const payload = await readJsonPayload(response);
@@ -103,7 +104,7 @@ export async function fetchResponseLogicRuleEvaluation(input: {
   expectedRevision?: number;
   signal?: AbortSignal;
 }): Promise<RuleEvaluationEnvelope> {
-  const response = await evaluationFetch(input, "/api/response-logic/evaluation", {
+  const response = await evaluationFetch(input, `${RESPONSE_LOGIC_API_BASE}/evaluation`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
