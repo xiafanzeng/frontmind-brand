@@ -560,7 +560,6 @@ export default function ManagedKeywordTables({
   // The confirmation modal is pure ephemeral UI state: it must stay closed on
   // first entry, refresh, navigation and project switches, and open only from
   // an explicit 选择词条 click. Filters below remain persisted flow state.
-  const [initialGenerationSession] = useState(() => tables.length === 0);
   const [pages, setPages] = useState<Record<string, number>>({});
   const [batchSelection, setBatchSelection] = useState<Record<string, {
     question: string; category: KeywordCategoryKey; tableId: string;
@@ -709,12 +708,9 @@ export default function ManagedKeywordTables({
           desc={KEYWORD_SOURCE_DESCRIPTION}
         />
       )}
-      {generationEnabled &&
-        initialGenerationSession &&
-        (!loading || tables.length > 0) &&
-        (!error || tables.length > 0) && (
-          <QuestionTemplateApiFlow />
-        )}
+      {generationEnabled && (
+        <QuestionTemplateApiFlow />
+      )}
       {tables.length === 0 ? (
         loading ? (
           <KeywordEmptyPanel
