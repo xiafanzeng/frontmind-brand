@@ -11,7 +11,7 @@ import {REPORT_STAGES,type ReportWorkspace,type ReportRunView,type ReportProduct
 import type {BrandReportDocument,BrandReportStage} from '../contracts/brand-report.js';
 import {renderPanoramaHtml,renderBriefingHtml,renderBriefingPptx,validateBrandReportDocument} from './report-renderer.js';
 import {reportMonitorAttempts,reportMonitorClient,ReportMonitorError,type ReportMonitorAttempt} from './report-monitor.js';
-import {reportModelArchive,reportWorkflowFingerprint,reportOutputSchema,validateReportModelOutput,type ReportModelInput} from './report-model.js';
+import {reportModelArchive,reportWorkflowFingerprint,reportModelWireSchema,validateReportModelOutput,type ReportModelInput} from './report-model.js';
 
 const OP='brand_report_workflow_v1';
 const RUNTIME='brandReport';
@@ -20,7 +20,7 @@ const active=new Map<string,Promise<void>>();
 type Context=ReturnType<ModuleHttpCore['context']>;
 type Actor={id:number;role:string};
 type Artifact={id:ReportArtifactId;label:string;mimeType:string;sizeBytes:number;sha256:string};
-type Job={id:string;stageId:string;attempt:number;phase:'queued'|'uploading'|'create_unknown'|'running';input:ReportModelInput;providerTaskId?:string;startedAt:string;resumedAt?:string;createClaimedAt?:number;repairId?:string;baselineEvents?:string[];repairClaimedAt?:number;repairSent?:boolean};
+type Job={id:string;stageId:string;attempt:number;phase:'queued'|'uploading'|'create_unknown'|'running';input:ReportModelInput;providerTaskId?:string;startedAt:string;resumedAt?:string;createClaimedAt?:number;recoverMissingCreate?:boolean;repairId?:string;baselineEvents?:string[];repairClaimedAt?:number;repairSent?:boolean};
 type Runtime={
  version:1;revision:number;actorId:number;brandName:string;context:{profile:unknown;knowledge?:unknown};inputHash:string;workflowHash:string;
  credentialId:string;credentialVersion:number;model:string;phase:ReportPhase;resumePhase?:ReportPhase;
@@ -150,6 +150,13 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    if(r.phase!=='failed')return;
    if(['MONITOR_FAILED','SAMPLE_FAILED'].includes(r.error?.code??''))throw new BrandReportError('MONITOR_TERMINAL','采集服务已确认该任务失败，已有结果已保存，请联系维护人员处理失败样本。');
    if(r.error?.code==='MODEL_TIMEOUT'&&r.job)r.job.resumedAt=iso();
+   // Older versions lost the provider error code. Only an explicit retry may
+   // ask the private runner to reconcile this exact task; it must prove 404
+   // itself before replaying the original task/intent identity.
+   if(r.error?.code==='REPORT_EXECUTION_FAILED'&&r.job?.phase==='create_unknown'&&!r.job.providerTaskId){
+    r.job.recoverMissingCreate=true;r.job.resumedAt=iso();
+   }
+   if(r.error?.code==='MODEL_SCHEMA_REJECTED'&&r.job)r.job.resumedAt=iso();
    if(r.error?.code==='MONITOR_TIMEOUT')r.monitorResumedAt=iso();
    // Completed samples and ambiguous POST markers remain intact. Only a proven failed model run gets a new stage task.
    if(r.error?.code==='MODEL_FAILED'||r.error?.code==='MODEL_OUTPUT_INVALID'){delete r.job;}
@@ -213,19 +220,43 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    if(state.job?.id!==job.id)throw new BrandReportError('JOB_CHANGED','报告执行阶段已变化。');Object.assign(state.job,change);
    await tx.update(model.agentTasks).set({providerState:state.job.phase,...(change.providerTaskId?{providerTaskId:change.providerTaskId}:{}),updatedAt:new Date()}).where(eq(model.agentTasks.id,job.id));
   },owner);Object.assign(job,change);};
+  const createInput=(fileId:string)=>({title:`FrontMind report ${id} ${job.stageId} ${job.attempt}`,prompt:`读取附件SKILL.md与input.json，完成${job.stageId}阶段。真实检索、深入分析、输出完整结构化结果。\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({operationToken:job.input.operationToken})}`,attachments:[{file_id:fileId,filename:'brand-report-stage.zip'}],agentProfile:credential.upstreamModel,locale:'zh-CN',interactiveMode:false,structuredOutputSchema:reportModelWireSchema(job.stageId)});
+  const uploadArchive=async()=>client.uploadFile({filename:'brand-report-stage.zip',bytes:await reportModelArchive(job.input),contentType:'application/zip',observer:{onCandidateCreated:async({fileId}:{fileId:string})=>model.recordUpstreamResource({userId:context.accountUserId,apiCredentialId:r.credentialId,kind:'file',upstreamId:fileId})}});
+  const create=async(fileId:string,recover=false)=>{
+   try{return await (recover?client.recoverMissingCreate!(createInput(fileId)):client.createTask(createInput(fileId)));}
+   catch(error){
+    // This adapter code is raised before dispatch. Neither a generic HTTP 400
+    // nor an ambiguous response proves that a model task was never created.
+    if(error instanceof model.ManusV2ApiError&&error.code==='XTY_STRUCTURED_OUTPUT_SCHEMA_INVALID'&&error.outcomeUnknown===false){
+     await setJob({phase:'queued',createClaimedAt:undefined,recoverMissingCreate:undefined});
+     throw new BrandReportError('MODEL_SCHEMA_REJECTED','研究结果格式在发送前被模型执行器拒绝，任务尚未创建。修复后可恢复原阶段。');
+    }
+    throw error;
+   }
+  };
+  const acceptCreated=async(created:{taskId:string})=>{
+   await setJob({phase:'running',providerTaskId:created.taskId,recoverMissingCreate:undefined});
+   await model.recordUpstreamResource({userId:context.accountUserId,apiCredentialId:r.credentialId,kind:'task',upstreamId:created.taskId});
+  };
   if(job.phase==='queued'||job.phase==='uploading'){
    await setJob({phase:'uploading'});
-   const uploaded=await client.uploadFile({filename:'brand-report-stage.zip',bytes:await reportModelArchive(job.input),contentType:'application/zip',observer:{onCandidateCreated:async({fileId}:{fileId:string})=>model.recordUpstreamResource({userId:context.accountUserId,apiCredentialId:r.credentialId,kind:'file',upstreamId:fileId})}});
+   const uploaded=await uploadArchive();
    await setJob({phase:'create_unknown',createClaimedAt:Date.now()});
-   const created=await client.createTask({title:`FrontMind report ${id} ${job.stageId} ${job.attempt}`,prompt:`读取附件SKILL.md与input.json，完成${job.stageId}阶段。真实检索、深入分析、输出完整结构化结果。\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({operationToken:job.input.operationToken})}`,attachments:[{file_id:uploaded.fileId,filename:'brand-report-stage.zip'}],agentProfile:credential.upstreamModel,locale:'zh-CN',interactiveMode:false,structuredOutputSchema:z.toJSONSchema(reportOutputSchema(job.stageId),{target:'draft-7'})});
-   await setJob({phase:'running',providerTaskId:created.taskId});
-   await model.recordUpstreamResource({userId:context.accountUserId,apiCredentialId:r.credentialId,kind:'task',upstreamId:created.taskId});return;
+   await acceptCreated(await create(uploaded.fileId));return;
   }
   if(!job.providerTaskId){
    const found=await client.findCreatedTask({title:`FrontMind report ${id} ${job.stageId} ${job.attempt}`,operationToken:job.input.operationToken,createdAfterSeconds:Math.floor(Date.parse(job.startedAt)/1000)-60,createdBeforeSeconds:Math.floor(Date.now()/1000)+60});
    if(found.matches.length>1)throw new BrandReportError('MODEL_CREATE_AMBIGUOUS','模型任务标识有多个匹配，请联系维护人员核对；不会重复创建。');
-   if(!found.unique){if(Date.now()-(job.createClaimedAt??Date.parse(job.startedAt))>180_000)throw new BrandReportError('MODEL_CREATE_UNKNOWN','模型任务创建结果未确认。恢复时会查询原任务，不重复提交。');return;}
-   await setJob({phase:'running',providerTaskId:String(found.unique.id)});
+   if(!found.unique){
+    if(job.recoverMissingCreate&&credential.provider==='xty_codex'&&client.recoverMissingCreate){
+     // The Xty helper performs its own authenticated GET and only creates on
+     // XTY_NOT_FOUND (404), retaining localTaskId and intentId = job.id. An
+     // unavailable runner or a conflicting existing command is never absence.
+     const uploaded=await uploadArchive();await acceptCreated(await create(uploaded.fileId,true));return;
+    }
+    if(Date.now()-(job.createClaimedAt??Date.parse(job.startedAt))>180_000)throw new BrandReportError('MODEL_CREATE_UNKNOWN','模型任务创建结果未确认。恢复时会查询原任务，不重复提交。');return;
+   }
+   await setJob({phase:'running',providerTaskId:String(found.unique.id),recoverMissingCreate:undefined});
   }
   if(Date.now()-Date.parse(job.resumedAt??job.startedAt)>2*60*60_000)throw new BrandReportError('MODEL_TIMEOUT','当前研究阶段等待时间较长，已保留原任务，请恢复查看。');
   const allEvents=await client.listAllMessages({taskId:job.providerTaskId,order:'asc'});
@@ -257,7 +288,7 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    if(!job.repairId){
     const repairId=randomUUID();await setJob({repairId,repairClaimedAt:Date.now(),baselineEvents:allEvents.map((e:any)=>e.id)});
     const repairClient=model.createCredentialAgentClient(credential,{accountUserId:context.accountUserId,operationId:id,localTaskId:job.id,intentId:repairId});
-    await repairClient.sendMessage({taskId:job.providerTaskId,prompt:`本阶段结果未通过校验：${invalid??'缺少结构化结果'}。读取原附件，补齐内容并返回完整JSON；不得改变operationToken=${job.input.operationToken}和inputHash=${job.input.inputHash}，不得制造来源。`,structuredOutputSchema:z.toJSONSchema(reportOutputSchema(job.stageId),{target:'draft-7'})});await setJob({repairSent:true});return;
+    await repairClient.sendMessage({taskId:job.providerTaskId,prompt:`本阶段结果未通过校验：${invalid??'缺少结构化结果'}。读取原附件，补齐内容并返回完整JSON；不得改变operationToken=${job.input.operationToken}和inputHash=${job.input.inputHash}，不得制造来源。`,structuredOutputSchema:reportModelWireSchema(job.stageId)});await setJob({repairSent:true});return;
    }
    if(Date.now()-(job.repairClaimedAt??0)>120_000)throw new BrandReportError('MODEL_OUTPUT_INVALID',`本阶段结果未通过检查：${invalid??'缺少完整研究结果'}。请恢复此阶段。`);
   }

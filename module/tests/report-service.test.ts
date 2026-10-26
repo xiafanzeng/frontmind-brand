@@ -2,9 +2,9 @@
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {randomUUID} from 'node:crypto';
 
-const mock=vi.hoisted(()=>({ports:null as any,output:null as any,creates:[] as any[],monitorSubmits:[] as any[],inputs:new Map<string,any>()}));
+const mock=vi.hoisted(()=>({ports:null as any,output:null as any,creates:[] as any[],recoveries:[] as any[],clientOptions:[] as any[],createError:null as any,recoverError:null as any,findError:null as any,found:null as any,monitorSubmits:[] as any[],inputs:new Map<string,any>()}));
 vi.mock('../server/intent-skill-runtime.js',async()=>{const {createHash}=await import('node:crypto');return {intentSkillPorts:()=>mock.ports,intentHash:(x:unknown)=>createHash('sha256').update(JSON.stringify(x)).digest('hex')};});
-vi.mock('../server/report-model.js',async()=>{const {z}=await import('zod');return {reportWorkflowFingerprint:async()=> 'workflow-v1',reportOutputSchema:()=>z.object({}),
+vi.mock('../server/report-model.js',async()=>{return {reportWorkflowFingerprint:async()=> 'workflow-v1',reportModelWireSchema:()=>({type:'object'}),
  reportModelArchive:async(input:any)=>{mock.inputs.set(input.operationToken,input);return Buffer.from(JSON.stringify(input));},validateReportModelOutput:(v:any,input:any)=>{if(v.inputHash!==input.inputHash)throw new Error('WRONG_INPUT');return v;}};});
 vi.mock('../server/report-monitor.js',async(original)=>{const real=await original<any>();return {...real,reportMonitorClient:()=>({configured:true,submit:async(a:any)=>{mock.monitorSubmits.push(a);return 'task-'+a.consumerTaskId;},poll:async()=>null})};});
 vi.mock('drizzle-orm',()=>{
@@ -37,14 +37,18 @@ let db:MemoryDb;
 const context={accountUserId:7,actorUserId:7,enterpriseProjectId:'project-a',businessOwnerId:'7',businessActorId:'7'};
 const profile={brandName:'测试企业',headline:'企业介绍',summary:'企业真实介绍',sections:[]};
 const makeService=(override={})=>createBrandReportService({database:async()=>db as any,context:()=>context,environment:{FRONTMIND_DASHBOARD_ASSET_DIR:'/tmp/report-test',MOLIZHISHU_TOKEN:'test'}},{...context,...override},{id:7,role:'user'});
+class ProviderError extends Error{
+ constructor(readonly code:string,readonly outcomeUnknown:boolean,readonly status=400){super('private provider error');this.name='ManusV2ApiError';}
+}
 beforeEach(()=>{
- db=new MemoryDb();mock.creates=[];mock.monitorSubmits=[];mock.inputs.clear();mock.output=null;
+ db=new MemoryDb();mock.creates=[];mock.recoveries=[];mock.clientOptions=[];mock.monitorSubmits=[];mock.inputs.clear();mock.output=null;mock.createError=null;mock.recoverError=null;mock.findError=null;mock.found=null;
  const credential={id:'credential-1',version:0,status:'active',provider:'xty_codex',agentProfile:'frontmind-pro',upstreamModel:'test-model'};
  mock.ports={agentOperations:table('operations'),agentTasks:table('tasks'),assertActorAllowed:()=>{},lockAccountRecord:async()=>{},lockCustomerProjectBusinessWrite:async()=>{},
   getDashboardWorkspace:async()=>({payload:profile}),getDecryptedCredentialForUser:async()=>credential,getApiCredentialStatus:async()=>({status:'active'}),getDecryptedCredentialForAccountById:async()=>credential,
-  recordUpstreamResource:async()=>{},classifyManusV2StructuredResultEnvelope:(v:any)=>({kind:'accepted',value:v}),orderManusV2EventsByProviderRank:(v:any)=>v,latestManusV2TaskState:()=>mock.output?'completed':'running',
-  createCredentialAgentClient:(_:any,options:any)=>({uploadFile:async()=>({fileId:'file-1'}),createTask:async(input:any)=>{mock.creates.push(input);return {taskId:options.localTaskId};},
-   listAllMessages:async()=>mock.output?[{id:'event-'+options.localTaskId,type:'structured_output_result',structured_output_result:mock.output}]:[],taskDetail:async()=>({status:'running'}),findCreatedTask:async()=>({matches:[],unique:null}),sendMessage:async()=>{}}),
+  ManusV2ApiError:ProviderError,recordUpstreamResource:async()=>{},classifyManusV2StructuredResultEnvelope:(v:any)=>({kind:'accepted',value:v}),orderManusV2EventsByProviderRank:(v:any)=>v,latestManusV2TaskState:()=>mock.output?'completed':'running',
+  createCredentialAgentClient:(_:any,options:any)=>{mock.clientOptions.push(options);return {uploadFile:async()=>({fileId:'file-1'}),createTask:async(input:any)=>{mock.creates.push(input);if(mock.createError)throw mock.createError;return {taskId:options.localTaskId};},
+   recoverMissingCreate:async(input:any)=>{mock.recoveries.push({input,options});if(mock.recoverError)throw mock.recoverError;return {taskId:options.localTaskId};},
+   listAllMessages:async()=>mock.output?[{id:'event-'+options.localTaskId,type:'structured_output_result',structured_output_result:mock.output}]:[],taskDetail:async()=>({status:'running'}),findCreatedTask:async()=>{if(mock.findError)throw mock.findError;return {matches:mock.found?[mock.found]:[],unique:mock.found};},sendMessage:async()=>{}};},
  };
 });
 async function begin(service=makeService()){
@@ -95,6 +99,71 @@ describe('brand report durable lifecycle',()=>{
   await service.retry(id);await service.schedule(id);
   const current=record.providerRuntime.brandReport;
   expect(current.phase).toBe('researching');expect(current.job.id).toBe(original);expect(current.job.resumedAt).toBeTruthy();expect(mock.creates).toHaveLength(1);
+ });
+
+ it('records only a known pre-dispatch schema rejection and retries the same stage identity',async()=>{
+  mock.createError=new ProviderError('XTY_STRUCTURED_OUTPUT_SCHEMA_INVALID',false);
+  const {id,service}=await begin();const record=db.data.tasks.find(t=>t.createMarker===`brand-report:${id}`);
+  const original=structuredClone(record.providerRuntime.brandReport.job);
+  expect(record.providerRuntime.brandReport).toMatchObject({phase:'failed',error:{code:'MODEL_SCHEMA_REJECTED'},job:{phase:'queued'}});
+  await service.schedule(id);expect(mock.creates).toHaveLength(1);
+  mock.createError=null;await service.retry(id);await service.schedule(id);
+  const current=record.providerRuntime.brandReport;
+  expect(current).toMatchObject({phase:'researching',job:{id:original.id,attempt:1,phase:'running',providerTaskId:original.id}});
+  expect(current.job.input).toEqual(original.input);expect(db.data.tasks).toHaveLength(2);expect(mock.creates).toHaveLength(2);expect(mock.recoveries).toHaveLength(0);
+  expect(mock.clientOptions.every(options=>options.localTaskId===original.id&&options.intentId===original.id)).toBe(true);
+ });
+
+ it.each([
+  ['XTY_STRUCTURED_OUTPUT_SCHEMA_INVALID',true],
+  ['XTY_RUNNER_REQUEST_FAILED',false],
+ ])('does not treat %s outcomeUnknown=%s as a proven pre-dispatch rejection',async(code,unknown)=>{
+  mock.createError=new ProviderError(code as string,unknown as boolean);
+  const {id,service}=await begin();const state=db.data.tasks.find(t=>t.createMarker===`brand-report:${id}`).providerRuntime.brandReport;
+  expect(state).toMatchObject({phase:'failed',error:{code:'REPORT_EXECUTION_FAILED'},job:{phase:'create_unknown'}});
+  await service.schedule(id);expect(mock.creates).toHaveLength(1);expect(mock.recoveries).toHaveLength(0);
+ });
+
+ async function legacyUnknown(){
+  mock.createError=new Error('legacy error without saved code');
+  const run=await begin();mock.createError=null;
+  const record=db.data.tasks.find(t=>t.createMarker===`brand-report:${run.id}`);
+  const original=structuredClone(record.providerRuntime.brandReport.job);
+  return {...run,record,original};
+ }
+ it('recovers a legacy missing create only after explicit retry through the fixed-ID provider helper',async()=>{
+  const {id,service,record,original}=await legacyUnknown();
+  await service.observe(id);await service.schedule(id);expect(mock.recoveries).toHaveLength(0);
+  await service.retry(id);await service.schedule(id);
+  expect(mock.recoveries).toHaveLength(1);expect(mock.creates).toHaveLength(1);
+  expect(mock.recoveries[0].options).toMatchObject({operationId:id,localTaskId:original.id,intentId:original.id});
+  expect(mock.recoveries[0].input).toEqual(mock.creates[0]);
+  expect(record.providerRuntime.brandReport).toMatchObject({phase:'researching',job:{id:original.id,attempt:original.attempt,phase:'running',providerTaskId:original.id,input:original.input}});
+  expect(db.data.tasks).toHaveLength(2);
+ });
+ it('reattaches an existing legacy task without invoking recovery or creating a replacement',async()=>{
+  const {id,service,record,original}=await legacyUnknown();mock.found={id:original.id};
+  await service.retry(id);await service.schedule(id);
+  expect(mock.recoveries).toHaveLength(0);expect(mock.creates).toHaveLength(1);
+  expect(record.providerRuntime.brandReport.job).toMatchObject({id:original.id,providerTaskId:original.id,phase:'running'});
+ });
+ it('does not interpret an unavailable runner or a conflicting recovery as absence',async()=>{
+  const {id,service,record,original}=await legacyUnknown();mock.findError=new ProviderError('XTY_RUNNER_UNREACHABLE',false,503);
+  await service.retry(id);await service.schedule(id);
+  expect(mock.recoveries).toHaveLength(0);expect(mock.creates).toHaveLength(1);
+  mock.findError=null;mock.recoverError=new ProviderError('XTY_CREATE_INTENT_CONFLICT',false,409);
+  await service.retry(id);await service.schedule(id);
+  expect(mock.recoveries).toHaveLength(1);expect(mock.creates).toHaveLength(1);expect(db.data.tasks).toHaveLength(2);
+  expect(record.providerRuntime.brandReport).toMatchObject({phase:'failed',job:{id:original.id,phase:'create_unknown'}});
+ });
+ it('never falls back to createTask when the provider lacks fixed-ID recovery',async()=>{
+  const {id,service,record}=await legacyUnknown();
+  const client=mock.ports.createCredentialAgentClient;
+  mock.ports.createCredentialAgentClient=(...args:any[])=>{const result=client(...args);delete result.recoverMissingCreate;return result;};
+  record.providerRuntime.brandReport.job.createClaimedAt=Date.now()-300_000;
+  await service.retry(id);await service.schedule(id);
+  expect(mock.recoveries).toHaveLength(0);expect(mock.creates).toHaveLength(1);
+  expect(record.providerRuntime.brandReport).toMatchObject({phase:'failed',error:{code:'MODEL_CREATE_UNKNOWN'},job:{phase:'create_unknown'}});
  });
 
 });
