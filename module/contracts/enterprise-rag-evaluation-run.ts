@@ -199,6 +199,44 @@ function exactOrderedIds(actual: readonly string[], expected: readonly string[])
   );
 }
 
+function isSingleIdentifierEdit(left: string, right: string) {
+  if (left === right || Math.abs(left.length - right.length) > 1) return false;
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let edits = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (left.length > right.length) leftIndex += 1;
+    else if (right.length > left.length) rightIndex += 1;
+    else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+  if (leftIndex < left.length || rightIndex < right.length) edits += 1;
+  return edits === 1;
+}
+
+function identifierRepairHint(
+  invalid: string,
+  allowed: ReadonlySet<string>,
+) {
+  const candidates = [...allowed].filter((candidate) =>
+    /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/u.test(candidate) &&
+    !candidate.startsWith("claim-") &&
+    isSingleIdentifierEdit(invalid, candidate)
+  );
+  return candidates.length === 1
+    ? `；唯一一处字符编辑可达的合法 ID 是 ${JSON.stringify(candidates[0])}`
+    : "";
+}
+
 /** Validate the model's semantic coordinates before the existing deterministic
  * enterprise-rag-evaluation Skill is allowed to calculate a score. */
 export function validateEnterpriseRagJudgeOutput(
@@ -240,7 +278,7 @@ export function validateEnterpriseRagJudgeOutput(
     : new Set(options.allowedClaimIds ?? ENTERPRISE_RAG_CLAIM_IDS);
   const allowedSources = new Map(input.sources.map((source) => [source.id, source]));
   const claimIds = new Set<string>();
-  for (const claim of parsed.claims) {
+  for (const [claimIndex, claim] of parsed.claims.entries()) {
     if (claimIds.has(claim.id)) {
       throw new EnterpriseRagEvaluationValidationError("评估陈述标识重复");
     }
@@ -260,13 +298,17 @@ export function validateEnterpriseRagJudgeOutput(
         "评估陈述不是回答中的连续原文",
       );
     }
-    if (
-      claim.sourceIds.some(
-        (id) => !allowedSources.has(id) || !frozenEvidence.has(id),
-      )
-    ) {
+    const invalidSourceIndex = claim.sourceIds.findIndex(
+      (id) => !allowedSources.has(id) || !frozenEvidence.has(id),
+    );
+    if (invalidSourceIndex >= 0) {
+      const invalidSourceId = claim.sourceIds[invalidSourceIndex]!;
+      const allowedSourceIds = new Set(
+        [...allowedSources.keys()].filter((id) => frozenEvidence.has(id)),
+      );
       throw new EnterpriseRagEvaluationValidationError(
-        "评估陈述引用了未授权来源",
+        `评估陈述引用了未授权来源：claims[${claimIndex}].sourceIds[${invalidSourceIndex}] 不在冻结白名单中` +
+          `${identifierRepairHint(invalidSourceId, allowedSourceIds)}。不得复制上一轮该字段的值；必须在所有字段中重新从冻结白名单逐字选择，且重新核对来源正文；无法确认来源时使用空数组并按无来源重新评定`,
       );
     }
     if (
@@ -288,10 +330,19 @@ export function validateEnterpriseRagJudgeOutput(
     ...frozenEvidence,
     ...(allowedClaimIds ? claimIds : []),
   ]);
-  for (const item of [...parsed.dimensions, ...parsed.gates]) {
-    if (item.evidenceIds.some((id) => !allowedJudgmentEvidence.has(id))) {
+  const judgmentItems = [
+    ...parsed.dimensions.map((item, index) => ({ item, path: `dimensions[${index}]` })),
+    ...parsed.gates.map((item, index) => ({ item, path: `gates[${index}]` })),
+  ];
+  for (const { item, path } of judgmentItems) {
+    const invalidEvidenceIndex = item.evidenceIds.findIndex(
+      (id) => !allowedJudgmentEvidence.has(id),
+    );
+    if (invalidEvidenceIndex >= 0) {
+      const invalidEvidenceId = item.evidenceIds[invalidEvidenceIndex]!;
       throw new EnterpriseRagEvaluationValidationError(
-        "评估模型引用了未授权证据",
+        `评估模型引用了未授权证据：${path}.evidenceIds[${invalidEvidenceIndex}] 不在冻结白名单中` +
+          `${identifierRepairHint(invalidEvidenceId, frozenEvidence)}。不得复制上一轮该字段的值；必须在所有字段中重新从冻结白名单逐字选择`,
       );
     }
   }

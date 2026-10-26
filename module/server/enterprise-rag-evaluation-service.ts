@@ -996,6 +996,17 @@ export function createEnterpriseRagEvaluationService(
     try {
       const clients = await persistedClient(owned, runtime);
       const client = clients.client;
+      const frozenEvidenceIds = new Set(runtime.input.allowedEvidenceIds);
+      const frozenSourceIds = Array.from(new Set(
+        runtime.input.sources
+          .map(({ id }) => id)
+          .filter((id) => frozenEvidenceIds.has(id)),
+      ));
+      const judgmentEvidenceRule = clients.validationOptions.allowedClaimIds === null
+        ? "维度和门禁的 evidenceIds 只能逐字引用冻结证据 ID，不得引用 claim ID。"
+        : "维度和门禁的 evidenceIds 还可以引用本次 JSON 中实际存在且已绑定回答原文的 claim-1 至 claim-30。";
+      const sourceIdRule =
+        "claims[].sourceIds 是更窄的来源集合，只能从冻结来源 ID 白名单逐字复制；question:*、answer:*、claim-* 都不得写入。哪怕只多、少或改一个字符也非法。无法确认有合法来源直接支持时，必须使用 status=unsupported、sourceIds=[]，并同步按无来源调整事实/引用门禁与评分。";
       const freshOwned = await findOwnedOperation(owned.operation.id);
       if (!freshOwned) return;
       owned = freshOwned;
@@ -1013,7 +1024,7 @@ export function createEnterpriseRagEvaluationService(
         phase = "create_unknown";
         const created = await client.createTask({
           title: owned.task.title,
-          prompt: `解压附件并完整读取 SKILL.md，严格按流程评估 input.json。只返回符合结构化输出 schema 的 JSON。证据 ID 必须逐字复制，禁止重算、缩写或改写；维度和门禁可以引用本次 JSON 中实际存在的 claim-1 至 claim-30。\n冻结证据 ID 白名单=${JSON.stringify(runtime.input.allowedEvidenceIds)}\n冻结来源 ID 白名单=${JSON.stringify(runtime.input.sources.map(({ id }) => id))}\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: runtime.input.operationToken })}`,
+          prompt: `解压附件并完整读取 SKILL.md，严格按流程评估 input.json。只返回符合结构化输出 schema 的 JSON。所有 ID 必须从对应白名单逐字复制，禁止重算、缩写或改写。${judgmentEvidenceRule}${sourceIdRule}\n冻结证据 ID 白名单=${JSON.stringify(runtime.input.allowedEvidenceIds)}\n冻结来源 ID 白名单=${JSON.stringify(frozenSourceIds)}\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: runtime.input.operationToken })}`,
           attachments,
           agentProfile: owned.operation.upstreamModel,
           locale: "zh-CN",
@@ -1190,7 +1201,7 @@ export function createEnterpriseRagEvaluationService(
           await clients.repairClient(intentId).sendMessage({
             taskId: providerTaskId,
             structuredOutputSchema: clients.wireSchema,
-            prompt: `上一轮结果未通过校验：${invalidResult}。请重新完整读取原附件中的 SKILL.md 和 input.json，修正后返回完整 JSON。冻结问题、回答和来源仍是唯一依据；禁止联网、补造证据、混入网站建设评分或改变任务标识。证据 ID 必须从下列白名单逐字复制，禁止重算、缩写或改写；也可以引用本次 JSON 中实际存在且已绑定回答原文的 claim-1 至 claim-30。claim.sourceIds 只能来自冻结来源白名单。仅返回 JSON，不要解释。\n冻结证据 ID 白名单=${JSON.stringify(runtime.input.allowedEvidenceIds)}\n冻结来源 ID 白名单=${JSON.stringify(runtime.input.sources.map(({ id }) => id))}\noperationToken=${runtime.input.operationToken}\ninputHash=${runtime.input.inputHash}\n本轮修复标识=${intentId}`,
+            prompt: `上一轮结果未通过校验：${invalidResult}。请重新完整读取原附件中的 SKILL.md 和 input.json，修正后返回完整 JSON。不要从上一轮错误 JSON 复制任何 ID；必须重新从下列对应白名单逐字选择，禁止重算、缩写或改写，并在所有字段中移除校验消息指出的非法值。冻结问题、回答和来源仍是唯一依据；禁止联网、补造证据、混入网站建设评分或改变任务标识。${judgmentEvidenceRule}${sourceIdRule}仅返回 JSON，不要解释。\n冻结证据 ID 白名单=${JSON.stringify(runtime.input.allowedEvidenceIds)}\n冻结来源 ID 白名单=${JSON.stringify(frozenSourceIds)}\noperationToken=${runtime.input.operationToken}\ninputHash=${runtime.input.inputHash}\n本轮修复标识=${intentId}`,
           });
           await mutateRuntime(owned.task.id, (current) => {
             if (current.lease?.owner === owner && current.repair?.intentId === intentId) {
