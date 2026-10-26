@@ -6,6 +6,7 @@ import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/mod
 import {createResponseLogicEvaluationRouter} from "@frontmind/module-brand/server/response-logic-evaluation-api";
 import {createResponseLogicJudgeRouter} from "@frontmind/module-brand/server/response-logic-judge-api";
 import {createResponseLogicOptimizationRouter} from "@frontmind/module-brand/server/response-logic-optimization-api";
+import {assembleResponseLogicCore} from "@frontmind/module-brand/server/response-logic-runtime";
 import {
  createEnterpriseRagEvaluationService,
  EnterpriseRagEvaluationError,
@@ -98,10 +99,32 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  router.post("/question-templates/recommend-core-words",recommendQuestionTemplates("recommend-core-words"));
  router.post("/question-templates/recommend-questions",recommendQuestionTemplates("recommend-questions"));
  // Response-logic evaluation/judge/optimizer — mounted under /api/modules/brand/response-logic
- // Core host auth middleware (frontmindUser) is already applied upstream.
- router.use("/response-logic/evaluation", createResponseLogicEvaluationRouter(core as never));
- router.use("/response-logic/evaluation/judge", createResponseLogicJudgeRouter(core as never));
- router.use("/response-logic/optimization", createResponseLogicOptimizationRouter(core as never));
+ // Runtime ports assembled from BrandKeywordPorts + Brand ledger question resolver.
+ const rlRuntime = assembleResponseLogicCore({ getDb: () => core.database() });
+ router.use("/response-logic/evaluation", createResponseLogicEvaluationRouter(rlRuntime as never));
+ router.use("/response-logic/evaluation/judge", createResponseLogicJudgeRouter(rlRuntime as never));
+ router.use("/response-logic/optimization", createResponseLogicOptimizationRouter(rlRuntime as never));
+ // Basic CRUD for response-logic records (list + save)
+ router.get("/response-logic", async (req, res) => {
+  try {
+   res.setHeader("Cache-Control", "no-store");
+   const ctx = core.context(req);
+   const records = await rlRuntime.responseLogicService.listResponseLogicEntries(ctx.accountUserId);
+   res.json({ records });
+  } catch { res.status(503).json({ error: { code: "RESPONSE_LOGIC_UNAVAILABLE", message: "应答逻辑服务暂不可用" } }); }
+ });
+ router.post("/response-logic", async (req, res) => {
+  try {
+   res.setHeader("Cache-Control", "no-store");
+   const ctx = core.context(req);
+   const record = await rlRuntime.responseLogicService.saveResponseLogicEntry({ userId: ctx.accountUserId, value: req.body });
+   res.json({ record });
+  } catch (error) {
+   const code = (error as { code?: string }).code;
+   if (code === "CONFLICT") { res.status(409).json({ error: { code: "REVISION_CONFLICT", message: "版本冲突，请刷新后重试" } }); return; }
+   res.status(503).json({ error: { code: "RESPONSE_LOGIC_SAVE_FAILED", message: "保存应答逻辑失败" } });
+  }
+ });
 
  router.get("/capabilities",(req,res)=>{
   const context=core.context(req);
