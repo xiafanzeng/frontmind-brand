@@ -72,7 +72,10 @@ export type EnterpriseRagEvaluationFrozenInput = {
   };
 };
 
-const identifier = z.string().trim().min(1).max(255);
+// Coordinates are capabilities and must retain their exact bytes. In
+// particular, do not trim here: the alias decoder must see and reject a
+// leading/trailing-space mutation instead of silently normalizing it.
+const identifier = z.string().min(1).max(255);
 const explanation = z.string().trim().min(1).max(2_000);
 const evidenceIds = z.array(identifier).min(1).max(20);
 
@@ -179,8 +182,217 @@ export function enterpriseRagJudgeWireSchema(
 
 export type EnterpriseRagJudgeOutput = z.infer<typeof judgeOutputSchema>;
 
+export type EnterpriseRagEvidenceAliasBinding = {
+  alias: string;
+  canonicalId: string;
+  kind: "question" | "answer" | "source" | "evidence";
+};
+
+/** Frozen provider-facing ID projection. The model never needs to transcribe
+ * long storage identifiers, while every accepted alias remains an exact,
+ * server-owned capability for one canonical frozen ID. */
+export type EnterpriseRagEvidenceAliasContract = {
+  revision: "evidence-alias-v1";
+  bindings: EnterpriseRagEvidenceAliasBinding[];
+};
+
+const evidenceAliasContractSchema = z.object({
+  revision: z.literal("evidence-alias-v1"),
+  bindings: z.array(z.object({
+    alias: identifier,
+    canonicalId: identifier,
+    kind: z.enum(["question", "answer", "source", "evidence"]),
+  }).strict()).min(1).max(10_000),
+}).strict();
+
+const EVIDENCE_ALIAS_CAPACITY = 10_000;
+
+/** Encode every base-36 coordinate as three equal symbols in a fixed slot.
+ * Two generated aliases therefore differ by at least three substitutions.
+ * The deletion-signature check below additionally proves that no two members
+ * of the concrete codebook are related by one deletion plus one insertion, so
+ * every single-character insertion/deletion/substitution has at most one
+ * legal alias candidate. */
+const EVIDENCE_ALIAS_KIND_CODE: Record<
+  EnterpriseRagEvidenceAliasBinding["kind"],
+  string
+> = {
+  question: "QQQ",
+  answer: "AAA",
+  source: "SSS",
+  evidence: "EEE",
+};
+
+function evidenceAlias(
+  index: number,
+  kind: EnterpriseRagEvidenceAliasBinding["kind"],
+) {
+  if (!Number.isInteger(index) || index < 0 || index >= EVIDENCE_ALIAS_CAPACITY) {
+    throw new EnterpriseRagEvaluationValidationError(
+      "冻结证据数量超出评估传输合同容量",
+    );
+  }
+  const coordinate = index.toString(36).toUpperCase().padStart(3, "0");
+  return `rag-${EVIDENCE_ALIAS_KIND_CODE[kind]}-${
+    [...coordinate].map((symbol) => symbol.repeat(3)).join("-")
+  }`;
+}
+
+function assertEvidenceAliasSeparation(
+  bindings: readonly EnterpriseRagEvidenceAliasBinding[],
+) {
+  const deletionOwners = new Map<string, string>();
+  for (const [bindingIndex, binding] of bindings.entries()) {
+    if (binding.alias !== evidenceAlias(bindingIndex, binding.kind)) {
+      throw new EnterpriseRagEvaluationValidationError(
+        "评估传输别名不符合防误码编码",
+      );
+    }
+    for (let index = 0; index < binding.alias.length; index += 1) {
+      const signature =
+        binding.alias.slice(0, index) + binding.alias.slice(index + 1);
+      const owner = deletionOwners.get(signature);
+      if (owner && owner !== binding.alias) {
+        throw new EnterpriseRagEvaluationValidationError(
+          "评估传输别名未满足单字符错误隔离",
+        );
+      }
+      deletionOwners.set(signature, binding.alias);
+    }
+  }
+}
+
+export function createEnterpriseRagEvidenceAliasContract(
+  input: EnterpriseRagEvaluationFrozenInput,
+): EnterpriseRagEvidenceAliasContract {
+  const canonicalIds = input.allowedEvidenceIds;
+  if (canonicalIds.length > EVIDENCE_ALIAS_CAPACITY) {
+    throw new EnterpriseRagEvaluationValidationError(
+      "冻结证据数量超出评估传输合同容量",
+    );
+  }
+  const canonicalSet = new Set(canonicalIds);
+  if (canonicalSet.size !== canonicalIds.length) {
+    throw new EnterpriseRagEvaluationValidationError(
+      "冻结证据标识重复，不能创建评估传输合同",
+    );
+  }
+  if (canonicalIds.some((id) => ENTERPRISE_RAG_CLAIM_IDS.includes(id))) {
+    throw new EnterpriseRagEvaluationValidationError(
+      "冻结证据标识与评估陈述坐标冲突，不能创建评估传输合同",
+    );
+  }
+  const questionId = `question:${input.questionMessageId}`;
+  const answerId = `answer:${input.answerMessageId}`;
+  if (!canonicalSet.has(questionId) || !canonicalSet.has(answerId)) {
+    throw new EnterpriseRagEvaluationValidationError(
+      "冻结问题或回答证据缺失，不能创建评估传输合同",
+    );
+  }
+  const sourceIds = input.sources.map(({ id }) => id);
+  if (
+    new Set(sourceIds).size !== sourceIds.length ||
+    sourceIds.some((id) => !canonicalSet.has(id))
+  ) {
+    throw new EnterpriseRagEvaluationValidationError(
+      "冻结来源与证据白名单不一致，不能创建评估传输合同",
+    );
+  }
+
+  const bindings: EnterpriseRagEvidenceAliasBinding[] = [];
+  const bind = (
+    canonicalId: string,
+    kind: EnterpriseRagEvidenceAliasBinding["kind"],
+  ) => {
+    bindings.push({
+      alias: evidenceAlias(bindings.length, kind),
+      canonicalId,
+      kind,
+    });
+  };
+  bind(questionId, "question");
+  bind(answerId, "answer");
+  for (const sourceId of sourceIds) bind(sourceId, "source");
+  const alreadyBound = new Set(bindings.map(({ canonicalId }) => canonicalId));
+  for (const canonicalId of canonicalIds) {
+    if (alreadyBound.has(canonicalId)) continue;
+    bind(canonicalId, "evidence");
+    alreadyBound.add(canonicalId);
+  }
+  const aliases = new Set(bindings.map(({ alias }) => alias));
+  const reserved = new Set([...canonicalIds, ...ENTERPRISE_RAG_CLAIM_IDS]);
+  if (
+    aliases.size !== bindings.length ||
+    bindings.length !== canonicalIds.length ||
+    bindings.some(({ alias }) =>
+      !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(alias) || reserved.has(alias)
+    )
+  ) {
+    throw new EnterpriseRagEvaluationValidationError(
+      "评估传输别名发生冲突",
+    );
+  }
+  assertEvidenceAliasSeparation(bindings);
+  return { revision: "evidence-alias-v1", bindings };
+}
+
+export function validateEnterpriseRagEvidenceAliasContract(
+  input: EnterpriseRagEvaluationFrozenInput,
+  value: unknown,
+): EnterpriseRagEvidenceAliasContract {
+  const parsed = evidenceAliasContractSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new EnterpriseRagEvaluationValidationError("评估传输合同缺失");
+  }
+  const expected = createEnterpriseRagEvidenceAliasContract(input);
+  if (
+    parsed.data.bindings.length !== expected.bindings.length ||
+    parsed.data.bindings.some((binding, index) => {
+      const frozen = expected.bindings[index];
+      return !frozen ||
+        binding.alias !== frozen.alias ||
+        binding.canonicalId !== frozen.canonicalId ||
+        binding.kind !== frozen.kind;
+    })
+  ) {
+    throw new EnterpriseRagEvaluationValidationError("评估传输合同与冻结证据不一致");
+  }
+  return structuredClone(expected);
+}
+
+export function enterpriseRagAliasedInput(
+  input: EnterpriseRagEvaluationFrozenInput,
+  contract: EnterpriseRagEvidenceAliasContract,
+): EnterpriseRagEvaluationFrozenInput {
+  const frozen = validateEnterpriseRagEvidenceAliasContract(input, contract);
+  const aliases = new Map(
+    frozen.bindings.map(({ canonicalId, alias }) => [canonicalId, alias]),
+  );
+  return {
+    ...structuredClone(input),
+    sources: input.sources.map((source) => ({
+      ...structuredClone(source),
+      id: aliases.get(source.id)!,
+    })),
+    allowedEvidenceIds: input.allowedEvidenceIds.map((id) => aliases.get(id)!),
+  };
+}
+
+export function enterpriseRagAliasedJudgeWireSchema(
+  input: EnterpriseRagEvaluationFrozenInput,
+  contract: EnterpriseRagEvidenceAliasContract,
+) {
+  return enterpriseRagJudgeWireSchema(enterpriseRagAliasedInput(input, contract));
+}
+
 export class EnterpriseRagEvaluationValidationError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly kind:
+      | "semantic"
+      | "unauthorized_identifier"
+      | "repairable_identifier" = "semantic",
+  ) {
     super(message);
     this.name = "EnterpriseRagEvaluationValidationError";
   }
@@ -223,7 +435,7 @@ function isSingleIdentifierEdit(left: string, right: string) {
   return edits === 1;
 }
 
-function identifierRepairHint(
+function identifierRepairCandidate(
   invalid: string,
   allowed: ReadonlySet<string>,
 ) {
@@ -232,9 +444,125 @@ function identifierRepairHint(
     !candidate.startsWith("claim-") &&
     isSingleIdentifierEdit(invalid, candidate)
   );
-  return candidates.length === 1
-    ? `；唯一一处字符编辑可达的合法 ID 是 ${JSON.stringify(candidates[0])}`
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function identifierRepairHint(
+  invalid: string,
+  allowed: ReadonlySet<string>,
+) {
+  const candidate = identifierRepairCandidate(invalid, allowed);
+  return candidate
+    ? `；唯一一处字符编辑可达的合法 ID 是 ${JSON.stringify(candidate)}`
     : "";
+}
+
+/** Decode only exact frozen aliases. Unknown, approximate, or canonical IDs
+ * fail closed before the canonical semantic validator is reached. */
+export function decodeEnterpriseRagAliasedJudgeOutput(
+  value: unknown,
+  input: EnterpriseRagEvaluationFrozenInput,
+  contract: EnterpriseRagEvidenceAliasContract,
+): EnterpriseRagJudgeOutput {
+  const parsed = judgeOutputSchema.parse(value);
+  const frozen = validateEnterpriseRagEvidenceAliasContract(input, contract);
+  const canonicalByAlias = new Map(
+    frozen.bindings.map(({ alias, canonicalId }) => [alias, canonicalId]),
+  );
+  const sourceAliases = new Set(
+    frozen.bindings.filter(({ kind }) => kind === "source").map(({ alias }) => alias),
+  );
+  const evidenceAliases = new Set(frozen.bindings.map(({ alias }) => alias));
+  const invalidAliases: Array<{
+    path: string;
+    label: string;
+    candidate?: string;
+  }> = [];
+  const decode = (
+    id: string,
+    allowed: ReadonlySet<string>,
+    path: string,
+    label: string,
+  ) => {
+    if (!allowed.has(id)) {
+      invalidAliases.push({
+        path,
+        label,
+        candidate: identifierRepairCandidate(id, allowed),
+      });
+      return id;
+    }
+    return canonicalByAlias.get(id)!;
+  };
+  const decoded: EnterpriseRagJudgeOutput = {
+    ...parsed,
+    dimensions: parsed.dimensions.map((item, itemIndex) => ({
+      ...item,
+      evidenceIds: item.evidenceIds.map((id, evidenceIndex) =>
+        ENTERPRISE_RAG_CLAIM_IDS.includes(id)
+          ? id
+          : decode(
+              id,
+              evidenceAliases,
+              `dimensions[${itemIndex}].evidenceIds[${evidenceIndex}]`,
+              "评估模型引用了未授权证据别名",
+            )
+      ),
+    })),
+    gates: parsed.gates.map((item, itemIndex) => ({
+      ...item,
+      evidenceIds: item.evidenceIds.map((id, evidenceIndex) =>
+        ENTERPRISE_RAG_CLAIM_IDS.includes(id)
+          ? id
+          : decode(
+              id,
+              evidenceAliases,
+              `gates[${itemIndex}].evidenceIds[${evidenceIndex}]`,
+              "评估模型引用了未授权证据别名",
+            )
+      ),
+    })),
+    claims: parsed.claims.map((claim, claimIndex) => ({
+      ...claim,
+      sourceIds: claim.sourceIds.map((id, sourceIndex) =>
+        decode(
+          id,
+          sourceAliases,
+          `claims[${claimIndex}].sourceIds[${sourceIndex}]`,
+          "评估陈述引用了未授权来源别名",
+        )
+      ),
+    })),
+  };
+  if (invalidAliases.length) {
+    const groups = new Map<string, {
+      label: string;
+      candidate?: string;
+      paths: string[];
+    }>();
+    for (const issue of invalidAliases) {
+      const key = `${issue.label}\u0000${issue.candidate ?? ""}`;
+      const group = groups.get(key) ?? {
+        label: issue.label,
+        candidate: issue.candidate,
+        paths: [],
+      };
+      group.paths.push(issue.path);
+      groups.set(key, group);
+    }
+    const details = [...groups.values()].map((group) =>
+      `${group.label}：${group.paths.join("、")} 不在冻结传输白名单中` +
+      (group.candidate
+        ? `；这些路径唯一一处字符编辑可达的合法 ID 是 ${JSON.stringify(group.candidate)}`
+        : "；这些路径没有唯一的单字符合法候选")
+    ).join("；");
+    const repairable = invalidAliases.every(({ candidate }) => Boolean(candidate));
+    throw new EnterpriseRagEvaluationValidationError(
+      `${details}。不得复制上一轮这些字段的值；必须从冻结传输白名单逐字选择`,
+      repairable ? "repairable_identifier" : "unauthorized_identifier",
+    );
+  }
+  return decoded;
 }
 
 /** Validate the model's semantic coordinates before the existing deterministic
@@ -306,9 +634,11 @@ export function validateEnterpriseRagJudgeOutput(
       const allowedSourceIds = new Set(
         [...allowedSources.keys()].filter((id) => frozenEvidence.has(id)),
       );
+      const repairHint = identifierRepairHint(invalidSourceId, allowedSourceIds);
       throw new EnterpriseRagEvaluationValidationError(
         `评估陈述引用了未授权来源：claims[${claimIndex}].sourceIds[${invalidSourceIndex}] 不在冻结白名单中` +
-          `${identifierRepairHint(invalidSourceId, allowedSourceIds)}。不得复制上一轮该字段的值；必须在所有字段中重新从冻结白名单逐字选择，且重新核对来源正文；无法确认来源时使用空数组并按无来源重新评定`,
+          `${repairHint}。不得复制上一轮该字段的值；必须在所有字段中重新从冻结白名单逐字选择，且重新核对来源正文；无法确认来源时使用空数组并按无来源重新评定`,
+        repairHint ? "repairable_identifier" : "unauthorized_identifier",
       );
     }
     if (
@@ -340,9 +670,11 @@ export function validateEnterpriseRagJudgeOutput(
     );
     if (invalidEvidenceIndex >= 0) {
       const invalidEvidenceId = item.evidenceIds[invalidEvidenceIndex]!;
+      const repairHint = identifierRepairHint(invalidEvidenceId, frozenEvidence);
       throw new EnterpriseRagEvaluationValidationError(
         `评估模型引用了未授权证据：${path}.evidenceIds[${invalidEvidenceIndex}] 不在冻结白名单中` +
-          `${identifierRepairHint(invalidEvidenceId, frozenEvidence)}。不得复制上一轮该字段的值；必须在所有字段中重新从冻结白名单逐字选择`,
+          `${repairHint}。不得复制上一轮该字段的值；必须在所有字段中重新从冻结白名单逐字选择`,
+        repairHint ? "repairable_identifier" : "unauthorized_identifier",
       );
     }
   }
