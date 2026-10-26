@@ -128,6 +128,7 @@ import {
   max,
   ne,
   notInArray,
+  sql,
 } from "drizzle-orm";
 import { z } from "zod";
 
@@ -388,6 +389,48 @@ async function requireDb() {
     );
   }
   return db;
+}
+
+export async function ensureSiteOpsProfileForOwner(
+  executor: any,
+  input: {
+    table: any;
+    ownerPredicate: SQL;
+    userId: number;
+  },
+) {
+  await executor
+    .insert(input.table)
+    .values({ userId: input.userId })
+    .onDuplicateKeyUpdate({
+      // Keep the existing owner immutable. In enterprise mode the primary key
+      // is the ambient enterpriseProjectId, so a conflicting owner must never
+      // be reassigned by this idempotent initializer.
+      set: { userId: sql`${input.table.userId}` },
+    });
+  const rows = await executor
+    .select({ userId: input.table.userId })
+    .from(input.table)
+    .where(input.ownerPredicate)
+    .limit(1)
+    .for("update");
+  if (!rows[0] || Number(rows[0].userId) !== input.userId) {
+    throw new SiteOpsServiceError(
+      "FORBIDDEN",
+      "站点配置归属校验失败。",
+      403,
+    );
+  }
+  return rows[0];
+}
+
+async function ensureOwnedSiteProfile(executor: any, userId: number) {
+  const table = enterpriseSiteProfileTable();
+  return ensureSiteOpsProfileForOwner(executor, {
+    table,
+    ownerPredicate: enterpriseSiteProfileOwnerPredicate(userId),
+    userId,
+  });
 }
 
 async function requireSiteOpsEntitlement(userId: number) {
@@ -3098,6 +3141,7 @@ export async function openSiteOps(actor: AuthenticatedUser) {
   const project = await db.transaction(async (tx: any) => {
     await lockCustomerProjectBusinessWrite(tx, enterpriseWorkspaceUserId(actor.id), actor);
     await lockSiteOpsIdentity(tx,enterpriseWorkspaceUserId(actor.id));
+    await ensureOwnedSiteProfile(tx, enterpriseWorkspaceUserId(actor.id));
     const existing = await loadOwnedProject(tx, enterpriseWorkspaceUserId(actor.id), undefined, true);
     if (existing) return existing;
 
@@ -6279,6 +6323,7 @@ async function handleDomainSync(
   },
 ) {
   const connection = await requireAliyunConnection(tx, input.project.id);
+  await ensureOwnedSiteProfile(tx, enterpriseWorkspaceUserId(input.actor.id));
   const [activeRows, profileRows, dnsEvidence] = await Promise.all([
     tx
       .select({ id: siteOperations.id })
