@@ -1,0 +1,525 @@
+{
+  "description": "FrontMind 全链路标准产物文件清单。canonical 为最终检查、S10 读取和交付打包优先使用的标准文件名；aliases 用于兼容执行 Agent 已生成的等价文件名。",
+  "brand_placeholder": "{brand}",
+  "rules": [
+    "企业或品牌展示名用 brand_name；文件名、脚本参数和 outputs 路径统一用 brand_id。",
+    "每个阶段的 Wide Research manifest.generated_files 必须优先写入 canonical 文件路径。",
+    "如果阶段已经产出等价文件但文件名不一致，先运行 output_contract_normalizer.py 复制/规范化为 canonical 文件名；不得重新写一个浅层占位文件充数。",
+    "completeness_checker 只在 S9.8 完成后运行；S1-S4 阶段命名检查使用 output_contract_normalizer.py，不得提前运行全量 completeness_checker。"
+  ],
+  "outputs": [
+    {
+      "stage": "S0.0",
+      "role": "workflow_reading_manifest_json",
+      "canonical": "_execution/S0.0_{brand}_workflow_reading_manifest.json",
+      "format": "json",
+      "required": true
+    },
+    {
+      "stage": "S0.0",
+      "role": "workflow_reading_manifest_md",
+      "canonical": "_execution/S0.0_{brand}_workflow_reading_manifest.md",
+      "format": "md",
+      "required": true
+    },
+    {
+      "stage": "S0.1",
+      "role": "input_plan_json",
+      "canonical": "00_project_input/S0.1_{brand}_输入解析与补全计划.json",
+      "format": "json",
+      "required": true
+    },
+    {
+      "stage": "S0.1",
+      "role": "input_plan_md",
+      "canonical": "00_project_input/S0.1_{brand}_输入解析与补全计划.md",
+      "format": "md",
+      "required": true
+    },
+    {
+      "stage": "S0.1",
+      "role": "input_manifest_json",
+      "canonical": "_execution/S0.1_{brand}_input_resolution_manifest.json",
+      "format": "json",
+      "required": true
+    },
+    {
+      "stage": "S1",
+      "role": "brand_facts_json",
+      "canonical": "S1_{brand}_品牌事实图谱.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S1_*品牌事实*.json",
+        "S1_*事实图谱*.json",
+        "S1_*品牌资产*.json",
+        "S1_*知识库*.json",
+        "S1_*brand*facts*.json",
+        "S1_*knowledge*.json"
+      ]
+    },
+    {
+      "stage": "S1",
+      "role": "brand_knowledge_md",
+      "canonical": "S1_{brand}_品牌知识库.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S1_*品牌知识*.md",
+        "S1_*知识库*.md",
+        "S1_*品牌资产*.md",
+        "S1_*brand*knowledge*.md"
+      ]
+    },
+    {
+      "stage": "S1",
+      "role": "gap_report_md",
+      "canonical": "S1_{brand}_知识库缺口报告.md",
+      "format": "md",
+      "required": false,
+      "aliases": [
+        "S1_*缺口*.md",
+        "S1_*gap*.md"
+      ]
+    },
+    {
+      "stage": "S1",
+      "role": "visual_assets_json",
+      "canonical": "S1_{brand}_视觉资产清单.json",
+      "format": "json",
+      "required": false,
+      "aliases": [
+        "S1_*视觉资产*.json",
+        "S1_*visual*asset*.json"
+      ]
+    },
+    {
+      "stage": "S2",
+      "role": "marketing_atlas_json",
+      "canonical": "S2_{brand}_营销图谱.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S2_*营销图谱*.json",
+        "S2_*营销*.json",
+        "S2_*用户意图*.json",
+        "S2_*marketing*atlas*.json",
+        "S2_*intent*.json"
+      ]
+    },
+    {
+      "stage": "S2",
+      "role": "marketing_report_md",
+      "canonical": "S2_{brand}_营销图谱报告.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S2_*营销图谱*.md",
+        "S2_*营销*.md",
+        "S2_*用户意图*.md",
+        "S2_*marketing*atlas*.md",
+        "S2_*intent*.md"
+      ]
+    },
+    {
+      "stage": "S3",
+      "role": "trend_scorecard_json",
+      "canonical": "S3_{brand}_趋势打分卡.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S3_*趋势打分*.json",
+        "S3_*趋势*.json",
+        "S3_*trend*score*.json",
+        "S3_*scorecard*.json"
+      ]
+    },
+    {
+      "stage": "S3",
+      "role": "trend_report_md",
+      "canonical": "S3_{brand}_品类趋势报告.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S3_*品类趋势*.md",
+        "S3_*趋势报告*.md",
+        "S3_*趋势*.md",
+        "S3_*trend*.md"
+      ]
+    },
+    {
+      "stage": "S4",
+      "role": "positioning_statement_json",
+      "canonical": "S4_{brand}_定位声明.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S4_*定位声明*.json",
+        "S4_*定位*.json",
+        "S4_*positioning*statement*.json",
+        "S4_*positioning*.json"
+      ]
+    },
+    {
+      "stage": "S4",
+      "role": "positioning_statement_md",
+      "canonical": "S4_{brand}_品牌定位声明.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S4_*品牌定位声明*.md",
+        "S4_*定位声明*.md",
+        "S4_*positioning*statement*.md"
+      ]
+    },
+    {
+      "stage": "S4",
+      "role": "positioning_analysis_md",
+      "canonical": "S4_{brand}_定位分析报告.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S4_*定位分析*.md",
+        "S4_*品牌定位报告*.md",
+        "S4_*positioning*analysis*.md",
+        "S4_*positioning*.md"
+      ]
+    },
+    {
+      "stage": "S4.8",
+      "role": "fixed_questions_json",
+      "canonical": "S4.8_{brand}_fixed_monitoring_questions.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S4.8_*fixed_monitoring_questions*.json",
+        "S4.8_*固定*.json",
+        "S4.8_*监控问题*.json"
+      ]
+    },
+    {
+      "stage": "S5.0",
+      "role": "monitoring_data_json",
+      "canonical": "S5_{brand}_frontmind_monitoring_data.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S5_*frontmind_monitoring_data*.json",
+        "S5_*监控数据*.json"
+      ]
+    },
+    {
+      "stage": "S5.0",
+      "role": "monitoring_data_execution_manifest",
+      "canonical": "_execution/S5.0_{brand}_monitoring_data_execution_manifest.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S5.0_*monitoring_data_execution_manifest*.json"
+      ]
+    },
+    {
+      "stage": "S5.0",
+      "role": "citation_analysis_json",
+      "canonical": "S5_{brand}_引用分析数据.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S5_*引用分析数据*.json",
+        "S5_*citation*analysis*.json"
+      ]
+    },
+    {
+      "stage": "S5.0",
+      "role": "citation_analysis_raw_json",
+      "canonical": "S5_{brand}_引用分析原始提取.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S5_*引用分析原始提取*.json"
+      ]
+    },
+    {
+      "stage": "S5.0",
+      "role": "citation_analysis_import_manifest",
+      "canonical": "_execution/S5.0_{brand}_citation_analysis_import_manifest.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S5.0_*citation_analysis_import_manifest*.json"
+      ]
+    },
+    {
+      "stage": "S5",
+      "role": "diagnosis_json",
+      "canonical": "S5_{brand}_品牌诊断数据.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S5_*品牌诊断数据*.json",
+        "S5_*诊断数据*.json",
+        "S5_*diagnosis*.json"
+      ]
+    },
+    {
+      "stage": "S5",
+      "role": "diagnosis_md",
+      "canonical": "S5_{brand}_品牌诊断数据.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S5_*品牌诊断数据*.md",
+        "S5_*诊断报告*.md",
+        "S5_*诊断*.md",
+        "S5_*diagnosis*.md"
+      ]
+    },
+    {
+      "stage": "S5",
+      "role": "gap_report_md",
+      "canonical": "S5_{brand}_Gap报告.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S5_*Gap报告*.md",
+        "S5_*GAP报告*.md",
+        "S5_*缺口*.md",
+        "S5_*gap*.md"
+      ]
+    },
+    {
+      "stage": "S5.5",
+      "role": "semantic_scorecard_json",
+      "canonical": "S5.5_{brand}_语义资产评分卡.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S5.5_*语义资产评分*.json",
+        "S5.5_*评分卡*.json",
+        "S5.5_*语义*.json",
+        "S5.5_*bsas*.json"
+      ]
+    },
+    {
+      "stage": "S5.5",
+      "role": "semantic_audit_md",
+      "canonical": "S5.5_{brand}_语义资产审计报告.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S5.5_*语义资产审计*.md",
+        "S5.5_*语义资产*.md",
+        "S5.5_*语义*.md",
+        "S5.5_*bsas*.md"
+      ]
+    },
+    {
+      "stage": "S6",
+      "role": "verbal_tokens_json",
+      "canonical": "S6_{brand}_话语token.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S6_*话语token*.json",
+        "S6_*话语*.json",
+        "S6_*verbal*token*.json"
+      ]
+    },
+    {
+      "stage": "S6",
+      "role": "verbal_handbook_md",
+      "canonical": "S6_{brand}_话语手册.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S6_*话语手册*.md",
+        "S6_*话语*.md",
+        "S6_*verbal*.md"
+      ]
+    },
+    {
+      "stage": "S7",
+      "role": "visual_prompt_json",
+      "canonical": "S7_{brand}_视觉Prompt包.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S7_*视觉Prompt*.json",
+        "S7_*Prompt包*.json",
+        "S7_*视觉*.json",
+        "S7_*visual*prompt*.json"
+      ]
+    },
+    {
+      "stage": "S7",
+      "role": "visual_system_md",
+      "canonical": "S7_{brand}_视觉符号体系报告.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S7_*视觉符号*.md",
+        "S7_*视觉体系*.md",
+        "S7_*视觉*.md",
+        "S7_*visual*.md"
+      ]
+    },
+    {
+      "stage": "S8",
+      "role": "qa_tree_json",
+      "canonical": "S8_{brand}_问答树.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S8_*问答树*.json",
+        "S8_*qa_tree*.json"
+      ]
+    },
+    {
+      "stage": "S8",
+      "role": "qa_matrix_json",
+      "canonical": "S8_{brand}_问答矩阵.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S8_*问答矩阵*.json",
+        "S8_*qa_matrix*.json"
+      ]
+    },
+    {
+      "stage": "S8",
+      "role": "content_calendar_json",
+      "canonical": "S8_{brand}_内容日历.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S8_*内容日历*.json",
+        "S8_*content_calendar*.json",
+        "S8_*calendar*.json"
+      ]
+    },
+    {
+      "stage": "S8",
+      "role": "landing_blueprint_md",
+      "canonical": "S8_{brand}_落地页蓝图.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S8_*落地页蓝图*.md",
+        "S8_*落地页*.md",
+        "S8_*landing*.md"
+      ]
+    },
+    {
+      "stage": "S8",
+      "role": "qa_report_md",
+      "canonical": "S8_{brand}_问答报告.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S8_*问答报告*.md",
+        "S8_*问答*.md",
+        "S8_*qa*.md"
+      ]
+    },
+    {
+      "stage": "S9",
+      "role": "enablement_package_md",
+      "canonical": "S9_{brand}_业务赋能建议包.md",
+      "format": "md",
+      "required": true,
+      "aliases": [
+        "S9_*业务赋能建议*.md",
+        "S9_*赋能建议*.md",
+        "S9_*赋能*.md",
+        "S9_*建议包*.md",
+        "S9_*enablement*.md"
+      ]
+    },
+    {
+      "stage": "S9",
+      "role": "strategy_completeness_md",
+      "canonical": "S9_{brand}_策略完整性检查.md",
+      "format": "md",
+      "required": false,
+      "aliases": [
+        "S9_*策略完整性*.md",
+        "S9_*完整性检查*.md"
+      ]
+    },
+    {
+      "stage": "S9.8",
+      "role": "title_hooks_json",
+      "canonical": "S9.8_{brand}_article_title_hooks.json",
+      "format": "json",
+      "required": true,
+      "aliases": [
+        "S9.8_*article_title_hooks*.json",
+        "S9.8_*标题钩子*.json",
+        "S9.8_*title_hooks*.json",
+        "S9.8_*标题*.json"
+      ]
+    },
+    {
+      "stage": "S9.8",
+      "role": "title_hooks_md",
+      "canonical": "S9.8_{brand}_article_title_hooks.md",
+      "format": "md",
+      "required": false,
+      "aliases": [
+        "S9.8_*article_title_hooks*.md",
+        "S9.8_*标题钩子*.md",
+        "S9.8_*title_hooks*.md",
+        "S9.8_*标题*.md"
+      ]
+    },
+    {
+      "stage": "S10",
+      "role": "panorama_data_json",
+      "canonical": "S10_{brand}_全景报告数据.json",
+      "format": "json",
+      "required": true
+    },
+    {
+      "stage": "S10",
+      "role": "panorama_html",
+      "canonical": "S10_{brand}_AI智能品牌优化方案全景报告.html",
+      "format": "html",
+      "required": true
+    },
+    {
+      "stage": "S10",
+      "role": "panorama_pdf",
+      "canonical": "S10_{brand}_AI智能品牌优化方案全景报告.pdf",
+      "format": "pdf",
+      "required": true
+    },
+    {
+      "stage": "S11",
+      "role": "format_report_json",
+      "canonical": "S11_{brand}_格式整理报告.json",
+      "format": "json",
+      "required": true
+    },
+    {
+      "stage": "S11",
+      "role": "format_report_md",
+      "canonical": "S11_{brand}_格式整理报告.md",
+      "format": "md",
+      "required": true
+    },
+    {
+      "stage": "S11",
+      "role": "layout_check_json",
+      "canonical": "S11_{brand}_格式整理复核.json",
+      "format": "json",
+      "required": true
+    },
+    {
+      "stage": "FINAL",
+      "role": "primary_panorama_pdf",
+      "canonical": "{brand}_AI智能品牌优化方案全景报告.pdf",
+      "format": "pdf",
+      "required": true
+    }
+  ]
+}

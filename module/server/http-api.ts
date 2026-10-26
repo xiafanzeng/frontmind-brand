@@ -5,6 +5,7 @@ import {z} from "zod";
 import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
 import {assembleResponseLogicCore} from "@frontmind/module-brand/server/response-logic-runtime";
 import {createResponseLogicApi} from "@frontmind/module-brand/server/response-logic-api";
+import {createBrandReportRouter} from "@frontmind/module-brand/server/report-api";
 import {
  createEnterpriseRagEvaluationService,
  EnterpriseRagEvaluationError,
@@ -21,6 +22,7 @@ export interface ModuleHttpCore {
 /** Add new module-owned APIs here. Mounted in both Dashboard and the development subdomain. */
 export function createModuleHttpApi(core:ModuleHttpCore):Router {
  const router=Router();
+ router.use('/reports',createBrandReportRouter(core));
  const ragEvaluationCoordinate=z.object({
   sourceQaTaskId:z.string().uuid(),
   turnId:z.string().uuid(),
@@ -107,7 +109,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   const context=core.context(req);
   res.setHeader("Cache-Control","no-store");
   res.json({module:"brand",apiVersion:1,workspaceId:context.enterpriseProjectId,
-   features:["knowledge", "keywords", "intent-workbench", "enterprise-qa", "enterprise-rag-evaluation", "siteops"]});
+   features:["reports", "knowledge", "keywords", "intent-workbench", "enterprise-qa", "enterprise-rag-evaluation", "siteops"]});
  });
  return router;
 }

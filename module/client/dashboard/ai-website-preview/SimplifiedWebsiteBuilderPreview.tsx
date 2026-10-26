@@ -1250,7 +1250,7 @@ export function SimplifiedWebsiteBuilderPreview({
 
   const linkLatestRagReport = () => {
     if (!latestRagReport) {
-      setNotice("尚无已保存的企业 RAG 评估快照。先完成一次人工评审后即可显式关联。");
+      setNotice("尚无可关联的企业 RAG 评估快照。先在企业 RAG 页完成一次自动评估或人工复核。");
       return;
     }
     setLinkedRagReportId(latestRagReport.reportId);

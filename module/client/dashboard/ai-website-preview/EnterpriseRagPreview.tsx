@@ -342,6 +342,24 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
         (run) => run.status === "completed" && Boolean(run.report),
       ) ?? null;
   const automaticReport = automaticReportRun?.report ?? null;
+  const mirroredServerReportIds = useRef(new Set<string>());
+  useEffect(() => {
+    if (!live || !automaticReport) return;
+    if (mirroredServerReportIds.current.has(automaticReport.reportId)) return;
+    mirroredServerReportIds.current.add(automaticReport.reportId);
+    // Completed server reports are mirrored once into the shared scoped audit so
+    // the website flow can explicitly link them; saveEvaluationReport is idempotent.
+    saveEvaluationReport({
+      reportId: automaticReport.reportId,
+      createdAt: automaticReport.completedAt,
+      subject: {
+        kind: "rag-answer",
+        id: automaticReport.sourceTurnId,
+        version: automaticReport.evaluator.ruleVersion,
+      },
+      result: automaticReport.result,
+    }, scopedEvaluationStorage(storageScopeKey));
+  }, [automaticReport?.reportId, live, storageScopeKey]);
   const displayDimensions = automaticReport
     ? reportDimensions(automaticReport)
     : dimensions;
