@@ -194,9 +194,33 @@ export function assembleResponseLogicCore(input: {
     providerFileLeases: undefined,
     fileResourceContentExpiry: () => null,
     isFileResourceContentExpired: () => false,
-    redactSensitivePayload: ((value: unknown) => value) as never,
-    redactSensitiveText: ((value: string) => value) as never,
-    safeErrorForLog: ((error: unknown) => error) as never,
+    redactSensitivePayload: ((value: unknown) => {
+      if (!value || typeof value !== "object") return value;
+      const REDACTED = "[REDACTED]";
+      const SENSITIVE_KEYS = /^(apiKey|password|token|secret|authorization|credential|cookie|session)/i;
+      const walk = (obj: Record<string, unknown>): Record<string, unknown> => {
+        const result: Record<string, unknown> = {};
+        for (const [key, val] of Object.entries(obj)) {
+          if (SENSITIVE_KEYS.test(key)) result[key] = REDACTED;
+          else if (val && typeof val === "object" && !Array.isArray(val)) result[key] = walk(val as Record<string, unknown>);
+          else if (typeof val === "string" && val.length > 200) result[key] = val.slice(0, 200) + "…[TRUNCATED]";
+          else result[key] = val;
+        }
+        return result;
+      };
+      return walk(value as Record<string, unknown>);
+    }) as never,
+    redactSensitiveText: ((value: string) => {
+      // Redact credential-like patterns: Bearer tokens, API keys, long base64 strings
+      return value
+        .replace(/Bearer\s+[A-Za-z0-9+/=]{20,}/gi, "Bearer [REDACTED]")
+        .replace(/(?:sk-|pk-|xty-)[A-Za-z0-9]{16,}/g, "[REDACTED]")
+        .replace(/[A-Za-z0-9+/]{40,}={0,2}/g, (m) => m.length > 40 ? "[REDACTED]" : m);
+    }) as never,
+    safeErrorForLog: ((error: unknown) => {
+      if (error instanceof Error) return { name: error.name, message: error.message, code: (error as { code?: string }).code };
+      return { message: String(error).slice(0, 500) };
+    }) as never,
 
     // ── Database ──
     getDb: db as never,
