@@ -1,4 +1,4 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrandConversationContext } from "./host";
 
@@ -19,9 +19,12 @@ vi.mock("./host", () => ({
 
 import { useEnterpriseQaController } from "./use-enterprise-qa-controller";
 
-function conversationContext(taskId?: string): BrandConversationContext {
+function conversationContext(
+  taskId?: string,
+  conversationId = "qa-conversation",
+): BrandConversationContext {
   const conversation = {
-    id: "qa-conversation",
+    id: conversationId,
     title: "企业问答",
     purpose: "enterprise_qa" as const,
     workbenchAgentId: "enterprise-qa",
@@ -191,6 +194,25 @@ describe("enterprise QA controller", () => {
       clientRequestId: "request-pending",
       prompt: "重试这个问题",
     });
+  });
+
+  it("clears an old conversation error after switching to a new conversation", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: { message: "旧会话提交失败" } }),
+    });
+    const { result, rerender } = renderHook(() =>
+      useEnterpriseQaController(),
+    );
+
+    await act(async () => {
+      expect(await result.current.send("旧问题")).toBe(false);
+    });
+    expect(result.current.notice).toBe("旧会话提交失败");
+
+    mocks.context = conversationContext(undefined, "qa-conversation-next");
+    rerender();
+    await waitFor(() => expect(result.current.notice).toBe(""));
   });
 });
 

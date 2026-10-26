@@ -63,6 +63,10 @@ export function useEnterpriseQaController({ preview = false } = {}) {
   const lock = useRef(false);
   const active = context.activeConversation;
 
+  useEffect(() => {
+    setNotice("");
+  }, [active?.id]);
+
   const request = useCallback(
     async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
       const rest = brandHost().captureWorkspaceRestOperation();
