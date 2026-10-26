@@ -26,6 +26,7 @@ import { trpc } from "../api-hooks";
 import { projectWorkspaceUrl } from "../host";
 import { requestWorkspaceNavigation } from "../host";
 import { navigate } from "wouter/use-browser-location";
+import QuestionTemplateApiFlow from "./QuestionTemplateApiFlow";
 
 export type ManagedKeywordTable = {
   id: string;
@@ -712,10 +713,7 @@ export default function ManagedKeywordTables({
         initialGenerationSession &&
         (!loading || tables.length > 0) &&
         (!error || tables.length > 0) && (
-          <BrandQuestionUniverseGenerationControl
-            knowledgePublished={knowledgePublished}
-            presentation={tables.length > 0 ? "catalog" : "empty"}
-          />
+          <QuestionTemplateApiFlow />
         )}
       {tables.length === 0 ? (
         loading ? (
