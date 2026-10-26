@@ -170,6 +170,22 @@ describe("企业 RAG 自动评估模型输出边界", () => {
     ).toThrow("陈述引用了未授权来源");
   });
 
+  it("legacy 合同保留旧 claim 标识语义但不授权它作为新增证据", () => {
+    const legacy = validOutput();
+    legacy.claims[0].id = "doc-1";
+    for (const item of [...legacy.dimensions, ...legacy.gates]) {
+      item.evidenceIds = ["doc-1"];
+    }
+    expect(() =>
+      validateEnterpriseRagJudgeOutput(legacy, input, { allowedClaimIds: null })
+    ).not.toThrow();
+
+    legacy.dimensions[0].evidenceIds = ["claim-1"];
+    expect(() =>
+      validateEnterpriseRagJudgeOutput(legacy, input, { allowedClaimIds: null })
+    ).toThrow("未授权证据");
+  });
+
   it("拒绝给无支持陈述挂载来源", () => {
     const value = validOutput();
     value.claims[0].status = "unsupported";

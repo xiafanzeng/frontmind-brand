@@ -244,7 +244,7 @@ export function validateEnterpriseRagJudgeOutput(
     if (claimIds.has(claim.id)) {
       throw new EnterpriseRagEvaluationValidationError("评估陈述标识重复");
     }
-    if (frozenEvidence.has(claim.id)) {
+    if (allowedClaimIds && frozenEvidence.has(claim.id)) {
       throw new EnterpriseRagEvaluationValidationError(
         "评估陈述标识与冻结证据冲突",
       );
