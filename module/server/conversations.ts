@@ -35,7 +35,13 @@ export function assertBrandConversationPurpose(purpose: BrandConversationPurpose
     throw new BrandConversationAccessError("BRAND_CONVERSATION_TASK_MISMATCH");
   for (const message of snapshot.messages) {
     const dispatch = message.generalChatDispatch as Record<string, unknown> | undefined;
-    if (dispatch && (purpose !== "enterprise_qa" || dispatch.purpose !== "enterprise_qa"))
+    if (!dispatch) continue;
+    const localTaskId = dispatch.localTaskId;
+    const isNewTask = localTaskId === null;
+    const boundTaskId = existing?.taskId ?? existing?.previousResponseId;
+    if (purpose !== "enterprise_qa" ||
+        (isNewTask ? dispatch.purpose !== "enterprise_qa" : dispatch.purpose !== undefined) ||
+        (!isNewTask && (typeof localTaskId !== "string" || !localTaskId || localTaskId !== boundTaskId)))
       throw new BrandConversationAccessError("BRAND_CONVERSATION_DISPATCH_MISMATCH");
   }
 }

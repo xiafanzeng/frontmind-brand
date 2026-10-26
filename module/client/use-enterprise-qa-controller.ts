@@ -180,7 +180,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
             ].sort(),
             localTaskId: conversation.taskId ?? null,
             modelProfile: conversation.taskId ? null : "frontmind-base",
-            purpose: "enterprise_qa",
+            ...(!conversation.taskId ? { purpose: "enterprise_qa" } : {}),
           };
           pending = {
             id: clientRequestId,
