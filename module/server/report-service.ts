@@ -21,6 +21,8 @@ const runningControllers=new Map<string,AbortController>();
 const OP='brand_report_workflow_v1';
 const RUNTIME='brandReport';
 const LEASE=180_000;
+const HEARTBEAT_INTERVAL=20_000;
+const HEARTBEAT_FAILURE_LIMIT=3;
 const active=new Map<string,Promise<void>>();
 type Context=ReturnType<ModuleHttpCore['context']>;
 type Actor={id:number;role:string};
@@ -280,13 +282,51 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    controller.signal.throwIfAborted();
    await appendReportEvent(directory(id),job.stageId,event);
   };
-  let beating=false;
-  const heartbeat=setInterval(()=>{
-   if(beating)return;beating=true;
-   void mutate(id,state=>{
-    if(state.phase==='cancelled')throw new Error('REPORT_STOPPED_BY_USER');
-   },owner).catch(error=>controller.abort(error)).finally(()=>{beating=false;});
-  },20_000);heartbeat.unref();
+  let beating=false,finished=false,heartbeatFailures=0;
+  let heartbeatEvents=Promise.resolve();
+  let leaseDeadline:ReturnType<typeof setTimeout>;
+  const recordHeartbeat=(event:ReportEventInput)=>{
+   heartbeatEvents=appendReportEvent(directory(id),job.stageId,event).then(()=>{})
+    .catch(()=>{console.error('[BrandReport heartbeat event]',id,'过程记录写入失败');});
+   return heartbeatEvents;
+  };
+  const abortHeartbeat=(error:Error)=>{
+   if(finished||controller.signal.aborted)return;
+   void recordHeartbeat({kind:'error',message:error instanceof BrandReportError?error.message:'报告执行心跳失败，当前执行器已停止；已保存的研究和采集记录保留。',detail:JSON.stringify({code:error instanceof BrandReportError?error.code:'REPORT_HEARTBEAT_FAILED'})});
+   controller.abort(error);
+  };
+  const armLeaseDeadline=(expiresAt:number)=>{
+   clearTimeout(leaseDeadline);
+   leaseDeadline=setTimeout(()=>abortHeartbeat(new BrandReportError('REPORT_LEASE_EXPIRED','报告执行器未能在租约到期前恢复数据库连接，当前阶段已停止。已保存的研究与采集记录可在恢复后复用。')),Math.max(0,expiresAt-Date.now()));
+   leaseDeadline.unref();
+  };
+  armLeaseDeadline(r.lease!.expiresAt);
+  const heartbeat=setInterval(async()=>{
+   if(finished||beating||controller.signal.aborted)return;beating=true;
+   const startedAt=Date.now();
+   try{
+    await mutate(id,state=>{
+     if(state.phase==='cancelled')throw new BrandReportError('REPORT_STOPPED_BY_USER','本轮已停止，已完成的研究和采集记录已保留。');
+    },owner);
+    if(finished||controller.signal.aborted)return;
+    // Use the request start as a conservative bound: a slow commit must not
+    // extend the local execution deadline beyond the database's actual lease.
+    armLeaseDeadline(startedAt+LEASE);
+    if(heartbeatFailures)await recordHeartbeat({kind:'status',message:'数据库连接已恢复，当前阶段继续执行，已有研究无需重跑。',detail:JSON.stringify({code:'REPORT_HEARTBEAT_RECOVERED',failedAttempts:heartbeatFailures})});
+    heartbeatFailures=0;
+   }catch(error){
+    if(finished||controller.signal.aborted)return;
+    const causes:unknown[]=[];let cause:any=error;
+    for(let i=0;cause&&i<4;i++,cause=cause.cause)causes.push(cause.code,cause.message);
+    const transient=!(error instanceof BrandReportError)&&/Database query failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|PROTOCOL_CONNECTION_LOST|PROTOCOL_SEQUENCE_TIMEOUT|ER_CON_COUNT_ERROR|ER_LOCK_DEADLOCK|ER_LOCK_WAIT_TIMEOUT/i.test(causes.join(' '));
+    if(!transient){abortHeartbeat(error instanceof Error?error:new Error(String(error)));return;}
+    heartbeatFailures++;
+    if(heartbeatFailures>=HEARTBEAT_FAILURE_LIMIT){
+     abortHeartbeat(Object.assign(new BrandReportError('REPORT_HEARTBEAT_FAILED','报告数据库连接连续三次未恢复，当前阶段已停止。研究文件和已有采集记录已保留，请在连接恢复后继续。'),{cause:error}));return;
+    }
+    await recordHeartbeat({kind:'status',message:`数据库连接暂时不可用，正在重试执行心跳（${heartbeatFailures}/${HEARTBEAT_FAILURE_LIMIT}）。当前租约仍有效，研究继续执行。`,detail:JSON.stringify({code:'REPORT_HEARTBEAT_RETRY',attempt:heartbeatFailures,retryAfterMs:HEARTBEAT_INTERVAL})});
+   }finally{beating=false;}
+  },HEARTBEAT_INTERVAL);heartbeat.unref();
   try{
    await mutate(id,async(state,tx)=>{
     if(state.job?.id!==job.id)throw new BrandReportError('JOB_CHANGED','报告阶段已变化。');
@@ -310,7 +350,7 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
     await tx.update(model.agentTasks).set({providerState:'completed',updatedAt:new Date()}).where(eq(model.agentTasks.id,job.id));
    },owner);
    await emit({kind:'artifact',message:`${job.stageId==='briefing'?'汇报内容':REPORT_STAGES.find(s=>s[0]===job.stageId)?.[1]??job.stageId}已保存，可展开阅读。`});
-  }finally{clearInterval(heartbeat);if(runningControllers.get(id)===controller)runningControllers.delete(id);}
+  }finally{finished=true;clearInterval(heartbeat);clearTimeout(leaseDeadline!);if(runningControllers.get(id)===controller)runningControllers.delete(id);await heartbeatEvents;}
  }
  function directory(id:string){if(!assetRoot||!path.isAbsolute(assetRoot))throw new BrandReportError('REPORT_STORAGE_UNAVAILABLE','报告存储不可用。',503);return path.join(assetRoot,'brand-reports',intentHash([context.accountUserId,context.enterpriseProjectId]),z.string().uuid().parse(id));}
  async function render(id:string,owner:string,r:Runtime){
