@@ -73,6 +73,37 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   try {res.setHeader("Cache-Control","no-store");res.json(await createIntentWorkbenchService(core,req).poll());}
   catch {res.status(503).json({error:{code:"INTENT_UNAVAILABLE",message:"优化工作台暂不可用，请确认数据库迁移已完成后重新读取"}});}
  });
+ router.get("/intent/stream",async(req,res)=>{
+  const parsed=z.string().uuid().safeParse(req.query.jobId);
+  if(!parsed.success){res.status(400).json({error:{message:"任务标识格式不正确"}});return;}
+  const service=createIntentWorkbenchService(core,req);
+  let closed=false;
+  res.on("close",()=>{closed=true;});
+  res.setHeader("Content-Type","text/event-stream");
+  res.setHeader("Cache-Control","no-cache, no-transform");
+  res.setHeader("X-Accel-Buffering","no");
+  res.flushHeaders();
+  let last="";
+  try {
+   // Each connection is bounded; clients can safely fall back to GET reads.
+   for(let attempt=0;attempt<120 && !closed;attempt++){
+    const workspace=await service.poll();
+    if(closed)break;
+    const job=workspace.state.jobs?.find(item=>item.id===parsed.data);
+    if(!job){res.write('event: unavailable\ndata: {}\n\n');break;}
+    const payload=JSON.stringify(job);
+    if(payload!==last){res.write(`event: progress\ndata: ${payload}\n\n`);last=payload;}
+    else res.write(": heartbeat\n\n");
+    if(["succeeded","failed"].includes(job.status))break;
+    await new Promise<void>(resolve=>{
+     const timer=setTimeout(done,2500);
+     function done(){clearTimeout(timer);res.off("close",done);resolve();}
+     res.once("close",done);
+    });
+   }
+  } catch {if(!closed)res.write('event: unavailable\ndata: {}\n\n');}
+  finally {if(!closed)res.end();}
+ });
  // API-backed question-template flow. Credentials stay server-side; never pass tokens to the browser.
  const recommendQuestionTemplates = (path:string) => async (req:Request,res:import("express").Response) => {
   res.setHeader("Cache-Control","no-store");

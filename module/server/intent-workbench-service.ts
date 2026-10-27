@@ -151,6 +151,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     let phase = job.status;
     let terminalError: string | undefined;
     let repairDispatch = false;
+    let progress = job.progress;
     try {
       const db = await database();
       const {core: model, client, repairClient, task, input} = await intentSkillClient(job, context.accountUserId, db);
@@ -201,6 +202,25 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         return;
       }
       const allEvents: Array<{id: string; type: string; timestamp: number; [key: string]: any}> = await client.listAllMessages({taskId: providerTaskId, order: "asc"});
+      // Only fixed public labels cross the workspace boundary, never provider
+      // content, tool arguments, reasoning or unvalidated scores.
+      const publicLabels: Record<string, string> = {
+        task_created: "模型任务已创建", task_state: "模型任务状态已更新",
+        status_update: "模型任务状态已更新",
+        assistant_message: "模型返回了一条任务消息",
+        tool_call: "模型正在调用工具处理资料", tool_result: "工具处理已返回",
+        tool_use: "模型正在调用工具处理资料",
+        structured_output_result: "已收到评估结果，正在校验",
+      };
+      const previousEvents = progress?.events ?? [];
+      const publicEvents = allEvents.filter(event => Object.hasOwn(publicLabels, event.type)).map(event => ({
+        id: digest(event.id), label: publicLabels[event.type]!,
+        at: Number.isFinite(event.timestamp) && event.timestamp > 0 && event.timestamp < 8.64e15 ?
+          new Date(event.timestamp).toISOString() : previousEvents.find(item => item.id === digest(event.id))?.at ?? job!.createdAt,
+      }));
+      const mergedEvents = new Map([...previousEvents, ...publicEvents].map(event => [event.id, event]));
+      progress = {stage: job.repair ? "repairing" : allEvents.some(event => event.type === "structured_output_result") ? "validating" : allEvents.length ? "analyzing" : "submitted",
+        updatedAt: new Date().toISOString(), events: [...mergedEvents.values()].slice(-24)};
       // A repair turn may never borrow the original turn's result or terminal event.
       const baseline = new Set(job.repair?.baselineEventIds ?? []);
       const events = allEvents.filter(event => !baseline.has(event.id));
@@ -335,6 +355,12 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         const current = ledger.state.jobs?.find(j => j.id === job!.id);
         if (current?.lease?.owner !== owner) return;
         delete current.lease;
+        current.progress = {
+          stage: terminalError ? "failed" : current.status === "succeeded" ? "completed" :
+            current.repair ? "repairing" : current.status === "running" ? progress?.stage ?? "submitted" :
+            current.status === "create_unknown" ? "submitted" : "preparing",
+          updatedAt: new Date().toISOString(), events: progress?.events ?? [],
+        };
         if (terminalError) {
           current.status = "failed"; current.error = terminalError;
           const model = intentSkillPorts();
