@@ -10,7 +10,7 @@ import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {readDocument,writeDocument,listDocuments} from '../workflows/report-harness/safe-files.mjs';
-import {publicAddress,publicResearchUrl,searchResults,searchRelevance,sogouSearchResults,sogouRedirectTarget,researchSearch,fetchPublicPage} from '../workflows/report-harness/research.mjs';
+import {publicAddress,publicResearchUrl,searchResults,searchRelevance,sogouSearchResults,sogouRedirectTarget,researchSearch,fetchPublicPage,decodePublicHtml,researchFetch} from '../workflows/report-harness/research.mjs';
 import {publicEvents} from '../workflows/report-harness/events.mjs';
 import {reportRuntimePatch} from '../workflows/report-harness/runtime-config.mjs';
 
@@ -125,4 +125,29 @@ test('official SDK initializes without a model call, executes a local mock tool 
  if(!node){t.skip('本机需 Node 24 或 REPORT_HARNESS_NODE_BIN 执行 SDK 检验；Linux 构建使用随模块安装的私有 Node 24。');return;}
  const {stdout}=await promisify(execFile)(node,[fileURLToPath(new URL('./helpers/report-harness-sdk-offline.mjs',import.meta.url))],{timeout:80000,maxBuffer:1024*1024,env:{PATH:process.env.PATH,LANG:process.env.LANG,TMPDIR:process.env.TMPDIR}});
  const result=JSON.parse(stdout.trim());assert.equal(result.initializedWithoutModelCall,true);assert.equal(result.sessionReused,true);assert.equal(result.localMockRequests,4);
+});
+
+
+test('public page decoding preserves declared GBK evidence and rejects unreadable bytes',async()=>{
+ const gbk=Buffer.from('d6d0cec4d7cac1cf','hex'); // 中文资料
+ for(const header of ['text/html; charset=gb2312','text/html; charset="gbk"']){
+  const page=await fetchPublicPage('https://example.org/about',{dnsLookup:async()=>[{address:'8.8.8.8'}],request:(_url,_options,receive)=>{
+   const req=new EventEmitter();req.end=()=>{const res=new PassThrough();res.statusCode=200;res.headers={'content-type':header};receive(res);res.end(Buffer.concat([Buffer.from('<p>'),gbk,Buffer.from('</p>')]));};return req;
+  }});
+  assert.equal(page.html,'<p>中文资料</p>');assert.equal(page.encoding,'gbk');
+ }
+ assert.equal(decodePublicHtml(Buffer.concat([Buffer.from('<meta charset="gb2312"><p>'),gbk,Buffer.from('</p>')])).html,'<meta charset="gb2312"><p>中文资料</p>');
+ assert.equal(decodePublicHtml(Buffer.from('<p>新材料公开资料</p>')).html,'<p>新材料公开资料</p>');
+ assert.equal(decodePublicHtml(Buffer.concat([Buffer.from([0xef,0xbb,0xbf]),Buffer.from('中文')]),'text/html;charset=gbk').html,'中文');
+ assert.throws(()=>decodePublicHtml(Buffer.alloc(80,0xff)),/ENCODING_UNREADABLE/);
+ assert.throws(()=>decodePublicHtml(Buffer.from('text'),'text/html;charset=unknown-charset'),/ENCODING_UNSUPPORTED/);
+});
+
+test('empty research pages retain a diagnostic and cannot report successful evidence',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'report-empty-source-'));
+ try{
+  await assert.rejects(researchFetch('https://example.org/about',{root,stage:'S2',loadPage:async url=>({url,html:'<script>renderApp()</script>',fetchedAt:'2026-10-27T00:00:00Z',encoding:'utf-8'})}),/EMPTY_BODY/);
+  const files=await listDocuments(root);assert.equal(files.length,1);
+  assert.match(await readDocument(root,files[0].id),/不得作为研究证据/);
+ }finally{await rm(root,{recursive:true,force:true});}
 });

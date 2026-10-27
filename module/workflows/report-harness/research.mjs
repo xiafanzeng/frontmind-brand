@@ -18,6 +18,18 @@ export function publicResearchUrl(raw){
  if(/\/(?:api|graphql|rpc|admin|login|logout|order|pay|checkout|publish|submit)(?:\/|$)/i.test(url.pathname)||[...url.searchParams.keys()].some(key=>/token|secret|api.?key|password|authorization/i.test(key)))throw new Error('REPORT_RESEARCH_BUSINESS_API_DENIED');
  return url;
 }
+export function decodePublicHtml(bytes,contentType=''){
+ // Public Chinese sources still use GBK/GB2312. Honor their declared encoding
+ // instead of silently turning evidence into UTF-8 replacement characters.
+ const head=bytes.subarray(0,4096).toString('latin1');
+ const declared=contentType.match(/charset\s*=\s*["']?([^\s;"']+)/i)?.[1]
+  ??head.match(/<meta\b[^>]*charset\s*=\s*["']?([^\s;"'/>]+)/i)?.[1];
+ const bom=bytes[0]===0xef&&bytes[1]===0xbb&&bytes[2]===0xbf?'utf-8':bytes[0]===0xff&&bytes[1]===0xfe?'utf-16le':bytes[0]===0xfe&&bytes[1]===0xff?'utf-16be':undefined;
+ let decoder;try{decoder=new TextDecoder(bom??declared??'utf-8');}catch{throw new Error('REPORT_RESEARCH_ENCODING_UNSUPPORTED');}
+ const html=decoder.decode(bytes),replacements=(html.match(/\uFFFD/g)??[]).length;
+ if(replacements>=5&&replacements/html.length>0.01)throw new Error('REPORT_RESEARCH_ENCODING_UNREADABLE');
+ return {html,encoding:decoder.encoding};
+}
 export async function fetchPublicPage(raw,{signal,dnsLookup=lookup,request=https.request}={}){
  let url=publicResearchUrl(raw);
  for(let redirects=0;redirects<=3;redirects++){
@@ -30,12 +42,12 @@ export async function fetchPublicPage(raw,{signal,dnsLookup=lookup,request=https
     if(res.statusCode<200||res.statusCode>=300){res.resume();reject(new Error(`REPORT_RESEARCH_HTTP_${res.statusCode}`));return;}
     if(!/^(?:text\/(?:html|plain)|application\/xhtml\+xml)(?:;|$)/i.test(res.headers['content-type']??'')){res.resume();reject(new Error('REPORT_RESEARCH_CONTENT_TYPE_DENIED'));return;}
     const chunks=[];let bytes=0;res.on('data',chunk=>{bytes+=chunk.length;if(bytes>2*1024*1024){req.destroy(new Error('REPORT_RESEARCH_PAGE_TOO_LARGE'));return;}chunks.push(chunk);});
-    res.on('error',reject);res.on('end',()=>resolve({html:Buffer.concat(chunks).toString('utf8')}));
+    res.on('error',reject);res.on('end',()=>{try{resolve(decodePublicHtml(Buffer.concat(chunks),res.headers['content-type']));}catch(error){reject(error);}});
    });
    req.on('timeout',()=>req.destroy(new Error('REPORT_RESEARCH_TIMEOUT')));req.on('error',reject);req.end();
   });
   if(response.redirect){url=publicResearchUrl(new URL(response.redirect,url).href);continue;}
-  return {url:url.href,html:response.html,fetchedAt:new Date().toISOString()};
+  return {url:url.href,html:response.html,encoding:response.encoding,fetchedAt:new Date().toISOString()};
  }
  throw new Error('REPORT_RESEARCH_REDIRECT_LIMIT');
 }
@@ -119,9 +131,10 @@ export async function researchSearch(query,{root,stage,signal,loadPage=fetchPubl
  await writeDocument(root,artifact,JSON.stringify({query,status:'failed',attempts},null,2));
  throw new Error('REPORT_SEARCH_NO_RELEVANT_RESULTS: 公开搜索没有返回相关且可安全访问的结果，诊断已保存。请根据已知官网直接核查并注明检索限制，不得引用无关结果或虚构来源。');
 }
-export async function researchFetch(url,{root,stage,signal}={}){
- const page=await fetchPublicPage(url,{signal});const text=htmlText(page.html).slice(0,50000);
+export async function researchFetch(url,{root,stage,signal,loadPage=fetchPublicPage}={}){
+ const page=await loadPage(url,{signal});const text=htmlText(page.html).slice(0,50000);
  const artifact=`work/${stage}-source-${createHash('sha256').update(page.url).digest('hex').slice(0,12)}.md`;
- await writeDocument(root,artifact,`# 公开来源\n\nURL: ${page.url}\n抓取时间: ${page.fetchedAt}\n\n${text}`);
- return {url:page.url,fetchedAt:page.fetchedAt,artifact,text};
+ await writeDocument(root,artifact,`# 公开来源\n\nURL: ${page.url}\n抓取时间: ${page.fetchedAt}\n${page.encoding?`编码: ${page.encoding}\n`:''}\n${text||'抓取状态：未获得可读正文，不得作为研究证据。'}`);
+ if(!text)throw new Error(`REPORT_RESEARCH_EMPTY_BODY: 网页未返回可读正文，诊断已保存至 ${artifact}，不得作为有效来源。`);
+ return {url:page.url,fetchedAt:page.fetchedAt,encoding:page.encoding,artifact,text};
 }

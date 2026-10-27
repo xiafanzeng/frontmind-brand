@@ -11,7 +11,7 @@ vi.mock('../server/report-model.js',()=>({reportWorkflowFingerprint:async()=>moc
 vi.mock('../server/report-harness.js',()=>({
  reportHarnessConfig:()=>({model:'deepseek-flash'}),reportHarnessDocuments:async()=>[],reportHarnessDocument:async()=>({text:'saved'}),closeReportHarness:async()=>{},
  runReportHarness:async(options:any)=>{mock.runs.push(options);await options.onSession('session-1');await options.onEvent({kind:'text',message:'正在核实企业资料。'});
-  return new Promise((resolve,reject)=>{mock.pending.set(options.jobId,{resolve,reject,options});options.signal.addEventListener('abort',()=>reject(new Error('cancelled')),{once:true});});},
+  return new Promise((resolve,reject)=>{mock.pending.set(options.jobId,{resolve,reject,options});options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});});},
 }));
 vi.mock('../server/report-monitor.js',async(original)=>{const real=await original<any>();return {...real,reportMonitorClient:()=>({configured:true,submit:async(a:any)=>{mock.monitorSubmits.push(a);return mock.monitorWait?await mock.monitorWait:'task-'+a.consumerTaskId;},poll:async()=>null})};});
 vi.mock('drizzle-orm',()=>{
@@ -51,7 +51,15 @@ beforeEach(async()=>{
  root=await mkdtemp(path.join(os.tmpdir(),'brand-report-service-'));db=new MemoryDb();mock.runs=[];mock.pending.clear();mock.monitorSubmits=[];mock.monitorWait=null;mock.workflowHash='workflow-v2';
  mock.ports={agentOperations:table('operations'),agentTasks:table('tasks'),assertActorAllowed:()=>{},lockAccountRecord:async()=>{},lockCustomerProjectBusinessWrite:async()=>{},getDashboardWorkspace:async()=>({payload:profile}),createCredentialAgentClient:()=>{throw new Error('XTY must never run');}};
 });
-afterEach(async()=>{for(const operation of db.data.operations){const service=makeService();await service.stop(operation.id).catch(()=>{});await service.schedule(operation.id);}await rm(root,{recursive:true,force:true});});
+afterEach(async()=>{for(const operation of db.data.operations){const service=makeService();await service.stop(operation.id).catch(()=>{});await service.schedule(operation.id);}vi.restoreAllMocks();await rm(root,{recursive:true,force:true});});
+function captureHeartbeat(){
+ const intervals=vi.spyOn(globalThis,'setInterval'),deadlines=vi.spyOn(globalThis,'setTimeout');
+ return {
+  tick:async()=>{const callback=intervals.mock.calls.find(([,delay])=>delay===20_000)![0] as ()=>Promise<void>;await callback();},
+  deadlineCount:()=>deadlines.mock.calls.filter(([,delay])=>typeof delay==='number'&&delay>170_000&&delay<=180_000).length,
+  expire:()=>{const callback=deadlines.mock.calls.filter(([,delay])=>typeof delay==='number'&&delay>170_000&&delay<=180_000).at(-1)![0] as ()=>void;callback();},
+ };
+}
 async function begin(){const id=randomUUID(),service=makeService();await service.start({clientRequestId:id,includeKnowledge:false,profileHash:intentHash(profile)});await until(()=>mock.pending.has(state(id).job?.id));return {id,service};}
 async function finishStage(id:string,service:ReturnType<typeof makeService>){
  const job=state(id).job;await until(()=>mock.pending.has(job.id));
@@ -123,6 +131,75 @@ describe('DeepSeek report durable lifecycle',()=>{
   expect(stopped.phase).toBe('cancelled');expect(pending.options.signal.aborted).toBe(true);expect(state(id).stages).toHaveLength(0);
   expect((await service.processView(id,0)).events.length).toBeGreaterThan(0);
   await expect(service.retry(id)).rejects.toMatchObject({code:'REPORT_STOPPED'});await service.schedule(id);expect(mock.runs).toHaveLength(1);
+ });
+ it('keeps the same model stage running through a transient database heartbeat failure and records recovery',async()=>{
+  const heartbeat=captureHeartbeat(),{id,service}=await begin();
+  const running=mock.runs[0],jobId=state(id).job.id,initialLease=state(id).lease.expiresAt;
+  vi.spyOn(db,'transaction').mockRejectedValueOnce(new Error('Database query failed'));
+  await heartbeat.tick();
+  expect(running.signal.aborted).toBe(false);expect(state(id).job.id).toBe(jobId);
+  expect(state(id).lease.expiresAt).toBe(initialLease);
+  expect((await service.processView(id,0)).events.some(e=>e.detail?.includes('REPORT_HEARTBEAT_RETRY'))).toBe(true);
+  vi.spyOn(Date,'now').mockReturnValue(Date.now()+20_000);
+  await heartbeat.tick();
+  expect(running.signal.aborted).toBe(false);expect(state(id).lease.expiresAt).toBeGreaterThan(initialLease);
+  expect((await service.processView(id,0)).events.some(e=>e.detail?.includes('REPORT_HEARTBEAT_RECOVERED'))).toBe(true);
+  await finishStage(id,service);
+  expect(state(id).stages).toHaveLength(1);expect(mock.runs).toHaveLength(1);expect(mock.monitorSubmits).toHaveLength(0);
+ });
+ it('stops after three consecutive failed heartbeat renewals with the technical cause retained',async()=>{
+  const heartbeat=captureHeartbeat(),{id,service}=await begin();
+  const databaseError=Object.assign(new Error('Database query failed'),{cause:{code:'ECONNRESET'}});
+  const transactions=vi.spyOn(db,'transaction');
+  for(let i=0;i<3;i++){transactions.mockRejectedValueOnce(databaseError);await heartbeat.tick();}
+  await service.schedule(id);
+  expect(mock.runs[0].signal.reason).toMatchObject({code:'REPORT_HEARTBEAT_FAILED',cause:databaseError});
+  expect(state(id).error.code).toBe('REPORT_HEARTBEAT_FAILED');expect(state(id).stages).toHaveLength(0);
+  expect((await service.processView(id,0)).events.some(e=>e.message.includes('连续三次未恢复'))).toBe(true);
+ });
+ it.each(['completed','failed'])('does not rearm or report recovery when a late heartbeat resolves after the stage is %s',async outcome=>{
+  const heartbeat=captureHeartbeat(),{id,service}=await begin();
+  const transactions=vi.spyOn(db,'transaction').mockRejectedValueOnce(new Error('Database query failed'));
+  await heartbeat.tick();
+  let resolveRenewal!:(value:unknown)=>void;
+  transactions.mockImplementationOnce(()=>new Promise(resolve=>{resolveRenewal=resolve;}));
+  const renewal=heartbeat.tick();await until(()=>!!resolveRenewal);
+  if(outcome==='completed')await finishStage(id,service);
+  else{mock.pending.get(state(id).job.id).reject(new Error('model request failed'));await service.schedule(id);}
+  const deadlines=heartbeat.deadlineCount(),events=(await service.processView(id,0)).events.length;
+  resolveRenewal(undefined);await renewal;
+  expect(heartbeat.deadlineCount()).toBe(deadlines);
+  expect((await service.processView(id,0)).events).toHaveLength(events);
+  expect(mock.runs[0].signal.aborted).toBe(false);
+ });
+ it('stops at the last confirmed lease deadline even while a database renewal is still pending',async()=>{
+  const heartbeat=captureHeartbeat(),{id,service}=await begin();
+  let rejectRenewal!:(reason:Error)=>void;
+  vi.spyOn(db,'transaction').mockImplementationOnce(()=>new Promise((_resolve,reject)=>{rejectRenewal=reject;}));
+  const renewal=heartbeat.tick();await until(()=>!!rejectRenewal);
+  vi.spyOn(Date,'now').mockReturnValue(state(id).lease.expiresAt);
+  heartbeat.expire();
+  expect(mock.runs[0].signal.reason).toMatchObject({code:'REPORT_LEASE_EXPIRED'});
+  rejectRenewal(new Error('Database query failed'));await renewal;await service.schedule(id);
+  expect(state(id).error.code).toBe('REPORT_LEASE_EXPIRED');expect(mock.runs).toHaveLength(1);
+ });
+ it('preserves the heartbeat diagnosis in process files when the database cannot save failure state',async()=>{
+  const heartbeat=captureHeartbeat(),{id,service}=await begin();
+  const transactions=vi.spyOn(db,'transaction').mockRejectedValue(new Error('Database query failed'));
+  for(let i=0;i<3;i++)await heartbeat.tick();
+  await service.schedule(id);
+  expect(mock.runs[0].signal.reason).toMatchObject({code:'REPORT_HEARTBEAT_FAILED'});
+  expect((await service.processView(id,0)).events.at(-1)).toMatchObject({kind:'error',message:expect.stringContaining('连续三次未恢复')});
+  // The database remains unavailable, so the durable event must explain why
+  // the old running job may later be reported as interrupted after lease expiry.
+  expect(state(id).job.phase).toBe('running');transactions.mockRestore();
+ });
+ it('does not retry a heartbeat after another executor takes the lease',async()=>{
+  const heartbeat=captureHeartbeat(),{id,service}=await begin();
+  state(id).lease.owner='another-executor';await heartbeat.tick();await service.schedule(id);
+  expect(mock.runs[0].signal.reason).toMatchObject({code:'REPORT_LEASE_CHANGED'});
+  expect(state(id).lease.owner).toBe('another-executor');expect(state(id).phase).toBe('researching');
+  expect((await service.processView(id,0)).events.some(e=>e.detail?.includes('REPORT_HEARTBEAT_RETRY'))).toBe(false);
  });
  it('retains a supplier receipt arriving after stop without resuming the report',async()=>{
   const {id,service}=await begin();await finishStage(id,service);
