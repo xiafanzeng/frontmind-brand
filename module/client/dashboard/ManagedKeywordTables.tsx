@@ -202,6 +202,7 @@ export default function ManagedKeywordTables({
 }: ManagedKeywordTablesProps) {
   const { isWorkbench } = useBusinessWorkspace();
   const utils = trpc.useUtils();
+  const [sourceView,setSourceView]=useState<"recommended"|"saved">(generationEnabled?"recommended":"saved");
   // The confirmation modal is pure ephemeral UI state: it must stay closed on
   // first entry, refresh, navigation and project switches, and open only from
   // an explicit 选择词条 click. Filters below remain persisted flow state.
@@ -354,9 +355,15 @@ export default function ManagedKeywordTables({
         />
       )}
       {generationEnabled && (
-        <QuestionTemplateApiFlow onSaved={() => utils.workspace.dashboard.invalidate()} />
+        <nav className="qt-source-tabs" aria-label="词条来源">
+          <button type="button" aria-pressed={sourceView==="recommended"} onClick={()=>setSourceView("recommended")}>推荐新词条<span>生成后直接加入优化</span></button>
+          <button type="button" aria-pressed={sourceView==="saved"} onClick={()=>setSourceView("saved")}>已保存词库 <b>{totalRows}</b><span>查看历史与已保存问题</span></button>
+        </nav>
       )}
-      {tables.length === 0 ? (
+      {generationEnabled && (
+        <div hidden={sourceView!=="recommended"}><QuestionTemplateApiFlow onSaved={() => utils.workspace.dashboard.invalidate()} onOptimize={onUseQuestions ?? (onUseQuestion ? items => {if(items[0])onUseQuestion(items[0]);} : undefined)} /></div>
+      )}
+      {(!generationEnabled || sourceView==="saved") && (tables.length === 0 ? (
         loading ? (
           <KeywordEmptyPanel
             title="正在载入品牌全域词库"
@@ -670,7 +677,7 @@ export default function ManagedKeywordTables({
             </div>
           )}
         </>
-      )}
+      ))}
     </section>
   );
 }

@@ -1,7 +1,7 @@
 import {expect,it,vi} from "vitest";
 import type {Request} from "express";
 import type {BrandKeywordPorts} from "../server/brand-keyword-ports";
-import {appendRecommendedQuestions,createQuestionTemplateCatalogService,questionTemplateSaveSchema} from "../server/question-template-catalog-service";
+import {appendRecommendedQuestions,createQuestionTemplateCatalogService,questionTemplateSaveSchema,savedQuestionSelections} from "../server/question-template-catalog-service";
 import {createBrandQuestionUniverseService} from "../server/brand-question-universe-service";
 
 const input=questionTemplateSaveSchema.parse({brand:"东莞台心医院",questions:[{question:"综合医院如何选择？",coreWord:"综合医院",category:"category",mainCategory:"industry",heat:12}]});
@@ -18,12 +18,18 @@ function fixture(){
 it("保留原有词库与看板，保存后重试不产生重复行或新版本",async()=>{
  const f=fixture();
  expect(await f.service.save(input)).toMatchObject({added:1,duplicates:0,revision:3});
+ expect((await f.service.save(input)).selections).toEqual([{question:"综合医院如何选择？",category:"industry",tableId:"question-template-api:v1",rowIndex:0,dashboardRevision:3}]);
  expect(f.read().payload.knowledge).toEqual({untouched:true});
  expect(f.read().payload.keywordTables[0]).toBe(table);
  expect(f.read().payload.keywordTables[1].rows[0]).toEqual(["综合医院如何选择？","综合医院","行业排名词","","12","东莞台心医院","品类相关"]);
  expect(await f.service.save(input)).toMatchObject({added:0,duplicates:1,revision:3});
  expect(f.update).toHaveBeenCalledTimes(1);
  expect(f.model.lockCustomerProjectBusinessWrite).toHaveBeenCalledWith({},7,{id:8,role:"customer"});
+});
+it("重复推荐返回实际已有词库坐标，只交接此次所选问题",()=>{
+ const tables=[{...table,rows:[["其他历史问题？","行业排名词"],["旧问题？","美誉舆情词"]]}];
+ const value=questionTemplateSaveSchema.parse({brand:"医院",questions:[{question:"旧 问题？",mainCategory:"industry"}]});
+ expect(savedQuestionSelections(tables,value,9)).toEqual([{question:"旧问题？",category:"reputation",tableId:"existing",rowIndex:1,dashboardRevision:9}]);
 });
 it("版本竞争后重读并合并，不丢失另一用户保存的问题",async()=>{
  const f=fixture();
