@@ -157,7 +157,7 @@ describe("public site assistant api", () => {
     expect(typeof response.body.session).toBe("string");
     expect(calls.some((call) => call.path === "/api/brand/conversations/sync")).toBe(true);
     const create = calls.find((call) => call.path === "/api/frontmind/v2/tasks");
-    expect(create?.body).toMatchObject({purpose: "enterprise_qa", prompt: "你们提供什么服务？"});
+    expect(create?.body).toMatchObject({purpose: "enterprise_qa", prompt: "你们提供什么服务？", modelProfile: "frontmind-base"});
     const sync = calls.find((call) => call.path === "/api/brand/conversations/sync");
     expect(sync?.body).toMatchObject({
       purpose: "enterprise_qa",
@@ -171,9 +171,19 @@ describe("public site assistant api", () => {
       deletedIds: [],
     });
     // The dispatched user message must be synced under the same id the task
-    // creation references.
-    const syncedMessageId = sync?.body.conversations[0].messages[0].id;
-    expect(create?.body.clientRequestId).toBe(syncedMessageId);
+    // creation references, carrying the matching dispatch metadata.
+    const syncedMessage = sync?.body.conversations[0].messages[0];
+    expect(create?.body.clientRequestId).toBe(syncedMessage.id);
+    expect(syncedMessage.generalChatDispatch).toMatchObject({
+      schemaVersion: 1,
+      kind: "pending_user",
+      clientRequestId: syncedMessage.id,
+      providerPrompt: "你们提供什么服务？",
+      localAssetIds: [],
+      localTaskId: null,
+      modelProfile: "frontmind-base",
+      purpose: "enterprise_qa",
+    });
   });
 
   it("continues an existing session through the task message route", async () => {
@@ -198,13 +208,15 @@ describe("public site assistant api", () => {
     expect(second.body.session).toBe(session);
     expect(second.body.answer.text).toBe("第二轮回答。");
     expect(calls.some((call) => call.path === "/api/frontmind/v2/tasks/task-1/messages")).toBe(true);
-    // Every turn syncs the same conversation, with the task pointers set for
-    // follow-ups, so the server-side contract checks admit the continuation.
+    // Every turn syncs the same conversation, with the task pointers set and
+    // the continuation dispatch metadata bound to the running task.
     const syncs = calls.filter((call) => call.path === "/api/brand/conversations/sync");
     expect(syncs).toHaveLength(2);
     expect(syncs[0].body.conversations[0].taskId).toBeUndefined();
     expect(syncs[1].body.conversations[0]).toMatchObject({taskId: "task-1", previousResponseId: "task-1"});
     expect(syncs[1].body.conversations[0].messages.map((message: {role: string; content: string}) => message.content)).toEqual(["第一轮", "第二轮"]);
+    expect(syncs[1].body.conversations[0].messages[1].generalChatDispatch).toMatchObject({localTaskId: "task-1", modelProfile: null});
+    expect(syncs[1].body.conversations[0].messages[1].generalChatDispatch.purpose).toBeUndefined();
   });
 
   it("starts a new session when the token is unknown", async () => {

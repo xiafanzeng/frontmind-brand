@@ -459,14 +459,28 @@ export function createSiteAssistantPublicApi(
     globalWindow.hits.push(timestamp);
 
     try {
-      // The task contract requires the conversation and the exact user
-      // message (id == clientRequestId) to be synced before every dispatch.
-      const clientRequestId = `sa-${randomUUID()}`;
+      // The task contract requires the conversation, the exact user message
+      // (id == clientRequestId) and a matching generalChatDispatch metadata
+      // block to be synced before every dispatch. This mirrors the dashboard
+      // conversation client: base profile for the opening turn, the bound
+      // task for continuations.
+      const clientRequestId = randomUUID();
+      const generalChatDispatch = {
+        schemaVersion: 1,
+        kind: "pending_user" as const,
+        clientRequestId,
+        providerPrompt: question,
+        localAssetIds: [] as string[],
+        localTaskId: session.taskId,
+        modelProfile: session.taskId ? null : "frontmind-base",
+        ...(session.taskId ? {} : {purpose: "enterprise_qa" as const}),
+      };
       const userMessage = {
         id: clientRequestId,
         role: "user" as const,
         content: question,
         timestamp: Math.floor(timestamp / 1000),
+        generalChatDispatch,
       };
       const syncedMessages = [...session.messages, userMessage];
       const sync = await client.json(
@@ -512,7 +526,7 @@ export function createSiteAssistantPublicApi(
             conversationId: session.conversationId,
             clientRequestId,
             prompt: question,
-            modelProfile: "frontmind-pro",
+            modelProfile: "frontmind-base",
             purpose: "enterprise_qa",
             localAssetIds: [],
           });
