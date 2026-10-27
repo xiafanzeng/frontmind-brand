@@ -12,7 +12,7 @@ export function publicEvents(notification){
  if(event.type==='tool/result'){
   const message=object(data.message),text=visibleText(message.content);
   const events=[{kind:'tool_end',message:message.isError?'工具执行失败':'工具执行完成',toolCallId:String(message.toolCallId),detail:text.slice(0,30000)}];
-  if(!message.isError){try{const value=JSON.parse(text);if(typeof value.artifact==='string'&&/^work\/[^/]+\.(md|json)$/.test(value.artifact))events.push({kind:'artifact',message:'已保存研究文档',detail:value.artifact,toolCallId:String(message.toolCallId)});}catch{}}
+  if(!message.isError){try{const value=JSON.parse(text);if(typeof value.artifact==='string'&&/^work\/[^/]+\.(md|json)$/.test(value.artifact))events.push({kind:'artifact',message:value.revision?'已保存修订，上一版本可在中间文件中查阅':'已保存研究文档',detail:value.revision?JSON.stringify({artifact:value.artifact,revision:value.revision}):value.artifact,toolCallId:String(message.toolCallId)});}catch{}}
   return events;
  }
  if(event.type==='assistant/message'){

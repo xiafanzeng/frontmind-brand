@@ -3,13 +3,12 @@ import {readFile,mkdir,writeFile,rename} from 'node:fs/promises';
 import path from 'node:path';
 import {and,desc,eq,sql} from 'drizzle-orm';
 import JSZip from 'jszip';
-import {chromium} from 'playwright';
 import {z} from 'zod';
 import type {ModuleHttpCore} from './http-api.js';
 import {intentHash,intentSkillPorts} from './intent-skill-runtime.js';
 import {REPORT_STAGES,type ReportWorkspace,type ReportRunView,type ReportProduct,type ReportPhase,type ReportArtifactId,type ReportProcessView} from '../contracts/report-run.js';
 import type {BrandReportDocument,BrandReportStage} from '../contracts/brand-report.js';
-import {renderPanoramaHtml,renderBriefingHtml,renderBriefingPptx,validateBrandReportDocument} from './report-renderer.js';
+import {renderPanoramaHtml,renderBriefingHtml,validateBrandReportDocument} from './report-renderer.js';
 import {reportMonitorAttempts,reportMonitorClient,ReportMonitorError,type ReportMonitorAttempt} from './report-monitor.js';
 import {reportModelArchive,reportWorkflowFingerprint,validateReportModelOutput,type ReportModelInput} from './report-model.js';
 
@@ -28,7 +27,7 @@ type Actor={id:number;role:string};
 type Artifact={id:ReportArtifactId;label:string;mimeType:string;sizeBytes:number;sha256:string};
 type Job={id:string;stageId:string;attempt:number;phase:'queued'|'uploading'|'create_unknown'|'running';input:ReportModelInput;providerTaskId?:string;startedAt:string;resumedAt?:string;createClaimedAt?:number;recoverMissingCreate?:boolean;repairId?:string;baselineEvents?:string[];repairClaimedAt?:number;repairSent?:boolean};
 type Runtime={
- engine?:typeof ENGINE;sessionId?:string;version:1;revision:number;actorId:number;brandName:string;context:{profile:unknown;knowledge?:unknown};inputHash:string;workflowHash:string;
+ engine?:typeof ENGINE;sessionId?:string;version:1;revision:number;actorId:number;brandName:string;context:{profile:unknown;knowledge?:unknown;subject?:{name:string;scope:string;backgroundBrandName:string;boundary:string}};inputHash:string;workflowHash:string;
  credentialId:string;credentialVersion:number;model:string;phase:ReportPhase;resumePhase?:ReportPhase;
  stages:BrandReportStage[];products:ReportProduct[];attempts:ReportMonitorAttempt[];
  confirmation?:{productId:string;questions:[string,string];platforms:string[];confirmedAt:string};
@@ -54,9 +53,9 @@ export function reportView(owned:Owned):ReportRunView {
   sampleCount:r.attempts.filter(a=>a.status==='completed').length,expectedSamples:r.attempts.length,
   error:r.error??null,engine:r.engine??'legacy',model:r.model,canStop:!['completed','failed','cancelled'].includes(r.phase),canRetry:r.engine===ENGINE&&r.phase==='failed'&&!['MONITOR_FAILED','SAMPLE_FAILED','REPORT_STOPPED_BY_USER'].includes(r.error?.code??''),artifacts:r.artifacts.map(({sha256:_hash,...item})=>item)};
 }
-const startSchema=z.object({clientRequestId:z.string().uuid(),includeKnowledge:z.boolean(),profileHash:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+const startSchema=z.object({clientRequestId:z.string().uuid(),includeKnowledge:z.boolean(),profileHash:z.string().regex(/^[a-f0-9]{64}$/),subjectScope:z.string().trim().min(1).max(120).optional()}).strict();
 const confirmSchema=z.object({expectedRevision:z.number().int().nonnegative(),productId:z.string().min(1).max(80),platforms:z.array(z.enum(['doubao','yuanbao','qianwen'])).min(1).max(3)}).strict();
-const artifactIds=new Set<ReportArtifactId>(['panorama.html','panorama.pdf','briefing.html','briefing.pptx','reports.zip']);
+const artifactIds=new Set<ReportArtifactId>(['panorama.html','briefing.html','reports.zip']);
 
 export function createBrandReportService(core:ModuleHttpCore,context:Context,actor:Actor) {
  const model=intentSkillPorts();
@@ -108,12 +107,14 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
  }
  async function start(value:unknown){
   assertActor();const input=startSchema.parse(value);const old=await find(input.clientRequestId);
-  if(old){const previous=runtime(old);if(intentHash(previous.context.profile)!==input.profileHash||Boolean(previous.context.knowledge)!==input.includeKnowledge)throw new BrandReportError('IDEMPOTENCY_CONFLICT','这个请求标识已用于不同的资料选择。');schedule(old.operation.id);return reportView(old);}
+  if(old){const previous=runtime(old);if(intentHash(previous.context.profile)!==input.profileHash||Boolean(previous.context.knowledge)!==input.includeKnowledge||(previous.context.subject?.scope??'')!==(input.subjectScope??''))throw new BrandReportError('IDEMPOTENCY_CONFLICT','这个请求标识已用于不同的资料或研究主体。');schedule(old.operation.id);return reportView(old);}
   const info=await company();
   if(!info.ready)throw new BrandReportError('COMPANY_REQUIRED','请先在企业资料中确定当前企业，再开始诊断。');
   if(info.profileHash!==input.profileHash)throw new BrandReportError('PROFILE_CHANGED','企业资料已更新，请重新读取后开始。');
   if(input.includeKnowledge&&!info.snapshot)throw new BrandReportError('KNOWLEDGE_MISSING','所选知识库已变化，请重新选择资料。');
-  const frozen={profile:info.profile,...(input.includeKnowledge?{knowledge:object(info.snapshot.documents)}:{})};
+  const subject={name:input.subjectScope?`${info.name}（${input.subjectScope}）`:info.name,scope:input.subjectScope??'',backgroundBrandName:info.name,
+   boundary:input.subjectScope?`本轮仅研究和诊断${input.subjectScope}。企业整体资料只作为相关背景，不得把其他部门的产品、业绩或采集结果归属于研究主体。`:'本轮研究当前企业整体；所有事实和结论仍须与来源对应。'};
+  const frozen={profile:info.profile,subject,...(input.includeKnowledge?{knowledge:object(info.snapshot.documents)}:{})};
   if(Buffer.byteLength(JSON.stringify(frozen))>6*1024*1024)throw new BrandReportError('SOURCE_TOO_LARGE','本轮资料超过处理范围，请先整理企业资料。');
   let config:ReturnType<typeof reportHarnessConfig>;
   try{config=reportHarnessConfig(core.environment);}catch{throw new BrandReportError('MODEL_UNAVAILABLE','DeepSeek 报告执行服务尚未配置，请联系维护人员。',503);}
@@ -128,11 +129,11 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    if(concurrent){operationId=concurrent.operation.id;return;}
    if(await find(input.clientRequestId,tx))return;
    const inputHash=intentHash({context:frozen,workflowHash,includeKnowledge:input.includeKnowledge});
-   const r:Runtime={engine:ENGINE,version:1,revision:0,actorId:actor.id,brandName:info.name,context:frozen,inputHash,workflowHash,
+   const r:Runtime={engine:ENGINE,version:1,revision:0,actorId:actor.id,brandName:subject.name,context:frozen,inputHash,workflowHash,
     credentialId:'server:brand-report:deepseek',credentialVersion:1,model:config.model,phase:'researching',stages:[],products:[],attempts:[],stageAttempts:{},artifacts:[],createdAt:iso(),updatedAt:iso()};
    await tx.insert(model.agentOperations).values({id:operationId,enterpriseProjectId:context.enterpriseProjectId,provider:'deepseek',scope:'managed_user',accountUserId:context.accountUserId,presalesProjectId:null,
     operationType:OP,idempotencyKeyHash:intentHash([OP,context.accountUserId,context.enterpriseProjectId,operationId]),requestHash:inputHash,contractName:OP,contractRevision:2,schemaHash:intentHash('brand-report-deepseek-v1'),apiCredentialId:'server:brand-report:deepseek',credentialVersion:1,publicProfile:'brand-report-server',upstreamModel:config.model,status:'queued'});
-   await tx.insert(model.agentTasks).values({id:randomUUID(),operationId,providerTaskId:null,providerRequestId:null,createMarker:`brand-report:${operationId}`,title:`品牌报告 · ${info.name}`,providerState:'researching',providerRuntime:{[RUNTIME]:r}});
+   await tx.insert(model.agentTasks).values({id:randomUUID(),operationId,providerTaskId:null,providerRequestId:null,createMarker:`brand-report:${operationId}`,title:`品牌报告 · ${subject.name}`,providerState:'researching',providerRuntime:{[RUNTIME]:r}});
   });schedule(operationId);return reportView(await requireOwned(operationId));
  }
  async function confirm(id:string,value:unknown){
@@ -217,7 +218,7 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    if(r.workflowHash!==await reportWorkflowFingerprint())throw new BrandReportError('WORKFLOW_VERSION_CHANGED','工作流版本已更新，原报告的阶段结果已保留。请完成旧版本兼容处理后恢复。');
    if(r.phase==='monitoring'){await monitor(id,owner,r);return;}
    if(r.phase==='rendering'){await render(id,owner,r);return;}
-   if(r.stages.length===4&&!r.confirmation){await mutate(id,state=>{state.phase='awaiting_confirmation';delete state.job;},owner);return;}
+   if(r.stages.some(stage=>stage.id==='S4.8')&&!r.confirmation){await mutate(id,state=>{state.phase='awaiting_confirmation';delete state.job;},owner);return;}
    await runModel(id,owner,r);
   }catch(error){await fail(id,owner,r.phase,error).catch(()=>{});}
   finally{await mutate(id,state=>{if(state.lease?.owner===owner)delete state.lease;}).catch(()=>{});}
@@ -238,15 +239,21 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
   };
   if(!pending.taskId){
    await mutate(id,state=>{const a=state.attempts.find(a=>a.consumerTaskId===pending.consumerTaskId)!;a.status='submitting';a.submittedAt??=iso();},owner);
+   await appendReportEvent(directory(id),'monitoring',{kind:'tool_start',message:`${pending.platform} · ${pending.question===r.confirmation?.questions[0]?'Q1 可见度':'Q2 风险信任'} · 第 ${pending.run}/5 次采集`,detail:JSON.stringify({question:pending.question,platform:pending.platform,consumerTaskId:pending.consumerTaskId}),toolCallId:pending.consumerTaskId});
    // The supplier documents consumerTaskId as idempotent. An ambiguous retry uses the exact original key and body.
    const taskId=await client.submit(pending,r.brandName);
    await saveReceipt(a=>{a.taskId=taskId;a.status='submitted';a.nextPollAt=Date.now()+300_000;});
-   await appendReportEvent(directory(id),'monitoring',{kind:'tool_end',message:`${pending.platform}的采集请求已受理。`,toolCallId:pending.consumerTaskId});
+   await appendReportEvent(directory(id),'monitoring',{kind:'tool_end',message:`${pending.platform}第 ${pending.run}/5 次采集请求已受理。`,detail:JSON.stringify({supplierTaskId:taskId,consumerTaskId:pending.consumerTaskId,question:pending.question}),toolCallId:pending.consumerTaskId});
   }else{
    if(Date.now()-Math.max(Date.parse(pending.submittedAt??r.createdAt),Date.parse(r.monitorResumedAt??r.createdAt))>4*60*60_000)throw new BrandReportError('MONITOR_TIMEOUT','采集等待时间较长，已保留供应商任务。请检查服务状态后恢复。');
    const sample=await client.poll(pending,r.brandName);
    await saveReceipt(a=>{a.nextPollAt=Date.now()+30_000;if(sample){a.sample=sample;a.status='completed';}});
-   if(sample)await appendReportEvent(directory(id),'monitoring',{kind:'artifact',message:`${pending.platform}的一份真实回答已保存。`,toolCallId:pending.consumerTaskId});
+   if(sample){
+    const dir=path.join(directory(id),'harness','work');await mkdir(dir,{recursive:true,mode:0o700});
+    const target=path.join(dir,`monitor-${pending.consumerTaskId}.json`),temp=`${target}.${owner}.tmp`;
+    await writeFile(temp,JSON.stringify(sample,null,2),{mode:0o600});await rename(temp,target);
+    await appendReportEvent(directory(id),'monitoring',{kind:'artifact',message:`${pending.platform}第 ${pending.run}/5 次真实回答已保存，含 ${sample.citations.length} 条引用。`,detail:JSON.stringify(sample,null,2),toolCallId:pending.consumerTaskId});
+   }
   }
  }
  async function reserveJob(id:string,owner:string,r:Runtime):Promise<Job>{
@@ -290,8 +297,8 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    catch{throw new BrandReportError('MODEL_OUTPUT_INVALID','本阶段内容尚未通过完整性检查，研究文件和过程已保留。可恢复修订当前阶段。');}
    await mutate(id,async(state,tx)=>{
     if(state.job?.id!==job.id)throw new BrandReportError('JOB_CHANGED','报告阶段已变化。');
-    if('stage' in validated){state.stages.push(validated.stage as BrandReportStage);if(job.stageId==='S4')state.products=validated.products;
-     if(state.stages.length===4&&!state.confirmation)state.phase='awaiting_confirmation';}
+    if('stage' in validated){state.stages.push(validated.stage as BrandReportStage);if(job.stageId==='S4.8')state.products=validated.products.map(p=>({...p,question:`${p.label}推荐`}));
+     if(job.stageId==='S4.8'&&!state.confirmation)state.phase='awaiting_confirmation';}
     else{state.briefingSlides=validated.slides as BrandReportDocument['briefingSlides'];state.phase='rendering';}
     delete state.job;delete state.error;
     await tx.update(model.agentTasks).set({providerState:'completed',updatedAt:new Date()}).where(eq(model.agentTasks.id,job.id));
@@ -308,19 +315,16 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    monitoring:{confirmedAt:r.confirmation.confirmedAt,questions:r.confirmation.questions,platforms:r.confirmation.platforms,samples:r.attempts.map(a=>a.sample!)},briefingSlides:r.briefingSlides};
   validateBrandReportDocument(doc);
   const panorama=renderPanoramaHtml(doc),briefing=renderBriefingHtml(doc);
-  const browser=await chromium.launch({headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});let pdf:Buffer;
-  try{const page=await browser.newPage();await page.route('**/*',route=>route.abort());await page.setContent(panorama,{waitUntil:'load',timeout:30_000});await page.locator('details').evaluateAll(nodes=>nodes.forEach(node=>{(node as HTMLDetailsElement).open=true;}));await page.emulateMedia({media:'print'});pdf=await page.pdf({format:'A4',printBackground:true,preferCSSPageSize:true});}finally{await browser.close();}
-  const pptx=Buffer.from(await renderBriefingPptx(doc));
   const files:Array<Artifact&{bytes:Buffer}>=[];
   function add(id:ReportArtifactId,label:string,mimeType:string,bytes:Buffer){files.push({id,label,mimeType,bytes,sizeBytes:bytes.length,sha256:digest(bytes)});}
-  add('panorama.html','全景报告 · 网页版','text/html',Buffer.from(panorama));add('panorama.pdf','全景报告 · PDF','application/pdf',pdf);
-  add('briefing.html','汇报报告 · 网页版','text/html',Buffer.from(briefing));add('briefing.pptx','汇报报告 · PPTX','application/vnd.openxmlformats-officedocument.presentationml.presentation',pptx);
+  add('panorama.html','全景报告 · HTML','text/html',Buffer.from(panorama));
+  add('briefing.html','汇报报告 · HTML','text/html',Buffer.from(briefing));
   const zip=new JSZip();for(const f of files)zip.file(f.id,f.bytes);zip.file('report-data.json',JSON.stringify(doc,null,2));
   add('reports.zip','全部报告与证据','application/zip',await zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'}));
   const dir=path.join(directory(id),owner);await mkdir(dir,{recursive:true,mode:0o700});
   for(const f of files){const target=path.join(dir,f.id),temp=`${target}.${owner}.tmp`;await writeFile(temp,f.bytes,{mode:0o600});await rename(temp,target);}
   await mutate(id,state=>{state.document=doc;state.artifactGeneration=owner;state.artifacts=files.map(({bytes:_bytes,...f})=>f);state.phase='completed';delete state.error;},owner);
-  await appendReportEvent(directory(id),'completed',{kind:'artifact',message:'两份报告已生成，HTML、PDF、PPTX 和完整证据包已保存。'});
+  await appendReportEvent(directory(id),'completed',{kind:'artifact',message:'全景报告 HTML、汇报报告 HTML 和本轮证据包已保存。两份报告使用同一批真实采集数据。'});
  }
  async function artifact(id:string,file:string){
   const owned=await requireOwned(id),r=runtime(owned);if(r.phase!=='completed'||!artifactIds.has(file as ReportArtifactId))throw new BrandReportError('REPORT_FILE_NOT_FOUND','报告文件尚未生成。',404);
