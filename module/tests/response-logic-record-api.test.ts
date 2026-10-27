@@ -276,4 +276,72 @@ describe("response-logic record list/save routes", () => {
       await harness.close();
     }
   });
+
+  it("serves the current question context through the ledger resolver", async () => {
+    const harness = createHarness({});
+    const url = await harness.start();
+    try {
+      harness.runtime.getDashboardQuestion.mockResolvedValue({
+        questionId: "t:1",
+        question: "最新的问题文本",
+        intent: "意图",
+        writeScope: { revision: 7, contractId: null, quotaPeriodId: "brand-intent" },
+      });
+      const response = await fetch(`${url}/response-logic/question-context?questionId=${encodeURIComponent("t:1")}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({
+        questionId: "t:1",
+        question: "最新的问题文本",
+        intent: "意图",
+        workspaceRevision: 7,
+      });
+      expect(harness.runtime.assertServiceCapability).toHaveBeenCalledWith(42, "responseLogic");
+      expect(harness.runtime.getDashboardQuestion).toHaveBeenCalledWith(42, "t:1");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("answers 404 when the question does not resolve for this workspace", async () => {
+    const harness = createHarness({});
+    const url = await harness.start();
+    try {
+      harness.runtime.getDashboardQuestion.mockResolvedValue(null);
+      const response = await fetch(`${url}/response-logic/question-context?questionId=t:gone`);
+      expect(response.status).toBe(404);
+      expect((await response.json()).error.code).toBe("RESPONSE_LOGIC_QUESTION_NOT_CONFIGURED");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("rejects a malformed question-context query", async () => {
+    const harness = createHarness({});
+    const url = await harness.start();
+    try {
+      const missing = await fetch(`${url}/response-logic/question-context`);
+      expect(missing.status).toBe(400);
+      const empty = await fetch(`${url}/response-logic/question-context?questionId=`);
+      expect(empty.status).toBe(400);
+      expect(harness.runtime.getDashboardQuestion).not.toHaveBeenCalled();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("maps an entitlement failure on question-context to its status code", async () => {
+    const harness = createHarness({});
+    const url = await harness.start();
+    try {
+      harness.runtime.assertServiceCapability.mockRejectedValue(
+        Object.assign(new Error("无权限"), { code: "SERVICE_FORBIDDEN", statusCode: 403 }),
+      );
+      const response = await fetch(`${url}/response-logic/question-context?questionId=t:1`);
+      expect(response.status).toBe(403);
+      expect((await response.json()).error.code).toBe("SERVICE_FORBIDDEN");
+    } finally {
+      await harness.close();
+    }
+  });
 });

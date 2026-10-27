@@ -57,6 +57,8 @@ import {ResponseLogicOptimizationWorkflow} from "./response-logic/optimization-w
 import {fingerprintLogic, type LogicSections} from "./response-logic/mock-evaluation.js";
 import {useJudgeEvaluation} from "./use-judge-evaluation.js";
 import {useOptimizationGeneration} from "./use-optimization-generation.js";
+import {useQuestionFreshness} from "./use-question-freshness.js";
+import {fetchResponseLogicQuestionContext} from "./response-logic-question-context-client.js";
 import {
   parseResponseLogicReply as parseResponseLogicReplyCore,
   getResponseLogicPollDelay as getResponseLogicPollDelayCore,
@@ -1787,9 +1789,18 @@ function ResponseLogicQuestionEditor({
     !generating && !hasAdoptedContent && !generation;
   const currentLogic: LogicSections = {concern:draft.concern,conclusion:draft.conclusion,facts:draft.facts,boundaries:draft.boundaries};
   const currentFingerprint = fingerprintLogic(currentLogic);
-  // Question-context basis (entry text + intent): part of the judge and
-  // optimizer context keys so a changed question text drops stale results.
-  const questionBasis = `${question.question}\u0000${question.intent ?? ""}`;
+  // Question freshness: the server's current question text/intent is re-read
+  // on focus/visibility and on a low-frequency timer. The effective basis
+  // feeds the judge/optimizer context keys, so an edit made in another tab
+  // (or adopting the latest question) resets those state machines and drops
+  // stale verdicts, candidates and task ids. Read failures leave the context
+  // unverified and block new starts instead of trusting stale data.
+  const questionFreshness = useQuestionFreshness({
+    questionId,
+    currentBasis: `${question.question}\u0000${question.intent ?? ""}`,
+    fetchContext: fetchResponseLogicQuestionContext,
+  });
+  const questionBasis = questionFreshness.basis;
   const currentVersion = persistedRecord?.confirmed?.version ?? null;
   const currentRevision = persistedRecord?.revision ?? 0;
   const showDemo = Boolean(draft.concern.trim() || draft.conclusion.trim() || draft.facts.trim() || draft.boundaries.trim());
@@ -1797,8 +1808,17 @@ function ResponseLogicQuestionEditor({
   // a server-side internal diagnostic and is never invoked by this flow.
   const judge = useJudgeEvaluation({ questionId, recordRevision: currentRevision, sourceFingerprint: currentFingerprint, questionBasis });
   const beginDemoEvaluation = () => {
-    void judge.start();
-    setDemoView("evaluation");
+    void (async () => {
+      if (!(await questionFreshness.checkNow())) return;
+      void judge.start();
+      setDemoView("evaluation");
+    })();
+  };
+  const retryDemoEvaluation = () => {
+    void (async () => {
+      if (!(await questionFreshness.checkNow())) return;
+      void judge.start();
+    })();
   };
   const judgeErrorText = judge.state.phase === "failed"
     ? [judge.state.error, judge.state.errorCode].filter(Boolean).join(" · ") || undefined
@@ -1813,6 +1833,16 @@ function ResponseLogicQuestionEditor({
     judgeTaskId: judge.state.phase === "completed" && judge.state.taskId ? judge.state.taskId : "",
     questionBasis,
   });
+  // Freshness gate in front of the optimizer start: a stale or unverified
+  // question context never dispatches a new optimization task. The server
+  // 409 gates remain the authority; this only avoids dispatching doomed runs.
+  const guardedOptimization = {
+    ...optimization,
+    start: async (): Promise<void> => {
+      if (!(await questionFreshness.checkNow())) return;
+      await optimization.start();
+    },
+  };
   const adoptOptimizationPatch = (patch: Partial<LogicSections>) => {
     patchDraft(patch);
     setDemoView("detail");
@@ -1932,6 +1962,23 @@ function ResponseLogicQuestionEditor({
         </section>
       )}
 
+      {(questionFreshness.deleted || questionFreshness.stale || questionFreshness.checkError) && (
+        <div className="rl-eval-entry" role={questionFreshness.checkError ? "alert" : "status"} style={{display:"flex",gap:10,flexWrap:"wrap",margin:"18px 0",alignItems:"center"}}>
+          {questionFreshness.deleted ? (
+            <span>当前问题已被删除或不可访问，请返回优化问题列表重新选择。</span>
+          ) : questionFreshness.stale ? (
+            <>
+              <span>当前问题已更新，请刷新问题并重新评估或生成。</span>
+              <button type="button" className="rl-text-button" onClick={questionFreshness.applyLatest}>载入最新问题并继续</button>
+            </>
+          ) : (
+            <>
+              <span>无法确认最新问题（{questionFreshness.checkError}）。为避免使用过期结果，请先重试。</span>
+              <button type="button" className="rl-text-button" onClick={() => { void questionFreshness.checkNow(); }}>重试</button>
+            </>
+          )}
+        </div>
+      )}
       {showDemo && demoView === "detail" && (
         <div className="rl-eval-entry" style={{display:"flex",gap:10,flexWrap:"wrap",margin:"18px 0",alignItems:"center"}}>
           <button type="button" className="rl-eval-entry-button" onClick={beginDemoEvaluation}>查看四维评估</button>
@@ -1939,10 +1986,10 @@ function ResponseLogicQuestionEditor({
         </div>
       )}
       {showDemo && demoView === "evaluation" && (
-        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={()=>{void judge.start();}}/>
+        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={retryDemoEvaluation}/>
       )}
       {showDemo && demoView === "optimize" && (
-        <ResponseLogicOptimizationWorkflow key={`${questionId}:${currentVersion}:${currentRevision}:${currentFingerprint}`} question={question.question} intent={question.intent ?? ""} logic={currentLogic} judgeTaskId={judge.state.phase === "completed" && judge.state.taskId ? judge.state.taskId : ""} optimization={optimization} onAdopt={adoptOptimizationPatch} onBack={()=>setDemoView("evaluation")}/>
+        <ResponseLogicOptimizationWorkflow key={`${questionId}:${currentVersion}:${currentRevision}:${currentFingerprint}`} question={question.question} intent={question.intent ?? ""} logic={currentLogic} judgeTaskId={judge.state.phase === "completed" && judge.state.taskId ? judge.state.taskId : ""} optimization={guardedOptimization} onAdopt={adoptOptimizationPatch} onBack={()=>setDemoView("evaluation")}/>
       )}
       {demoView === "evaluation" && judge.state.phase === "idle" && (
         <div className="rl-eval-entry" role="status">当前应答逻辑或版本已变化，评估结果已失效。<button type="button" className="rl-text-button" onClick={beginDemoEvaluation}>重新查看评估</button><button type="button" className="rl-text-button" onClick={()=>setDemoView("detail")}>返回应答逻辑编辑</button></div>
