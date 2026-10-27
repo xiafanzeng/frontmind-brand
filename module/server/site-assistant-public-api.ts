@@ -456,15 +456,19 @@ export function createSiteAssistantPublicApi(
           "POST",
           "/api/brand/conversations/sync",
           {
-            conversation: {
-              id: session.conversationId,
-              title: "官网 AI 助手",
-              purpose: "enterprise_qa",
-              messages: [],
-              status: "idle",
-              createdAt: Math.floor(timestamp / 1000),
-              updatedAt: Math.floor(timestamp / 1000),
-            },
+            purpose: "enterprise_qa",
+            conversations: [
+              {
+                id: session.conversationId,
+                title: "官网 AI 助手",
+                purpose: "enterprise_qa",
+                messages: [],
+                status: "idle",
+                createdAt: Math.floor(timestamp / 1000),
+                updatedAt: Math.floor(timestamp / 1000),
+              },
+            ],
+            deletedIds: [],
           },
         );
         if (sync.status >= 400) {

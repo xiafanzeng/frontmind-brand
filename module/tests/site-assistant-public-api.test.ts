@@ -158,6 +158,12 @@ describe("public site assistant api", () => {
     expect(calls.some((call) => call.path === "/api/brand/conversations/sync")).toBe(true);
     const create = calls.find((call) => call.path === "/api/frontmind/v2/tasks");
     expect(create?.body).toMatchObject({purpose: "enterprise_qa", prompt: "你们提供什么服务？"});
+    const sync = calls.find((call) => call.path === "/api/brand/conversations/sync");
+    expect(sync?.body).toMatchObject({
+      purpose: "enterprise_qa",
+      conversations: [{purpose: "enterprise_qa", status: "idle", messages: []}],
+      deletedIds: [],
+    });
   });
 
   it("continues an existing session through the task message route", async () => {
