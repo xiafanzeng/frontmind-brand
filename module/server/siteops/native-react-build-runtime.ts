@@ -864,7 +864,8 @@ function resolveHostModule(name: string) {
   }
 }
 
-function controlledViteBuilderSource(input: {
+/** @internal Child build program, also exercised by platform boundary regressions. */
+export function controlledViteBuilderSource(input: {
   viteModuleUrl: string;
   tailwindModuleUrl: string | null;
   tailwindV3ModuleUrl: string | null;
