@@ -94,6 +94,11 @@ import {
   TRUSTED_REACT_RENDERER_SOURCE,
   TRUSTED_REACT_VISUAL_CONTRACT_V4_CSS,
 } from "./react-static-runtime.js";
+import {
+  TRUSTED_SITE_ASSISTANT_WIDGET_CSS,
+  TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE,
+  siteAssistantApiOrigin,
+} from "./site-assistant-widget.js";
 
 export {
   SiteOpsMaterializationError,
@@ -1879,6 +1884,7 @@ function buildTrustedReactSource(input: {
       : TRUSTED_REACT_COMPONENT_LIBRARY_SOURCE_V2_2,
   );
   addTextFile(files, "src/render.mjs", TRUSTED_REACT_RENDERER_SOURCE);
+  const assistantApiOrigin = siteAssistantApiOrigin();
   addTextFile(
     files,
     "src/data/site.json",
@@ -1899,6 +1905,7 @@ function buildTrustedReactSource(input: {
       brandLogoWidth: frozenBrandAsset?.width ?? null,
       brandLogoHeight: frozenBrandAsset?.height ?? null,
       bodyClass: projection.bodyClass,
+      assistant: { apiBase: assistantApiOrigin },
     }),
   );
 
@@ -2163,6 +2170,8 @@ function buildTrustedReactSource(input: {
     "public/styles.css",
     `${cssForMaterializer(input.visual, input.designSpec, input.workflow)}\n`,
   );
+  addTextFile(files, "public/assistant.js", TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE);
+  addTextFile(files, "public/assistant.css", `${TRUSTED_SITE_ASSISTANT_WIDGET_CSS}\n`);
   if (input.brandAsset) {
     addTextFile(files, input.brandAsset.publicPath, input.brandAsset.bytes);
   }
