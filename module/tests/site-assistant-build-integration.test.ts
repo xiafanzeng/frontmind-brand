@@ -1,6 +1,7 @@
 // @vitest-environment node
 import {describe, expect, it} from "vitest";
 import {TRUSTED_REACT_COMPONENT_LIBRARY_SOURCE} from "../server/siteops/react-static-runtime.js";
+import {nativeDocumentCsp} from "../server/siteops/native-react-build-runtime.js";
 import {
   SITE_ASSISTANT_WIDGET_API_ORIGIN_DEFAULT,
   TRUSTED_SITE_ASSISTANT_WIDGET_CSS,
@@ -27,6 +28,15 @@ describe("site assistant trusted build integration", () => {
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("session");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_CSS).toContain(".fm-assistant-panel");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_CSS).toContain("prefers-reduced-motion");
+  });
+
+  it("opens only the assistant Q&A origin in the native document CSP", () => {
+    const csp = nativeDocumentCsp("https://brand.frontmind.cn");
+    expect(csp).toContain("connect-src https://brand.frontmind.cn");
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("form-action 'none'");
+    // No wildcard or second origin may sneak into the connect policy.
+    expect(csp.match(/connect-src [^;]+/)![0].split(" ")).toHaveLength(2);
   });
 
   it("uses the deterministic brand origin and only accepts https overrides", () => {

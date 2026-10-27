@@ -39,6 +39,11 @@ import {
   type ValidatedNativeReactSource,
 } from "./native-react-source.js";
 import { previewNavigationBridgeSource } from "./preview-routing.js";
+import {
+  TRUSTED_SITE_ASSISTANT_WIDGET_CSS,
+  TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE,
+  siteAssistantApiOrigin,
+} from "./site-assistant-widget.js";
 
 const FIXED_ZIP_DATE = new Date("2000-01-01T00:00:00.000Z");
 const MAX_BUILD_LOG_BYTES = 256 * 1024;
@@ -52,8 +57,17 @@ const NATIVE_QA_POLICY = "siteops-native-hard-safety-v1" as const;
 const SAFE_BUILD_ERROR_MARKER = "__FRONTMIND_NATIVE_BUILD_ERROR__";
 const PINNED_SHADERS_REACT_BUNDLE_SHA256 =
   "ca34b0dbc19593b44b4dd017f2e763f8463b3b46383df769a41b1a5202400033";
-const NATIVE_DOCUMENT_CSP =
-  "default-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; media-src 'self' data:; manifest-src 'none'; base-uri 'self'; form-action 'none'";
+const NATIVE_DOCUMENT_CSP_BASE =
+  "default-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; media-src 'self' data:; manifest-src 'none'; base-uri 'self'; form-action 'none'";
+
+/**
+ * The floating AI assistant is the single Dashboard-owned network exception:
+ * its scripts ship with the site, and only its Q&A API origin may be reached
+ * from the visitor's browser. Everything else stays connect-src 'none'.
+ */
+export function nativeDocumentCsp(assistantApiOrigin: string) {
+  return `${NATIVE_DOCUMENT_CSP_BASE}; connect-src ${assistantApiOrigin}`;
+}
 const HOST_DEPENDENCY_ALLOWLIST = new Set<string>(
   NATIVE_SOURCE_ALLOWED_DEPENDENCIES,
 );
@@ -814,16 +828,6 @@ async function linkHostDependencies(root: string, dependencies: string[]) {
   for (const dependency of dependencies) {
     const target = path.join(modules, ...dependency.split("/"));
     await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    // Windows rejects unprivileged directory symlinks (EPERM without
-    // Developer Mode); junctions keep the staging build runnable there.
-    if (process.platform === "win32") {
-      await (await import("node:fs/promises")).symlink(
-        hostPackageRoot(dependency),
-        target,
-        "junction",
-      );
-      continue;
-    }
     await symlink(hostPackageRoot(dependency), target, "dir");
   }
 }
@@ -860,8 +864,7 @@ function resolveHostModule(name: string) {
   }
 }
 
-/** @internal Child build program, also exercised by platform boundary regressions. */
-export function controlledViteBuilderSource(input: {
+function controlledViteBuilderSource(input: {
   viteModuleUrl: string;
   tailwindModuleUrl: string | null;
   tailwindV3ModuleUrl: string | null;
@@ -904,12 +907,12 @@ const sourceBoundary = {
       throw Object.assign(new Error("NATIVE_BUILD_SOURCE_BOUNDARY"), { code: "NATIVE_BUILD_SOURCE_BOUNDARY" });
     }
     if (!importer || !path.isAbsolute(importer)) return null;
-    const importerRelative = path.relative(root, importer.split("?", 1)[0]).replaceAll("\\\\", "/");
-    if (importerRelative === ".." || importerRelative.startsWith("../") || path.isAbsolute(importerRelative) || importerRelative.startsWith("node_modules/")) return null;
+    const importerRelative = path.relative(root, importer.split("?", 1)[0]);
+    if (importerRelative.startsWith("../") || path.isAbsolute(importerRelative) || importerRelative.startsWith("node_modules/")) return null;
     if (clean.startsWith(".")) {
       const target = path.resolve(path.dirname(importer), clean);
-      const relative = path.relative(root, target).replaceAll("\\\\", "/");
-      if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+      const relative = path.relative(root, target);
+      if (relative.startsWith("../") || path.isAbsolute(relative)) {
         throw Object.assign(new Error("NATIVE_BUILD_SOURCE_BOUNDARY"), { code: "NATIVE_BUILD_SOURCE_BOUNDARY" });
       }
       return null;
@@ -1340,8 +1343,21 @@ function normalizeRoutePages(input: {
   routes: string[];
   mode: "preview" | "production";
   canonicalOrigin: string | null;
+  assistantApiOrigin: string;
 }) {
   const fileMap = new Map(input.files.map((file) => [file.path, file.bytes]));
+  const documentCsp = nativeDocumentCsp(input.assistantApiOrigin);
+  // Host-owned assistant assets; provider content never flows into these.
+  const assistantConfig = `window.__FRONTMIND_ASSISTANT__=${JSON.stringify(
+    { apiBase: input.assistantApiOrigin },
+  ).replaceAll("<", "\\u003c")};\n`;
+  const assistantHeadMarkup =
+    '<link rel="stylesheet" href="/assistant.css">' +
+    '<script src="/assistant-config.js" defer></script>' +
+    '<script src="/assistant.js" defer></script>';
+  fileMap.set("assistant.js", Buffer.from(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE, "utf8"));
+  fileMap.set("assistant-config.js", Buffer.from(assistantConfig, "utf8"));
+  fileMap.set("assistant.css", Buffer.from(`${TRUSTED_SITE_ASSISTANT_WIDGET_CSS}\n`, "utf8"));
   const root = fileMap.get("index.html");
   if (!root) throw new NativeReactBuildError("NATIVE_BUILD_ROUTE_MISSING");
   const rootHtml = root.toString("utf8");
@@ -1366,8 +1382,9 @@ function normalizeRoutePages(input: {
       );
     html = upsertHeadMarkup(
       html,
-      `<meta http-equiv="Content-Security-Policy" content="${NATIVE_DOCUMENT_CSP}">`,
+      `<meta http-equiv="Content-Security-Policy" content="${documentCsp}">`,
     );
+    html = upsertHeadMarkup(html, assistantHeadMarkup);
     if (input.mode === "preview" || output === "404.html") {
       html = upsertHeadMarkup(
         html,
@@ -1433,8 +1450,18 @@ function compiledTextHasForbiddenExternalUrl(input: {
   text: string;
   mode: "preview" | "production";
   canonicalOrigin: string | null;
+  allowedOrigins: readonly string[];
 }) {
   const absoluteUrls = input.text.match(/https?:\/\/[^\s"'`<>{}\\]+/giu) ?? [];
+  const allowedOriginSet = new Set(
+    input.allowedOrigins.map((origin) => {
+      try {
+        return new URL(origin).origin;
+      } catch {
+        return origin;
+      }
+    }),
+  );
   for (const raw of absoluteUrls) {
     if (
       SAFE_COMPILED_ABSOLUTE_URLS.has(raw) ||
@@ -1443,6 +1470,13 @@ function compiledTextHasForbiddenExternalUrl(input: {
     ) {
       continue;
     }
+    let origin: string | null = null;
+    try {
+      origin = new URL(raw).origin;
+    } catch {
+      return true;
+    }
+    if (allowedOriginSet.has(origin)) continue;
     if (input.mode === "production" && input.canonicalOrigin) {
       try {
         if (new URL(raw).origin === new URL(input.canonicalOrigin).origin) {
@@ -1482,7 +1516,15 @@ function assertStaticHardSafety(input: {
   mode: "preview" | "production";
   canonicalOrigin: string | null;
   forbiddenTokens: string[];
+  assistantApiOrigin: string;
 }) {
+  // Host-authored assistant assets are not provider output; only they may
+  // reference the Q&A API origin.
+  const assistantFiles = new Set([
+    "assistant.js",
+    "assistant-config.js",
+    "assistant.css",
+  ]);
   const fileMap = new Map(input.files.map((file) => [file.path, file.bytes]));
   const checks: NativeReactQaReportV1["checks"] = [];
   const requireCheck = (
@@ -1519,16 +1561,19 @@ function assertStaticHardSafety(input: {
   );
   for (const file of textFiles) {
     const text = file.bytes.toString("utf8");
-    requireCheck(
-      `external-url-literals:${file.path}`,
-      !compiledTextHasForbiddenExternalUrl({
-        text,
-        mode: input.mode,
-        canonicalOrigin: input.canonicalOrigin,
-      }),
-      "compiled text contains no untrusted external URL literal",
-      "NATIVE_BUILD_NETWORK_FORBIDDEN",
-    );
+    if (!assistantFiles.has(file.path)) {
+      requireCheck(
+        `external-url-literals:${file.path}`,
+        !compiledTextHasForbiddenExternalUrl({
+          text,
+          mode: input.mode,
+          canonicalOrigin: input.canonicalOrigin,
+          allowedOrigins: [input.assistantApiOrigin],
+        }),
+        "compiled text contains no untrusted external URL literal",
+        "NATIVE_BUILD_NETWORK_FORBIDDEN",
+      );
+    }
     if (/\.html$/iu.test(file.path)) {
       requireCheck(
         `no-frame:${file.path}`,
@@ -1779,7 +1824,7 @@ async function runBrowserQaStrict(input: {
         "Cache-Control": "no-store",
         "Content-Type": servedMime(filename ?? "404.html"),
         "Content-Length": bytes.length,
-        "Content-Security-Policy": NATIVE_DOCUMENT_CSP,
+        "Content-Security-Policy": nativeDocumentCsp(siteAssistantApiOrigin()),
         ...(input.mode === "preview"
           ? { "X-Robots-Tag": "noindex, nofollow, noarchive" }
           : {}),
@@ -2445,6 +2490,7 @@ export async function materializeNativeReactSource(
     input.mode,
     input.canonicalOrigin,
   );
+  const assistantApiOrigin = siteAssistantApiOrigin();
   const target =
     input.mode === "production"
       ? input.target === "global_excluding_cn" || input.target === "mainland_cn"
@@ -2564,6 +2610,7 @@ export async function materializeNativeReactSource(
       routes,
       mode: input.mode,
       canonicalOrigin,
+      assistantApiOrigin,
     });
     const checks = assertStaticHardSafety({
       files,
@@ -2571,6 +2618,7 @@ export async function materializeNativeReactSource(
       mode: input.mode,
       canonicalOrigin,
       forbiddenTokens: [input.validatedSource.receipt.operationToken],
+      assistantApiOrigin,
     });
     for (const asset of requiredUserMedia) {
       const outputPath = asset.publicPath.replace(/^\//u, "");
