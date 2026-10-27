@@ -1,4 +1,4 @@
-import {captureWorkspaceRestOperation} from "../lib/workspace-rest-scope";
+import {captureWorkspaceRestOperation, forkWorkspaceRestOperation} from "../lib/workspace-rest-scope";
 import type {IntentWorkspace, IntentSkillJob} from "../../contracts/intent-workbench";
 export interface IntentWorkbenchApi {
   observe(): Promise<IntentWorkspace>;
@@ -57,11 +57,11 @@ export const liveIntentWorkbenchApi: IntentWorkbenchApi = {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let terminal = false;
     const streamController = new AbortController();
+    const streamOperation = forkWorkspaceRestOperation(operation, streamController.signal);
     let idleTimer = setTimeout(() => streamController.abort(), 45_000);
     try {
-      const response = await operation.fetch(`/api/modules/brand/intent/stream?jobId=${encodeURIComponent(jobId)}`, {
+      const response = await streamOperation.fetch(`/api/modules/brand/intent/stream?jobId=${encodeURIComponent(jobId)}`, {
         credentials: "same-origin", headers: operation.headers({Accept: "text/event-stream"}),
-        signal: operation.signal ? AbortSignal.any([operation.signal, streamController.signal]) : streamController.signal,
       });
       if (response.ok && response.headers.get("content-type")?.includes("text/event-stream") && response.body) {
         reader = response.body.getReader();

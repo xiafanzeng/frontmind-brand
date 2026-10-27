@@ -1,7 +1,12 @@
 import {afterEach, describe, expect, it, vi} from "vitest";
 import {emptyIntentState, type IntentWorkspace} from "../../contracts/intent-workbench";
 const scope = vi.hoisted(() => ({fetch: vi.fn(), assertActive: vi.fn(), headers: vi.fn((value: unknown) => value)}));
-vi.mock("../lib/workspace-rest-scope", () => ({captureWorkspaceRestOperation: () => scope}));
+vi.mock("../lib/workspace-rest-scope", () => ({
+  captureWorkspaceRestOperation: () => scope,
+  forkWorkspaceRestOperation: (_operation: unknown, signal: AbortSignal) => ({
+    ...scope, fetch: (input: RequestInfo | URL, init?: RequestInit) => scope.fetch(input, {...init, signal}),
+  }),
+}));
 import {liveIntentWorkbenchApi} from "./intent-workbench-api";
 
 const workspace = (status: string): IntentWorkspace => ({
@@ -64,6 +69,18 @@ describe("优化任务轮询", () => {
     await vi.advanceTimersByTimeAsync(2500);
     expect((await waiting).state.jobs![0].status).toBe("succeeded");
     expect(scope.fetch.mock.calls.every(call => !call[1]?.method || call[1].method === "GET")).toBe(true);
+  });
+  it("宿主绑定流取消信号，45秒无响应后终止连接并回读原任务", async () => {
+    vi.useFakeTimers();
+    scope.fetch.mockResolvedValueOnce(new Response(JSON.stringify(workspace("running"))))
+      .mockImplementationOnce((_input, init) => new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {once: true});
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(workspace("succeeded"))));
+    const waiting = liveIntentWorkbenchApi.waitForJob!("job", vi.fn());
+    await vi.advanceTimersByTimeAsync(47_500);
+    expect((await waiting).state.jobs![0].status).toBe("succeeded");
+    expect(scope.fetch.mock.calls[1][1].signal.aborted).toBe(true);
   });
   it("网关返回 HTML 时显示接口、状态及格式，避免裸露 JSON 解析异常", async () => {
     scope.fetch.mockResolvedValue(new Response("<html>Bad gateway</html>", {status: 502, headers: {"content-type": "text/html"}}));
