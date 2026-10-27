@@ -1758,7 +1758,7 @@ export function SimplifiedWebsiteBuilderPreview({
           <div className="sfp-workspace-grid">
             <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--assistant">
               <div className="sfp-section-heading sfp-section-heading--compact">
-                <div><h2>配置 AI 助手</h2><p>{siteOps ? "名称、欢迎语与主题色会作为真实生成偏好提交；当前协议不保证模板包含可交互助手，以真实预览为准。" : "配置网站右下角的帮助窗口并直接试用。"}</p></div>
+                <div><h2>配置 AI 助手</h2><p>{siteOps ? "名称、欢迎语与主题色会作为真实生成偏好提交；每个真实网站都会内置右下角 AI 助手悬浮窗，问答由真实 RAG 服务提供。" : "配置网站右下角的帮助窗口并直接试用。"}</p></div>
               </div>
               <div className="sfp-rag-link-card">
                 <span><Bot size={19} /></span>
@@ -1776,7 +1776,7 @@ export function SimplifiedWebsiteBuilderPreview({
                     ))}
                   </div>
                 </fieldset>
-                <label className="sfp-setting-row"><span><strong>展示回答来源</strong><small>{siteOps ? "仅本地示意；当前 SiteOps 生成协议不支持此开关" : "让访客可以核对回答依据"}</small></span><input type="checkbox" checked={showSources} onChange={(event) => { invalidateSteps("assistant"); setShowSources(event.currentTarget.checked); }} /></label>
+                <label className="sfp-setting-row"><span><strong>展示回答来源</strong><small>{siteOps ? "真实网站的助手回答始终展示知识来源；此开关仅影响本地示意预览" : "让访客可以核对回答依据"}</small></span><input type="checkbox" checked={showSources} onChange={(event) => { invalidateSteps("assistant"); setShowSources(event.currentTarget.checked); }} /></label>
               </div>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel">
