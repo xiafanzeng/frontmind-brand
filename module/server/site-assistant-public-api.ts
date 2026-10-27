@@ -68,6 +68,13 @@ type AssistantSession = {
   taskId: string | null;
   turns: number;
   lastSeenAt: number;
+  /** Synced user turns; the provider owns assistant projections. */
+  messages: Array<{
+    id: string;
+    role: "user";
+    content: string;
+    timestamp: number;
+  }>;
 };
 
 export type SiteAssistantAskErrorCode =
@@ -441,6 +448,7 @@ export function createSiteAssistantPublicApi(
         taskId: null,
         turns: 0,
         lastSeenAt: timestamp,
+        messages: [],
       };
       sessions.set(session.token, session);
     }
@@ -451,34 +459,44 @@ export function createSiteAssistantPublicApi(
     globalWindow.hits.push(timestamp);
 
     try {
-      if (!session.taskId) {
-        const sync = await client.json(
-          "POST",
-          "/api/brand/conversations/sync",
-          {
-            purpose: "enterprise_qa",
-            conversations: [
-              {
-                id: session.conversationId,
-                title: "官网 AI 助手",
-                purpose: "enterprise_qa",
-                messages: [],
-                status: "idle",
-                createdAt: Math.floor(timestamp / 1000),
-                updatedAt: Math.floor(timestamp / 1000),
-              },
-            ],
-            deletedIds: [],
-          },
-        );
-        if (sync.status >= 400) {
-          throw Object.assign(new Error("ASSISTANT_CONVERSATION_SYNC_FAILED"), {
-            internalStatus: sync.status,
-          });
-        }
+      // The task contract requires the conversation and the exact user
+      // message (id == clientRequestId) to be synced before every dispatch.
+      const clientRequestId = `sa-${randomUUID()}`;
+      const userMessage = {
+        id: clientRequestId,
+        role: "user" as const,
+        content: question,
+        timestamp: Math.floor(timestamp / 1000),
+      };
+      const syncedMessages = [...session.messages, userMessage];
+      const sync = await client.json(
+        "POST",
+        "/api/brand/conversations/sync",
+        {
+          purpose: "enterprise_qa",
+          conversations: [
+            {
+              id: session.conversationId,
+              title: "官网 AI 助手",
+              purpose: "enterprise_qa",
+              messages: syncedMessages,
+              status: "running",
+              ...(session.taskId
+                ? {taskId: session.taskId, previousResponseId: session.taskId}
+                : {}),
+              createdAt: Math.floor(timestamp / 1000) - session.turns,
+              updatedAt: Math.floor(timestamp / 1000),
+            },
+          ],
+          deletedIds: [],
+        },
+      );
+      if (sync.status >= 400) {
+        throw Object.assign(new Error("ASSISTANT_CONVERSATION_SYNC_FAILED"), {
+          internalStatus: sync.status,
+        });
       }
 
-      const clientRequestId = `site-assistant-${randomUUID()}`;
       const dispatch = session.taskId
         ? await client.json(
             "POST",
@@ -561,6 +579,7 @@ export function createSiteAssistantPublicApi(
           { session: session.token },
         );
       }
+      session.messages = syncedMessages;
       res.json({
         schemaVersion: 1,
         session: session.token,
