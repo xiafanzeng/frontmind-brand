@@ -230,7 +230,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       }}>查看当前任务</button></>}
     </div>}
     {!pending && !error && view !== "progress" && workspace?.state.jobs?.at(-1)?.status === "failed" && <div className="iw-error" role="alert">{workspace.state.jobs.at(-1)?.error}</div>}
-    {view === "universe" && <><header className="iw-header iw-universe-header"><div><h1>品牌全域词库</h1><p>基于多平台数据整理 GEO 优化问题，按分类筛选并加入优化清单。</p></div><button onClick={() => openSection("list")}>优化清单 <span className="iw-tag">{questions.length}</span><ArrowRight size={15}/></button></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => setIntake([selection])} onUseQuestions={items => setIntake(items)}/></>}
+    {view === "universe" && <><header className="iw-header iw-universe-header"><div><h1>词条生成与优化</h1><p>推荐核心词 → 生成问题 → 选择新词条 → 加入优化清单</p></div><button onClick={() => openSection("list")}>查看优化清单 <span className="iw-tag">{questions.length}</span><ArrowRight size={15}/></button></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => setIntake([selection])} onUseQuestions={items => setIntake(items)}/></>}
     {view !== "universe" && !workspace && !error && <div role="status" className="iw-empty">正在读取优化工作台…</div>}
     {view === "list" && workspace && <>
       <IntentQuestionCatalog questions={questions} visible={visible} evaluations={evaluations} activeJob={activeJob} received={received} integration={catalogIntegration}

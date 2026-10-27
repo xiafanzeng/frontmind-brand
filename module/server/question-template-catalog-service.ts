@@ -53,6 +53,27 @@ export function appendRecommendedQuestions(tables:Table[],input:z.infer<typeof q
  return {tables:next,added:rows.length,duplicates:input.questions.length-rows.length};
 }
 
+/** Return durable source coordinates for exactly this submission, including existing duplicates. */
+export function savedQuestionSelections(tables:Table[],input:z.infer<typeof questionTemplateSaveSchema>,revision:number){
+ const categoryKeys:Record<string,string>=Object.fromEntries(Object.entries(mainCategoryLabels).flatMap(([key,label])=>[[key,key],[label,key]]));
+ const selected=new Set<string>();
+ return input.questions.flatMap(item=>{
+  const key=normalize(item.question);
+  if(selected.has(key))return [];
+  selected.add(key);
+  for(const table of tables){
+   const questionIndex=table.columns.findIndex(column=>normalize(column)==="问题");
+   if(questionIndex<0)continue;
+   const rowIndex=table.rows.findIndex(row=>normalize(row[questionIndex]??"")===key);
+   if(rowIndex<0)continue;
+   const categoryIndex=table.columns.findIndex(column=>["核心词分类","主分类"].includes(normalize(column)));
+   const category=categoryKeys[table.rows[rowIndex][categoryIndex]??""]??item.mainCategory;
+   return [{question:table.rows[rowIndex][questionIndex],category,tableId:table.id,rowIndex,dashboardRevision:revision}];
+  }
+  throw new QuestionTemplateCatalogError("SAVED_SOURCE_MISSING","保存结果未能定位，请刷新词库后重试。");
+ });
+}
+
 export function createQuestionTemplateCatalogService(core:ModuleHttpCore,request:Request,ports:()=>BrandKeywordPorts=intentSkillPorts){
  return {async save(value:unknown){
   const context=core.context(request);
@@ -72,7 +93,7 @@ export function createQuestionTemplateCatalogService(core:ModuleHttpCore,request
   for(let attempt=0;attempt<3;attempt++){
    const workspace=await model.getDashboardWorkspace(context.accountUserId);
    const merged=appendRecommendedQuestions(workspace.payload.keywordTables,input);
-   if(!merged.added)return {success:true,added:0,duplicates:merged.duplicates,revision:workspace.revision};
+   if(!merged.added)return {success:true,added:0,duplicates:merged.duplicates,revision:workspace.revision,selections:savedQuestionSelections(merged.tables,input,workspace.revision)};
    try {
     const published=await model.updateDashboardWorkspace({
      userId:context.accountUserId,actorUserId:actor.id,
@@ -81,7 +102,7 @@ export function createQuestionTemplateCatalogService(core:ModuleHttpCore,request
      beforeWrite:(tx:unknown)=>model.lockCustomerProjectBusinessWrite(tx,context.accountUserId,actor),
      sourceName:"recommended-questions.json",reason:"客户将所选推荐问题追加保存到全域词库",
     });
-    return {success:true,added:merged.added,duplicates:merged.duplicates,revision:published.revision};
+    return {success:true,added:merged.added,duplicates:merged.duplicates,revision:published.revision,selections:savedQuestionSelections(merged.tables,input,published.revision)};
    }catch(error){
     if(!(error instanceof model.DashboardRevisionConflictError))throw error;
    }
