@@ -110,5 +110,5 @@ test('official SDK initializes without a model call, executes a local mock tool 
  const node=process.env.REPORT_HARNESS_NODE_BIN??(Number(process.versions.node.split('.')[0])>=24?process.execPath:process.platform==='linux'&&process.arch==='x64'?require.resolve('node-linux-x64/bin/node'):undefined);
  if(!node){t.skip('本机需 Node 24 或 REPORT_HARNESS_NODE_BIN 执行 SDK 检验；Linux 构建使用随模块安装的私有 Node 24。');return;}
  const {stdout}=await promisify(execFile)(node,[fileURLToPath(new URL('./helpers/report-harness-sdk-offline.mjs',import.meta.url))],{timeout:80000,maxBuffer:1024*1024,env:{PATH:process.env.PATH,LANG:process.env.LANG,TMPDIR:process.env.TMPDIR}});
- const result=JSON.parse(stdout.trim());assert.equal(result.initializedWithoutModelCall,true);assert.equal(result.sessionReused,true);assert.equal(result.localMockRequests,3);
+ const result=JSON.parse(stdout.trim());assert.equal(result.initializedWithoutModelCall,true);assert.equal(result.sessionReused,true);assert.equal(result.localMockRequests,4);
 });
