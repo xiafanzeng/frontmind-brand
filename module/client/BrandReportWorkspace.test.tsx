@@ -9,10 +9,17 @@ afterEach(cleanup);
 describe('brand report visible workflow',()=>{
  it('selects materials without a free text composer and starts a frozen input',async()=>{
   render(<BrandReportWorkspace projectId="project-a"/>);
-  await screen.findByRole('button',{name:/测试企业/});expect(screen.queryAllByRole('textbox')).toHaveLength(0);
+  await screen.findByRole('button',{name:/当前企业 · 已选择/});expect(screen.queryAllByRole('textbox')).toHaveLength(0);
   fireEvent.click(screen.getByRole('button',{name:/已有品牌知识库/}));
   fireEvent.click(screen.getByRole('button',{name:'开始品牌研究'}));
   await waitFor(()=>expect(mock.fetch).toHaveBeenCalledWith('/api/modules/brand/reports',expect.objectContaining({method:'POST',body:expect.stringContaining('"includeKnowledge":true')})));
+ });
+ it('uses a scope card and ordinary configuration field to freeze the subject',async()=>{
+  render(<BrandReportWorkspace projectId="project-a"/>);
+  fireEvent.click(await screen.findByRole('button',{name:/聚焦业务或部门/}));
+  fireEvent.change(screen.getByRole('textbox',{name:/业务或部门名称/}),{target:{value:'医学美容科'}});
+  fireEvent.click(screen.getByRole('button',{name:'开始品牌研究'}));
+  await waitFor(()=>expect(mock.fetch).toHaveBeenCalledWith('/api/modules/brand/reports',expect.objectContaining({body:expect.stringContaining('"subjectScope":"医学美容科"')})));
  });
  it('puts both questions and platform cards into one confirmation',async()=>{
   mock.workspace.runs=[run];render(<BrandReportWorkspace projectId="project-a"/>);
@@ -27,15 +34,15 @@ describe('brand report visible workflow',()=>{
   mock.workspace.runs=[{...run,phase:'completed',canStop:false}];render(<BrandReportWorkspace projectId="project-a"/>);
   const results=await screen.findByRole('region',{name:'报告成果'});
   expect(within(results).getByRole('link',{name:/打开全景报告/}).getAttribute('href')).toContain('/panorama.html');
-  expect(within(results).getByRole('link',{name:/下载 PDF/}).getAttribute('href')).toContain('/panorama.pdf');
+  expect(within(results).getByRole('link',{name:/下载全景 HTML/}).getAttribute('href')).toContain('/panorama.html?download=1');
   expect(within(results).getByRole('link',{name:/打开汇报报告/}).getAttribute('href')).toContain('/briefing.html');
-  expect(within(results).getByRole('link',{name:/下载 PPTX/}).getAttribute('href')).toContain('/briefing.pptx');
+  expect(within(results).getByRole('link',{name:/下载汇报 HTML/}).getAttribute('href')).toContain('/briefing.html?download=1');
  });
  it('renders live public output, tool receipts and intermediate documents, and can stop while running',async()=>{
   mock.workspace.runs=[{...run,phase:'researching',currentStage:'S1'}];
   mock.process={events:[{seq:1,at:run.createdAt,stageId:'S1',kind:'text',message:'正在核实公开企业资料。'},{seq:2,at:run.createdAt,stageId:'S1',kind:'tool_end',message:'来源页面读取完成',detail:'返回公开资料正文'}],nextCursor:2,hasMore:false,documents:[{id:'S1',title:'企业事实',summary:'已核实',markdown:'完整企业研究正文',sources:[]}],intermediate:[{id:'work/notes.md',title:'研究笔记',text:'已保存的初步证据',updatedAt:run.createdAt}]};
   render(<BrandReportWorkspace projectId="project-a"/>);
-  await screen.findByText('正在核实公开企业资料。');expect(screen.getByText('来源页面读取完成')).toBeTruthy();expect(screen.getByText('研究笔记')).toBeTruthy();expect(screen.getByText('完整企业研究正文')).toBeTruthy();
+  await screen.findByText('正在核实公开企业资料。');expect(screen.getAllByText('来源页面读取完成')[0]).toBeTruthy();expect(screen.getByText('研究笔记')).toBeTruthy();expect(screen.getByText('完整企业研究正文')).toBeTruthy();
   const stop=screen.getByRole('button',{name:'停止本轮'}) as HTMLButtonElement;expect(stop.disabled).toBe(false);fireEvent.click(stop);
   await waitFor(()=>expect(mock.fetch).toHaveBeenCalledWith('/api/modules/brand/reports/run-1/stop',expect.objectContaining({method:'POST'})));
  });

@@ -1,12 +1,13 @@
 import { z } from "zod";
 
 export const BRAND_REPORT_SCHEMA_VERSION = "brand-report-v1" as const;
-export const BRAND_REPORT_WORKFLOW_VERSION = "report-v3-web-1" as const;
+export const BRAND_REPORT_WORKFLOW_VERSION = "report-v3-web-html-2" as const;
 export const BRAND_REPORT_STAGES = [
   { id: "S1", title: "品牌事实", description: "整理企业资料与公开证据" },
   { id: "S2", title: "营销图谱", description: "理解受众、场景与决策问题" },
   { id: "S3", title: "品类趋势", description: "研究市场变化与机会" },
   { id: "S4", title: "品牌定位", description: "比较竞品并明确核心产品" },
+  { id: "S4.8", title: "核心产品与双问题", description: "根据研究形成一次确认的产品与问题卡片" },
   { id: "S5", title: "品牌诊断", description: "结合真实回答分析品牌可见性" },
   { id: "S5.5", title: "语义资产审计", description: "分析品牌资产与引用信源" },
   { id: "S6", title: "品牌话语体系", description: "形成有证据的表达与话术" },
@@ -15,7 +16,7 @@ export const BRAND_REPORT_STAGES = [
   { id: "S9", title: "业务赋能", description: "安排执行路线、协作与评估" },
   { id: "S9.8", title: "内容标题机会", description: "形成可以执行的内容选题" },
 ] as const;
-export const brandReportStageIdSchema = z.enum(["S1", "S2", "S3", "S4", "S5", "S5.5", "S6", "S7", "S8", "S9", "S9.8"]);
+export const brandReportStageIdSchema = z.enum(["S1", "S2", "S3", "S4", "S4.8", "S5", "S5.5", "S6", "S7", "S8", "S9", "S9.8"]);
 export type BrandReportStageId = z.infer<typeof brandReportStageIdSchema>;
 
 const publicUrl = z.string().url().max(4000).refine((value) => {
@@ -38,8 +39,13 @@ export const brandReportSampleSchema = z.object({
   question: z.string().min(1).max(2000),
   answer: z.string().min(1).max(100000),
   mentioned: z.boolean(),
+  sentiment: z.enum(["positive", "neutral", "negative", "unknown"]).optional(),
+  sentimentEvidence: z.array(z.string().max(20000)).max(100).optional(),
+  collectedAt: z.string().max(100).optional(),
+  supplierTaskId: z.string().max(200).optional(),
   rank: z.number().int().positive().nullable(),
   citations: z.array(brandReportSourceSchema.extend({ site: z.string().max(500).optional() })).max(1000),
+  references: z.array(brandReportSourceSchema.extend({ site: z.string().max(500).optional() })).max(1000).optional(),
 });
 export type BrandReportSample = z.infer<typeof brandReportSampleSchema>;
 
@@ -51,8 +57,8 @@ export const brandReportMonitoringSchema = z.object({
 });
 export const brandReportBriefingSlideSchema = z.object({
   title: z.string().min(1).max(120),
-  lead: z.string().max(400),
-  bullets: z.array(z.string().min(1).max(600)).max(8),
+  lead: z.string().max(2000),
+  bullets: z.array(z.string().min(1).max(6000)).min(1).max(20),
   sourceStageIds: z.array(brandReportStageIdSchema).min(1),
 });
 export const BRAND_REPORT_BRIEFING_ROSTER = [
@@ -69,6 +75,7 @@ export const brandReportDocumentSchema = z.object({
   briefingSlides: z.array(brandReportBriefingSlideSchema).length(13),
 }).superRefine((document, ctx) => {
   const ids = new Set(document.stages.map((stage) => stage.id));
+  if (ids.size !== document.stages.length) ctx.addIssue({ code: "custom", path: ["stages"], message: "研究阶段不能重复" });
   for (const stage of BRAND_REPORT_STAGES) {
     if (!ids.has(stage.id)) ctx.addIssue({ code: "custom", path: ["stages"], message: `缺少 ${stage.id} ${stage.title}` });
   }
@@ -96,25 +103,53 @@ export const BRAND_REPORT_PLATFORM_LABELS: Record<string, string> = {
   chatgpt: "ChatGPT", googleai: "Google AI", bingai_overviews: "必应 AI", baiduai: "百度文心", quark: "夸克",
 };
 
-/** Every delivery format obtains its numerical baseline from these same frozen samples. */
+/** Both HTML reports derive every measured number from this frozen sample set.
+ * Q2 deliberately never enters visibility or rank denominators. */
 export function calculateBrandReportMetrics(monitoring: BrandReportDocument["monitoring"]) {
-  const metrics = (samples: BrandReportSample[]) => ({
-    samples: samples.length,
-    mentions: samples.filter((sample) => sample.mentioned).length,
-    mentionRate: samples.length ? samples.filter((sample) => sample.mentioned).length / samples.length * 100 : 0,
-    firstRecommendations: samples.filter((sample) => sample.rank === 1).length,
-    firstRecommendationRate: samples.length ? samples.filter((sample) => sample.rank === 1).length / samples.length * 100 : 0,
-    citations: samples.reduce((sum, sample) => sum + sample.citations.length, 0),
-  });
-  const sources = new Map<string, { url: string; title: string; site: string; references: number }>();
+  const rate = (count: number, total: number) => total ? count / total * 100 : 0;
+  const metrics = (samples: BrandReportSample[]) => {
+    const ranked = samples.filter(sample => sample.mentioned && sample.rank !== null);
+    const mentions = samples.filter(sample => sample.mentioned).length;
+    const firstRecommendations = ranked.filter(sample => sample.rank === 1).length;
+    const top3 = ranked.filter(sample => sample.rank! <= 3).length;
+    const top5 = ranked.filter(sample => sample.rank! <= 5).length;
+    return { samples: samples.length, mentions, mentionRate: rate(mentions, samples.length),
+      firstRecommendations, firstRecommendationRate: rate(firstRecommendations, samples.length),
+      top3, top3Rate: rate(top3, samples.length), top5, top5Rate: rate(top5, samples.length),
+      rankedSamples: ranked.length, averageRank: ranked.length ? ranked.reduce((sum, sample) => sum + sample.rank!, 0) / ranked.length : null,
+      rankDistribution: [
+        { label: "第 1 位", count: firstRecommendations },
+        { label: "第 2–3 位", count: ranked.filter(sample => sample.rank! >= 2 && sample.rank! <= 3).length },
+        { label: "第 4–5 位", count: ranked.filter(sample => sample.rank! >= 4 && sample.rank! <= 5).length },
+        { label: "第 6–10 位", count: ranked.filter(sample => sample.rank! >= 6 && sample.rank! <= 10).length },
+        { label: "第 11 位及以后", count: ranked.filter(sample => sample.rank! >= 11).length },
+        { label: "提及但无位次", count: samples.filter(sample => sample.mentioned && sample.rank === null).length },
+        { label: "未提及", count: samples.filter(sample => !sample.mentioned).length },
+      ],
+      citations: samples.reduce((sum, sample) => sum + sample.citations.length, 0),
+    };
+  };
+  const ranking = monitoring.samples.filter(sample => sample.question === monitoring.questions[0]);
+  const reputation = monitoring.samples.filter(sample => sample.question === monitoring.questions[1]);
+  const sources = new Map<string, { url: string; title: string; site: string; references: number; questions: string[]; platforms: string[] }>();
+  const domains = new Map<string, { site: string; references: number; articles: Set<string>; platforms: Set<string> }>();
   for (const sample of monitoring.samples) for (const source of sample.citations) {
+    const question = sample.question === monitoring.questions[0] ? "Q1" : "Q2";
     const current = sources.get(source.url);
-    if (current) current.references += 1;
-    else sources.set(source.url, { url: source.url, title: source.title, site: source.site || new URL(source.url).hostname, references: 1 });
+    if (current) { current.references += 1; if (!current.questions.includes(question)) current.questions.push(question); if (!current.platforms.includes(sample.platform)) current.platforms.push(sample.platform); }
+    else sources.set(source.url, { url: source.url, title: source.title, site: source.site || new URL(source.url).hostname, references: 1, questions: [question], platforms: [sample.platform] });
+    const host = new URL(source.url).hostname.replace(/^www\./, "");
+    const domain = domains.get(host) ?? { site: host, references: 0, articles: new Set<string>(), platforms: new Set<string>() };
+    domain.references += 1; domain.articles.add(source.url); domain.platforms.add(sample.platform); domains.set(host, domain);
   }
   return {
-    ...metrics(monitoring.samples),
-    platforms: monitoring.platforms.map((platform) => ({ platform, label: BRAND_REPORT_PLATFORM_LABELS[platform] ?? platform, ...metrics(monitoring.samples.filter((sample) => sample.platform === platform)) })),
+    ...metrics(ranking), samples: monitoring.samples.length, rankingSamples: ranking.length,
+    citations: monitoring.samples.reduce((sum, sample) => sum + sample.citations.length, 0),
+    referenceRecords: monitoring.samples.reduce((sum, sample) => sum + (sample.references?.length ?? 0), 0),
+    platforms: monitoring.platforms.map(platform => ({ platform, label: BRAND_REPORT_PLATFORM_LABELS[platform] ?? platform, ...metrics(ranking.filter(sample => sample.platform === platform)) })),
+    reputation: { samples: reputation.length, negative: reputation.filter(sample => sample.sentiment === "negative").length, positive: reputation.filter(sample => sample.sentiment === "positive").length, neutral: reputation.filter(sample => sample.sentiment === "neutral").length, unclassified: reputation.filter(sample => !sample.sentiment || sample.sentiment === "unknown").length, mentioned: reputation.filter(sample => sample.mentioned).length,
+      platforms: monitoring.platforms.map(platform => ({ platform, label: BRAND_REPORT_PLATFORM_LABELS[platform] ?? platform, samples: reputation.filter(sample => sample.platform === platform).length, negative: reputation.filter(sample => sample.platform === platform && sample.sentiment === "negative").length, positive: reputation.filter(sample => sample.platform === platform && sample.sentiment === "positive").length, neutral: reputation.filter(sample => sample.platform === platform && sample.sentiment === "neutral").length, unclassified: reputation.filter(sample => sample.platform === platform && (!sample.sentiment || sample.sentiment === "unknown")).length, citations: reputation.filter(sample => sample.platform === platform).reduce((sum, sample) => sum + sample.citations.length, 0) })) },
     topSources: [...sources.values()].sort((a, b) => b.references - a.references || a.url.localeCompare(b.url)),
+    domains: [...domains.values()].map(domain => ({ ...domain, articles: domain.articles.size, platforms: [...domain.platforms] })).sort((a, b) => b.references - a.references || a.site.localeCompare(b.site)),
   };
 }

@@ -2,7 +2,7 @@ import type {BrandReportDocument, BrandReportStage} from './brand-report.js';
 
 export const REPORT_STAGES = [
   ['S1','企业与品牌事实'], ['S2','市场与营销图谱'], ['S3','行业趋势'], ['S4','品牌定位'],
-  ['S5','品牌诊断'], ['S5.5','语义资产评估'], ['S6','品牌表达'], ['S7','视觉与内容符号'],
+  ['S4.8','诊断问题生成'], ['S5','品牌诊断'], ['S5.5','语义资产评估'], ['S6','品牌表达'], ['S7','视觉与内容符号'],
   ['S8','问答与内容架构'], ['S9','业务推进方案'], ['S9.8','内容机会与标题'],
 ] as const;
 export const REPORT_PLATFORMS = [{id:'doubao',label:'豆包'},{id:'yuanbao',label:'腾讯元宝'},{id:'qianwen',label:'千问'}] as const;
@@ -30,5 +30,5 @@ export type ReportWorkspace = {
   knowledge:{available:boolean;documentCount:number};
   runs:ReportRunView[];
 };
-export type ReportArtifactId = 'panorama.html'|'panorama.pdf'|'briefing.html'|'briefing.pptx'|'reports.zip';
+export type ReportArtifactId = 'panorama.html'|'briefing.html'|'reports.zip';
 export type ReportDocument = BrandReportDocument;

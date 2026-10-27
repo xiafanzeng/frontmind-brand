@@ -35,7 +35,7 @@ export function createBrandReportRouter(core:ModuleHttpCore):Router{
   res.setHeader('Content-Type',`${info.mimeType}${info.mimeType==='text/html'?'; charset=utf-8':''}`);
   res.setHeader('X-Content-Type-Options','nosniff');
   // Generated reports contain escaped content only. No remote scripts, frames, or same-origin API access.
-  res.setHeader('Content-Security-Policy',"sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'");
+  res.setHeader('Content-Security-Policy',"sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'");
   res.setHeader('Content-Disposition',`${req.query.download==='1'||info.mimeType!=='text/html'?'attachment':'inline'}; filename="${info.id}"; filename*=UTF-8''${encodeURIComponent(`${brandName}-${info.id}`)}`);
   res.send(bytes);
  }catch(e){error(res,e);}});

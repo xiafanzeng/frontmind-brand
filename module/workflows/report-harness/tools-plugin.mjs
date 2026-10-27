@@ -1,5 +1,6 @@
 import {readFile,readdir} from 'node:fs/promises';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {defineTool} from '@deepseek-ai/dsh-tools';
 import {readDocument,writeDocument,checkedPath} from './safe-files.mjs';
 import {researchSearch,researchFetch} from './research.mjs';
@@ -9,6 +10,12 @@ export const inject=['tools'];
 const output={schema:{type:'json'},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]};
 export function apply(ctx,config){
  const root=path.resolve(config.root);let count=0,lastJob='';
+ const saveRevision=async(artifact,text)=>{
+  let previous;try{previous=await readDocument(root,artifact);}catch(error){if(error.code!=='ENOENT')throw error;}
+  let revision;
+  if(previous!==undefined&&previous!==text){revision=artifact.replace(/\.(md|json)$/,`-revision-${createHash('sha256').update(previous).digest('hex').slice(0,12)}.$1`);await writeDocument(root,revision,previous);}
+  await writeDocument(root,artifact,text);return {artifact,saved:true,...(revision?{revision}:{} )};
+ };
  const current=async()=>{const stage=JSON.parse(await readFile(config.stageConfig,'utf8'));if(stage.jobId!==lastJob){count=0;lastJob=stage.jobId;}return stage;};
  const add=(toolName,description,parameters,execute)=>ctx.tools.register(defineTool({name:toolName,description,parameters,output,execute}));
  add('list_report_files','列出本轮阶段输入、工作流说明与已有研究文件。',{},async()=>{
@@ -30,10 +37,10 @@ export function apply(ctx,config){
  add('write_research_note','保存本阶段的中间分析文档，用户可在执行过程里查看。name 为不含目录的 md 或 json 文件名。',{name:{type:'string',required:true},text:{type:'string',required:true}},async(args)=>{
   const stage=await current();if(!/^[a-zA-Z0-9_\u4e00-\u9fff-]{1,100}\.(md|json)$/.test(args.name))throw new Error('REPORT_NOTE_NAME_INVALID');
   if(args.name.endsWith('.json'))JSON.parse(args.text);
-  const artifact=`work/${stage.stageId}-${args.name}`;await writeDocument(root,artifact,args.text);return {artifact,saved:true};
+  const artifact=`work/${stage.stageId}-${args.name}`;return saveRevision(artifact,args.text);
  });
  add('save_stage_output','完成研究后，将符合 OUTPUT_SCHEMA.json 的 JSON 字符串保存为本阶段产物。不要用工具伪造来源或采集结果。',{json:{type:'string',required:true}},async(args)=>{
   const stage=await current();const value=JSON.parse(args.json);if(value.operationToken!==stage.operationToken||value.inputHash!==stage.inputHash)throw new Error('REPORT_OUTPUT_INPUT_MISMATCH');
-  const artifact=`work/${stage.stageId}-${stage.jobId}-output.json`;await writeDocument(root,artifact,JSON.stringify(value,null,2));return {artifact,saved:true};
+  const artifact=`work/${stage.stageId}-${stage.jobId}-output.json`;return saveRevision(artifact,JSON.stringify(value,null,2));
  });
 }

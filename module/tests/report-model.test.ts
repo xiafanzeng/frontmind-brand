@@ -3,11 +3,11 @@ import {describe,expect,it} from 'vitest';
 import Ajv from 'ajv';
 import JSZip from 'jszip';
 import {BRAND_REPORT_STAGES} from '../contracts/brand-report.js';
-import {reportModelArchive,reportModelWireSchema,validateReportModelOutput,type ReportModelInput} from '../server/report-model.js';
+import {reportModelArchive,reportModelWireSchema,validateReportModelOutput,assertTwelveWeekCalendar,assertReportStageStructure,type ReportModelInput} from '../server/report-model.js';
 
 const input:ReportModelInput={operationToken:'brand-report:test:S1:1',inputHash:'a'.repeat(64),stageId:'S1',brandName:'测试企业',context:{profile:{}},previousStages:[],monitoring:null};
 function output(url='https://example.org/source'){
- return {operationToken:input.operationToken,inputHash:input.inputHash,stage:{id:'S1',title:'品牌事实',summary:'经过核对的品牌事实与企业资料构成本轮研究的真实依据。',markdown:'经过核对的完整研究事实与来源。'.repeat(50),sources:[{title:'公开来源',url}]},products:[]};
+ return {operationToken:input.operationToken,inputHash:input.inputHash,stage:{id:'S1',title:'品牌事实',summary:'经过核对的品牌事实与企业资料构成本轮研究的真实依据。',markdown:'## 主体事实与产品业务\n已读取公开产品资料，保留该主体服务范围。\n\n## 证据来源\n公开页面对产品边界给出明确解释。\n\n## 资料缺口\n未取得独立案例证明，后续需要核实，不能把自述当成已证实效果。',sources:[{title:'公开来源',url}]},products:[]};
 }
 const s2Input={...input,stageId:'S2',operationToken:'brand-report:test:S2:1'};
 const repeatedReason='真实资质、适配场景、流程与支付边界';
@@ -22,7 +22,7 @@ const specificReasons=[
  '晚间就诊者需核对门诊时段与预约截止时间',
  ];
 function table(heading:string,values:string[]){return `|编号|意图类别|用户角色|${heading}|\n|---|---|---|---|\n${values.map((value,index)=>`|T${index+1}|信息搜索|患者或共同决策者|${value}|`).join('\n')}`;}
-function s2Output(markdown:string){const result=output();return {...result,operationToken:s2Input.operationToken,stage:{...result.stage,id:'S2',markdown:result.stage.markdown+'\n\n'+markdown}};}
+function s2Output(markdown:string){const result=output();return {...result,operationToken:s2Input.operationToken,stage:{...result.stage,id:'S2',markdown:'## 用户角色与场景\n不同角色的服务需求需要逐一对照。\n\n## 意图关键词与触点\n对比选择与服务查询需要不同页面承接。\n\n## 竞品与决策分析\n公开资料限定竞品业务范围，不引入无证据判断。\n\n| 类型 | 来源 |\n| --- | --- |\n| 品类意图 | 已读公开资料 |\n\n'+markdown}};}
 
 describe('brand report model transport contract',()=>{
  it('compiles every stage using the actual strict AJV configuration without format plugins',()=>{
@@ -90,5 +90,41 @@ describe('S2 table reasoning quality',()=>{
   expect(instructions).toContain('禁止将画像、场景、触发条件、问题按数组索引轮转');
   expect(instructions).toContain('保留已核查事实与来源');
   expect(instructions).toContain('分类名称、意图类别可以合理重复');
+ });
+});
+
+
+describe('current HTML workflow and product confirmation',()=>{
+ it('ships only active HTML instructions, retains original frozen input and the exact stage',async()=>{
+  for(const stageId of ['S1','S4.8','S8','briefing']){
+   const archive=await JSZip.loadAsync(await reportModelArchive({...input,stageId}));
+   const names=Object.keys(archive.files).filter(name=>!archive.files[name]!.dir);
+   expect(names.filter(name=>name.startsWith('workflow/'))).toHaveLength(3);
+   const source=await Promise.all(names.filter(name=>name.endsWith('.md')).map(name=>archive.file(name)!.async('string')));
+   expect(source.join('\n')).not.toMatch(/PPTX|PDF|静默|ppt-master/i);
+   expect(source.join('\n')).toContain('唯一');expect(source.join('\n')).toContain('HTML');
+   expect(names).toContain(`workflow/${stageId==='briefing'?'S12':stageId}.md`);
+  }
+ });
+ it('creates product options only at S4.8 and fixes Q1 to product plus recommendation',()=>{
+  const current={...input,stageId:'S4.8'};
+  const value={...output(),stage:{...output().stage,id:'S4.8',markdown:'## 产品候选与证据\n候选来自已读主体资料。\n\n## 双问题\nQ1是地区专业服务推荐，Q2用于风险研究。'},products:[{id:'service',label:'地区专业服务',question:'地区专业服务推荐'}]};
+  expect(()=>validateReportModelOutput(value,current)).not.toThrow();
+  expect(()=>validateReportModelOutput({...value,products:[]},current)).toThrow('核心产品');
+  expect(()=>validateReportModelOutput({...value,products:[{...value.products[0]!,question:'其他问题'}]},current)).toThrow('Q1');
+  expect(()=>validateReportModelOutput({...value,stage:{...value.stage,id:'S4'}},{...input,stageId:'S4'})).toThrow('只有 S4.8');
+ });
+ it('requires every week of the content calendar without imposing arbitrary word counts',()=>{
+  const calendar=Array.from({length:12},(_,i)=>`| W${String(i+1).padStart(2,'0')} | 具体主题 | 渠道 | 证据与复测 |`).join('\n');
+  expect(()=>assertTwelveWeekCalendar(calendar)).not.toThrow();
+  expect(()=>assertTwelveWeekCalendar(calendar.replace('W08','另一周'))).toThrow('缺第8周');
+  expect(()=>assertTwelveWeekCalendar(Array.from({length:12},(_,i)=>`第${i+1}周：具体安排`).join('\n'))).not.toThrow();
+ });
+ it('rejects summaries, missing analysis columns and duplicate filler rather than counting characters',()=>{
+  expect(()=>assertReportStageStructure('S1','一句总结')).toThrow('独立分析章节');
+  expect(()=>assertReportStageStructure('S1','## 事实\n内容\n## 产品\n内容\n## 来源\n内容')).toThrow('资料缺口');
+  expect(()=>assertReportStageStructure('S1',output().stage.markdown)).not.toThrow();
+  const repeated='这是一段完全重复的通用建议，不能替代各个阶段的真实证据，也不能通过复制标题和正文伪装完整研究。';
+  expect(()=>assertReportStageStructure('S1',output().stage.markdown+'\n\n'+Array(8).fill(repeated).join('\n\n'))).toThrow('重复段落');
  });
 });

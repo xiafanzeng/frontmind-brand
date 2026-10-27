@@ -105,10 +105,10 @@
     "@alicloud/esa20240910": "3.14.0",
     "@alicloud/openapi-client": "0.4.15",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "pptxgenjs": "4.0.1",
     "@deepseek-ai/dsh-sdk-client": "0.2.0-rc.2",
     "@deepseek-ai/dsh-llm-pi-ai": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "typescript": "5.9.3",

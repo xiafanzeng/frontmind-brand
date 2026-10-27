@@ -1,7 +1,7 @@
 {
   "upstream": "FrontMind_Report_Workflow_一键交付版_v3_最终版.zip",
   "upstreamVersion": "v3-2026-10-12",
-  "purpose": "Reviewed workflow source and rendering reference; upstream instructions are not runtime authority.",
+  "purpose": "Active HTML workflow plus archived upstream algorithm references; only activeEntries enter model input.",
   "excluded": [
     ".venv",
     "molizhishu_api.json",
@@ -12,589 +12,945 @@
   ],
   "files": [
     {
+      "path": "source/00_先读我_全景报告最高原则.md",
+      "sha256": "ff2f61b55581511e5c4db0ae1d3ed99c4aaf17aa545a4336362e56f0da816150",
+      "bytes": 2333,
+      "role": "archived-reference",
+      "upstreamSha256": "c7dd89451779124b8c987364ce7f5080088d46c00e21d07f16905a87b6c4e93d"
+    },
+    {
+      "path": "source/README.md",
+      "sha256": "e525902184e37fbd36a59297834231cd49ca1bc136ceb2f297b0f050aff46d4c",
+      "bytes": 194,
+      "role": "archived-reference",
+      "upstreamSha256": "2559dc0f501238574ae6c72de1a4ce85b219efec8d04c36437245fb4fb96d568"
+    },
+    {
+      "path": "source/SKILL.md",
+      "sha256": "ff2f61b55581511e5c4db0ae1d3ed99c4aaf17aa545a4336362e56f0da816150",
+      "bytes": 2333,
+      "role": "archived-reference",
+      "upstreamSha256": "cf7ac7dc862ba980e2d33bae0257329c01183b4a9eb6d29166078208dc1b6bd2"
+    },
+    {
       "path": "source/Strategy_Workflow/README.md",
       "sha256": "2e2485d141554ebf440961033e895f9a2f0a3724fc2703f7ff57615baa51a89c",
-      "bytes": 1114
-    },
-    {
-      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/SKILL.md",
-      "sha256": "26210d0e4a4b17bdd5cfbe4183c50e08af500931d3b11b47d887cde5af645514",
-      "bytes": 13532
-    },
-    {
-      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/references/competitive-analysis-method.md",
-      "sha256": "84076b2c0682a14b6101a7861ae836fec62ad42a538ed006a2f244ab55192125",
-      "bytes": 4860
-    },
-    {
-      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/references/positioning-frameworks.md",
-      "sha256": "0da1ceb09f7aa741bbb1955ee0aa8fb216e4bf7e71ce77689fb649ce33167b26",
-      "bytes": 7391
-    },
-    {
-      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/scripts/positioning_validator.py",
-      "sha256": "69758a4bbaae9ec9bb71a6dd7d415663831b55bc4e202e4b6e2534e1a6b5b62f",
-      "bytes": 11641
-    },
-    {
-      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/templates/positioning_statement_template.md",
-      "sha256": "1a04dde1b5325173da235fd45a1c77ec9760777adbdfc744fd6f708df3881f8b",
-      "bytes": 3031
-    },
-    {
-      "path": "source/Strategy_Workflow/S11.成品格式整理师.skill/SKILL.md",
-      "sha256": "13ac043d8773b710dacddfa6d05fe2c2c7ad3c2331a1926546e52ae1c2c8b869",
-      "bytes": 7997
-    },
-    {
-      "path": "source/Strategy_Workflow/S11.成品格式整理师.skill/references/layout-quality-contract.md",
-      "sha256": "6917ed76e30e4054c5ae089d2aa18fe5b5dc5ffe40c6bbcc3db2232a64c41878",
-      "bytes": 3189
-    },
-    {
-      "path": "source/Strategy_Workflow/S11.成品格式整理师.skill/scripts/layout_quality_checker.py",
-      "sha256": "17b962d7aca6c3a4ba4dbbf57c749bc70716d749de922f8a64db0ab213daf92b",
-      "bytes": 10142
-    },
-    {
-      "path": "source/Strategy_Workflow/S11.成品格式整理师.skill/scripts/format_panorama_report.py",
-      "sha256": "93faec626255b3634ceffa5f375950140fd49e1bc4e217400a965beba500b579",
-      "bytes": 56665
-    },
-    {
-      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/SKILL.md",
-      "sha256": "cee707f7e7a7de1e5216f020d285739106e0ce89b2bccb56b27b8a6e9060ac08",
-      "bytes": 13980
-    },
-    {
-      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/references/trend-frameworks.md",
-      "sha256": "5d4204018cbb7c03c46aa2e803abd0a591a287fd5f2a8e6bff9638d08803bc43",
-      "bytes": 5394
-    },
-    {
-      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/references/signal-source-list.md",
-      "sha256": "af22001d793e21759fed52e0ba5333757eb2ccc82dabbcac223878b7eb8f02a3",
-      "bytes": 3381
-    },
-    {
-      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/scripts/signal_aggregator.py",
-      "sha256": "6a57f4797d9f0816e3eda3dededa5e91bc325b1e291a190adbe5e69f55a80ed2",
-      "bytes": 9832
-    },
-    {
-      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/templates/trend_scorecard.json",
-      "sha256": "533ce767d9684148497213f188d548f5faed4ed5c7640de1ae01053947c3e388",
-      "bytes": 3976
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/SKILL.md",
-      "sha256": "ddeb382bba8cee6c759edd7b8162da310b1960f3333376e742e60055bf7d0a9e",
-      "bytes": 19200
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/references/scoring-benchmarks.md",
-      "sha256": "c3df23680a770500e993b32428c7a9bb059a8b8b16385e7a218250369366e9be",
-      "bytes": 5936
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/references/bsas-methodology.md",
-      "sha256": "922c6d795352f4b521900a4ac595cd444e5abf4ed3a7cf3174392e92524bd660",
-      "bytes": 6169
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/scripts/bsas_calculator.py",
-      "sha256": "f8809906ed1b5fd49b4dda01a25363a71989100409f9f935ea5c3fc8a9fdea9d",
-      "bytes": 28731
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/templates/bsas_scorecard_schema.json",
-      "sha256": "c28f9eb4aa8521e364ad14cf6eef3c10a1ab9c8cea02c1fcf9246e929a213fae",
-      "bytes": 33282
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/templates/bsas_report_template.md",
-      "sha256": "07e7657bf5090005d1f9ad46c64e827f4248b8c5bb97fdf2082bc9fe449afb88",
-      "bytes": 8448
-    },
-    {
-      "path": "source/Strategy_Workflow/S12.GEO汇报PPT生成师.skill/SKILL.md",
-      "sha256": "9300c78979506c248689862535833e239cf5fa550fb1ed6809ff79062a870e85",
-      "bytes": 5362
-    },
-    {
-      "path": "source/Strategy_Workflow/S12.GEO汇报PPT生成师.skill/scripts/pptx_font_hardening.py",
-      "sha256": "77245f07da1d54a8f31e67c6ba93fa997ab78d63487b2e4effcc005277d70959",
-      "bytes": 2835
-    },
-    {
-      "path": "source/Strategy_Workflow/S12.GEO汇报PPT生成师.skill/scripts/render_pptx_pages.py",
-      "sha256": "5eee0d2daf531199eabfe1334180e5e7fe4837cc77fd7419cb70801bce318890",
-      "bytes": 2345
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/SKILL.md",
-      "sha256": "56fc4913f2970e283a8c7a410dbb2bc0a0eaa9a73886088dc4461abf4e155701",
-      "bytes": 13798
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/references/uploaded-citation-analysis-spreadsheet-contract.md",
-      "sha256": "a5164e9b046a9b5b62e1696852273129232ebffa8620a26f80ffcb982c64f4e0",
-      "bytes": 4485
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/references/uploaded-monitoring-spreadsheet-contract.md",
-      "sha256": "277acfbca92f3adea1185d62b323c2e1796054f2fb079c1befd877dfeb6ecd26",
-      "bytes": 4709
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/references/citation-intelligence.md",
-      "sha256": "762deacf0008f430c9be666ca3bfa365b3025b89563814bd247b2f11169ed287",
-      "bytes": 7256
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/references/diagnosis-metrics.md",
-      "sha256": "e3555d580f06f0d2f7139effc5d25831f17e67992d265bb6af2232899b4997d0",
-      "bytes": 9223
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/ranking_position_calculator.py",
-      "sha256": "6853fa264914a04336eefdb0361fe6ada7d1344973abbc60b1bc1f251ccea4fb",
-      "bytes": 17821
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/monitoring_evidence_helpers.py",
-      "sha256": "90c03d1aa886006ee65eaf7870ed788c495337f5bd5a1168b09a8c4531a7879e",
-      "bytes": 3905
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/import_citation_analysis_spreadsheet.py",
-      "sha256": "4523add2fc774bdd5963cd0e663cf23d8fe0e030a3bf4c57685857e93ccc18ff",
-      "bytes": 26149
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/gap_calculator.py",
-      "sha256": "b14b2ff09e9b5a6877934e9f2f2b5761bdc5f7e4b5a371fa6d98736b306d1d47",
-      "bytes": 11319
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/import_monitoring_spreadsheet.py",
-      "sha256": "818ba2ac270021c41f449bc6b8f781c3c4aaca644ce02f6d1bc9d24059f76822",
-      "bytes": 33997
-    },
-    {
-      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/templates/diagnosis_data_schema.json",
-      "sha256": "511bf959567c0a646046d3165f1a2e92acb24587ae4b156f1a796347af9b0e49",
-      "bytes": 26759
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/SKILL.md",
-      "sha256": "47d3174ee67264d52a056332b6697d6903a0386f9e3f61e5710d03fdc3f3debe",
-      "bytes": 11296
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/references/panorama-report-page-blueprint.md",
-      "sha256": "643b1e0fd54d5e47b84db6bd1c646bdfd850ad72e7e566bb78f23e1211d4bca9",
-      "bytes": 6550
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/references/report_data_schema.md",
-      "sha256": "6cf3f0976ba52995d95a1dcacb3b2e7e3980167eb985015d0670b4390561d137",
-      "bytes": 7487
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/references/consulting-report-template-contract.md",
-      "sha256": "5eff842649e38cc373bdc6463c9a1db863697a645c5c2f84f7ee95ef41c4464a",
-      "bytes": 6246
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/scripts/render_panorama_report.py",
-      "sha256": "9cd22709af67ed8bcc088bc42b09a01de3ca6dd07bee0d730c2aa757317be9da",
-      "bytes": 214180
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/scripts/pre_render_file_check.py",
-      "sha256": "46e69a98a2d32a5ed3829c3f46f88960dea3cf0813bf4f242ebcef2271cd51bd",
-      "bytes": 21248
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/scripts/template_compliance_checker.py",
-      "sha256": "55f83ffa43cdb915c4f0b821b942d7990d1f4e86261ccac7cadf097ac12199bd",
-      "bytes": 9072
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/templates/geo_workflow_diagram.svg",
-      "sha256": "09c349d9ddcb8ba21d494cdacb8d1d40b81625fa50d32d66697f11498b75bfa5",
-      "bytes": 36046
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/templates/frontmind_cover_front_back.pdf",
-      "sha256": "e37c51f793649fcf561c80d80b4b80ae1f70c470ec8a6956523b1795f369872d",
-      "bytes": 3407340
-    },
-    {
-      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/templates/panorama_report_template.html",
-      "sha256": "142e40832f1287c8ee1463e99e1f08af8c0068a2feaf60fe2b73e93714525fee",
-      "bytes": 23760
-    },
-    {
-      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/SKILL.md",
-      "sha256": "b18515552f9f1a8f192a5f11e080f66f653484acc947bc0b4d1722af6bdc3b23",
-      "bytes": 11646
-    },
-    {
-      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/references/enablement-framework.md",
-      "sha256": "8b754e71b31bb1241e3e47e2804ad0ca01b2cfbff71c9c7e2a827bd72254f915",
-      "bytes": 5865
-    },
-    {
-      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/references/enablement-modules.md",
-      "sha256": "6699643fbb917c401807ea28e18d302ac3fcc9c99316972497280ee2934b092b",
-      "bytes": 6887
-    },
-    {
-      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/scripts/strategy_pack_assembler.py",
-      "sha256": "fadc5fc9d57d23a19415e8e842d29c45c040db7e22439fdf29506921146fe03b",
-      "bytes": 6176
-    },
-    {
-      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/scripts/completeness_checker.py",
-      "sha256": "83e2ff6a65e083407c7b74eee860e41e098f399b4f867782de2a279f72dae5fb",
-      "bytes": 19468
-    },
-    {
-      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/templates/enablement_package_template.md",
-      "sha256": "6c74589e540757e29771b85a7f6c9279ffe6383093a1ec31064ae860b209de84",
-      "bytes": 8244
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/SKILL.md",
-      "sha256": "9456e2ee629be9c1e6dde1bf586c94fde587b88bd67f57e65ce7ca07ab498ad0",
-      "bytes": 14134
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/references/question-path-framework.md",
-      "sha256": "e84414c0c4a328f22770ec5fe9ad9108c63f685238da422ea6c9076649772245",
-      "bytes": 4198
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/references/qa-architecture-method.md",
-      "sha256": "9a9b8445bb2ce62babbbf60b60eac628aea1973c951bf7dde5ed5cde5c922629",
-      "bytes": 7188
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/references/landing-page-anatomy.md",
-      "sha256": "f26fc852ad44d750dc17fd27f54e92e72efd009b9e7a6d9e8e15b5c0ec793dd3",
-      "bytes": 4803
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/scripts/token_hit_rate_checker.py",
-      "sha256": "109a530e77c92754a6236ee5caec05d437920e2cbd30e54ce38b3f8fecfcb67b",
-      "bytes": 5022
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/scripts/qa_matrix_validator.py",
-      "sha256": "1767daa2c1ba3863c6b9df1608000a788db1162e72ef982ce98ef98ea1a1b123",
-      "bytes": 6994
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/templates/qa_matrix_schema.json",
-      "sha256": "b75b04483bfad5805b96d78724c13ccd5e99d7dafad63294bb75dc56cc33548a",
-      "bytes": 4512
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/templates/landing_page_blueprint.md",
-      "sha256": "fdcb628070e9af4fea3811cae71d8a8219b2d1ad269a439e27a9f4522d5cccc7",
-      "bytes": 3217
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/templates/qa_tree_schema.json",
-      "sha256": "a5f10102e9c66e37ee1dd59cc53f7886f7565f8b17fac3448887096286a2f89c",
-      "bytes": 3316
-    },
-    {
-      "path": "source/Strategy_Workflow/S8.问答架构师.skill/templates/content_calendar_schema.json",
-      "sha256": "e6ed4d3b20ff2d075419d1fc931d9248eb311cdd51895a12fda716e6ff78c534",
-      "bytes": 2992
-    },
-    {
-      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/SKILL.md",
-      "sha256": "a585e323b56f2cb9ba54ce9aac18af110c8b2d73ab7dec3c3874911df5e0e262",
-      "bytes": 15058
-    },
-    {
-      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/references/verbal-identity-method.md",
-      "sha256": "736c9a889035ce5cfefc8332d3f259a3a42a4ea6f725d3c2ad39e89cc1ab8da5",
-      "bytes": 7341
-    },
-    {
-      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/scripts/token_validator.py",
-      "sha256": "13e9c0691aa95b62c1f0746d356d46915df1af5b03c1d7feb976d5d731e89c58",
-      "bytes": 13966
-    },
-    {
-      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/templates/verbal_handbook_template.md",
-      "sha256": "49856dc34c205e4cc51eb2aba812eb1ae30cddb751566c1b88ad295222f38128",
-      "bytes": 5615
-    },
-    {
-      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/templates/verbal_token_schema.json",
-      "sha256": "b7e3db87556a37e7ee465a69221effbf96a0d97b4b8bfb0e8fde9de25b8f9223",
-      "bytes": 3264
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/project-input-contract.md",
-      "sha256": "7c0ba9fc720f29a0a1d5a2b0a67f3bf22412c711342e83c49fe80e981ffeafd8",
-      "bytes": 5890
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/report-template-quality-gates.md",
-      "sha256": "7aaee74dda9dc6db6ee0de2365fc6df53300c386ed07998cdea3b039c8b4918f",
-      "bytes": 4767
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/brand_facts_schema.json",
-      "sha256": "f5bc25df3aef2a9499b414136eb9aa6898b5c6ecd3f385e37a937b8f3edb53b2",
-      "bytes": 18683
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/output-format-standard.md",
-      "sha256": "c22755eb78b60b9be9a3a3294011f69372e418fc44283070b56a416fea12f755",
-      "bytes": 7162
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/geo_pdf_generator.py",
-      "sha256": "778a405dfddf536cb5e3b63b8bfcd74ef659d6b0238d7c548c7e516a926693a0",
-      "bytes": 9038
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/全链路标准产物文件清单.md",
-      "sha256": "216716637714247e817003b08ac31c4e563584fbbc10e48825648ff0c8d890c2",
-      "bytes": 6151
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/术语与模板字段闭环契约.md",
-      "sha256": "c41e7f8801d78e4f5e524d207f0bfc76e08ccd07ec538bf7bfa6e03e7770df70",
-      "bytes": 3709
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/core-execution-principles.md",
-      "sha256": "44bdfa3115bc16fd49892a1a587ed725043ca9f203eebb9e087f050f39f5c5a3",
-      "bytes": 2944
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/source-depth-and-coverage-contract.md",
-      "sha256": "78df715c0a6c056d95c4f9d56d70b06dbe06e2bcd3bf4c6e30c1fde3184d7467",
-      "bytes": 7604
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/silent-source-file-quality-gate.md",
-      "sha256": "6df03fdf2ca3cc502cdb472ec4482f64d0ad3d4c50921ddfdf33078ea6b2f28b",
-      "bytes": 1470
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/stage-output-registry.json",
-      "sha256": "513e962ed2a382162ca08009941a5eb88ed0d5d00de16f974b2121356e6aa1ba",
-      "bytes": 13971
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/pdf_cover_contract.py",
-      "sha256": "847a1c3b6fb82a6e538c1210ff0bc543f335d8099cd50e12c229ba3894f6e482",
-      "bytes": 8161
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/wide-research-execution-contract.md",
-      "sha256": "d4c6529581182dc3da12d1ec3bf77fa8ba4ec944473ca080f077137426c33d14",
-      "bytes": 11778
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/全景报告内容完整性与丰富度契约.md",
-      "sha256": "961b5ad3cc54924a5373a12bef923e5877d97d6cb95748daf9976235d0e5aad6",
-      "bytes": 7974
-    },
-    {
-      "path": "source/Strategy_Workflow/shared/molizhishu-api-contract.md",
-      "sha256": "ed79b11623bcfe6606f633f82e6db64fea05bb9e072fcd4c3250eab51357209a",
-      "bytes": 5790
-    },
-    {
-      "path": "source/Strategy_Workflow/S9.8.内容机会标题钩子生成师.skill/SKILL.md",
-      "sha256": "4caf6a9b426f3615911ade1ade716309fafa9ab685bb09ce818d4b7cb0583e78",
-      "bytes": 5091
-    },
-    {
-      "path": "source/Strategy_Workflow/S9.8.内容机会标题钩子生成师.skill/scripts/title_hook_generator.py",
-      "sha256": "dac5c662551e65e8bd93f036d265dacbe424fb567d1d727433efab4989dc41c6",
-      "bytes": 8483
-    },
-    {
-      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/SKILL.md",
-      "sha256": "39ece943fa339109bfa58f40bdf7fd7be45858953cb44144756b3c6fffe35ee9",
-      "bytes": 45357
-    },
-    {
-      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/references/brand-facts-schema.md",
-      "sha256": "2ae33e7bd728566977e7a6651761ad29368bf468fa34de870f7b3f9ac43f3076",
-      "bytes": 15176
-    },
-    {
-      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/references/industry-intel-playbook.md",
-      "sha256": "45e8b7501ae9f0c65a854ac9c8f0b05b16145d82f71b0bdd7502f94c59e3097a",
-      "bytes": 22002
-    },
-    {
-      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/references/info-collection-template.md",
-      "sha256": "7047f2470597583b20d71c8f0f43b6eac2a7cccadc14501ed18e3ec1c8b8dc58",
-      "bytes": 7365
-    },
-    {
-      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/scripts/visual_scraper.py",
-      "sha256": "893ec9c6203accb4048657bf7fe5857f3991ab4de9e842f70be7f2b61be6b6e4",
-      "bytes": 16062
-    },
-    {
-      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/scripts/json_schema_validator.py",
-      "sha256": "973c8f156449251fb8ccaa07083dd72bb93e34f11fad1313719c3fc1e4dd649f",
-      "bytes": 18857
-    },
-    {
-      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/scripts/gap_reporter.py",
-      "sha256": "c010a2d8da47e6c913615c29023906f5f82d864a8597fdef7278584241977902",
-      "bytes": 21921
-    },
-    {
-      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/templates/brand_knowledge_md_template.md",
-      "sha256": "b48c193c9d9762f7e3944d9e3390694f806d6a7968531eb1a3e21dea1f24a4f3",
-      "bytes": 9920
-    },
-    {
-      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/SKILL.md",
-      "sha256": "51dfb07b1db89a2bee2bd364cf120534c56e8d0165424925d639293562c22ba1",
-      "bytes": 25123
-    },
-    {
-      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/references/visual-symbol-system-method.md",
-      "sha256": "12ad1b21e3eeaf977e3cfaca8e55b8d3c84525f36a82ea26c5b804fff795aca7",
-      "bytes": 9662
-    },
-    {
-      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/references/ai-image-tool-prompt-syntax.md",
-      "sha256": "5f8b46a8ba0e761d801f74c33c0d8204796e3f3a80fab9152008dfbf46def921",
-      "bytes": 6558
-    },
-    {
-      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/scripts/clip_similarity_scorer.py",
-      "sha256": "07709b89dd0962ba4e5fc745562243d95a2d9a056b93cf665792da5a6cefb188",
-      "bytes": 9521
-    },
-    {
-      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/scripts/prompt_pack_validator.py",
-      "sha256": "e589d30bc5976c1b4fd093c5a0500e895b6d18ad01ee5b3d8b1690107a44061c",
-      "bytes": 15673
-    },
-    {
-      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/templates/visual_prompt_pack_schema.json",
-      "sha256": "8c05d1876c5fcf1ea00cd6f65488ab2fa1dd9dbf6b739da520b11d32565b841a",
-      "bytes": 8389
-    },
-    {
-      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/SKILL.md",
-      "sha256": "cefeb7e9670262d485dbde5d7ca290da54b53fcc4837363c09ac32ed21a1fe90",
-      "bytes": 15661
-    },
-    {
-      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/references/atlas-methodology.md",
-      "sha256": "3f31dc1bc46e784800ad786e08da18cd76c5a535150aaa880651f658eae32bb4",
-      "bytes": 5877
-    },
-    {
-      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/references/two-layer-question-framework.md",
-      "sha256": "2fac1ba6021f469f4907705d0d8ae8ad3d2d31802e2ecd890e4becf30ee560eb",
-      "bytes": 5412
-    },
-    {
-      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/scripts/atlas_validator.py",
-      "sha256": "3f4f4b942235b15cea34fa80639bc36fc8f575ee170d1f256de9dd2a9774a484",
-      "bytes": 13826
-    },
-    {
-      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/templates/atlas_report_template.md",
-      "sha256": "44cab1a5815fa984ff25e4c3423451b55f33f9b3defc230cd26e3e2584f0412f",
-      "bytes": 4270
+      "bytes": 1114,
+      "role": "archived-reference",
+      "upstreamSha256": "2e2485d141554ebf440961033e895f9a2f0a3724fc2703f7ff57615baa51a89c"
     },
     {
       "path": "source/Strategy_Workflow/S0.策略编排师.skill/SKILL.md",
       "sha256": "4326a103e3eb929fc99294ab39a69ed30165d1cb9b6c56e4229d79c833fc7bc9",
-      "bytes": 11008
+      "bytes": 11008,
+      "role": "archived-reference",
+      "upstreamSha256": "4326a103e3eb929fc99294ab39a69ed30165d1cb9b6c56e4229d79c833fc7bc9"
     },
     {
       "path": "source/Strategy_Workflow/S0.策略编排师.skill/references/strategy-orchestration-rules.md",
       "sha256": "320f03b03ac1eafff3c1273ea6e091028e41b5971792a487f8809c68b0821aae",
-      "bytes": 3429
-    },
-    {
-      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/output_contract_normalizer.py",
-      "sha256": "850da3598c975e80ee1cdb2ff003fe398875e1c798d2bcdaa130ac2b2376522c",
-      "bytes": 12665
-    },
-    {
-      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/workflow_reading_guard.py",
-      "sha256": "a509aab37cfc897c0ddb77d3fcf927d8da7a2fceb75191fe56ed40c36debdaac",
-      "bytes": 9762
-    },
-    {
-      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/generate_fixed_monitoring_questions.py",
-      "sha256": "6a5259ca21493785c7fb758cbdc94f9a858e2e82977e9ce28575ccc2c4be9f15",
-      "bytes": 6197
-    },
-    {
-      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/template_compliance_checker.py",
-      "sha256": "ac47c580d07b8da858ea409f39be4f957e66f9bd4408d8b2ec6cfbdf9e9e3727",
-      "bytes": 30861
-    },
-    {
-      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/fetch_molizhishu_monitoring.py",
-      "sha256": "d3a18b2b3bc0878a4df7ebed0a73693e4505555d7b9604c781678cbc2a686f0f",
-      "bytes": 22689
+      "bytes": 3429,
+      "role": "archived-reference",
+      "upstreamSha256": "320f03b03ac1eafff3c1273ea6e091028e41b5971792a487f8809c68b0821aae"
     },
     {
       "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/confirm_fixed_monitoring_questions.py",
       "sha256": "2cee0cfd446e171ccda7e1021b039d2b6329b22158e13f2f622cbe1babc54ffd",
-      "bytes": 4409
+      "bytes": 4409,
+      "role": "archived-reference",
+      "upstreamSha256": "2cee0cfd446e171ccda7e1021b039d2b6329b22158e13f2f622cbe1babc54ffd"
+    },
+    {
+      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/fetch_molizhishu_monitoring.py",
+      "sha256": "d3a18b2b3bc0878a4df7ebed0a73693e4505555d7b9604c781678cbc2a686f0f",
+      "bytes": 22689,
+      "role": "archived-reference",
+      "upstreamSha256": "d3a18b2b3bc0878a4df7ebed0a73693e4505555d7b9604c781678cbc2a686f0f"
     },
     {
       "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/final_delivery_packer.py",
       "sha256": "f084e5dda1f7f111a4ece18636d4e49885ebfda981727bf21a573e361a79e97d",
-      "bytes": 41873
+      "bytes": 41873,
+      "role": "archived-reference",
+      "upstreamSha256": "f084e5dda1f7f111a4ece18636d4e49885ebfda981727bf21a573e361a79e97d"
+    },
+    {
+      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/generate_fixed_monitoring_questions.py",
+      "sha256": "6a5259ca21493785c7fb758cbdc94f9a858e2e82977e9ce28575ccc2c4be9f15",
+      "bytes": 6197,
+      "role": "archived-reference",
+      "upstreamSha256": "6a5259ca21493785c7fb758cbdc94f9a858e2e82977e9ce28575ccc2c4be9f15"
+    },
+    {
+      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/output_contract_normalizer.py",
+      "sha256": "850da3598c975e80ee1cdb2ff003fe398875e1c798d2bcdaa130ac2b2376522c",
+      "bytes": 12665,
+      "role": "archived-reference",
+      "upstreamSha256": "850da3598c975e80ee1cdb2ff003fe398875e1c798d2bcdaa130ac2b2376522c"
     },
     {
       "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/project_input_resolver.py",
       "sha256": "6f344f20b3d3cb9918b0aa52f97a01554598e4d0942a4d1fe6322524e6c2eeeb",
-      "bytes": 12888
-    },
-    {
-      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/unified_pdf_report_generator.py",
-      "sha256": "82d063d33d92f1117e25304e9644003d5cdf6a6ce3c2610d9b1300fc1e16be1d",
-      "bytes": 9014
+      "bytes": 12888,
+      "role": "archived-reference",
+      "upstreamSha256": "6f344f20b3d3cb9918b0aa52f97a01554598e4d0942a4d1fe6322524e6c2eeeb"
     },
     {
       "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/stage_execution_checker.py",
       "sha256": "0e43199a0ed9a43b1cc6666880aae9620c7e1c5e76f45bf5bcf845710e4b65dd",
-      "bytes": 34761
+      "bytes": 34761,
+      "role": "archived-reference",
+      "upstreamSha256": "0e43199a0ed9a43b1cc6666880aae9620c7e1c5e76f45bf5bcf845710e4b65dd"
     },
     {
-      "path": "source/README.md",
-      "sha256": "2559dc0f501238574ae6c72de1a4ce85b219efec8d04c36437245fb4fb96d568",
-      "bytes": 10989
+      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/template_compliance_checker.py",
+      "sha256": "ac47c580d07b8da858ea409f39be4f957e66f9bd4408d8b2ec6cfbdf9e9e3727",
+      "bytes": 30861,
+      "role": "archived-reference",
+      "upstreamSha256": "ac47c580d07b8da858ea409f39be4f957e66f9bd4408d8b2ec6cfbdf9e9e3727"
     },
     {
-      "path": "source/SKILL.md",
-      "sha256": "cf7ac7dc862ba980e2d33bae0257329c01183b4a9eb6d29166078208dc1b6bd2",
-      "bytes": 11133
+      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/unified_pdf_report_generator.py",
+      "sha256": "82d063d33d92f1117e25304e9644003d5cdf6a6ce3c2610d9b1300fc1e16be1d",
+      "bytes": 9014,
+      "role": "archived-reference",
+      "upstreamSha256": "82d063d33d92f1117e25304e9644003d5cdf6a6ce3c2610d9b1300fc1e16be1d"
     },
     {
-      "path": "source/00_先读我_全景报告最高原则.md",
-      "sha256": "c7dd89451779124b8c987364ce7f5080088d46c00e21d07f16905a87b6c4e93d",
-      "bytes": 14089
+      "path": "source/Strategy_Workflow/S0.策略编排师.skill/scripts/workflow_reading_guard.py",
+      "sha256": "a509aab37cfc897c0ddb77d3fcf927d8da7a2fceb75191fe56ed40c36debdaac",
+      "bytes": 9762,
+      "role": "archived-reference",
+      "upstreamSha256": "a509aab37cfc897c0ddb77d3fcf927d8da7a2fceb75191fe56ed40c36debdaac"
+    },
+    {
+      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/SKILL.md",
+      "sha256": "39ece943fa339109bfa58f40bdf7fd7be45858953cb44144756b3c6fffe35ee9",
+      "bytes": 45357,
+      "role": "archived-reference",
+      "upstreamSha256": "39ece943fa339109bfa58f40bdf7fd7be45858953cb44144756b3c6fffe35ee9"
+    },
+    {
+      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/references/brand-facts-schema.md",
+      "sha256": "2ae33e7bd728566977e7a6651761ad29368bf468fa34de870f7b3f9ac43f3076",
+      "bytes": 15176,
+      "role": "archived-reference",
+      "upstreamSha256": "2ae33e7bd728566977e7a6651761ad29368bf468fa34de870f7b3f9ac43f3076"
+    },
+    {
+      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/references/industry-intel-playbook.md",
+      "sha256": "45e8b7501ae9f0c65a854ac9c8f0b05b16145d82f71b0bdd7502f94c59e3097a",
+      "bytes": 22002,
+      "role": "archived-reference",
+      "upstreamSha256": "45e8b7501ae9f0c65a854ac9c8f0b05b16145d82f71b0bdd7502f94c59e3097a"
+    },
+    {
+      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/references/info-collection-template.md",
+      "sha256": "7047f2470597583b20d71c8f0f43b6eac2a7cccadc14501ed18e3ec1c8b8dc58",
+      "bytes": 7365,
+      "role": "archived-reference",
+      "upstreamSha256": "7047f2470597583b20d71c8f0f43b6eac2a7cccadc14501ed18e3ec1c8b8dc58"
+    },
+    {
+      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/scripts/gap_reporter.py",
+      "sha256": "c010a2d8da47e6c913615c29023906f5f82d864a8597fdef7278584241977902",
+      "bytes": 21921,
+      "role": "archived-reference",
+      "upstreamSha256": "c010a2d8da47e6c913615c29023906f5f82d864a8597fdef7278584241977902"
+    },
+    {
+      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/scripts/json_schema_validator.py",
+      "sha256": "973c8f156449251fb8ccaa07083dd72bb93e34f11fad1313719c3fc1e4dd649f",
+      "bytes": 18857,
+      "role": "archived-reference",
+      "upstreamSha256": "973c8f156449251fb8ccaa07083dd72bb93e34f11fad1313719c3fc1e4dd649f"
+    },
+    {
+      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/scripts/visual_scraper.py",
+      "sha256": "893ec9c6203accb4048657bf7fe5857f3991ab4de9e842f70be7f2b61be6b6e4",
+      "bytes": 16062,
+      "role": "archived-reference",
+      "upstreamSha256": "893ec9c6203accb4048657bf7fe5857f3991ab4de9e842f70be7f2b61be6b6e4"
+    },
+    {
+      "path": "source/Strategy_Workflow/S1.品牌资产知识库.skill/templates/brand_knowledge_md_template.md",
+      "sha256": "b48c193c9d9762f7e3944d9e3390694f806d6a7968531eb1a3e21dea1f24a4f3",
+      "bytes": 9920,
+      "role": "archived-reference",
+      "upstreamSha256": "b48c193c9d9762f7e3944d9e3390694f806d6a7968531eb1a3e21dea1f24a4f3"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/SKILL.md",
+      "sha256": "47d3174ee67264d52a056332b6697d6903a0386f9e3f61e5710d03fdc3f3debe",
+      "bytes": 11296,
+      "role": "archived-reference",
+      "upstreamSha256": "47d3174ee67264d52a056332b6697d6903a0386f9e3f61e5710d03fdc3f3debe"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/references/consulting-report-template-contract.md",
+      "sha256": "5eff842649e38cc373bdc6463c9a1db863697a645c5c2f84f7ee95ef41c4464a",
+      "bytes": 6246,
+      "role": "archived-reference",
+      "upstreamSha256": "5eff842649e38cc373bdc6463c9a1db863697a645c5c2f84f7ee95ef41c4464a"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/references/panorama-report-page-blueprint.md",
+      "sha256": "643b1e0fd54d5e47b84db6bd1c646bdfd850ad72e7e566bb78f23e1211d4bca9",
+      "bytes": 6550,
+      "role": "archived-reference",
+      "upstreamSha256": "643b1e0fd54d5e47b84db6bd1c646bdfd850ad72e7e566bb78f23e1211d4bca9"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/references/report_data_schema.md",
+      "sha256": "6cf3f0976ba52995d95a1dcacb3b2e7e3980167eb985015d0670b4390561d137",
+      "bytes": 7487,
+      "role": "archived-reference",
+      "upstreamSha256": "6cf3f0976ba52995d95a1dcacb3b2e7e3980167eb985015d0670b4390561d137"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/scripts/pre_render_file_check.py",
+      "sha256": "46e69a98a2d32a5ed3829c3f46f88960dea3cf0813bf4f242ebcef2271cd51bd",
+      "bytes": 21248,
+      "role": "archived-reference",
+      "upstreamSha256": "46e69a98a2d32a5ed3829c3f46f88960dea3cf0813bf4f242ebcef2271cd51bd"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/scripts/render_panorama_report.py",
+      "sha256": "9cd22709af67ed8bcc088bc42b09a01de3ca6dd07bee0d730c2aa757317be9da",
+      "bytes": 214180,
+      "role": "archived-reference",
+      "upstreamSha256": "9cd22709af67ed8bcc088bc42b09a01de3ca6dd07bee0d730c2aa757317be9da"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/scripts/template_compliance_checker.py",
+      "sha256": "55f83ffa43cdb915c4f0b821b942d7990d1f4e86261ccac7cadf097ac12199bd",
+      "bytes": 9072,
+      "role": "archived-reference",
+      "upstreamSha256": "55f83ffa43cdb915c4f0b821b942d7990d1f4e86261ccac7cadf097ac12199bd"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/templates/frontmind_cover_front_back.pdf",
+      "sha256": "e37c51f793649fcf561c80d80b4b80ae1f70c470ec8a6956523b1795f369872d",
+      "bytes": 3407340,
+      "role": "archived-reference",
+      "upstreamSha256": "e37c51f793649fcf561c80d80b4b80ae1f70c470ec8a6956523b1795f369872d"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/templates/geo_workflow_diagram.svg",
+      "sha256": "09c349d9ddcb8ba21d494cdacb8d1d40b81625fa50d32d66697f11498b75bfa5",
+      "bytes": 36046,
+      "role": "archived-reference",
+      "upstreamSha256": "09c349d9ddcb8ba21d494cdacb8d1d40b81625fa50d32d66697f11498b75bfa5"
+    },
+    {
+      "path": "source/Strategy_Workflow/S10.AI智能品牌优化方案全景报告生成师.skill/templates/panorama_report_template.html",
+      "sha256": "142e40832f1287c8ee1463e99e1f08af8c0068a2feaf60fe2b73e93714525fee",
+      "bytes": 23760,
+      "role": "archived-reference",
+      "upstreamSha256": "142e40832f1287c8ee1463e99e1f08af8c0068a2feaf60fe2b73e93714525fee"
+    },
+    {
+      "path": "source/Strategy_Workflow/S11.成品格式整理师.skill/SKILL.md",
+      "sha256": "13ac043d8773b710dacddfa6d05fe2c2c7ad3c2331a1926546e52ae1c2c8b869",
+      "bytes": 7997,
+      "role": "archived-reference",
+      "upstreamSha256": "13ac043d8773b710dacddfa6d05fe2c2c7ad3c2331a1926546e52ae1c2c8b869"
+    },
+    {
+      "path": "source/Strategy_Workflow/S11.成品格式整理师.skill/references/layout-quality-contract.md",
+      "sha256": "6917ed76e30e4054c5ae089d2aa18fe5b5dc5ffe40c6bbcc3db2232a64c41878",
+      "bytes": 3189,
+      "role": "archived-reference",
+      "upstreamSha256": "6917ed76e30e4054c5ae089d2aa18fe5b5dc5ffe40c6bbcc3db2232a64c41878"
+    },
+    {
+      "path": "source/Strategy_Workflow/S11.成品格式整理师.skill/scripts/format_panorama_report.py",
+      "sha256": "93faec626255b3634ceffa5f375950140fd49e1bc4e217400a965beba500b579",
+      "bytes": 56665,
+      "role": "archived-reference",
+      "upstreamSha256": "93faec626255b3634ceffa5f375950140fd49e1bc4e217400a965beba500b579"
+    },
+    {
+      "path": "source/Strategy_Workflow/S11.成品格式整理师.skill/scripts/layout_quality_checker.py",
+      "sha256": "17b962d7aca6c3a4ba4dbbf57c749bc70716d749de922f8a64db0ab213daf92b",
+      "bytes": 10142,
+      "role": "archived-reference",
+      "upstreamSha256": "17b962d7aca6c3a4ba4dbbf57c749bc70716d749de922f8a64db0ab213daf92b"
+    },
+    {
+      "path": "source/Strategy_Workflow/S12.GEO汇报PPT生成师.skill/SKILL.md",
+      "sha256": "9300c78979506c248689862535833e239cf5fa550fb1ed6809ff79062a870e85",
+      "bytes": 5362,
+      "role": "archived-reference",
+      "upstreamSha256": "9300c78979506c248689862535833e239cf5fa550fb1ed6809ff79062a870e85"
+    },
+    {
+      "path": "source/Strategy_Workflow/S12.GEO汇报PPT生成师.skill/scripts/pptx_font_hardening.py",
+      "sha256": "77245f07da1d54a8f31e67c6ba93fa997ab78d63487b2e4effcc005277d70959",
+      "bytes": 2835,
+      "role": "archived-reference",
+      "upstreamSha256": "77245f07da1d54a8f31e67c6ba93fa997ab78d63487b2e4effcc005277d70959"
+    },
+    {
+      "path": "source/Strategy_Workflow/S12.GEO汇报PPT生成师.skill/scripts/render_pptx_pages.py",
+      "sha256": "5eee0d2daf531199eabfe1334180e5e7fe4837cc77fd7419cb70801bce318890",
+      "bytes": 2345,
+      "role": "archived-reference",
+      "upstreamSha256": "5eee0d2daf531199eabfe1334180e5e7fe4837cc77fd7419cb70801bce318890"
+    },
+    {
+      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/SKILL.md",
+      "sha256": "cefeb7e9670262d485dbde5d7ca290da54b53fcc4837363c09ac32ed21a1fe90",
+      "bytes": 15661,
+      "role": "archived-reference",
+      "upstreamSha256": "cefeb7e9670262d485dbde5d7ca290da54b53fcc4837363c09ac32ed21a1fe90"
+    },
+    {
+      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/references/atlas-methodology.md",
+      "sha256": "3f31dc1bc46e784800ad786e08da18cd76c5a535150aaa880651f658eae32bb4",
+      "bytes": 5877,
+      "role": "archived-reference",
+      "upstreamSha256": "3f31dc1bc46e784800ad786e08da18cd76c5a535150aaa880651f658eae32bb4"
+    },
+    {
+      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/references/two-layer-question-framework.md",
+      "sha256": "2fac1ba6021f469f4907705d0d8ae8ad3d2d31802e2ecd890e4becf30ee560eb",
+      "bytes": 5412,
+      "role": "archived-reference",
+      "upstreamSha256": "2fac1ba6021f469f4907705d0d8ae8ad3d2d31802e2ecd890e4becf30ee560eb"
+    },
+    {
+      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/scripts/atlas_validator.py",
+      "sha256": "3f4f4b942235b15cea34fa80639bc36fc8f575ee170d1f256de9dd2a9774a484",
+      "bytes": 13826,
+      "role": "archived-reference",
+      "upstreamSha256": "3f4f4b942235b15cea34fa80639bc36fc8f575ee170d1f256de9dd2a9774a484"
+    },
+    {
+      "path": "source/Strategy_Workflow/S2.营销图谱专家.skill/templates/atlas_report_template.md",
+      "sha256": "44cab1a5815fa984ff25e4c3423451b55f33f9b3defc230cd26e3e2584f0412f",
+      "bytes": 4270,
+      "role": "archived-reference",
+      "upstreamSha256": "44cab1a5815fa984ff25e4c3423451b55f33f9b3defc230cd26e3e2584f0412f"
+    },
+    {
+      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/SKILL.md",
+      "sha256": "cee707f7e7a7de1e5216f020d285739106e0ce89b2bccb56b27b8a6e9060ac08",
+      "bytes": 13980,
+      "role": "archived-reference",
+      "upstreamSha256": "cee707f7e7a7de1e5216f020d285739106e0ce89b2bccb56b27b8a6e9060ac08"
+    },
+    {
+      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/references/signal-source-list.md",
+      "sha256": "af22001d793e21759fed52e0ba5333757eb2ccc82dabbcac223878b7eb8f02a3",
+      "bytes": 3381,
+      "role": "archived-reference",
+      "upstreamSha256": "af22001d793e21759fed52e0ba5333757eb2ccc82dabbcac223878b7eb8f02a3"
+    },
+    {
+      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/references/trend-frameworks.md",
+      "sha256": "5d4204018cbb7c03c46aa2e803abd0a591a287fd5f2a8e6bff9638d08803bc43",
+      "bytes": 5394,
+      "role": "archived-reference",
+      "upstreamSha256": "5d4204018cbb7c03c46aa2e803abd0a591a287fd5f2a8e6bff9638d08803bc43"
+    },
+    {
+      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/scripts/signal_aggregator.py",
+      "sha256": "6a57f4797d9f0816e3eda3dededa5e91bc325b1e291a190adbe5e69f55a80ed2",
+      "bytes": 9832,
+      "role": "archived-reference",
+      "upstreamSha256": "6a57f4797d9f0816e3eda3dededa5e91bc325b1e291a190adbe5e69f55a80ed2"
+    },
+    {
+      "path": "source/Strategy_Workflow/S3.品类趋势研判师.skill/templates/trend_scorecard.json",
+      "sha256": "533ce767d9684148497213f188d548f5faed4ed5c7640de1ae01053947c3e388",
+      "bytes": 3976,
+      "role": "archived-reference",
+      "upstreamSha256": "533ce767d9684148497213f188d548f5faed4ed5c7640de1ae01053947c3e388"
+    },
+    {
+      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/SKILL.md",
+      "sha256": "26210d0e4a4b17bdd5cfbe4183c50e08af500931d3b11b47d887cde5af645514",
+      "bytes": 13532,
+      "role": "archived-reference",
+      "upstreamSha256": "26210d0e4a4b17bdd5cfbe4183c50e08af500931d3b11b47d887cde5af645514"
+    },
+    {
+      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/references/competitive-analysis-method.md",
+      "sha256": "84076b2c0682a14b6101a7861ae836fec62ad42a538ed006a2f244ab55192125",
+      "bytes": 4860,
+      "role": "archived-reference",
+      "upstreamSha256": "84076b2c0682a14b6101a7861ae836fec62ad42a538ed006a2f244ab55192125"
+    },
+    {
+      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/references/positioning-frameworks.md",
+      "sha256": "0da1ceb09f7aa741bbb1955ee0aa8fb216e4bf7e71ce77689fb649ce33167b26",
+      "bytes": 7391,
+      "role": "archived-reference",
+      "upstreamSha256": "0da1ceb09f7aa741bbb1955ee0aa8fb216e4bf7e71ce77689fb649ce33167b26"
+    },
+    {
+      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/scripts/positioning_validator.py",
+      "sha256": "69758a4bbaae9ec9bb71a6dd7d415663831b55bc4e202e4b6e2534e1a6b5b62f",
+      "bytes": 11641,
+      "role": "archived-reference",
+      "upstreamSha256": "69758a4bbaae9ec9bb71a6dd7d415663831b55bc4e202e4b6e2534e1a6b5b62f"
+    },
+    {
+      "path": "source/Strategy_Workflow/S4.品牌定位分析师.skill/templates/positioning_statement_template.md",
+      "sha256": "1a04dde1b5325173da235fd45a1c77ec9760777adbdfc744fd6f708df3881f8b",
+      "bytes": 3031,
+      "role": "archived-reference",
+      "upstreamSha256": "1a04dde1b5325173da235fd45a1c77ec9760777adbdfc744fd6f708df3881f8b"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/SKILL.md",
+      "sha256": "ddeb382bba8cee6c759edd7b8162da310b1960f3333376e742e60055bf7d0a9e",
+      "bytes": 19200,
+      "role": "archived-reference",
+      "upstreamSha256": "ddeb382bba8cee6c759edd7b8162da310b1960f3333376e742e60055bf7d0a9e"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/references/bsas-methodology.md",
+      "sha256": "922c6d795352f4b521900a4ac595cd444e5abf4ed3a7cf3174392e92524bd660",
+      "bytes": 6169,
+      "role": "archived-reference",
+      "upstreamSha256": "922c6d795352f4b521900a4ac595cd444e5abf4ed3a7cf3174392e92524bd660"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/references/scoring-benchmarks.md",
+      "sha256": "c3df23680a770500e993b32428c7a9bb059a8b8b16385e7a218250369366e9be",
+      "bytes": 5936,
+      "role": "archived-reference",
+      "upstreamSha256": "c3df23680a770500e993b32428c7a9bb059a8b8b16385e7a218250369366e9be"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/scripts/bsas_calculator.py",
+      "sha256": "f8809906ed1b5fd49b4dda01a25363a71989100409f9f935ea5c3fc8a9fdea9d",
+      "bytes": 28731,
+      "role": "archived-reference",
+      "upstreamSha256": "f8809906ed1b5fd49b4dda01a25363a71989100409f9f935ea5c3fc8a9fdea9d"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/templates/bsas_report_template.md",
+      "sha256": "07e7657bf5090005d1f9ad46c64e827f4248b8c5bb97fdf2082bc9fe449afb88",
+      "bytes": 8448,
+      "role": "archived-reference",
+      "upstreamSha256": "07e7657bf5090005d1f9ad46c64e827f4248b8c5bb97fdf2082bc9fe449afb88"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.5.品牌语义资产审计师.skill/templates/bsas_scorecard_schema.json",
+      "sha256": "c28f9eb4aa8521e364ad14cf6eef3c10a1ab9c8cea02c1fcf9246e929a213fae",
+      "bytes": 33282,
+      "role": "archived-reference",
+      "upstreamSha256": "c28f9eb4aa8521e364ad14cf6eef3c10a1ab9c8cea02c1fcf9246e929a213fae"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/SKILL.md",
+      "sha256": "56fc4913f2970e283a8c7a410dbb2bc0a0eaa9a73886088dc4461abf4e155701",
+      "bytes": 13798,
+      "role": "archived-reference",
+      "upstreamSha256": "56fc4913f2970e283a8c7a410dbb2bc0a0eaa9a73886088dc4461abf4e155701"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/references/citation-intelligence.md",
+      "sha256": "762deacf0008f430c9be666ca3bfa365b3025b89563814bd247b2f11169ed287",
+      "bytes": 7256,
+      "role": "archived-reference",
+      "upstreamSha256": "762deacf0008f430c9be666ca3bfa365b3025b89563814bd247b2f11169ed287"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/references/diagnosis-metrics.md",
+      "sha256": "e3555d580f06f0d2f7139effc5d25831f17e67992d265bb6af2232899b4997d0",
+      "bytes": 9223,
+      "role": "archived-reference",
+      "upstreamSha256": "e3555d580f06f0d2f7139effc5d25831f17e67992d265bb6af2232899b4997d0"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/references/uploaded-citation-analysis-spreadsheet-contract.md",
+      "sha256": "a5164e9b046a9b5b62e1696852273129232ebffa8620a26f80ffcb982c64f4e0",
+      "bytes": 4485,
+      "role": "archived-reference",
+      "upstreamSha256": "a5164e9b046a9b5b62e1696852273129232ebffa8620a26f80ffcb982c64f4e0"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/references/uploaded-monitoring-spreadsheet-contract.md",
+      "sha256": "277acfbca92f3adea1185d62b323c2e1796054f2fb079c1befd877dfeb6ecd26",
+      "bytes": 4709,
+      "role": "archived-reference",
+      "upstreamSha256": "277acfbca92f3adea1185d62b323c2e1796054f2fb079c1befd877dfeb6ecd26"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/gap_calculator.py",
+      "sha256": "b14b2ff09e9b5a6877934e9f2f2b5761bdc5f7e4b5a371fa6d98736b306d1d47",
+      "bytes": 11319,
+      "role": "archived-reference",
+      "upstreamSha256": "b14b2ff09e9b5a6877934e9f2f2b5761bdc5f7e4b5a371fa6d98736b306d1d47"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/import_citation_analysis_spreadsheet.py",
+      "sha256": "4523add2fc774bdd5963cd0e663cf23d8fe0e030a3bf4c57685857e93ccc18ff",
+      "bytes": 26149,
+      "role": "archived-reference",
+      "upstreamSha256": "4523add2fc774bdd5963cd0e663cf23d8fe0e030a3bf4c57685857e93ccc18ff"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/import_monitoring_spreadsheet.py",
+      "sha256": "818ba2ac270021c41f449bc6b8f781c3c4aaca644ce02f6d1bc9d24059f76822",
+      "bytes": 33997,
+      "role": "archived-reference",
+      "upstreamSha256": "818ba2ac270021c41f449bc6b8f781c3c4aaca644ce02f6d1bc9d24059f76822"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/monitoring_evidence_helpers.py",
+      "sha256": "90c03d1aa886006ee65eaf7870ed788c495337f5bd5a1168b09a8c4531a7879e",
+      "bytes": 3905,
+      "role": "archived-reference",
+      "upstreamSha256": "90c03d1aa886006ee65eaf7870ed788c495337f5bd5a1168b09a8c4531a7879e"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/scripts/ranking_position_calculator.py",
+      "sha256": "6853fa264914a04336eefdb0361fe6ada7d1344973abbc60b1bc1f251ccea4fb",
+      "bytes": 17821,
+      "role": "archived-reference",
+      "upstreamSha256": "6853fa264914a04336eefdb0361fe6ada7d1344973abbc60b1bc1f251ccea4fb"
+    },
+    {
+      "path": "source/Strategy_Workflow/S5.品牌诊断专家.skill/templates/diagnosis_data_schema.json",
+      "sha256": "511bf959567c0a646046d3165f1a2e92acb24587ae4b156f1a796347af9b0e49",
+      "bytes": 26759,
+      "role": "archived-reference",
+      "upstreamSha256": "511bf959567c0a646046d3165f1a2e92acb24587ae4b156f1a796347af9b0e49"
+    },
+    {
+      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/SKILL.md",
+      "sha256": "a585e323b56f2cb9ba54ce9aac18af110c8b2d73ab7dec3c3874911df5e0e262",
+      "bytes": 15058,
+      "role": "archived-reference",
+      "upstreamSha256": "a585e323b56f2cb9ba54ce9aac18af110c8b2d73ab7dec3c3874911df5e0e262"
+    },
+    {
+      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/references/verbal-identity-method.md",
+      "sha256": "736c9a889035ce5cfefc8332d3f259a3a42a4ea6f725d3c2ad39e89cc1ab8da5",
+      "bytes": 7341,
+      "role": "archived-reference",
+      "upstreamSha256": "736c9a889035ce5cfefc8332d3f259a3a42a4ea6f725d3c2ad39e89cc1ab8da5"
+    },
+    {
+      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/scripts/token_validator.py",
+      "sha256": "13e9c0691aa95b62c1f0746d356d46915df1af5b03c1d7feb976d5d731e89c58",
+      "bytes": 13966,
+      "role": "archived-reference",
+      "upstreamSha256": "13e9c0691aa95b62c1f0746d356d46915df1af5b03c1d7feb976d5d731e89c58"
+    },
+    {
+      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/templates/verbal_handbook_template.md",
+      "sha256": "49856dc34c205e4cc51eb2aba812eb1ae30cddb751566c1b88ad295222f38128",
+      "bytes": 5615,
+      "role": "archived-reference",
+      "upstreamSha256": "49856dc34c205e4cc51eb2aba812eb1ae30cddb751566c1b88ad295222f38128"
+    },
+    {
+      "path": "source/Strategy_Workflow/S6.品牌话语体系.skill/templates/verbal_token_schema.json",
+      "sha256": "b7e3db87556a37e7ee465a69221effbf96a0d97b4b8bfb0e8fde9de25b8f9223",
+      "bytes": 3264,
+      "role": "archived-reference",
+      "upstreamSha256": "b7e3db87556a37e7ee465a69221effbf96a0d97b4b8bfb0e8fde9de25b8f9223"
+    },
+    {
+      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/SKILL.md",
+      "sha256": "51dfb07b1db89a2bee2bd364cf120534c56e8d0165424925d639293562c22ba1",
+      "bytes": 25123,
+      "role": "archived-reference",
+      "upstreamSha256": "51dfb07b1db89a2bee2bd364cf120534c56e8d0165424925d639293562c22ba1"
+    },
+    {
+      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/references/ai-image-tool-prompt-syntax.md",
+      "sha256": "5f8b46a8ba0e761d801f74c33c0d8204796e3f3a80fab9152008dfbf46def921",
+      "bytes": 6558,
+      "role": "archived-reference",
+      "upstreamSha256": "5f8b46a8ba0e761d801f74c33c0d8204796e3f3a80fab9152008dfbf46def921"
+    },
+    {
+      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/references/visual-symbol-system-method.md",
+      "sha256": "12ad1b21e3eeaf977e3cfaca8e55b8d3c84525f36a82ea26c5b804fff795aca7",
+      "bytes": 9662,
+      "role": "archived-reference",
+      "upstreamSha256": "12ad1b21e3eeaf977e3cfaca8e55b8d3c84525f36a82ea26c5b804fff795aca7"
+    },
+    {
+      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/scripts/clip_similarity_scorer.py",
+      "sha256": "07709b89dd0962ba4e5fc745562243d95a2d9a056b93cf665792da5a6cefb188",
+      "bytes": 9521,
+      "role": "archived-reference",
+      "upstreamSha256": "07709b89dd0962ba4e5fc745562243d95a2d9a056b93cf665792da5a6cefb188"
+    },
+    {
+      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/scripts/prompt_pack_validator.py",
+      "sha256": "e589d30bc5976c1b4fd093c5a0500e895b6d18ad01ee5b3d8b1690107a44061c",
+      "bytes": 15673,
+      "role": "archived-reference",
+      "upstreamSha256": "e589d30bc5976c1b4fd093c5a0500e895b6d18ad01ee5b3d8b1690107a44061c"
+    },
+    {
+      "path": "source/Strategy_Workflow/S7.视觉符号体系.skill/templates/visual_prompt_pack_schema.json",
+      "sha256": "8c05d1876c5fcf1ea00cd6f65488ab2fa1dd9dbf6b739da520b11d32565b841a",
+      "bytes": 8389,
+      "role": "archived-reference",
+      "upstreamSha256": "8c05d1876c5fcf1ea00cd6f65488ab2fa1dd9dbf6b739da520b11d32565b841a"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/SKILL.md",
+      "sha256": "9456e2ee629be9c1e6dde1bf586c94fde587b88bd67f57e65ce7ca07ab498ad0",
+      "bytes": 14134,
+      "role": "archived-reference",
+      "upstreamSha256": "9456e2ee629be9c1e6dde1bf586c94fde587b88bd67f57e65ce7ca07ab498ad0"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/references/landing-page-anatomy.md",
+      "sha256": "f26fc852ad44d750dc17fd27f54e92e72efd009b9e7a6d9e8e15b5c0ec793dd3",
+      "bytes": 4803,
+      "role": "archived-reference",
+      "upstreamSha256": "f26fc852ad44d750dc17fd27f54e92e72efd009b9e7a6d9e8e15b5c0ec793dd3"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/references/qa-architecture-method.md",
+      "sha256": "9a9b8445bb2ce62babbbf60b60eac628aea1973c951bf7dde5ed5cde5c922629",
+      "bytes": 7188,
+      "role": "archived-reference",
+      "upstreamSha256": "9a9b8445bb2ce62babbbf60b60eac628aea1973c951bf7dde5ed5cde5c922629"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/references/question-path-framework.md",
+      "sha256": "e84414c0c4a328f22770ec5fe9ad9108c63f685238da422ea6c9076649772245",
+      "bytes": 4198,
+      "role": "archived-reference",
+      "upstreamSha256": "e84414c0c4a328f22770ec5fe9ad9108c63f685238da422ea6c9076649772245"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/scripts/qa_matrix_validator.py",
+      "sha256": "1767daa2c1ba3863c6b9df1608000a788db1162e72ef982ce98ef98ea1a1b123",
+      "bytes": 6994,
+      "role": "archived-reference",
+      "upstreamSha256": "1767daa2c1ba3863c6b9df1608000a788db1162e72ef982ce98ef98ea1a1b123"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/scripts/token_hit_rate_checker.py",
+      "sha256": "109a530e77c92754a6236ee5caec05d437920e2cbd30e54ce38b3f8fecfcb67b",
+      "bytes": 5022,
+      "role": "archived-reference",
+      "upstreamSha256": "109a530e77c92754a6236ee5caec05d437920e2cbd30e54ce38b3f8fecfcb67b"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/templates/content_calendar_schema.json",
+      "sha256": "e6ed4d3b20ff2d075419d1fc931d9248eb311cdd51895a12fda716e6ff78c534",
+      "bytes": 2992,
+      "role": "archived-reference",
+      "upstreamSha256": "e6ed4d3b20ff2d075419d1fc931d9248eb311cdd51895a12fda716e6ff78c534"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/templates/landing_page_blueprint.md",
+      "sha256": "fdcb628070e9af4fea3811cae71d8a8219b2d1ad269a439e27a9f4522d5cccc7",
+      "bytes": 3217,
+      "role": "archived-reference",
+      "upstreamSha256": "fdcb628070e9af4fea3811cae71d8a8219b2d1ad269a439e27a9f4522d5cccc7"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/templates/qa_matrix_schema.json",
+      "sha256": "b75b04483bfad5805b96d78724c13ccd5e99d7dafad63294bb75dc56cc33548a",
+      "bytes": 4512,
+      "role": "archived-reference",
+      "upstreamSha256": "b75b04483bfad5805b96d78724c13ccd5e99d7dafad63294bb75dc56cc33548a"
+    },
+    {
+      "path": "source/Strategy_Workflow/S8.问答架构师.skill/templates/qa_tree_schema.json",
+      "sha256": "a5f10102e9c66e37ee1dd59cc53f7886f7565f8b17fac3448887096286a2f89c",
+      "bytes": 3316,
+      "role": "archived-reference",
+      "upstreamSha256": "a5f10102e9c66e37ee1dd59cc53f7886f7565f8b17fac3448887096286a2f89c"
+    },
+    {
+      "path": "source/Strategy_Workflow/S9.8.内容机会标题钩子生成师.skill/SKILL.md",
+      "sha256": "4caf6a9b426f3615911ade1ade716309fafa9ab685bb09ce818d4b7cb0583e78",
+      "bytes": 5091,
+      "role": "archived-reference",
+      "upstreamSha256": "4caf6a9b426f3615911ade1ade716309fafa9ab685bb09ce818d4b7cb0583e78"
+    },
+    {
+      "path": "source/Strategy_Workflow/S9.8.内容机会标题钩子生成师.skill/scripts/title_hook_generator.py",
+      "sha256": "dac5c662551e65e8bd93f036d265dacbe424fb567d1d727433efab4989dc41c6",
+      "bytes": 8483,
+      "role": "archived-reference",
+      "upstreamSha256": "dac5c662551e65e8bd93f036d265dacbe424fb567d1d727433efab4989dc41c6"
+    },
+    {
+      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/SKILL.md",
+      "sha256": "b18515552f9f1a8f192a5f11e080f66f653484acc947bc0b4d1722af6bdc3b23",
+      "bytes": 11646,
+      "role": "archived-reference",
+      "upstreamSha256": "b18515552f9f1a8f192a5f11e080f66f653484acc947bc0b4d1722af6bdc3b23"
+    },
+    {
+      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/references/enablement-framework.md",
+      "sha256": "8b754e71b31bb1241e3e47e2804ad0ca01b2cfbff71c9c7e2a827bd72254f915",
+      "bytes": 5865,
+      "role": "archived-reference",
+      "upstreamSha256": "8b754e71b31bb1241e3e47e2804ad0ca01b2cfbff71c9c7e2a827bd72254f915"
+    },
+    {
+      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/references/enablement-modules.md",
+      "sha256": "6699643fbb917c401807ea28e18d302ac3fcc9c99316972497280ee2934b092b",
+      "bytes": 6887,
+      "role": "archived-reference",
+      "upstreamSha256": "6699643fbb917c401807ea28e18d302ac3fcc9c99316972497280ee2934b092b"
+    },
+    {
+      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/scripts/completeness_checker.py",
+      "sha256": "83e2ff6a65e083407c7b74eee860e41e098f399b4f867782de2a279f72dae5fb",
+      "bytes": 19468,
+      "role": "archived-reference",
+      "upstreamSha256": "83e2ff6a65e083407c7b74eee860e41e098f399b4f867782de2a279f72dae5fb"
+    },
+    {
+      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/scripts/strategy_pack_assembler.py",
+      "sha256": "fadc5fc9d57d23a19415e8e842d29c45c040db7e22439fdf29506921146fe03b",
+      "bytes": 6176,
+      "role": "archived-reference",
+      "upstreamSha256": "fadc5fc9d57d23a19415e8e842d29c45c040db7e22439fdf29506921146fe03b"
+    },
+    {
+      "path": "source/Strategy_Workflow/S9.业务赋能规划师.skill/templates/enablement_package_template.md",
+      "sha256": "6c74589e540757e29771b85a7f6c9279ffe6383093a1ec31064ae860b209de84",
+      "bytes": 8244,
+      "role": "archived-reference",
+      "upstreamSha256": "6c74589e540757e29771b85a7f6c9279ffe6383093a1ec31064ae860b209de84"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/brand_facts_schema.json",
+      "sha256": "f5bc25df3aef2a9499b414136eb9aa6898b5c6ecd3f385e37a937b8f3edb53b2",
+      "bytes": 18683,
+      "role": "archived-reference",
+      "upstreamSha256": "f5bc25df3aef2a9499b414136eb9aa6898b5c6ecd3f385e37a937b8f3edb53b2"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/core-execution-principles.md",
+      "sha256": "44bdfa3115bc16fd49892a1a587ed725043ca9f203eebb9e087f050f39f5c5a3",
+      "bytes": 2944,
+      "role": "archived-reference",
+      "upstreamSha256": "44bdfa3115bc16fd49892a1a587ed725043ca9f203eebb9e087f050f39f5c5a3"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/geo_pdf_generator.py",
+      "sha256": "778a405dfddf536cb5e3b63b8bfcd74ef659d6b0238d7c548c7e516a926693a0",
+      "bytes": 9038,
+      "role": "archived-reference",
+      "upstreamSha256": "778a405dfddf536cb5e3b63b8bfcd74ef659d6b0238d7c548c7e516a926693a0"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/molizhishu-api-contract.md",
+      "sha256": "ed79b11623bcfe6606f633f82e6db64fea05bb9e072fcd4c3250eab51357209a",
+      "bytes": 5790,
+      "role": "archived-reference",
+      "upstreamSha256": "ed79b11623bcfe6606f633f82e6db64fea05bb9e072fcd4c3250eab51357209a"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/output-format-standard.md",
+      "sha256": "c22755eb78b60b9be9a3a3294011f69372e418fc44283070b56a416fea12f755",
+      "bytes": 7162,
+      "role": "archived-reference",
+      "upstreamSha256": "c22755eb78b60b9be9a3a3294011f69372e418fc44283070b56a416fea12f755"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/pdf_cover_contract.py",
+      "sha256": "847a1c3b6fb82a6e538c1210ff0bc543f335d8099cd50e12c229ba3894f6e482",
+      "bytes": 8161,
+      "role": "archived-reference",
+      "upstreamSha256": "847a1c3b6fb82a6e538c1210ff0bc543f335d8099cd50e12c229ba3894f6e482"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/project-input-contract.md",
+      "sha256": "7c0ba9fc720f29a0a1d5a2b0a67f3bf22412c711342e83c49fe80e981ffeafd8",
+      "bytes": 5890,
+      "role": "archived-reference",
+      "upstreamSha256": "7c0ba9fc720f29a0a1d5a2b0a67f3bf22412c711342e83c49fe80e981ffeafd8"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/report-template-quality-gates.md",
+      "sha256": "7aaee74dda9dc6db6ee0de2365fc6df53300c386ed07998cdea3b039c8b4918f",
+      "bytes": 4767,
+      "role": "archived-reference",
+      "upstreamSha256": "7aaee74dda9dc6db6ee0de2365fc6df53300c386ed07998cdea3b039c8b4918f"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/silent-source-file-quality-gate.md",
+      "sha256": "6df03fdf2ca3cc502cdb472ec4482f64d0ad3d4c50921ddfdf33078ea6b2f28b",
+      "bytes": 1470,
+      "role": "archived-reference",
+      "upstreamSha256": "6df03fdf2ca3cc502cdb472ec4482f64d0ad3d4c50921ddfdf33078ea6b2f28b"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/source-depth-and-coverage-contract.md",
+      "sha256": "78df715c0a6c056d95c4f9d56d70b06dbe06e2bcd3bf4c6e30c1fde3184d7467",
+      "bytes": 7604,
+      "role": "archived-reference",
+      "upstreamSha256": "78df715c0a6c056d95c4f9d56d70b06dbe06e2bcd3bf4c6e30c1fde3184d7467"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/stage-output-registry.json",
+      "sha256": "513e962ed2a382162ca08009941a5eb88ed0d5d00de16f974b2121356e6aa1ba",
+      "bytes": 13971,
+      "role": "archived-reference",
+      "upstreamSha256": "513e962ed2a382162ca08009941a5eb88ed0d5d00de16f974b2121356e6aa1ba"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/wide-research-execution-contract.md",
+      "sha256": "d4c6529581182dc3da12d1ec3bf77fa8ba4ec944473ca080f077137426c33d14",
+      "bytes": 11778,
+      "role": "archived-reference",
+      "upstreamSha256": "d4c6529581182dc3da12d1ec3bf77fa8ba4ec944473ca080f077137426c33d14"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/全景报告内容完整性与丰富度契约.md",
+      "sha256": "961b5ad3cc54924a5373a12bef923e5877d97d6cb95748daf9976235d0e5aad6",
+      "bytes": 7974,
+      "role": "archived-reference",
+      "upstreamSha256": "961b5ad3cc54924a5373a12bef923e5877d97d6cb95748daf9976235d0e5aad6"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/全链路标准产物文件清单.md",
+      "sha256": "216716637714247e817003b08ac31c4e563584fbbc10e48825648ff0c8d890c2",
+      "bytes": 6151,
+      "role": "archived-reference",
+      "upstreamSha256": "216716637714247e817003b08ac31c4e563584fbbc10e48825648ff0c8d890c2"
+    },
+    {
+      "path": "source/Strategy_Workflow/shared/术语与模板字段闭环契约.md",
+      "sha256": "c41e7f8801d78e4f5e524d207f0bfc76e08ccd07ec538bf7bfa6e03e7770df70",
+      "bytes": 3709,
+      "role": "archived-reference",
+      "upstreamSha256": "c41e7f8801d78e4f5e524d207f0bfc76e08ccd07ec538bf7bfa6e03e7770df70"
+    },
+    {
+      "path": "source/active/MASTER_CONTROL.md",
+      "sha256": "1496f282720652adb6f5bf42cdea94e049a79fd1118bcd2e0e28fad583edd241",
+      "bytes": 2331,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S1.md",
+      "sha256": "11d787dde290af7624960f745b5b1eb383505d42d93d65ca18b54e24cd1c49a7",
+      "bytes": 1495,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S10.md",
+      "sha256": "6e71487a365642a76c3b52915bd71f1ab54c4a5db435f6cae6a38e0281d4146b",
+      "bytes": 569,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S11.md",
+      "sha256": "8090aff019596efec4c1faed12df1841b8a63aa8c572db7d5919152fa7d4f7fc",
+      "bytes": 575,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S12.md",
+      "sha256": "a426be5d8d6d20b1af09d0f13dc2b70602c8898aa1bd2a58502ee26bf545c9fe",
+      "bytes": 1568,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S2.md",
+      "sha256": "e8099d74d68454619e17cc851f2fb356a6458715b4d64d32209c473d2e8d220a",
+      "bytes": 2441,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S3.md",
+      "sha256": "a1c7b039b8f0f826d328eb645639dfcf23fa203e7f29f16438d3d4d8bd4bf52b",
+      "bytes": 1229,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S4.8.md",
+      "sha256": "363f327feea462af9f6def7647303f1702eaa3eda945418b0bb4417ee2746a26",
+      "bytes": 828,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S4.md",
+      "sha256": "d0054cc571c445941048148dcb442141736963c260aabc86e6b483513b758da7",
+      "bytes": 1218,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S5.5.md",
+      "sha256": "ec2fe287d598a275d509687067626f816270d98552e0b33f306a1ee275cc280e",
+      "bytes": 1628,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S5.md",
+      "sha256": "bf3ffc911b49cc0dcc807627cfaaf021e0f53487a7b25e2943f44d273b778398",
+      "bytes": 1469,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S6.md",
+      "sha256": "c2e6f92a9b9c27dab96abed4fd2595a6a5cf3064c2cff5c5fbcab3d886fdb03e",
+      "bytes": 1278,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S7.md",
+      "sha256": "dfb4604a5029db05b185f7b27d09fbc4ceddb5043ec1976948741c63849fa2ed",
+      "bytes": 1157,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S8.md",
+      "sha256": "213d6982d1511d2d0d126a61fb1cc5ebc41e72f4b8c8222d3d7e9428638b5886",
+      "bytes": 2319,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S9.8.md",
+      "sha256": "2e6fe1d263d4fd55b2b7f23d57e0300c0fff39f58046f18cb62ff76cd6baedd6",
+      "bytes": 1451,
+      "role": "active"
+    },
+    {
+      "path": "source/active/S9.md",
+      "sha256": "c88b12be973dfe37d38d744c9df015997a21723ca3043e457e7734446042b8f6",
+      "bytes": 1790,
+      "role": "active"
+    },
+    {
+      "path": "source/active/SHARED_CONTRACT.md",
+      "sha256": "10532d45cf5156e393142b27d83e31dddcaa9cd0ef007d6e8a8f43850b51f4b7",
+      "bytes": 3506,
+      "role": "active"
     }
+  ],
+  "workflowVersion": "report-v3-web-html-2",
+  "activeEntries": [
+    "source/active/MASTER_CONTROL.md",
+    "source/active/S1.md",
+    "source/active/S10.md",
+    "source/active/S11.md",
+    "source/active/S12.md",
+    "source/active/S2.md",
+    "source/active/S3.md",
+    "source/active/S4.8.md",
+    "source/active/S4.md",
+    "source/active/S5.5.md",
+    "source/active/S5.md",
+    "source/active/S6.md",
+    "source/active/S7.md",
+    "source/active/S8.md",
+    "source/active/S9.8.md",
+    "source/active/S9.md",
+    "source/active/SHARED_CONTRACT.md"
   ]
 }

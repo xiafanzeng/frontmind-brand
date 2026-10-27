@@ -57,7 +57,7 @@ async function finishStage(id:string,service:ReturnType<typeof makeService>){
  const job=state(id).job;await until(()=>mock.pending.has(job.id));
  const input=job.input;mock.pending.get(job.id).resolve({operationToken:input.operationToken,inputHash:input.inputHash,
  stage:{id:input.stageId,title:input.stageId,summary:'真实阶段结论',markdown:'完整研究正文',sources:[{title:'来源',url:'https://example.org'}]},
- products:input.stageId==='S4'?[{id:'product',label:'核心产品',question:'核心产品有哪些推荐品牌？'}]:[]});await service.schedule(id);
+ products:input.stageId==='S4.8'?[{id:'product',label:'核心产品',question:'核心产品有哪些推荐品牌？'}]:[]});await service.schedule(id);
 }
 describe('DeepSeek report durable lifecycle',()=>{
  it('starts once, binds the server DeepSeek profile, and isolates tenant reads',async()=>{
@@ -73,10 +73,10 @@ describe('DeepSeek report durable lifecycle',()=>{
   expect(after.events.every(e=>e.seq>before.nextCursor)).toBe(true);expect(after.documents[0]?.markdown).toBe('完整研究正文');
   expect(new Set([...before.events,...after.events].map(e=>e.seq)).size).toBe(before.events.length+after.events.length);
  });
- it('pauses exactly after S4 and keeps confirmation and monitoring idempotent',async()=>{
-  const {id,service}=await begin();for(let i=0;i<4;i++){if(i){void service.schedule(id);await until(()=>state(id).job?.phase==='running');}await finishStage(id,service);}
-  const view=reportView(owned(id));expect(view.phase).toBe('awaiting_confirmation');expect(mock.runs).toHaveLength(4);expect(mock.monitorSubmits).toHaveLength(0);
-  await service.schedule(id);expect(mock.runs).toHaveLength(4);
+ it('pauses exactly after S4.8 and keeps confirmation and monitoring idempotent',async()=>{
+  const {id,service}=await begin();for(let i=0;i<5;i++){if(i){void service.schedule(id);await until(()=>state(id).job?.phase==='running');}await finishStage(id,service);}
+  const view=reportView(owned(id));expect(view.phase).toBe('awaiting_confirmation');expect(mock.runs).toHaveLength(5);expect(mock.monitorSubmits).toHaveLength(0);
+  await service.schedule(id);expect(mock.runs).toHaveLength(5);
   await expect(service.confirm(id,{expectedRevision:view.revision-1,productId:'product',platforms:['doubao']})).rejects.toMatchObject({code:'REPORT_CHANGED'});
   const selection={expectedRevision:view.revision,productId:'product',platforms:['doubao']};await service.confirm(id,selection);await service.schedule(id);
   const keys=state(id).attempts.map((a:any)=>a.consumerTaskId);await service.confirm(id,selection);await service.schedule(id);
@@ -109,6 +109,14 @@ describe('DeepSeek report durable lifecycle',()=>{
   const r=state(id);r.phase='researching';delete r.error;delete r.lease;
   await service.advance(id);expect(state(id).error.code).toBe('HARNESS_INTERRUPTED');expect(mock.runs).toHaveLength(1);
   await service.retry(id);await until(()=>mock.runs.length===2);expect(mock.runs[1].jobId).toBe(mock.runs[0].jobId);
+ });
+ it('freezes a department subject without rewriting the enterprise background',async()=>{
+  const id=randomUUID(),service=makeService();
+  await service.start({clientRequestId:id,includeKnowledge:false,profileHash:intentHash(profile),subjectScope:'医学美容科'});
+  await until(()=>mock.pending.has(state(id).job?.id));
+  expect(state(id).brandName).toBe('测试企业（医学美容科）');
+  expect(mock.runs[0].input.context).toMatchObject({profile,subject:{name:'测试企业（医学美容科）',scope:'医学美容科',backgroundBrandName:'测试企业'}});
+  await expect(service.start({clientRequestId:id,includeKnowledge:false,profileHash:intentHash(profile),subjectScope:'康复科'})).rejects.toMatchObject({code:'IDEMPOTENCY_CONFLICT'});
  });
  it('rejects a stale company snapshot before creating a report',async()=>{
   await expect(makeService().start({clientRequestId:randomUUID(),includeKnowledge:false,profileHash:'a'.repeat(64)})).rejects.toMatchObject({code:'PROFILE_CHANGED'});
