@@ -145,12 +145,14 @@ const configuredJudgeSkillPath =
 export function judgeSkillDirectoryCandidates(configuredPath: string | undefined): string[] {
   if (configuredPath) return [configuredPath];
   return [
+    // Source layout: module/server/ → ../workflows/ = module/workflows/
     join(import.meta.dirname, "../workflows/response-logic-evaluator.skill"),
+    // Compiled layout: module/dist/server/ → ../../workflows/ = module/workflows/
+    join(import.meta.dirname, "../../workflows/response-logic-evaluator.skill"),
+    // Assembled runtime via the module symlink
+    resolve(process.cwd(), "modules/brand/workflows/response-logic-evaluator.skill"),
     join(process.cwd(), "modules/intent/workflows/response-logic-evaluator.skill"),
     join(process.cwd(), "private-workflows/response-logic-evaluator.skill"),
-    // Assembled runtime images run from /app/apps/dashboard while the module
-    // checkout (including module/workflows) lives under /app/module-build.
-    resolve(process.cwd(), "../../module-build/module/workflows/response-logic-evaluator.skill"),
   ];
 }
 

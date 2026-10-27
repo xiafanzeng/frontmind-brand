@@ -62,10 +62,14 @@ const configuredOptimizerSkillPath =
 export function optimizerSkillDirectoryCandidates(configuredPath: string | undefined): string[] {
   if (configuredPath) return [configuredPath];
   return [
+    // Source layout: module/server/ → ../workflows/ = module/workflows/
     join(import.meta.dirname, "../workflows/response-logic-optimizer.skill"),
+    // Compiled layout: module/dist/server/ → ../../workflows/ = module/workflows/
+    join(import.meta.dirname, "../../workflows/response-logic-optimizer.skill"),
+    // Assembled runtime via the module symlink
+    resolve(process.cwd(), "modules/brand/workflows/response-logic-optimizer.skill"),
     join(process.cwd(), "modules/intent/workflows/response-logic-optimizer.skill"),
     join(process.cwd(), "private-workflows/response-logic-optimizer.skill"),
-    resolve(process.cwd(), "../../module-build/module/workflows/response-logic-optimizer.skill"),
   ];
 }
 

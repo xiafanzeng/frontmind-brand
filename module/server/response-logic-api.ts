@@ -688,7 +688,16 @@ if (
 }
 const skillDirectoryCandidates = configuredResponseLogicSkillPath
   ? [configuredResponseLogicSkillPath]
-  : [path.resolve(import.meta.dirname, "../workflows/response-logic-builder.skill"), path.resolve(process.cwd(), "modules/intent/workflows/response-logic-builder.skill"), path.resolve(process.cwd(), "private-workflows/response-logic-builder.skill")];
+  : [
+      // Source layout: module/server/ → ../workflows/ = module/workflows/
+      path.resolve(import.meta.dirname, "../workflows/response-logic-builder.skill"),
+      // Compiled layout: module/dist/server/ → ../../workflows/ = module/workflows/
+      path.resolve(import.meta.dirname, "../../workflows/response-logic-builder.skill"),
+      // Assembled runtime via the module symlink
+      path.resolve(process.cwd(), "modules/brand/workflows/response-logic-builder.skill"),
+      path.resolve(process.cwd(), "modules/intent/workflows/response-logic-builder.skill"),
+      path.resolve(process.cwd(), "private-workflows/response-logic-builder.skill"),
+    ];
 
 
 const RESPONSE_LOGIC_SKILL_FILES = [

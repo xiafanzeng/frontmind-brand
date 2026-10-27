@@ -418,7 +418,9 @@ describe("optimizer skill directory resolution", () => {
   });
   it("falls back through dev and container layouts when unconfigured", () => {
     const candidates = optimizerSkillDirectoryCandidates(undefined);
-    expect(candidates).toHaveLength(4);
-    expect(candidates[3].replaceAll("\\", "/")).toMatch(/\/module-build\/module\/workflows\/response-logic-optimizer\.skill$/);
+    expect(candidates.length).toBeGreaterThanOrEqual(5);
+    const normalized = candidates.map(c => c.replaceAll("\\", "/"));
+    expect(normalized.some(c => /workflows\/response-logic-optimizer\.skill$/.test(c))).toBe(true);
+    expect(normalized.some(c => c.includes("modules/brand/workflows"))).toBe(true);
   });
 });
