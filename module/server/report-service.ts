@@ -120,15 +120,20 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
   try{config=reportHarnessConfig(core.environment);}catch{throw new BrandReportError('MODEL_UNAVAILABLE','DeepSeek 报告执行服务尚未配置，请联系维护人员。',503);}
   const workflowHash=await reportWorkflowFingerprint();
   if(!assetRoot||!path.isAbsolute(assetRoot))throw new BrandReportError('REPORT_STORAGE_UNAVAILABLE','报告持久化目录尚未配置。',503);
+  const inputHash=intentHash({context:frozen,workflowHash,includeKnowledge:input.includeKnowledge});
   const db=await core.database();let operationId=input.clientRequestId;
   await db.transaction(async(tx:any)=>{
    await model.lockAccountRecord(tx,context.accountUserId);await model.lockCustomerProjectBusinessWrite(tx,context.accountUserId,actor);
    const concurrent=(await tx.select({operation:model.agentOperations,task:model.agentTasks}).from(model.agentOperations).innerJoin(model.agentTasks,
     and(eq(model.agentTasks.operationId,model.agentOperations.id),sql`${model.agentTasks.createMarker}=CONCAT('brand-report:',${model.agentOperations.id})`))
     .where(scope).orderBy(desc(model.agentOperations.createdAt)).limit(40) as Owned[]).find(o=>!['completed','failed','cancelled'].includes(runtime(o).phase));
-   if(concurrent){operationId=concurrent.operation.id;return;}
+   if(concurrent){
+    const previous=runtime(concurrent);
+    if(previous.engine!==ENGINE||previous.workflowHash!==workflowHash||previous.inputHash!==inputHash||intentHash(previous.context)!==intentHash(frozen))
+     throw new BrandReportError('REPORT_ALREADY_ACTIVE','当前企业已有一份资料、研究主体或工作流版本不同的报告尚未结束。请先查看或停止现有报告，再新建。');
+    operationId=concurrent.operation.id;return;
+   }
    if(await find(input.clientRequestId,tx))return;
-   const inputHash=intentHash({context:frozen,workflowHash,includeKnowledge:input.includeKnowledge});
    const r:Runtime={engine:ENGINE,version:1,revision:0,actorId:actor.id,brandName:subject.name,context:frozen,inputHash,workflowHash,
     credentialId:'server:brand-report:deepseek',credentialVersion:1,model:config.model,phase:'researching',stages:[],products:[],attempts:[],stageAttempts:{},artifacts:[],createdAt:iso(),updatedAt:iso()};
    await tx.insert(model.agentOperations).values({id:operationId,enterpriseProjectId:context.enterpriseProjectId,provider:'deepseek',scope:'managed_user',accountUserId:context.accountUserId,presalesProjectId:null,
