@@ -96,6 +96,16 @@ export async function prepareIntentSkill(accountUserId: number) {
   const [status, credential] = await Promise.all([core.getApiCredentialStatus(accountUserId), core.getDecryptedCredentialForUser(accountUserId)]);
   if (!credential || status.status !== "active" || !status.verifiedAt || credential.status !== "active" ||
     !credential.verifiedAt || credential.version !== status.version) throw new IntentSkillRuntimeError("请先配置并验证当前账户的模型 API");
+  // Same provider-mode selection Core's keyword credential chain applies: when
+  // the XTY runner is requested, dispatch must use the xty_codex service
+  // identity — fail explicitly rather than silently falling back to a zhipu
+  // credential. Under the mode the resolver itself returns the XTY identity,
+  // so this guard only fires if that contract ever drifts.
+  const xtyRequested = process.env.FRONTMIND_MODULE_PROVIDER_MODE === "xty_openai_agents" ||
+    process.env.FRONTMIND_AGENT_PROVIDER_MODE === "xty_openai_agents";
+  if (xtyRequested && (credential as {provider?: unknown}).provider !== "xty_codex") {
+    throw new IntentSkillRuntimeError("当前部署要求使用 XTY 模型运行器，但解析到的凭据不是 XTY 服务身份，已停止优化任务。");
+  }
   // Both source and dist/server resolve a shipped Skill, never a host cwd.
   const skill = await readFile(new URL("../workflows/optimize-intent/SKILL.md", import.meta.url), "utf8");
   return {credential, skill, skillHash: intentHash(skill)};

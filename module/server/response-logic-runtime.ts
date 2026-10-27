@@ -135,9 +135,19 @@ export type ResponseLogicRuntimeCore = ResponseLogicApiPorts & {
 
 export function assembleResponseLogicCore(input: {
   getDb(): Promise<MySql2Database<any> | null>;
+  /** Server environment (defaults to process.env) for provider-mode checks. */
+  environment?: Readonly<Record<string, string | undefined>>;
 }): ResponseLogicRuntimeCore {
   const bkp = intentSkillPorts();
   const db = input.getDb;
+  const environment = input.environment ?? process.env;
+  // Mirrors Core's keyword credential chain selection (brand-keyword-credential.ts):
+  // when either mode flag selects the OpenAI Agents/XTY runner, every business
+  // call must go through the xty_codex service identity — never a silent
+  // fallback to a customer zhipu key.
+  const xtyProviderModeRequested = () =>
+    environment.FRONTMIND_MODULE_PROVIDER_MODE === "xty_openai_agents" ||
+    environment.FRONTMIND_AGENT_PROVIDER_MODE === "xty_openai_agents";
 
   const questionResolverPorts: BrandQuestionResolverPorts = { getDb: db };
 
@@ -265,6 +275,16 @@ export function assembleResponseLogicCore(input: {
       return bkp.getDecryptedCredentialForUser(userId) as never;
     },
     createCredentialAgentClient: (credential: never, options?: Record<string, unknown>) => {
+      const handle = credential as unknown as { provider?: unknown } | null | undefined;
+      if (xtyProviderModeRequested() && (!handle || handle.provider !== "xty_codex")) {
+        // Explicit failure instead of dispatching through a zhipu credential
+        // while the deployment requires the XTY runner. Handlers map this via
+        // the ServiceEntitlementError shape (status + code).
+        throw Object.assign(
+          new Error("当前部署要求使用 XTY 模型运行器，但解析到的凭据不是 XTY 服务身份，已拒绝调用。"),
+          { code: "RESPONSE_LOGIC_PROVIDER_MODE_VIOLATION", statusCode: 503 },
+        );
+      }
       return bkp.createCredentialAgentClient(credential, options as never) as never;
     },
 
