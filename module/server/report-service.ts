@@ -207,8 +207,9 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
   for(const [key,value] of Object.entries(core.environment))if(/KEY|TOKEN|SECRET|PASSWORD/i.test(key)&&value&&value.length>5)diagnostic=diagnostic.replaceAll(value,'[REDACTED]');
   diagnostic=diagnostic.replace(/Bearer\s+[^\s"',]+/gi,'Bearer [REDACTED]').replace(/sk-[a-zA-Z0-9_-]+/g,'[REDACTED]').slice(0,2000);
   const harnessCode=diagnostic.match(/^REPORT_HARNESS_[A-Z0-9_]+/)?.[0];
-  const code=known?error.code:harnessCode??'REPORT_EXECUTION_FAILED';
-  const message=known?error.message:/\b401\b|\b403\b/.test(diagnostic)?'DeepSeek 连接认证未通过，请维护人员检查服务器凭据。':/\b429\b|CAPACITY/.test(diagnostic)?'模型或报告执行资源暂时繁忙，已保留进度，可以稍后恢复。':/TIMEOUT|INTERRUPTED/.test(diagnostic)?'模型执行超时或中断，已有过程和文件已保存，可以恢复当前阶段。':'当前步骤未能完成，已保留本轮进度。请恢复重试；若仍失败，请联系维护人员查看任务记录。';
+  const contextLimit=/context (?:window )?overflow|CONTEXT_WINDOW_EXCEEDED|maximum context length|context length exceeded/i.test(diagnostic);
+  const code=known?error.code:contextLimit?'REPORT_CONTEXT_LIMIT':harnessCode??'REPORT_EXECUTION_FAILED';
+  const message=known?error.message:contextLimit?'本阶段上下文容量不足，完整研究和中间文件已保存。请检查模型容量配置后恢复当前阶段，已有采集结果会继续复用。':/\b401\b|\b403\b/.test(diagnostic)?'DeepSeek 连接认证未通过，请维护人员检查服务器凭据。':/\b429\b|CAPACITY/.test(diagnostic)?'模型或报告执行资源暂时繁忙，已保留进度，可以稍后恢复。':/TIMEOUT|INTERRUPTED/.test(diagnostic)?'模型执行超时或中断，已有过程和文件已保存，可以恢复当前阶段。':'当前步骤未能完成，已保留本轮进度。请恢复重试；若仍失败，请联系维护人员查看任务记录。';
   await mutate(id,r=>{r.resumePhase=phase;r.phase='failed';r.error={code,message};delete r.lease;},owner);
   await appendReportEvent(directory(id),phase,{kind:'error',message});
   console.error('[BrandReport]',id,code,diagnostic);
@@ -294,7 +295,7 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    },owner);
    await emit({kind:'status',message:`开始 ${job.stageId==='briefing'?'汇报编制':REPORT_STAGES.find(s=>s[0]===job.stageId)?.[1]??job.stageId} · DeepSeek Flash`});
    const value=await runReportHarness({directory:directory(id),jobId:job.id,input:job.input,
-    archive:await reportModelArchive(job.input),environment:core.environment,signal:controller.signal,onEvent:emit,recovery:Boolean(job.resumedAt||(!r.job&&r.stages.length)),
+    archive:await reportModelArchive(job.input),environment:core.environment,signal:controller.signal,onEvent:emit,recovery:Boolean(job.resumedAt||(!r.job&&r.stages.length)),resumeCurrentStage:Boolean(job.resumedAt),
     onSession:async(sessionId:string)=>{await mutate(id,state=>{state.sessionId=sessionId;},owner);}});
    controller.signal.throwIfAborted();
    let validated:ReturnType<typeof validateReportModelOutput>;

@@ -7,7 +7,7 @@
     "build": "pnpm generate:policy && tsc -p tsconfig.build.json && pnpm build:workflows",
     "typecheck": "pnpm generate:policy && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
     "build:workflows": "pnpm generate:policy && node workflows/build-keyword-workflow.mjs --output dist/workflows/generate-brand-question-universe && node workflows/build-knowledge-base-workflow.mjs && node workflows/build-siteops-workflows.mjs && node workflows/build-intent-workflow.mjs && node workflows/build-rag-evaluation-workflow.mjs && node workflows/build-report-workflow.mjs && node workflows/build-report-harness.mjs",
-    "test": "node --test tests/workflow-version.test.mjs tests/workflow-source.test.mjs tests/report-harness.test.mjs && vitest run --config vitest.config.ts",
+    "test": "node --test tests/workflow-version.test.mjs tests/workflow-source.test.mjs tests/report-harness.test.mjs tests/report-output-files.test.mjs && vitest run --config vitest.config.ts",
     "accept:ai-website": "node scripts/accept-ai-website-flow.mjs",
     "generate:policy": "node workflows/generate-knowledge-base-working-set-policy.mjs",
     "catalog:ensure": "node dist/server/siteops/prepare-module-assets.js --ensure-ready --concurrency 1",

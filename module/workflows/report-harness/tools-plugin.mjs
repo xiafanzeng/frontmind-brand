@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {defineTool} from '@deepseek-ai/dsh-tools';
 import {readDocument,writeDocument,checkedPath} from './safe-files.mjs';
 import {researchSearch,researchFetch} from './research.mjs';
+import {assembleStageOutput} from './output-files.mjs';
 
 export const name='frontmind-report-tools';
 export const inject=['tools'];
@@ -28,7 +29,7 @@ export function apply(ctx,config){
   const text=await readDocument(root,args.path),offset=args.offset??0;if(!Number.isSafeInteger(offset)||offset<0||offset>text.length)throw new Error('REPORT_READ_OFFSET_INVALID');
   const nextOffset=Math.min(text.length,offset+24000);return {path:args.path,text:text.slice(offset,nextOffset),offset,nextOffset,totalCharacters:text.length,hasMore:nextOffset<text.length};
  });
- add('search_public_web','通过 Bing 的公开搜索网页查询资料；无付费搜索 API。失败时不虚构搜索结果。',{query:{type:'string',required:true}},async(args,exec)=>{
+ add('search_public_web','查询公开搜索网页，必要时回退并报告原因；无付费搜索 API。无关结果或验证拦截明确失败，不虚构结果。',{query:{type:'string',required:true}},async(args,exec)=>{
   const stage=await current();if(++count>60)throw new Error('REPORT_RESEARCH_CALL_LIMIT');return researchSearch(args.query,{root,stage:stage.stageId,signal:exec.signal});
  });
  add('fetch_public_page','读取公开 HTTPS 网页并保存来源快照。仅公开文本，不提供登录、业务 API、发稿、采集或付费任务。',{url:{type:'string',required:true}},async(args,exec)=>{
@@ -39,8 +40,8 @@ export function apply(ctx,config){
   if(args.name.endsWith('.json'))JSON.parse(args.text);
   const artifact=`work/${stage.stageId}-${args.name}`;return saveRevision(artifact,args.text);
  });
- add('save_stage_output','完成研究后，将符合 OUTPUT_SCHEMA.json 的 JSON 字符串保存为本阶段产物。不要用工具伪造来源或采集结果。',{json:{type:'string',required:true}},async(args)=>{
-  const stage=await current();const value=JSON.parse(args.json);if(value.operationToken!==stage.operationToken||value.inputHash!==stage.inputHash)throw new Error('REPORT_OUTPUT_INPUT_MISMATCH');
+ add('save_stage_output','保存符合 OUTPUT_SCHEMA 的阶段产物。优先 output 结构化对象（不要 JSON.stringify）+ markdownPath 引用已保存的完整正文；工具填充 stage.markdown。stage 与 products 是根对象的并列字段。汇报使用 output.slides。',{output:{type:'object',additionalProperties:true,description:'OUTPUT_SCHEMA 对应的结构化对象；若使用 markdownPath，可省略 stage.markdown。'},markdownPath:{type:'string',description:'本阶段 work/ 下已保存的完整正文 .md 路径，不得引用摘要替代全文。'},json:{type:'string',description:'仅为旧版兼容保留。不要与 output 同时传入。'}},async(args)=>{
+  const stage=await current();const value=await assembleStageOutput(root,stage,args);
   const artifact=`work/${stage.stageId}-${stage.jobId}-output.json`;return saveRevision(artifact,JSON.stringify(value,null,2));
  });
 }

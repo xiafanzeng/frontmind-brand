@@ -102,6 +102,12 @@ describe('DeepSeek report durable lifecycle',()=>{
   expect(after.events.every(e=>e.seq>before.nextCursor)).toBe(true);expect(after.documents[0]?.markdown).toBe('完整研究正文');
   expect(new Set([...before.events,...after.events].map(e=>e.seq)).size).toBe(before.events.length+after.events.length);
  });
+ it('allows session recovery for a new stage without treating new research as a stage retry',async()=>{
+  const {id,service}=await begin();expect(mock.runs[0].resumeCurrentStage).toBe(false);
+  await finishStage(id,service);void service.schedule(id);await until(()=>mock.runs.length===2&&mock.pending.has(mock.runs[1].jobId));
+  expect(mock.runs[1].input.stageId).toBe('S2');
+  expect(mock.runs[1].recovery).toBe(true);expect(mock.runs[1].resumeCurrentStage).toBe(false);
+ });
  it('pauses exactly after S4.8 and keeps confirmation and monitoring idempotent',async()=>{
   const {id,service}=await begin();for(let i=0;i<5;i++){if(i){void service.schedule(id);await until(()=>state(id).job?.phase==='running');}await finishStage(id,service);}
   const view=reportView(owned(id));expect(view.phase).toBe('awaiting_confirmation');expect(mock.runs).toHaveLength(5);expect(mock.monitorSubmits).toHaveLength(0);
@@ -138,6 +144,17 @@ describe('DeepSeek report durable lifecycle',()=>{
   const r=state(id);r.phase='researching';delete r.error;delete r.lease;
   await service.advance(id);expect(state(id).error.code).toBe('HARNESS_INTERRUPTED');expect(mock.runs).toHaveLength(1);
   await service.retry(id);await until(()=>mock.runs.length===2);expect(mock.runs[1].jobId).toBe(mock.runs[0].jobId);
+  expect(mock.runs[1].recovery).toBe(true);expect(mock.runs[1].resumeCurrentStage).toBe(true);
+ });
+ it('reports context capacity failure clearly while preserving current-stage recovery',async()=>{
+  const {id,service}=await begin();
+  mock.pending.get(state(id).job.id).reject(new Error('REPORT_HARNESS_TURN_ERROR: pi-ai detected context overflow for model "deepseek-flash"'));
+  await service.schedule(id);
+  const view=reportView(owned(id));
+  expect(view).toMatchObject({phase:'failed',canRetry:true,error:{code:'REPORT_CONTEXT_LIMIT'}});
+  expect(view.error?.message).toContain('上下文容量不足');expect(view.error?.message).toContain('已有采集结果会继续复用');
+  expect(state(id).job.input.operationToken).toBe(mock.runs[0].input.operationToken);
+  expect((await service.processView(id,0)).events.at(-1)?.message).toBe(view.error?.message);
  });
  it('freezes a department subject without rewriting the enterprise background',async()=>{
   const id=randomUUID(),service=makeService();
