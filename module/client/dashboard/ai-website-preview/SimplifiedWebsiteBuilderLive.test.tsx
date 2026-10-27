@@ -462,7 +462,7 @@ describe("redesigned live website builder setup", () => {
     fireEvent.change(screen.getByLabelText("欢迎语"), {
       target: { value: "您好，我会依据企业知识为您解答。" },
     });
-    expect(screen.getByText("仅本地示意；当前 SiteOps 生成协议不支持此开关")).toBeTruthy();
+    expect(screen.getByText("真实网站的助手回答始终展示知识来源；此开关仅影响本地示意预览")).toBeTruthy();
     fireEvent.click(screen.getByTestId("website-build-start"));
 
     await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
