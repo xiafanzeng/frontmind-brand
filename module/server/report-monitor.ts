@@ -3,6 +3,8 @@ import {createHash} from 'node:crypto';
 export type ReportSample = {
  id:string;platform:string;question:string;answer:string;mentioned:boolean;rank:number|null;
  citations:Array<{title:string;url:string;site?:string}>;
+ references?:Array<{title:string;url:string;site?:string}>;
+ sentiment?:'positive'|'neutral'|'negative'|'unknown';sentimentEvidence?:string[];collectedAt?:string;supplierTaskId?:string;
 };
 export type ReportMonitorAttempt = {
  consumerTaskId:string;question:string;platform:string;run:number;
@@ -40,16 +42,18 @@ export function reportSampleFromResult(attempt:ReportMonitorAttempt,brandName:st
  // mentionPosition is the supplier's monitored-keyword field. Generic rank is a
  // compatibility fallback only; a missing or non-positive rank is never made up.
  const rank=positiveRank(v.mentionPosition)??positiveRank(v.rank);
- const keywordMatched=items(v.keywordEvaluations).some(entry=>
-  exactKeyword(entry?.keyword)===exactKeyword(brandName)&&
-  ['positive','neutral','negative'].includes(String(entry?.nature??'').toLowerCase()));
+ const evaluations=items(v.keywordEvaluations).filter(entry=>exactKeyword(entry?.keyword)===exactKeyword(brandName));
+ const keywordMatched=evaluations.some(entry=>['positive','neutral','negative'].includes(String(entry?.nature??'').toLowerCase()));
  // Each request contains exactly this enterprise as monitorKeywords. Use the
  // supplier's explicit attribution even when its answer uses an abbreviation;
  // never infer an unknown alias or count another enterprise's evaluation.
  const mentioned=rank!==null||keywordMatched||answer.toLocaleLowerCase().includes(brandName.toLocaleLowerCase());
  const citations=items(v.citationList??v.citations).map(c=>({title:String(c.title??c.name??'引用来源'),url:safeUrl(c.url??c.link),site:String(c.media??c.site??c.domain??'')})).filter(c=>c.url);
+ const references=items(v.referenceList??v.references).map(c=>({title:String(c.title??c.name??'检索参考'),url:safeUrl(c.url??c.link),site:String(c.media??c.site??c.domain??'')})).filter(c=>c.url);
+ const natures=[...new Set(evaluations.map(entry=>String(entry.nature??'').toLowerCase()).filter(value=>['positive','neutral','negative'].includes(value)))];
+ const sentiment=natures.length===1?natures[0] as 'positive'|'neutral'|'negative':'unknown';
  return {id:attempt.consumerTaskId,platform:attempt.platform,question:attempt.question,answer,
-  mentioned,rank,citations};
+  mentioned,rank,citations,references,sentiment,sentimentEvidence:evaluations.map(entry=>String(entry.context??'').trim()).filter(Boolean),collectedAt:new Date().toISOString(),supplierTaskId:attempt.taskId};
 }
 
 export function reportMonitorClient(environment:Readonly<Record<string,string|undefined>>) {

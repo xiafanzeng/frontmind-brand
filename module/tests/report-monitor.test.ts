@@ -53,6 +53,18 @@ describe("brand report monitoring identity", () => {
     expect(reportSampleFromResult(attempt(), fullName, { subTaskList: [{ ...base, keywordEvaluations: [{ keyword: "台心医院", nature: "positive" }] }] })).toMatchObject({ mentioned: false, rank: null });
   });
 
+  it("preserves observed sentiment and separates search references from actual citations", () => {
+    const current = attempt();
+    const sample = reportSampleFromResult(current, "测试品牌", {subTaskList: [{...answer(),
+      keywordEvaluations: [{keyword: "测试品牌", nature: "negative", context: "平台的风险描述"}, {keyword: "其他企业", nature: "positive", context: "无关评价"}],
+      referenceList: [{title: "检索参考", url: "https://example.org/search-only"}],
+    }]});
+    expect(sample).toMatchObject({sentiment: "negative", sentimentEvidence: ["平台的风险描述"], supplierTaskId: current.taskId});
+    expect(sample.citations).toHaveLength(1); expect(sample.references).toHaveLength(1);
+    expect(sample.citations[0]?.url).not.toBe(sample.references?.[0]?.url);
+    expect(Number.isFinite(Date.parse(sample.collectedAt!))).toBe(true);
+  });
+
   it("prefers monitored-keyword ranking and rejects invalid numerical rankings", () => {
     const base = { ...answer(), answerContent: "相关企业信息。" };
     expect(reportSampleFromResult(attempt(), "测试品牌", { subTaskList: [{ ...base, rank: 1, mentionPosition: "3" }] })).toMatchObject({ mentioned: true, rank: 3 });

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
 import type { Request } from "express";
+import JSZip from "jszip";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import {
   int,
@@ -14,6 +15,7 @@ import {
   ENTERPRISE_RAG_DIMENSION_IDS,
   ENTERPRISE_RAG_GATE_IDS,
   ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA,
+  enterpriseRagJudgeWireSchema,
 } from "../contracts/enterprise-rag-evaluation-run";
 import { enterpriseQaDocumentCatalog } from "../server/enterprise-qa-answer";
 import {
@@ -40,7 +42,7 @@ function hash(text: string) {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-function harness() {
+function harness(documentCount = 2) {
   const operations = mysqlTable("operations_test", {
     id: varchar("id", { length: 36 }).primaryKey(),
     enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }),
@@ -89,15 +91,17 @@ function harness() {
   });
 
   const knowledgeText = JSON.stringify({
-    documents: [{
-      title: "门诊时间信息",
-      path: "service/hours.md",
-      content: "门诊挂号时间为 7:30，就诊时间为 8:00。",
-    }, {
-      title: "医院地址",
-      path: "contact/address.md",
-      content: "医院位于东莞市中心区。",
-    }],
+    documents: Array.from({length: documentCount}, (_, index) => index === 0
+      ? {
+          title: "门诊时间信息",
+          path: "service/hours.md",
+          content: "门诊挂号时间为 7:30，就诊时间为 8:00。",
+        }
+      : {
+          title: `冻结知识 ${index + 1}`,
+          path: `knowledge/document-${index + 1}.md`,
+          content: `这是第 ${index + 1} 份冻结知识。`,
+        }),
   });
   const purpose = {
     revision: 1,
@@ -109,7 +113,7 @@ function harness() {
       snapshotId: "snapshot-v2",
       version: 2,
       sourceFileName: "knowledge.zip",
-      documentCount: 2,
+      documentCount,
       contentHash: hash(knowledgeText),
     },
     knowledgeText,
@@ -356,9 +360,17 @@ function harness() {
     sourceQaTaskId: SOURCE_TASK_ID,
     turnId: TURN_ID,
   };
-  function acceptedOutput() {
+  function acceptedOutput(canonicalIds = false) {
     const evaluatorTask = taskRows.find((task) => task.operationId === REQUEST_ID);
-    const input = evaluatorTask.providerRuntime.enterpriseRagEvaluation.input;
+    const runtime = evaluatorTask.providerRuntime.enterpriseRagEvaluation;
+    const input = runtime.input;
+    const alias = (canonicalId: string) => canonicalIds
+      ? canonicalId
+      : runtime.wireContract.bindings.find(
+          (binding: any) => binding.canonicalId === canonicalId,
+        ).alias;
+    const answerEvidenceId = alias(`answer:${ANSWER_MESSAGE_ID}`);
+    const sourceId = alias(document.documentId);
     return {
       operationToken: input.operationToken,
       inputHash: input.inputHash,
@@ -366,19 +378,19 @@ function harness() {
         id,
         level: 4,
         rationale: "问题、回答与冻结来源一致。",
-        evidenceIds: ["claim-1", document.documentId],
+        evidenceIds: ["claim-1", answerEvidenceId, sourceId],
       })),
       gates: ENTERPRISE_RAG_GATE_IDS.map((id) => ({
         id,
         status: "passed",
         reason: "冻结证据支持且未发现风险。",
-        evidenceIds: ["claim-1", document.documentId],
+        evidenceIds: ["claim-1", answerEvidenceId, sourceId],
       })),
       claims: [{
         id: "claim-1",
         statement: "门诊挂号时间为 7:30，就诊时间为 8:00。",
         status: "supported",
-        sourceIds: [document.documentId],
+        sourceIds: [sourceId],
         rationale: "冻结来源直接包含相同时间信息。",
       }],
       summary: "回答完整且有冻结来源支持。",
@@ -447,23 +459,51 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(
       createSchema.properties.dimensions.items.properties.evidenceIds.items.enum,
     ).toEqual(expect.arrayContaining([
-      `answer:${ANSWER_MESSAGE_ID}`,
-      frozenInput.sources[0].id,
+      "rag-AAA-000-000-111",
+      "rag-SSS-000-000-222",
       "claim-1",
     ]));
     expect(
       createSchema.properties.dimensions.items.properties.evidenceIds.items.enum,
-    ).not.toContain(`answer:${ANSWER_MESSAGE_ID}-recalculated`);
+    ).not.toContain(`answer:${ANSWER_MESSAGE_ID}`);
     const frozenSources = h.taskRows.find((row) =>
       row.operationId === REQUEST_ID).providerRuntime.enterpriseRagEvaluation.input.sources;
     expect(frozenSources).toHaveLength(2);
     expect(frozenSources.map((source: any) => source.citedByAnswer)).toEqual([true, false]);
     expect(
       createSchema.properties.claims.items.properties.sourceIds.items.enum,
-    ).toEqual(frozenSources.map((source: any) => source.id));
+    ).toEqual(["rag-SSS-000-000-222", "rag-SSS-000-000-333"]);
     expect(h.client.createTask.mock.calls[0]![0].prompt).toContain(
       "claims[].sourceIds 是更窄的来源集合",
     );
+    expect(h.client.createTask.mock.calls[0]![0].prompt).toContain(
+      "rag-QQQ=问题、rag-AAA=回答、rag-SSS=来源、rag-EEE=其他证据",
+    );
+    expect(h.client.createTask.mock.calls[0]![0].prompt).not.toContain(
+      frozenSources[0].id,
+    );
+    const upload = h.client.uploadFile.mock.calls[0]![0];
+    const archive = await JSZip.loadAsync(upload.bytes);
+    const wireInput = JSON.parse(await archive.file("input.json")!.async("string"));
+    expect(wireInput.allowedEvidenceIds).toEqual([
+      "rag-QQQ-000-000-000",
+      "rag-AAA-000-000-111",
+      "rag-SSS-000-000-222",
+      "rag-SSS-000-000-333",
+    ]);
+    expect(wireInput.sources.map((source: any) => source.id)).toEqual([
+      "rag-SSS-000-000-222",
+      "rag-SSS-000-000-333",
+    ]);
+    expect(JSON.stringify(wireInput)).not.toContain(frozenSources[0].id);
+    const providerProjection = JSON.stringify({
+      schema: createSchema,
+      prompt: h.client.createTask.mock.calls[0]![0].prompt,
+      wireInput,
+    });
+    for (const canonicalId of frozenInput.allowedEvidenceIds) {
+      expect(providerProjection).not.toContain(canonicalId);
+    }
 
     const lostResponseRetry = await h.service.start({
       ...h.startInput,
@@ -487,6 +527,12 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(completed.report?.sourceTurnId).toBe(TURN_ID);
     expect(completed.report?.judgments.dimensions).toHaveLength(6);
     expect(completed.report?.judgments.gates).toHaveLength(7);
+    expect(completed.report?.judgments.claims[0].sourceIds).toEqual([
+      frozenSources[0].id,
+    ]);
+    expect(completed.report?.evaluator.outputHash).toBe(
+      intentHash(completed.report?.judgments),
+    );
     expect(h.persistedEvents).toHaveLength(1);
 
     const replay = await h.service.start(h.startInput);
@@ -501,8 +547,9 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const h = harness();
     await h.service.start(h.startInput);
     const invalid = h.acceptedOutput();
+    const allowedAnswerId = invalid.dimensions[0].evidenceIds[1]!;
     for (const item of [...invalid.dimensions, ...invalid.gates]) {
-      item.evidenceIds = [`answer:${ANSWER_MESSAGE_ID}-recalculated`];
+      item.evidenceIds = [`${allowedAnswerId}-recalculated`];
     }
     h.pushProviderOutput(invalid, "provider-invalid-result");
 
@@ -511,7 +558,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(pending.report).toBeNull();
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
     const repairRequest = h.client.sendMessage.mock.calls[0]![0];
-    expect(repairRequest.prompt).toContain(`answer:${ANSWER_MESSAGE_ID}`);
+    expect(repairRequest.prompt).toContain(allowedAnswerId);
     expect(repairRequest.prompt).toContain("禁止重算、缩写或改写");
     expect(repairRequest.structuredOutputSchema).toEqual(
       h.client.createTask.mock.calls[0]![0].structuredOutputSchema,
@@ -523,6 +570,28 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(completed.report?.result.score).toBe(100);
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
     expect(h.persistedEvents).toHaveLength(1);
+  });
+
+  it("语义修复允许对相关合法来源做最小必要增删", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const invalid = h.acceptedOutput();
+    invalid.claims[0].status = "unsupported";
+    h.pushProviderOutput(invalid, "provider-unsupported-with-source");
+
+    const pending = await h.service.observe(REQUEST_ID);
+    expect(pending.status).toBe("result_pending");
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    const prompt = h.client.sendMessage.mock.calls[0]![0].prompt;
+    expect(prompt).toContain("无支持陈述不得附带来源");
+    expect(prompt).toContain("可按语义需要添加、删除或从对应白名单重选 ID");
+    expect(prompt).toContain("不得无关重抄");
+
+    h.pushProviderOutput(h.acceptedOutput(), "provider-semantic-repaired");
+    const completed = await h.service.observe(REQUEST_ID);
+    expect(completed.status).toBe("completed");
+    expect(completed.report?.result.score).toBe(100);
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("assistant fallback 改写来源尾字符时给出精确候选并在唯一 repair 后完成", async () => {
@@ -540,14 +609,14 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
     const repairRequest = h.client.sendMessage.mock.calls[0]![0];
     expect(repairRequest.prompt).toContain(
-      "claims[0].sourceIds[0] 不在冻结白名单中",
+      "claims[0].sourceIds[0] 不在冻结传输白名单中",
     );
     expect(repairRequest.prompt).toContain(
       `唯一一处字符编辑可达的合法 ID 是 \"${allowedSourceId}\"`,
     );
     expect(repairRequest.prompt).not.toContain(rewrittenSourceId);
     expect(repairRequest.prompt).toContain(
-      "不要从上一轮错误 JSON 复制任何 ID",
+      "保留与本次校验失败无关的合法 ID",
     );
     expect(repairRequest.structuredOutputSchema).toEqual(
       h.client.createTask.mock.calls[0]![0].structuredOutputSchema,
@@ -562,7 +631,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(h.persistedEvents).toHaveLength(1);
   });
 
-  it("assistant fallback 的来源尾字符在 repair 后仍错误时严格失败且不写报告", async () => {
+  it("第二次且最终的来源别名 repair 仍错误时严格失败且不写报告", async () => {
     const h = harness();
     await h.service.start(h.startInput);
     const invalid = h.acceptedOutput();
@@ -579,13 +648,84 @@ describe("企业 RAG 自动评估持久化服务", () => {
       .evidenceIds.push(rewrittenSourceId);
     h.pushProviderAssistant(invalidRepair, "provider-invalid-source-repair-assistant");
 
+    const secondPending = await h.service.observe(REQUEST_ID);
+    expect(secondPending.status).toBe("result_pending");
+    expect(secondPending.report).toBeNull();
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(2);
+
+    h.pushProviderAssistant(invalidRepair, "provider-invalid-source-final-assistant");
+
     const failed = await h.service.observe(REQUEST_ID);
     expect(failed.status).toBe("failed");
     expect(failed.error?.code).toBe("EVALUATION_REPAIR_FAILED");
-    expect(failed.error?.message).toContain("陈述引用了未授权来源");
+    expect(failed.error?.message).toContain("未授权证据别名");
     expect(failed.report).toBeNull();
-    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(2);
     expect(h.persistedEvents).toHaveLength(0);
+  });
+
+  it("语义 repair 新生来源别名 typo 时只追加一次最终 repair 并完成", async () => {
+    const h = harness(49);
+    await h.service.start(h.startInput);
+    const initial = h.acceptedOutput();
+    const evaluatorTask = h.taskRows.find((row) => row.operationId === REQUEST_ID);
+    const bindings = evaluatorTask.providerRuntime.enterpriseRagEvaluation
+      .wireContract.bindings;
+    const citedSourceAlias = bindings.find((binding: any) =>
+      binding.canonicalId === evaluatorTask.providerRuntime
+        .enterpriseRagEvaluation.input.sources[0].id).alias;
+    const uncitedSourceAlias = bindings.find((binding: any) =>
+      binding.canonicalId === evaluatorTask.providerRuntime
+        .enterpriseRagEvaluation.input.sources[1].id).alias;
+    initial.claims[0].sourceIds = [uncitedSourceAlias];
+    h.pushProviderOutput(initial, "provider-semantic-invalid-result");
+
+    const firstPending = await h.service.observe(REQUEST_ID);
+    expect(firstPending.status).toBe("result_pending");
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.client.sendMessage.mock.calls[0]![0].prompt).toContain(
+      "陈述依据未被回答引用",
+    );
+    expect(h.client.sendMessage.mock.calls[0]![0].prompt).toContain(
+      "保留与本次校验失败无关的合法 ID",
+    );
+    delete evaluatorTask.providerRuntime.enterpriseRagEvaluation.repair.attempt;
+
+    const repairedWithTypo = h.acceptedOutput();
+    const rewrittenSourceAlias = `${citedSourceAlias}4`;
+    repairedWithTypo.claims[0].sourceIds = [rewrittenSourceAlias];
+    repairedWithTypo.dimensions.find(({id}) => id === "correctness")!
+      .evidenceIds.push(rewrittenSourceAlias);
+    repairedWithTypo.gates.find(({id}) => id === "facts")!
+      .evidenceIds.push(rewrittenSourceAlias);
+    repairedWithTypo.dimensions.find(({id}) => id === "citations")!.level = 2;
+    repairedWithTypo.gates.find(({id}) => id === "citations")!.status = "failed";
+    h.pushProviderAssistant(repairedWithTypo, "provider-repair-new-typo");
+
+    const secondPending = await h.service.observe(REQUEST_ID);
+    expect(secondPending.status).toBe("result_pending");
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(2);
+    const finalRepair = h.client.sendMessage.mock.calls[1]![0];
+    expect(finalRepair.prompt).toContain(
+      "claims[0].sourceIds[0] 不在冻结传输白名单中",
+    );
+    expect(finalRepair.prompt).toContain("dimensions[1].evidenceIds[3]");
+    expect(finalRepair.prompt).toContain("gates[0].evidenceIds[3]");
+    expect(finalRepair.prompt).toContain(
+      `唯一一处字符编辑可达的合法 ID 是 "${citedSourceAlias}"`,
+    );
+    expect(finalRepair.prompt).not.toContain(rewrittenSourceAlias);
+    expect(finalRepair.prompt).toContain("修复轮次=2/2");
+    expect(finalRepair.structuredOutputSchema).toEqual(
+      h.client.createTask.mock.calls[0]![0].structuredOutputSchema,
+    );
+
+    h.pushProviderOutput(h.acceptedOutput(), "provider-final-repaired-result");
+    const completed = await h.service.observe(REQUEST_ID);
+    expect(completed.status).toBe("completed");
+    expect(completed.report?.result.score).toBe(100);
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(2);
+    expect(h.persistedEvents).toHaveLength(1);
   });
 
   it("自动修复后仍引用未知证据时失败且不写入报告", async () => {
@@ -626,8 +766,10 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const h = harness();
     await h.service.start(h.startInput);
     const operation = h.operationRows.find((row) => row.id === REQUEST_ID);
+    const task = h.taskRows.find((row) => row.operationId === REQUEST_ID);
+    delete task.providerRuntime.enterpriseRagEvaluation.wireContract;
     operation.schemaHash = intentHash(ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA);
-    const invalid = h.acceptedOutput();
+    const invalid = h.acceptedOutput(true);
     invalid.gates[0].evidenceIds = ["legacy-invented-evidence"];
     h.pushProviderOutput(invalid, "legacy-invalid-result");
     const pending = await h.service.observe(REQUEST_ID);
@@ -642,7 +784,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
       "还可以引用本次 JSON 中实际存在",
     );
 
-    const legacyValid = h.acceptedOutput();
+    const legacyValid = h.acceptedOutput(true);
     const frozenSourceId = legacyValid.claims[0]!.sourceIds[0]!;
     for (const item of [...legacyValid.dimensions, ...legacyValid.gates]) {
       item.evidenceIds = [frozenSourceId];
@@ -651,6 +793,49 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const completed = await h.service.observe(REQUEST_ID);
     expect(completed.status).toBe("completed");
     expect(completed.report?.result.score).toBe(100);
+  });
+
+  it("继续接受使用旧 bound canonical schemaHash 启动的在途评估", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const operation = h.operationRows.find((row) => row.id === REQUEST_ID);
+    const task = h.taskRows.find((row) => row.operationId === REQUEST_ID);
+    const frozenInput = task.providerRuntime.enterpriseRagEvaluation.input;
+    delete task.providerRuntime.enterpriseRagEvaluation.wireContract;
+    operation.schemaHash = intentHash(enterpriseRagJudgeWireSchema(frozenInput));
+
+    h.pushProviderOutput(h.acceptedOutput(true), "old-bound-valid-result");
+    const completed = await h.service.observe(REQUEST_ID);
+    expect(completed.status).toBe("completed");
+    expect(completed.report?.result.score).toBe(100);
+    expect(completed.report?.judgments.claims[0].sourceIds).toEqual([
+      frozenInput.sources[0].id,
+    ]);
+  });
+
+  it("在调用模型前拒绝被篡改的别名合同或 schemaHash", async () => {
+    const contractTamper = harness();
+    await contractTamper.service.start(contractTamper.startInput);
+    const contractTask = contractTamper.taskRows.find((row) =>
+      row.operationId === REQUEST_ID);
+    contractTask.providerRuntime.enterpriseRagEvaluation
+      .wireContract.bindings[2].canonicalId = "doc-tampered";
+    const contractCalls = contractTamper.client.listAllMessages.mock.calls.length;
+    await expect(contractTamper.service.observe(REQUEST_ID)).rejects.toMatchObject({
+      code: "EVALUATION_CONTEXT_INVALID",
+    });
+    expect(contractTamper.client.listAllMessages).toHaveBeenCalledTimes(contractCalls);
+
+    const hashTamper = harness();
+    await hashTamper.service.start(hashTamper.startInput);
+    hashTamper.operationRows.find((row) => row.id === REQUEST_ID).schemaHash =
+      "0".repeat(64);
+    const hashCalls = hashTamper.client.listAllMessages.mock.calls.length;
+    const failed = await hashTamper.service.observe(REQUEST_ID);
+    expect(failed.status).toBe("failed");
+    expect(failed.error?.code).toBe("EVALUATION_CONTEXT_INVALID");
+    expect(hashTamper.client.listAllMessages).toHaveBeenCalledTimes(hashCalls);
+    expect(failed.report).toBeNull();
   });
 
   it("拒绝不属于源 QA 任务的 turn，且不会创建付费模型任务", async () => {

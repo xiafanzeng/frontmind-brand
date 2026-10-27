@@ -1,9 +1,15 @@
 import Ajv from "ajv";
 import {describe, expect, it} from "vitest";
 import {
+  ENTERPRISE_RAG_CLAIM_IDS,
   ENTERPRISE_RAG_DIMENSION_IDS,
   ENTERPRISE_RAG_GATE_IDS,
+  createEnterpriseRagEvidenceAliasContract,
+  decodeEnterpriseRagAliasedJudgeOutput,
+  enterpriseRagAliasedInput,
+  enterpriseRagAliasedJudgeWireSchema,
   enterpriseRagJudgeWireSchema,
+  validateEnterpriseRagEvidenceAliasContract,
   validateEnterpriseRagJudgeOutput,
   type EnterpriseRagEvaluationFrozenInput,
 } from "../contracts/enterprise-rag-evaluation-run";
@@ -73,6 +79,44 @@ function validOutput() {
   };
 }
 
+function aliasFor(
+  contract: ReturnType<typeof createEnterpriseRagEvidenceAliasContract>,
+  canonicalId: string,
+) {
+  return contract.bindings.find((binding) =>
+    binding.canonicalId === canonicalId)?.alias ?? "missing-alias";
+}
+
+function aliasedOutput(
+  contract: ReturnType<typeof createEnterpriseRagEvidenceAliasContract>,
+) {
+  const value = validOutput();
+  const answerAlias = aliasFor(contract, "answer:answer-message");
+  const sourceAlias = aliasFor(contract, "doc-1");
+  for (const item of [...value.dimensions, ...value.gates]) {
+    item.evidenceIds = ["claim-1", answerAlias, sourceAlias];
+  }
+  value.claims[0].sourceIds = [sourceAlias];
+  return value;
+}
+
+function editDistance(left: string, right: string) {
+  const previous = Array.from({length: right.length + 1}, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex]! + 1,
+        previous[rightIndex - 1]! +
+          (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[right.length]!;
+}
+
 describe("企业 RAG 自动评估模型输出边界", () => {
   it("接受与任务、回答和冻结来源严格绑定的完整判断", () => {
     const result = validateEnterpriseRagJudgeOutput(validOutput(), input);
@@ -97,6 +141,210 @@ describe("企业 RAG 自动评估模型输出边界", () => {
     const wrongToken = validOutput();
     wrongToken.operationToken = "rag-evaluation:other-task";
     expect(validate(wrongToken)).toBe(false);
+  });
+
+  it("用持久化短别名传输证据，并在完整校验前精确还原 canonical ID", () => {
+    const contract = createEnterpriseRagEvidenceAliasContract(input);
+    expect(contract).toEqual({
+      revision: "evidence-alias-v1",
+      bindings: [
+        {alias: "rag-QQQ-000-000-000", canonicalId: "question:question-message", kind: "question"},
+        {alias: "rag-AAA-000-000-111", canonicalId: "answer:answer-message", kind: "answer"},
+        {alias: "rag-SSS-000-000-222", canonicalId: "doc-1", kind: "source"},
+      ],
+    });
+    const wireInput = enterpriseRagAliasedInput(input, contract);
+    expect(wireInput.inputHash).toBe(input.inputHash);
+    expect(wireInput.allowedEvidenceIds).toEqual([
+      "rag-QQQ-000-000-000",
+      "rag-AAA-000-000-111",
+      "rag-SSS-000-000-222",
+    ]);
+    expect(wireInput.sources[0].id).toBe("rag-SSS-000-000-222");
+
+    const wireValue = aliasedOutput(contract);
+    const wireSchema = enterpriseRagAliasedJudgeWireSchema(input, contract);
+    const validate = new Ajv({strict: false}).compile(wireSchema);
+    expect(validate(wireValue)).toBe(true);
+    expect(validate(validOutput())).toBe(false);
+
+    const decoded = decodeEnterpriseRagAliasedJudgeOutput(
+      wireValue,
+      input,
+      contract,
+    );
+    expect(decoded.claims[0].sourceIds).toEqual(["doc-1"]);
+    expect(decoded.dimensions[0].evidenceIds).toEqual([
+      "claim-1",
+      "answer:answer-message",
+      "doc-1",
+    ]);
+    expect(() => validateEnterpriseRagJudgeOutput(decoded, input)).not.toThrow();
+  });
+
+  it("别名解码拒绝 canonical、近似值和被篡改的冻结映射", () => {
+    const contract = createEnterpriseRagEvidenceAliasContract(input);
+    const sourceAlias = aliasFor(contract, "doc-1");
+    const wireValue = aliasedOutput(contract);
+    const rewrittenAlias = `${sourceAlias}6`;
+    wireValue.claims[0].sourceIds = [rewrittenAlias];
+    let diagnostic = "";
+    try {
+      decodeEnterpriseRagAliasedJudgeOutput(wireValue, input, contract);
+    } catch (error) {
+      diagnostic = error instanceof Error ? error.message : String(error);
+    }
+    expect(diagnostic).toContain("claims[0].sourceIds[0]");
+    expect(diagnostic).toContain(
+      `唯一一处字符编辑可达的合法 ID 是 "${sourceAlias}"`,
+    );
+    expect(diagnostic).not.toContain(rewrittenAlias);
+
+    wireValue.claims[0].sourceIds = ["doc-1"];
+    expect(() =>
+      decodeEnterpriseRagAliasedJudgeOutput(wireValue, input, contract)
+    ).toThrow("未授权来源别名");
+
+    const tampered = structuredClone(contract);
+    tampered.bindings[2].canonicalId = "doc-other";
+    expect(() =>
+      validateEnterpriseRagEvidenceAliasContract(input, tampered)
+    ).toThrow("传输合同与冻结证据不一致");
+
+    const reorderedKeys = {
+      bindings: contract.bindings.map(({kind, canonicalId, alias}) => ({
+        kind,
+        canonicalId,
+        alias,
+      })),
+      revision: contract.revision,
+    };
+    expect(validateEnterpriseRagEvidenceAliasContract(input, reorderedKeys))
+      .toEqual(contract);
+    const reorderedBindings = structuredClone(contract);
+    reorderedBindings.bindings.reverse();
+    expect(() =>
+      validateEnterpriseRagEvidenceAliasContract(input, reorderedBindings)
+    ).toThrow("传输合同与冻结证据不一致");
+  });
+
+  it("49 个来源使用最小编辑距离至少为 3 的防误码别名，并聚合全部非法路径", () => {
+    const sources = Array.from({length: 49}, (_, index) => ({
+      ...input.sources[0],
+      id: `doc-${index + 1}`,
+      title: `知识文档 ${index + 1}`,
+      citedByAnswer: index === 0,
+    }));
+    const manySourceInput: EnterpriseRagEvaluationFrozenInput = {
+      ...input,
+      sources,
+      allowedEvidenceIds: [
+        "question:question-message",
+        "answer:answer-message",
+        ...sources.map(({id}) => id),
+      ],
+      knowledgeBase: {...input.knowledgeBase, documentCount: sources.length},
+    };
+    const contract = createEnterpriseRagEvidenceAliasContract(manySourceInput);
+    const aliases = contract.bindings.map(({alias}) => alias);
+    for (let left = 0; left < aliases.length; left += 1) {
+      for (let right = left + 1; right < aliases.length; right += 1) {
+        expect(
+          editDistance(aliases[left]!, aliases[right]!),
+          `${aliases[left]} / ${aliases[right]}`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+      for (const claimId of ENTERPRISE_RAG_CLAIM_IDS) {
+        expect(editDistance(aliases[left]!, claimId)).toBeGreaterThanOrEqual(3);
+      }
+    }
+
+    const targetAlias = aliasFor(contract, "doc-16");
+    const typoVariants = [
+      targetAlias.slice(0, -1),
+      `${targetAlias}6`,
+      `${targetAlias.slice(0, -1)}${targetAlias.endsWith("Z") ? "Y" : "Z"}`,
+    ];
+    for (const typo of typoVariants) {
+      const wireValue = aliasedOutput(contract);
+      wireValue.claims[0].sourceIds = [typo];
+      let error: unknown;
+      try {
+        decodeEnterpriseRagAliasedJudgeOutput(
+          wireValue,
+          manySourceInput,
+          contract,
+        );
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toMatchObject({kind: "repairable_identifier"});
+      expect(String(error)).toContain(
+        `唯一一处字符编辑可达的合法 ID 是 "${targetAlias}"`,
+      );
+      expect(String(error)).not.toContain(JSON.stringify(typo));
+    }
+
+    const repeatedTypo = `${targetAlias}4`;
+    const repeated = aliasedOutput(contract);
+    repeated.claims[0].sourceIds = [repeatedTypo];
+    repeated.dimensions[0].evidenceIds.push(repeatedTypo);
+    repeated.gates[0].evidenceIds.push(repeatedTypo);
+    let aggregate: unknown;
+    try {
+      decodeEnterpriseRagAliasedJudgeOutput(repeated, manySourceInput, contract);
+    } catch (caught) {
+      aggregate = caught;
+    }
+    expect(aggregate).toMatchObject({kind: "repairable_identifier"});
+    expect(String(aggregate)).toContain("dimensions[0].evidenceIds[3]");
+    expect(String(aggregate)).toContain("gates[0].evidenceIds[3]");
+    expect(String(aggregate)).toContain("claims[0].sourceIds[0]");
+    expect(String(aggregate)).not.toContain(JSON.stringify(repeatedTypo));
+  });
+
+  it("别名坐标前后空白都按非逐字复制拒绝", () => {
+    const contract = createEnterpriseRagEvidenceAliasContract(input);
+    const sourceAlias = aliasFor(contract, "doc-1");
+    const sourceWhitespace = aliasedOutput(contract);
+    sourceWhitespace.claims[0].sourceIds = [`${sourceAlias} `];
+    let sourceError: unknown;
+    try {
+      decodeEnterpriseRagAliasedJudgeOutput(sourceWhitespace, input, contract);
+    } catch (caught) {
+      sourceError = caught;
+    }
+    expect(sourceError).toMatchObject({kind: "repairable_identifier"});
+    expect(String(sourceError)).toContain(
+      `唯一一处字符编辑可达的合法 ID 是 "${sourceAlias}"`,
+    );
+
+    const evidenceWhitespace = aliasedOutput(contract);
+    evidenceWhitespace.dimensions[0].evidenceIds = [` ${sourceAlias}`];
+    let evidenceError: unknown;
+    try {
+      decodeEnterpriseRagAliasedJudgeOutput(evidenceWhitespace, input, contract);
+    } catch (caught) {
+      evidenceError = caught;
+    }
+    expect(evidenceError).toMatchObject({kind: "repairable_identifier"});
+    expect(String(evidenceError)).toContain(
+      `唯一一处字符编辑可达的合法 ID 是 "${sourceAlias}"`,
+    );
+  });
+
+  it("拒绝 canonical 证据占用 claim 坐标命名空间", () => {
+    const conflicting: EnterpriseRagEvaluationFrozenInput = {
+      ...input,
+      sources: [{...input.sources[0], id: "claim-1"}],
+      allowedEvidenceIds: [
+        "question:question-message",
+        "answer:answer-message",
+        "claim-1",
+      ],
+    };
+    expect(() => createEnterpriseRagEvidenceAliasContract(conflicting))
+      .toThrow("冻结证据标识与评估陈述坐标冲突");
   });
 
   it("拒绝线上出现的来源 ID 尾字符改写，并给唯一合法候选供严格修复", () => {

@@ -559,6 +559,21 @@ function jsonLdMarkup(value) {
     .replaceAll(String.fromCharCode(0x2029), "\\u2029");
 }
 
+/** Inline boot config for the host-owned floating assistant. Same script-safety
+ * escaping rules as JSON-LD: never interpolate customer values unescaped. */
+function assistantConfigScript(value) {
+  return "window.__FRONTMIND_ASSISTANT__=" + jsonLdMarkup(value) + ";";
+}
+
+function SiteAssistantTags({ site }) {
+  if (!site.assistant || !site.assistant.apiBase) return null;
+  return [
+    h("link", { key: "assistant-css", rel: "stylesheet", href: "/assistant.css" }),
+    h("script", { key: "assistant-config", dangerouslySetInnerHTML: { __html: assistantConfigScript(site.assistant) } }),
+    h("script", { key: "assistant-js", src: "/assistant.js", defer: true })
+  ];
+}
+
 export function SiteDocument({ site, page }) {
   const jsonLd = jsonLdMarkup(page.jsonLd);
   return h(
@@ -582,6 +597,7 @@ export function SiteDocument({ site, page }) {
       jsonLd ? h("script", { type: "application/ld+json", dangerouslySetInnerHTML: { __html: jsonLd } }) : null,
       h("link", { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" }),
       h("link", { rel: "stylesheet", href: "/styles.css" }),
+      h(SiteAssistantTags, { site }),
       h("title", null, page.title)
     ),
     h("body", { className: site.bodyClass }, h(SiteHeader, { site }), h("main", null, h(SitePage, { page })), h(SiteFooter, { site }))
@@ -592,7 +608,7 @@ export function NotFoundDocument({ site, page }) {
   return h(
     "html",
     { lang: site.language },
-    h("head", null, h("meta", { charSet: "UTF-8" }), h("meta", { name: "viewport", content: "width=device-width, initial-scale=1" }), h("meta", { name: "description", content: page.description }), h("meta", { name: "robots", content: site.robots }), h("link", { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" }), h("link", { rel: "stylesheet", href: "/styles.css" }), h("title", null, page.title)),
+    h("head", null, h("meta", { charSet: "UTF-8" }), h("meta", { name: "viewport", content: "width=device-width, initial-scale=1" }), h("meta", { name: "description", content: page.description }), h("meta", { name: "robots", content: site.robots }), h("link", { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" }), h("link", { rel: "stylesheet", href: "/styles.css" }), h(SiteAssistantTags, { site }), h("title", null, page.title)),
     h("body", { className: site.bodyClass }, h(SiteHeader, { site }), h("main", null, h("section", { className: "hero hero--not-found" }, h("div", { className: "shell" }, h(Eyebrow, null, "404"), h("h1", null, "页面未找到"), h("p", { className: "lede" }, h("a", { href: "/" }, "返回首页"))))), h(SiteFooter, { site }))
   );
 }

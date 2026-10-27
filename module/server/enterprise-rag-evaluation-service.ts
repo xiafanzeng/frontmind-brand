@@ -10,7 +10,14 @@ import {
   ENTERPRISE_RAG_CLAIM_IDS,
   ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA,
   ENTERPRISE_RAG_JUDGE_VERSION,
+  EnterpriseRagEvaluationValidationError,
+  createEnterpriseRagEvidenceAliasContract,
+  decodeEnterpriseRagAliasedJudgeOutput,
+  enterpriseRagAliasedInput,
+  enterpriseRagAliasedJudgeWireSchema,
   enterpriseRagJudgeWireSchema,
+  validateEnterpriseRagEvidenceAliasContract,
+  type EnterpriseRagEvidenceAliasContract,
   type EnterpriseRagEvaluationFrozenInput,
   type EnterpriseRagEvaluationReport,
   type EnterpriseRagEvaluationRunDto,
@@ -54,6 +61,7 @@ type RuntimeState = {
   sourceQaTaskId: string;
   sourceTurnId: string;
   input: EnterpriseRagEvaluationFrozenInput;
+  wireContract?: EnterpriseRagEvidenceAliasContract;
   skill: string;
   skillHash: string;
   credentialId: string;
@@ -65,6 +73,7 @@ type RuntimeState = {
   createClaimedAt?: number;
   terminalObservedAt?: number;
   repair?: {
+    attempt?: 1 | 2;
     intentId: string;
     claimedAt: number;
     sentAt?: number;
@@ -171,6 +180,16 @@ function runtimeFromTask(task: any): RuntimeState {
       "评估任务快照校验失败，请重新发起评估。",
     );
   }
+  if (value.wireContract !== undefined) {
+    try {
+      validateEnterpriseRagEvidenceAliasContract(input, value.wireContract);
+    } catch {
+      throw new EnterpriseRagEvaluationError(
+        "EVALUATION_CONTEXT_INVALID",
+        "评估任务传输合同校验失败，请重新发起评估。",
+      );
+    }
+  }
   return structuredClone(value) as RuntimeState;
 }
 
@@ -252,17 +271,47 @@ export function createEnterpriseRagEvaluationService(
   }
 
   function judgeContract(owned: OwnedOperation, runtime: RuntimeState) {
+    if (runtime.wireContract) {
+      const wireContract = validateEnterpriseRagEvidenceAliasContract(
+        runtime.input,
+        runtime.wireContract,
+      );
+      const wireInput = enterpriseRagAliasedInput(runtime.input, wireContract);
+      const wireSchema = enterpriseRagAliasedJudgeWireSchema(
+        runtime.input,
+        wireContract,
+      );
+      if (
+        String(owned.operation.schemaHash) !==
+        intentHash({ wireSchema, wireContract })
+      ) return null;
+      return {
+        wireSchema,
+        wireInput,
+        decodeProviderOutput: (value: unknown) =>
+          decodeEnterpriseRagAliasedJudgeOutput(
+            value,
+            runtime.input,
+            wireContract,
+          ),
+        validationOptions: { allowedClaimIds: ENTERPRISE_RAG_CLAIM_IDS },
+      };
+    }
     const boundWireSchema = enterpriseRagJudgeWireSchema(runtime.input);
     const schemaHash = String(owned.operation.schemaHash);
     if (schemaHash === intentHash(boundWireSchema)) {
       return {
         wireSchema: boundWireSchema,
+        wireInput: runtime.input,
+        decodeProviderOutput: (value: unknown) => value,
         validationOptions: { allowedClaimIds: ENTERPRISE_RAG_CLAIM_IDS },
       };
     }
     if (schemaHash === intentHash(ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA)) {
       return {
         wireSchema: ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA,
+        wireInput: runtime.input,
+        decodeProviderOutput: (value: unknown) => value,
         validationOptions: { allowedClaimIds: null },
       };
     }
@@ -839,6 +888,8 @@ export function createEnterpriseRagEvaluationService(
         },
       ),
       wireSchema: contract.wireSchema,
+      wireInput: contract.wireInput,
+      decodeProviderOutput: contract.decodeProviderOutput,
       validationOptions: contract.validationOptions,
     };
   }
@@ -847,10 +898,11 @@ export function createEnterpriseRagEvaluationService(
     owned: OwnedOperation,
     runtime: RuntimeState,
     client: any,
+    wireInput: EnterpriseRagEvaluationFrozenInput,
   ) {
     const zip = new JSZip();
     zip.file("SKILL.md", runtime.skill);
-    zip.file("input.json", JSON.stringify(runtime.input));
+    zip.file("input.json", JSON.stringify(wireInput));
     const uploaded = await client.uploadFile({
       filename: "evaluate-enterprise-rag.skill.zip",
       bytes: await zip.generateAsync({ type: "nodebuffer" }),
@@ -996,17 +1048,22 @@ export function createEnterpriseRagEvaluationService(
     try {
       const clients = await persistedClient(owned, runtime);
       const client = clients.client;
-      const frozenEvidenceIds = new Set(runtime.input.allowedEvidenceIds);
+      const wireInput = clients.wireInput;
+      const frozenEvidenceIds = new Set(wireInput.allowedEvidenceIds);
       const frozenSourceIds = Array.from(new Set(
-        runtime.input.sources
+        wireInput.sources
           .map(({ id }) => id)
           .filter((id) => frozenEvidenceIds.has(id)),
       ));
       const judgmentEvidenceRule = clients.validationOptions.allowedClaimIds === null
         ? "维度和门禁的 evidenceIds 只能逐字引用冻结证据 ID，不得引用 claim ID。"
         : "维度和门禁的 evidenceIds 还可以引用本次 JSON 中实际存在且已绑定回答原文的 claim-1 至 claim-30。";
-      const sourceIdRule =
-        "claims[].sourceIds 是更窄的来源集合，只能从冻结来源 ID 白名单逐字复制；question:*、answer:*、claim-* 都不得写入。哪怕只多、少或改一个字符也非法。无法确认有合法来源直接支持时，必须使用 status=unsupported、sourceIds=[]，并同步按无来源调整事实/引用门禁与评分。";
+      const sourceIdRule = runtime.wireContract
+        ? "claims[].sourceIds 是更窄的来源集合，只能从冻结来源 ID 白名单逐字复制；问题、回答和 claim-* 的证据别名都不得写入。哪怕只多、少或改一个字符也非法。无法确认有合法来源直接支持时，必须使用 status=unsupported、sourceIds=[]，并同步按无来源调整事实/引用门禁与评分。"
+        : "claims[].sourceIds 是更窄的来源集合，只能从冻结来源 ID 白名单逐字复制；question:*、answer:*、claim-* 都不得写入。哪怕只多、少或改一个字符也非法。无法确认有合法来源直接支持时，必须使用 status=unsupported、sourceIds=[]，并同步按无来源调整事实/引用门禁与评分。";
+      const aliasKindRule = runtime.wireContract
+        ? "传输别名的类型段固定为：rag-QQQ=问题、rag-AAA=回答、rag-SSS=来源、rag-EEE=其他证据；不得混淆类型。"
+        : "";
       const freshOwned = await findOwnedOperation(owned.operation.id);
       if (!freshOwned) return;
       owned = freshOwned;
@@ -1019,12 +1076,17 @@ export function createEnterpriseRagEvaluationService(
         }
         await updatePhase(owned, owner, "uploading");
         phase = "uploading";
-        const attachments = await uploadSkill(owned, runtime, client);
+        const attachments = await uploadSkill(
+          owned,
+          runtime,
+          client,
+          wireInput,
+        );
         await updatePhase(owned, owner, "create_unknown");
         phase = "create_unknown";
         const created = await client.createTask({
           title: owned.task.title,
-          prompt: `解压附件并完整读取 SKILL.md，严格按流程评估 input.json。只返回符合结构化输出 schema 的 JSON。所有 ID 必须从对应白名单逐字复制，禁止重算、缩写或改写。${judgmentEvidenceRule}${sourceIdRule}\n冻结证据 ID 白名单=${JSON.stringify(runtime.input.allowedEvidenceIds)}\n冻结来源 ID 白名单=${JSON.stringify(frozenSourceIds)}\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: runtime.input.operationToken })}`,
+          prompt: `解压附件并完整读取 SKILL.md，严格按流程评估 input.json。只返回符合结构化输出 schema 的 JSON。所有 ID 必须从对应白名单逐字复制，禁止重算、缩写或改写。${aliasKindRule}${judgmentEvidenceRule}${sourceIdRule}\n冻结证据 ID 白名单=${JSON.stringify(wireInput.allowedEvidenceIds)}\n冻结来源 ID 白名单=${JSON.stringify(frozenSourceIds)}\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: runtime.input.operationToken })}`,
           attachments,
           agentProfile: owned.operation.upstreamModel,
           locale: "zh-CN",
@@ -1094,6 +1156,11 @@ export function createEnterpriseRagEvaluationService(
         .orderManusV2EventsByProviderRank(events, "newest_first")
         .find((event: any) => event.type === "structured_output_result");
       let invalidResult: string | undefined;
+      let invalidKind:
+        | "semantic"
+        | "unauthorized_identifier"
+        | "repairable_identifier"
+        | undefined;
       let judgments: ReturnType<typeof validateEnterpriseRagJudgeOutput> | undefined;
       if (resultEvent) {
         try {
@@ -1107,11 +1174,14 @@ export function createEnterpriseRagEvaluationService(
             );
           }
           judgments = validateEnterpriseRagJudgeOutput(
-            classified.value,
+            clients.decodeProviderOutput(classified.value),
             runtime.input,
             clients.validationOptions,
           );
         } catch (error) {
+          invalidKind = error instanceof EnterpriseRagEvaluationValidationError
+            ? error.kind
+            : undefined;
           invalidResult = error instanceof z.ZodError
             ? "模型输出字段不符合评估结构"
             : error instanceof Error
@@ -1148,7 +1218,7 @@ export function createEnterpriseRagEvaluationService(
           if (fence) raw = fence[1]!.trim();
           try {
             judgments = validateEnterpriseRagJudgeOutput(
-              JSON.parse(raw),
+              clients.decodeProviderOutput(JSON.parse(raw)),
               runtime.input,
               clients.validationOptions,
             );
@@ -1159,6 +1229,9 @@ export function createEnterpriseRagEvaluationService(
             leaveLease = true;
             return;
           } catch (error) {
+            invalidKind = error instanceof EnterpriseRagEvaluationValidationError
+              ? error.kind
+              : undefined;
             invalidResult = error instanceof SyntaxError
               ? "模型最终 JSON 语法错误"
               : error instanceof z.ZodError
@@ -1169,21 +1242,36 @@ export function createEnterpriseRagEvaluationService(
           }
         }
         if (invalidResult) {
-          if (runtime.repair) {
+          const priorAttempt = runtime.repair
+            ? runtime.repair.attempt ?? 1
+            : 0;
+          const allowFinalIdentifierRepair =
+            priorAttempt === 1 && invalidKind === "repairable_identifier";
+          if (runtime.repair && !allowFinalIdentifierRepair) {
             throw new EnterpriseRagEvaluationError(
               "EVALUATION_REPAIR_FAILED",
               `模型结果自动修复后仍未通过校验：${invalidResult}；未写入评分，请重新评估。`,
             );
           }
+          const attempt = (priorAttempt + 1) as 1 | 2;
           const intentId = randomUUID();
           await mutateRuntime(owned.task.id, async (current, _task, tx) => {
-            if (current.lease?.owner !== owner || current.repair) {
+            const currentAttempt = current.repair
+              ? current.repair.attempt ?? 1
+              : 0;
+            if (
+              current.lease?.owner !== owner ||
+              currentAttempt !== priorAttempt ||
+              (priorAttempt > 0 &&
+                current.repair?.intentId !== runtime.repair?.intentId)
+            ) {
               throw new EnterpriseRagEvaluationError(
                 "EVALUATION_LEASE_CHANGED",
                 "评估任务执行权已变化，请重新读取。",
               );
             }
             current.repair = {
+              attempt,
               intentId,
               claimedAt: Date.now(),
               baselineEventIds: allEvents.map((event) => event.id),
@@ -1201,7 +1289,7 @@ export function createEnterpriseRagEvaluationService(
           await clients.repairClient(intentId).sendMessage({
             taskId: providerTaskId,
             structuredOutputSchema: clients.wireSchema,
-            prompt: `上一轮结果未通过校验：${invalidResult}。请重新完整读取原附件中的 SKILL.md 和 input.json，修正后返回完整 JSON。不要从上一轮错误 JSON 复制任何 ID；必须重新从下列对应白名单逐字选择，禁止重算、缩写或改写，并在所有字段中移除校验消息指出的非法值。冻结问题、回答和来源仍是唯一依据；禁止联网、补造证据、混入网站建设评分或改变任务标识。${judgmentEvidenceRule}${sourceIdRule}仅返回 JSON，不要解释。\n冻结证据 ID 白名单=${JSON.stringify(runtime.input.allowedEvidenceIds)}\n冻结来源 ID 白名单=${JSON.stringify(frozenSourceIds)}\noperationToken=${runtime.input.operationToken}\ninputHash=${runtime.input.inputHash}\n本轮修复标识=${intentId}`,
+            prompt: `上一轮结果未通过校验：${invalidResult}。请重新完整读取原附件中的 SKILL.md 和 input.json，修正后返回完整 JSON。必须保留与本次校验失败无关的合法 ID；只对校验消息指出的问题做最小必要修改（可按语义需要添加、删除或从对应白名单重选 ID），不得无关重抄，并须同步修正依赖结论。禁止重算、缩写或改写任何 ID。冻结问题、回答和来源仍是唯一依据；禁止联网、补造证据、混入网站建设评分或改变任务标识。${aliasKindRule}${judgmentEvidenceRule}${sourceIdRule}仅返回 JSON，不要解释。\n冻结证据 ID 白名单=${JSON.stringify(wireInput.allowedEvidenceIds)}\n冻结来源 ID 白名单=${JSON.stringify(frozenSourceIds)}\noperationToken=${runtime.input.operationToken}\ninputHash=${runtime.input.inputHash}\n修复轮次=${attempt}/2\n本轮修复标识=${intentId}`,
           });
           await mutateRuntime(owned.task.id, (current) => {
             if (current.lease?.owner === owner && current.repair?.intentId === intentId) {
@@ -1330,11 +1418,17 @@ export function createEnterpriseRagEvaluationService(
       input.turnId,
       operationToken,
     );
+    const wireContract = createEnterpriseRagEvidenceAliasContract(frozen);
+    const wireSchema = enterpriseRagAliasedJudgeWireSchema(
+      frozen,
+      wireContract,
+    );
     const runtime: RuntimeState = {
       schemaVersion: 1,
       sourceQaTaskId: input.sourceQaTaskId,
       sourceTurnId: input.turnId,
       input: frozen,
+      wireContract,
       skill: prepared.skill,
       skillHash: prepared.skillHash,
       credentialId: prepared.credential.id,
@@ -1403,7 +1497,7 @@ export function createEnterpriseRagEvaluationService(
         requestHash: frozen.inputHash,
         contractName: ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE,
         contractRevision: ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION,
-        schemaHash: intentHash(enterpriseRagJudgeWireSchema(frozen)),
+        schemaHash: intentHash({ wireSchema, wireContract }),
         apiCredentialId: prepared.credential.id,
         credentialVersion: prepared.credential.version,
         publicProfile: prepared.credential.agentProfile,

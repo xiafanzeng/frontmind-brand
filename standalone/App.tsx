@@ -30,7 +30,7 @@ function Runtime({context,preview}:{context:ModuleContext;preview:boolean}){
  const runtime=useMemo(()=>{const adapter=createBrandApi(preview?previewRpc:liveRpc);configureBrandApiHooks(adapter.api);installBrandHost(context,preview?previewConversations():liveConversations,preview);return adapter;},[context,preview]);
  const intentApi=useMemo(()=>preview?createIntentPreviewApi(context.workspace.id):undefined,[preview,context.workspace.id]);
  const [path,navigate]=useLocation();const search=useSearch();const params=new URLSearchParams(search);
- const requestedRaw=params.get('view')??(path==='/'?'knowledge':path.slice(1));
+ const requestedRaw=params.get('view')??(path==='/'?'reports':path.slice(1));
  const requested=resolveStandaloneBrandPage(requestedRaw);
  const requestedWebsiteStep=params.get('step');const requestedReturnStep=params.get('returnStep');
  const websiteStep=websiteSteps.includes(requestedWebsiteStep as BuildStep)?(requestedWebsiteStep as BuildStep):'template';
