@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import {z} from "zod";
+import {requestQuestionTemplate} from "./question-template-request.js";
 // 包名导入保持运行时从模块自身 dist 加载；相对导入会被 Dashboard 构建内联进 bundle，破坏 workflow 清单路径解析。
 import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
 import {assembleResponseLogicCore} from "@frontmind/module-brand/server/response-logic-runtime";
@@ -119,14 +120,14 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   const base=(core.environment.MOLIZHISHU_API_BASE_URL ?? "https://business.molizhishu.com").replace(/\/+$/, "").trim();
   const normalizedBase=base;
   try{
-   const response=await fetch(`${normalizedBase}/api/business/question-templates/${path}`,{method:"POST",headers:{Authorization:`Bearer ${token}`,Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify(req.body),signal:AbortSignal.timeout(30_000)});
+   const response=await requestQuestionTemplate(normalizedBase,path,token,req.body);
    const text=await response.text();let payload:unknown;try{payload=JSON.parse(text);}catch{payload={message:"上游接口返回非 JSON 内容。"};}
    const record=payload&&typeof payload==="object"?payload as Record<string,unknown>:{};
    if(!response.ok||record.success===false){res.status(response.ok?502:response.status).json({error:{code:"MOLIZHISHU_UPSTREAM_ERROR",message:typeof record.message==="string"?record.message:"模力指数接口暂时无法完成请求。"}});return;}
    res.status(200).json(payload);
   }catch(error){
    const timeout=error instanceof Error && error.name==="TimeoutError";
-   res.status(502).json({error:{code:timeout?"MOLIZHISHU_TIMEOUT":"MOLIZHISHU_UNAVAILABLE",message:timeout?"模力指数接口请求超时，请稍后重试。":"无法连接模力指数接口，请检查服务端网络与配置。"}});
+   res.status(timeout?504:502).json({error:{code:timeout?"MOLIZHISHU_TIMEOUT":"MOLIZHISHU_UNAVAILABLE",message:timeout?"模力指数生成超过2分钟仍未返回，请稍后重试。":"无法连接模力指数接口，请检查服务端网络与配置。"}});
   }
  };
  router.post("/question-templates/recommend-core-words",recommendQuestionTemplates("recommend-core-words"));
