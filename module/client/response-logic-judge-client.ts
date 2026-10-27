@@ -110,7 +110,17 @@ export async function pollJudgeTask(input: {
   throw new JudgeRequestError("JUDGE_RESPONSE_INVALID", `Judge 任务返回未知状态: ${String(body.status)}`, response.status);
 }
 
-/** Context key binding a judge poll to its original question+revision+fingerprint. */
-export function judgeContextKey(questionId: string, revision: number, fingerprint: string): string {
-  return `${questionId}:${revision}:${fingerprint}`;
+/**
+ * Context key binding a judge task to its origin context. The optional
+ * question basis (current question text + intent) extends the binding: a
+ * question edited elsewhere produces a different key, so the client state
+ * machine drops the old result instead of showing it as current.
+ */
+export function judgeContextKey(
+  questionId: string,
+  revision: number,
+  fingerprint: string,
+  questionBasis?: string,
+): string {
+  return `${questionId}:${revision}:${fingerprint}${questionBasis !== undefined ? `:${questionBasis}` : ""}`;
 }

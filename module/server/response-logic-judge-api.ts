@@ -497,6 +497,25 @@ export function createJudgeContextResolver(core: JudgeCore) {
       });
       return null;
     }
+    // Question-basis currency: the record's stored question basis must still
+    // match the current ledger question (text and intent). An edit committed
+    // after this record was last saved makes every judge/optimization task
+    // for it stale — starting or polling one must fail closed so the client's
+    // context-key state machine drops the old result instead of presenting it
+    // as current. Re-saving the draft under the new question text restores
+    // the basis and unblocks evaluation.
+    if (
+      configuredQuestion.question !== record.question ||
+      (configuredQuestion.intent ?? "") !== (record.intent ?? "")
+    ) {
+      judgeError(
+        res,
+        409,
+        "RESPONSE_LOGIC_QUESTION_CONTEXT_STALE",
+        "问题已变化，请刷新后重新评估或生成",
+      );
+      return null;
+    }
     const logic: LogicSections = {
       concern: record.draft.concern,
       conclusion: record.draft.conclusion,

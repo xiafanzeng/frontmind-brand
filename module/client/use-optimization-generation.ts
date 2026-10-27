@@ -41,6 +41,8 @@ export function useOptimizationGeneration(input: {
   recordRevision: number;
   sourceFingerprint: string;
   judgeTaskId: string;
+  /** Current question text+intent basis; a change drops stale candidates. */
+  questionBasis?: string;
 }) {
   const [state, dispatch] = useReducer(optimizationReducer, initialOptimizationLifecycleState);
   const pollAbortRef = useRef<AbortController | null>(null);
@@ -50,6 +52,7 @@ export function useOptimizationGeneration(input: {
 
   const contextKey = optimizationContextKey(
     input.questionId, input.recordRevision, input.sourceFingerprint, input.judgeTaskId,
+    input.questionBasis,
   );
 
   // On context change: cancel polling, reset state

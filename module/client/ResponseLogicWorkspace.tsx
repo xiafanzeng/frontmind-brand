@@ -1787,12 +1787,15 @@ function ResponseLogicQuestionEditor({
     !generating && !hasAdoptedContent && !generation;
   const currentLogic: LogicSections = {concern:draft.concern,conclusion:draft.conclusion,facts:draft.facts,boundaries:draft.boundaries};
   const currentFingerprint = fingerprintLogic(currentLogic);
+  // Question-context basis (entry text + intent): part of the judge and
+  // optimizer context keys so a changed question text drops stale results.
+  const questionBasis = `${question.question}\u0000${question.intent ?? ""}`;
   const currentVersion = persistedRecord?.confirmed?.version ?? null;
   const currentRevision = persistedRecord?.revision ?? 0;
   const showDemo = Boolean(draft.concern.trim() || draft.conclusion.trim() || draft.facts.trim() || draft.boundaries.trim());
   // LLM-as-Judge is the sole formal scorer. The rule evaluation engine remains
   // a server-side internal diagnostic and is never invoked by this flow.
-  const judge = useJudgeEvaluation({ questionId, recordRevision: currentRevision, sourceFingerprint: currentFingerprint });
+  const judge = useJudgeEvaluation({ questionId, recordRevision: currentRevision, sourceFingerprint: currentFingerprint, questionBasis });
   const beginDemoEvaluation = () => {
     void judge.start();
     setDemoView("evaluation");
@@ -1808,6 +1811,7 @@ function ResponseLogicQuestionEditor({
     recordRevision: currentRevision,
     sourceFingerprint: currentFingerprint,
     judgeTaskId: judge.state.phase === "completed" && judge.state.taskId ? judge.state.taskId : "",
+    questionBasis,
   });
   const adoptOptimizationPatch = (patch: Partial<LogicSections>) => {
     patchDraft(patch);

@@ -55,6 +55,8 @@ export function useJudgeEvaluation(input: {
   questionId: string;
   recordRevision: number;
   sourceFingerprint: string;
+  /** Current question text+intent basis; a change drops stale results. */
+  questionBasis?: string;
 }) {
   const [state, dispatch] = useReducer(judgeEvaluationReducer, initialJudgeLifecycleState);
   const pollAbortRef = useRef<AbortController | null>(null);
@@ -64,7 +66,12 @@ export function useJudgeEvaluation(input: {
   const phaseRef = useRef<JudgePhase>(initialJudgeLifecycleState.phase);
   phaseRef.current = state.phase;
 
-  const contextKey = judgeContextKey(input.questionId, input.recordRevision, input.sourceFingerprint);
+  const contextKey = judgeContextKey(
+    input.questionId,
+    input.recordRevision,
+    input.sourceFingerprint,
+    input.questionBasis,
+  );
 
   // On context change: cancel polling, reset state
   useEffect(() => {

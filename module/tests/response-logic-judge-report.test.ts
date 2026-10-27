@@ -60,6 +60,8 @@ describe("judgeEvaluationReducer", () => {
   const K2 = judgeContextKey("q2", 2, "fp-a"); // question switched
   const K3 = judgeContextKey("q1", 3, "fp-a"); // revision advanced
   const K4 = judgeContextKey("q1", 2, "fp-b"); // draft fingerprint changed
+  const K5 = judgeContextKey("q1", 2, "fp-a", "Q1\u0000intent-1"); // question basis bound
+  const K6 = judgeContextKey("q1", 2, "fp-a", "Q2 edited\u0000intent-1"); // question edited elsewhere
 
   const runningOn = (key: string) => {
     const starting = judgeEvaluationReducer(initialJudgeLifecycleState, { type: "start", contextKey: key });
@@ -67,7 +69,13 @@ describe("judgeEvaluationReducer", () => {
   };
 
   it("binds a distinct context key per question, revision and fingerprint", () => {
-    expect(new Set([K1, K2, K3, K4]).size).toBe(4);
+    expect(new Set([K1, K2, K3, K4, K5, K6]).size).toBe(6);
+  });
+
+  it("appends the question basis to the context key and keeps legacy keys stable", () => {
+    expect(K1).toBe("q1:2:fp-a");
+    expect(K5).toBe(`q1:2:fp-a:Q1\u0000intent-1`);
+    expect(K6).not.toBe(K5);
   });
 
   it("starts from idle and reaches running with the task id", () => {
@@ -99,6 +107,21 @@ describe("judgeEvaluationReducer", () => {
     const edited = judgeEvaluationReducer(runningOn(K1), { type: "context-change", contextKey: K4 });
     const after = judgeEvaluationReducer(edited, { type: "poll-completed", result: buildJudge(), contextKey: K1 });
     expect(after).toBe(edited);
+  });
+
+  it("drops a completed judge result when the question text was edited elsewhere (Q1→Q2)", () => {
+    const completed = judgeEvaluationReducer(runningOn(K5), {
+      type: "poll-completed", result: buildJudge(), contextKey: K5,
+    });
+    expect(completed.phase).toBe("completed");
+    // The entry question text updates to Q2 → new key → the old verdict,
+    // candidates and judgeTaskId are dropped; optimization cannot start.
+    const invalidated = judgeEvaluationReducer(completed, { type: "context-change", contextKey: K6 });
+    expect(invalidated.phase).toBe("idle");
+    expect(invalidated.result).toBeNull();
+    expect(invalidated.taskId).toBeNull();
+    const after = judgeEvaluationReducer(invalidated, { type: "poll-completed", result: buildJudge(), contextKey: K5 });
+    expect(after).toBe(invalidated);
   });
 
   it("drops a stale start success from a previous context", () => {

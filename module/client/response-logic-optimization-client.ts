@@ -121,6 +121,12 @@ export async function pollOptimizationTask(input: {
  * revision + draft fingerprint + judge task. Matches the server-side binding
  * (the start endpoint re-verifies the judge task against exactly this context).
  */
-export function optimizationContextKey(questionId: string, revision: number, fingerprint: string, judgeTaskId: string): string {
-  return `${questionId}:${revision}:${fingerprint}:${judgeTaskId}`;
+export function optimizationContextKey(
+  questionId: string,
+  revision: number,
+  fingerprint: string,
+  judgeTaskId: string,
+  questionBasis?: string,
+): string {
+  return `${questionId}:${revision}:${fingerprint}:${judgeTaskId}${questionBasis !== undefined ? `:${questionBasis}` : ""}`;
 }

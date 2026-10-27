@@ -124,6 +124,7 @@ async function startHarness(options: { credential: boolean }) {
   const address = server.address();
   if (typeof address !== "object" || !address) throw new Error("listen failed");
   return {
+    fake,
     upstreamClient,
     url: `http://127.0.0.1:${address.port}`,
     async close() {
@@ -267,5 +268,59 @@ describe("response-logic resolver gate across all public endpoints", () => {
     // Boundary: the segments beyond the question gate (readiness, archive
     // build, upstream dispatch) are covered by the migrated Intent suite;
     // this matrix proves only that the resolver gate lets the flow through.
+  });
+
+  it("fails judge and optimization closed while the record's question basis is stale (Q1→Q2)", async () => {
+    const harness = await startHarness({ credential: false });
+    servers.push(harness);
+    const json = { "Content-Type": "application/json" };
+
+    // Tab A saved the record under Q1; tab B edits the ledger question to Q2
+    // (ledger revision bumps; the record's stored basis stays Q1).
+    harness.fake.ledgerRows[0].revision = 6;
+    harness.fake.ledgerRows[0].payload = {
+      version: 1,
+      questions: [{ id: QUESTION_ID, question: "修改后的新问题文本", intent: "", category: "" }],
+    };
+
+    const judgeStart = await fetch(`${harness.url}/response-logic/evaluation/judge`, {
+      method: "POST", headers: json, body: JSON.stringify({ questionId: QUESTION_ID, expectedRevision: 1 }),
+    });
+    expect(judgeStart.status).toBe(409);
+    expect((await judgeStart.json()).error?.code).toBe("RESPONSE_LOGIC_QUESTION_CONTEXT_STALE");
+
+    const judgeStatus = await fetch(
+      `${harness.url}/response-logic/evaluation/judge/tasks/tk-1/status?questionId=${encodeURIComponent(QUESTION_ID)}&expectedRevision=1`,
+    );
+    expect(judgeStatus.status).toBe(409);
+    expect((await judgeStatus.json()).error?.code).toBe("RESPONSE_LOGIC_QUESTION_CONTEXT_STALE");
+
+    const optimizationStart = await fetch(`${harness.url}/response-logic/optimization`, {
+      method: "POST", headers: json,
+      body: JSON.stringify({ questionId: QUESTION_ID, expectedRevision: 1, judgeTaskId: "jt-1" }),
+    });
+    expect(optimizationStart.status).toBe(409);
+    expect((await optimizationStart.json()).error?.code).toBe("RESPONSE_LOGIC_QUESTION_CONTEXT_STALE");
+
+    const optimizationStatus = await fetch(
+      `${harness.url}/response-logic/optimization/tasks/tk-1/status?questionId=${encodeURIComponent(QUESTION_ID)}&expectedRevision=1&judgeTaskId=jt-1`,
+    );
+    expect(optimizationStatus.status).toBe(409);
+    expect((await optimizationStatus.json()).error?.code).toBe("RESPONSE_LOGIC_QUESTION_CONTEXT_STALE");
+
+    // No upstream client may be reached from a stale context.
+    expect(harness.upstreamClient).not.toHaveBeenCalled();
+
+    // Re-saving the draft under the edited question text restores the basis
+    // and unblocks evaluation (the credential gate is the next stop).
+    const resaved = await fetch(`${harness.url}/response-logic`, {
+      method: "POST", headers: json,
+      body: JSON.stringify({ ...saveBody, question: "修改后的新问题文本", expectedRevision: 1, publish: false }),
+    });
+    expect(resaved.status).toBe(200);
+    const judgeAfter = await fetch(`${harness.url}/response-logic/evaluation/judge`, {
+      method: "POST", headers: json, body: JSON.stringify({ questionId: QUESTION_ID, expectedRevision: 2 }),
+    });
+    expect(judgeAfter.status).toBe(428);
   });
 });
