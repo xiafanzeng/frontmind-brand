@@ -93,19 +93,114 @@ describe("brand response-logic adapter REST wiring", () => {
     const harness = createHarness();
     harness.setResponse(async () =>
       ({ ok: true, status: 200, json: async () => ({ id: "task-1", operationRevision: 1 }) }) as unknown as Response);
-    const task = await harness.host.createResponseLogicTask([], {
-      questionId: "t:1",
-      groupId: "brand-intent",
-      groupTitle: "品牌意图优化",
-      question: "问题",
-      intent: "",
-      summary: "",
-      draft: null,
-      operationRevision: 1,
-    } as never);
+    const task = await harness.host.createResponseLogicTask(
+      [{ role: "user", content: "请生成应答逻辑" }],
+      {
+        questionId: "t:1",
+        groupId: "brand-intent",
+        groupTitle: "品牌意图优化",
+        question: "问题",
+        intent: "",
+        summary: "",
+        draft: { concern: "", conclusion: "", facts: "", pending: "", boundaries: "", references: "", images: [], attachments: [] },
+        operationRevision: 1,
+        conversationId: "conv-1",
+      } as never,
+    );
     expect(task).toEqual({ id: "task-1", operationRevision: 1 });
     expect(harness.calls[0].input).toBe(`${RESPONSE_LOGIC_API_BASE}/start`);
     expect(harness.calls[0].init?.method).toBe("POST");
+  });
+
+  it("converts string messages to userMessage (fixes the 400 INVALID_RESPONSE_LOGIC_INPUT)", async () => {
+    const harness = createHarness();
+    harness.setResponse(async () =>
+      ({ ok: true, status: 200, json: async () => ({ id: "t", operationRevision: 1 }) }) as unknown as Response);
+    await harness.host.createResponseLogicTask(
+      [{ role: "user", content: "生成应答逻辑" }, { role: "user", content: "补充要求" }],
+      { questionId: "q1", groupId: "g", groupTitle: "T", question: "Q", intent: "", summary: "",
+        draft: { concern: "", conclusion: "", facts: "", pending: "", boundaries: "", references: "", images: [], attachments: [] },
+        conversationId: "c1" } as never,
+    );
+    const body = JSON.parse(String(harness.calls[0].init?.body));
+    expect(body.userMessage).toBe("生成应答逻辑\n补充要求");
+    expect(body.messages).toBeUndefined();
+  });
+
+  it("converts content-block messages to userMessage + attachments matching the server attachmentSchema", async () => {
+    const harness = createHarness();
+    harness.setResponse(async () =>
+      ({ ok: true, status: 200, json: async () => ({ id: "t" }) }) as unknown as Response);
+    await harness.host.createResponseLogicTask(
+      [{ role: "user", content: [
+        { type: "input_text", text: "请按资料生成" },
+        { type: "input_file", file_id: "asset_abc123", filename: "资料.pdf", mime_type: "application/pdf" },
+        { type: "input_text", text: "重点关注医保" },
+        { type: "input_image", image_url: "https://example.com/img.png" },
+      ]}],
+      { questionId: "q1", groupId: "g", groupTitle: "T", question: "Q", intent: "", summary: "",
+        draft: { concern: "", conclusion: "", facts: "", pending: "", boundaries: "", references: "", images: [], attachments: [] },
+        conversationId: "c1" } as never,
+    );
+    const body = JSON.parse(String(harness.calls[0].init?.body));
+    expect(body.userMessage).toBe("请按资料生成\n重点关注医保");
+    expect(body.attachments).toEqual([
+      { file_id: "asset_abc123", filename: "资料.pdf", mime_type: "application/pdf" },
+    ]);
+  });
+
+  it("handles empty messages without crashing or sending [object Object]", async () => {
+    const harness = createHarness();
+    harness.setResponse(async () =>
+      ({ ok: true, status: 200, json: async () => ({ id: "t" }) }) as unknown as Response);
+    await harness.host.createResponseLogicTask(
+      [{ role: "user", content: [] }],
+      { questionId: "q1", groupId: "g", groupTitle: "T", question: "Q", intent: "", summary: "",
+        draft: { concern: "", conclusion: "", facts: "", pending: "", boundaries: "", references: "", images: [], attachments: [] },
+        conversationId: "c1" } as never,
+    );
+    const body = JSON.parse(String(harness.calls[0].init?.body));
+    expect(body.userMessage).toBe("");
+    expect(body.attachments).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain("[object Object]");
+  });
+
+  it("sends a request body that passes the real server responseLogicStartSchema", async () => {
+    const harness = createHarness();
+    harness.setResponse(async () =>
+      ({ ok: true, status: 200, json: async () => ({ id: "t" }) }) as unknown as Response);
+    await harness.host.createResponseLogicTask(
+      [{ role: "user", content: [
+        { type: "input_text", text: "请生成" },
+        { type: "input_file", file_id: "asset_xyz", filename: "doc.pdf", mime_type: "application/pdf" },
+      ]}],
+      { questionId: "q1", groupId: "g", groupTitle: "T", question: "Q", intent: "I", summary: "S",
+        draft: { concern: "c", conclusion: "c", facts: "f", pending: "", boundaries: "b", references: "", images: [], attachments: [] },
+        conversationId: "conv-1", operationRevision: 1 } as never,
+    );
+    // Rebuild the server's start schema from the same exported contract schemas
+    // the server uses, so we validate against the real shape.
+    const { z: zod } = await import("zod");
+    const { responseLogicQuestionSchema, responseLogicDraftSchema } = await import("../contracts/response-logic.js");
+    const attachmentSchema = zod.object({
+      file_id: zod.string().max(255).refine((v: string) => v.trim().length > 0),
+      filename: zod.string().trim().min(1).max(512),
+      mime_type: zod.string().trim().min(1).max(255).optional(),
+    });
+    const startSchema = responseLogicQuestionSchema.extend({
+      conversationId: zod.string().trim().min(1).max(191),
+      taskId: zod.string().trim().min(1).max(255).optional(),
+      operationRevision: zod.number().int().positive().optional(),
+      userMessage: zod.string().max(200_000),
+      draft: responseLogicDraftSchema,
+      attachments: zod.array(attachmentSchema).max(50).default([]),
+    });
+    const body = JSON.parse(String(harness.calls[0].init?.body));
+    const parsed = startSchema.safeParse(body);
+    if (!parsed.success) {
+      console.error("Schema failures:", JSON.stringify(parsed.error.issues.map((i: { path: (string|number)[]; message: string }) => ({ path: i.path.join("."), message: i.message })), null, 2));
+    }
+    expect(parsed.success).toBe(true);
   });
 
   it("uploads materials with the Core v2 local-asset contract", async () => {

@@ -76,13 +76,35 @@ export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInp
   };
 
   const startTask: StartResponseLogicTask = async (messages, taskInput, signal) => {
+    // The server's responseLogicStartSchema requires userMessage (string) and
+    // attachments ({file_id, filename, mime_type?}[]) — not the raw messages
+    // array. Convert IntentMessage content blocks to the server contract,
+    // mirroring the Intent original adapter's conversion.
+    const contentBlocks = messages.flatMap(message =>
+      typeof message.content === "string"
+        ? [{ type: "input_text" as const, text: message.content }]
+        : message.content,
+    );
+    const userMessage = contentBlocks
+      .filter(block => block.type === "input_text" && typeof block.text === "string" && block.text.trim())
+      .map(block => block.text)
+      .join("\n");
+    const attachments = contentBlocks
+      .filter(block => block.type === "input_file" && typeof block.file_id === "string" && block.file_id.trim())
+      .map(block => ({
+        file_id: block.file_id as string,
+        filename: typeof block.filename === "string" && block.filename.trim() ? block.filename : "attachment",
+        ...(typeof block.mime_type === "string" && block.mime_type.trim() ? { mime_type: block.mime_type } : {}),
+      }));
+
     const response = await rest(signal).fetch(`${RL_API_BASE}/start`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         questionId: taskInput.questionId, groupId: taskInput.groupId, groupTitle: taskInput.groupTitle,
         question: taskInput.question, intent: taskInput.intent, summary: taskInput.summary,
         draft: taskInput.draft, operationRevision: taskInput.operationRevision,
-        conversationId: taskInput.conversationId, taskId: taskInput.taskId, messages,
+        conversationId: taskInput.conversationId, taskId: taskInput.taskId,
+        userMessage, attachments,
       }),
     });
     const body = await response.json().catch(() => ({}));
