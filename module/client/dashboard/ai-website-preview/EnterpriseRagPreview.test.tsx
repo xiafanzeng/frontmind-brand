@@ -928,20 +928,19 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(document.body.style.overflow).toBe("");
   });
 
-  it("separates representative and challenge statistics and opens a high-score failing case", () => {
+  it("removes the test-set demo while preserving single-answer sample review", () => {
     showPage();
-    fireEvent.click(screen.getByRole("tab", { name: "测试集演示" }));
-    expect(screen.getByRole("tab", { name: "测试集演示" }).getAttribute("aria-selected")).toBe("true");
-    const representativeSection = screen.getByRole("heading", { name: "代表集 · 常规任务" }).closest("section")!;
-    const challengeSection = screen.getByRole("heading", { name: "挑战集 · 风险与边界" }).closest("section")!;
-    expect(within(representativeSection).getAllByRole("button")).toHaveLength(2);
-    expect(within(challengeSection).getAllByRole("button")).toHaveLength(5);
-    expect(within(representativeSection).getByText(/场景加权分/)).toBeTruthy();
-    expect(within(challengeSection).getByText("可用 3/5 · 关键风险 2")).toBeTruthy();
-    expect(screen.getByText(/不构成企业 RAG 系统分或发布授权/)).toBeTruthy();
+    expect(screen.getByText("单次问答")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "测试集演示" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "测试集与验收口径演示" })).toBeNull();
+    expect(screen.queryByLabelText("核心统计指标")).toBeNull();
+    expect(screen.getByRole("region", { name: "回答质量评估" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "评分规则" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "评估记录" })).toBeTruthy();
 
-    fireEvent.click(within(challengeSection).getByRole("button", { name: /高分仍不能抵消越权/ }));
-    expect(screen.getByRole("tab", { name: "单次问答" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.change(screen.getByRole("combobox", { name: "选择评估示例" }), {
+      target: { value: "syn-permission-leak" },
+    });
     expect(evaluation().getByLabelText("综合评分").textContent).toContain("90");
     expect(evaluation().getByText("不可用，优先修复")).toBeTruthy();
     expect(evaluation().getByText("关键风险已发现")).toBeTruthy();
