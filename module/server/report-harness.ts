@@ -12,7 +12,7 @@ import {REPORT_STAGES} from '../contracts/report-run.js';
 
 export type ReportHarnessEvent={kind:'status'|'text'|'tool_start'|'tool_end'|'usage'|'artifact'|'error';message:string;detail?:string;toolCallId?:string};
 type EventSink=(event:ReportHarnessEvent)=>void|Promise<void>;
-export type ReportHarnessOptions={directory:string;jobId:string;input:ReportModelInput;archive:Buffer;environment:NodeJS.ProcessEnv;signal?:AbortSignal;recovery?:boolean;onEvent?:EventSink;onSession?:(sessionId:string)=>void|Promise<void>};
+export type ReportHarnessOptions={directory:string;jobId:string;input:ReportModelInput;archive:Buffer;environment:NodeJS.ProcessEnv;signal?:AbortSignal;recovery?:boolean;resumeCurrentStage?:boolean;onEvent?:EventSink;onSession?:(sessionId:string)=>void|Promise<void>};
 type Pending={requestId:string;resolve:(text:string)=>void;reject:(error:Error)=>void;onEvent?:EventSink;events:Promise<void>};
 type Worker={child:ChildProcessWithoutNullStreams;root:string;sessionId:string;pending?:Pending;ready:Promise<void>;closed:boolean;closing?:Promise<void>;idle?:ReturnType<typeof setTimeout>};
 const workers=new Map<string,Worker>();
@@ -112,7 +112,7 @@ export async function runReportHarness(options:ReportHarnessOptions){
  const abort=()=>{worker.pending?.reject(new Error('REPORT_STOPPED_BY_USER'));void closeWorker(worker);};options.signal?.addEventListener('abort',abort,{once:true});
  try{
   options.signal?.throwIfAborted();const stage=await stageFiles(options,worker.root);
-  const prompt=`本轮执行阶段 ${stage.stageId}。先调用 list_report_files，然后完整读取 ${stage.inputDirectory}/SKILL.md、input.json、OUTPUT_SCHEMA.json 与本阶段 workflow Skill。只完成该阶段，保留真实来源和全部必需内容。先前阶段与冻结监测数据在 input.json 中。持续报告当前动作与发现；用 write_research_note 保存中间分析，便于用户查看。搜索使用公开网页工具，无法检索时注明限制，不捏造成功。当前只运行本阶段，不添加暂停点，也不继续下一阶段。完成时先用 write_research_note 保存完整阶段正文，再调用 save_stage_output：用 output 结构化对象提供 operationToken、inputHash、stage 元信息/来源与根级 products，另用 markdownPath 引用该完整正文，工具会填充 stage.markdown；不要把整个结果再编码为 JSON 字符串，也不要因为格式错误缩短正文。汇报阶段用结构化 output.slides。最后简短说明已保存结果。${options.recovery?'这是技术恢复：优先完整读取 work/ 中已有的本阶段全稿、来源与修订，复用已核实研究，只修复未完成产物。核对来源归属：尚未核验与企业关系的站点不能称为官方或一手；研究推断须明确标记，尚无本轮监测时不能断言GEO风险或竞争压力的主要性。保留完整表格与正文，不能选择短版探测文件代替全稿。':''}`;
+  const prompt=`本轮执行阶段 ${stage.stageId}。先调用 list_report_files，然后完整读取 ${stage.inputDirectory}/SKILL.md、input.json、OUTPUT_SCHEMA.json 与本阶段 workflow Skill。只完成该阶段，保留真实来源和全部必需内容。先前阶段与冻结监测数据在 input.json 中。持续报告当前动作与发现；用 write_research_note 保存中间分析，便于用户查看。搜索使用公开网页工具，无法检索时注明限制，不捏造成功。当前只运行本阶段，不添加暂停点，也不继续下一阶段。完成时先用 write_research_note 保存完整阶段正文，再调用 save_stage_output：用 output 结构化对象提供 operationToken、inputHash、stage 元信息/来源与根级 products，另用 markdownPath 引用该完整正文，工具会填充 stage.markdown；不要把整个结果再编码为 JSON 字符串，也不要因为格式错误缩短正文。汇报阶段用结构化 output.slides。最后简短说明已保存结果。${options.resumeCurrentStage?'这是技术恢复：优先完整读取 work/ 中已有的本阶段全稿、来源与修订，复用已核实研究，只修复未完成产物。核对来源归属：尚未核验与企业关系的站点不能称为官方或一手；研究推断须明确标记，尚无本轮监测时不能断言GEO风险或竞争压力的主要性。保留完整表格与正文，不能选择短版探测文件代替全稿。':''}`;
   let text=await turn(worker,stage,prompt,options.onEvent);
   for(let repair=0;repair<2;repair++){
    options.signal?.throwIfAborted();

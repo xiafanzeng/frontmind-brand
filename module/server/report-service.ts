@@ -294,7 +294,7 @@ export function createBrandReportService(core:ModuleHttpCore,context:Context,act
    },owner);
    await emit({kind:'status',message:`开始 ${job.stageId==='briefing'?'汇报编制':REPORT_STAGES.find(s=>s[0]===job.stageId)?.[1]??job.stageId} · DeepSeek Flash`});
    const value=await runReportHarness({directory:directory(id),jobId:job.id,input:job.input,
-    archive:await reportModelArchive(job.input),environment:core.environment,signal:controller.signal,onEvent:emit,recovery:Boolean(job.resumedAt||(!r.job&&r.stages.length)),
+    archive:await reportModelArchive(job.input),environment:core.environment,signal:controller.signal,onEvent:emit,recovery:Boolean(job.resumedAt||(!r.job&&r.stages.length)),resumeCurrentStage:Boolean(job.resumedAt),
     onSession:async(sessionId:string)=>{await mutate(id,state=>{state.sessionId=sessionId;},owner);}});
    controller.signal.throwIfAborted();
    let validated:ReturnType<typeof validateReportModelOutput>;
