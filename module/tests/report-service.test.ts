@@ -4,9 +4,9 @@ import {randomUUID,createHash} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-const mock=vi.hoisted(()=>({ports:null as any,monitorSubmits:[] as any[],monitorWait:null as any,runs:[] as any[],pending:new Map<string,any>()}));
+const mock=vi.hoisted(()=>({ports:null as any,monitorSubmits:[] as any[],monitorWait:null as any,runs:[] as any[],pending:new Map<string,any>(),workflowHash:'workflow-v2'}));
 vi.mock('../server/intent-skill-runtime.js',()=>({intentSkillPorts:()=>mock.ports,intentHash:(x:unknown)=>createHash('sha256').update(JSON.stringify(x)).digest('hex')}));
-vi.mock('../server/report-model.js',()=>({reportWorkflowFingerprint:async()=> 'workflow-v2',
+vi.mock('../server/report-model.js',()=>({reportWorkflowFingerprint:async()=>mock.workflowHash,
  reportModelArchive:async(input:any)=>Buffer.from(JSON.stringify(input)),validateReportModelOutput:(v:any,input:any)=>{if(v.inputHash!==input.inputHash)throw new Error('WRONG_INPUT');return v;}}));
 vi.mock('../server/report-harness.js',()=>({
  reportHarnessConfig:()=>({model:'deepseek-flash'}),reportHarnessDocuments:async()=>[],reportHarnessDocument:async()=>({text:'saved'}),closeReportHarness:async()=>{},
@@ -48,7 +48,7 @@ const state=(id:string)=>db.data.tasks.find(t=>t.createMarker===`brand-report:${
 const owned=(id:string)=>({operation:db.data.operations.find(o=>o.id===id),task:db.data.tasks.find(t=>t.createMarker===`brand-report:${id}`)});
 async function until(check:()=>boolean){for(let i=0;i<100;i++){if(check())return;await new Promise(r=>setTimeout(r,5));}throw new Error('test did not reach state');}
 beforeEach(async()=>{
- root=await mkdtemp(path.join(os.tmpdir(),'brand-report-service-'));db=new MemoryDb();mock.runs=[];mock.pending.clear();mock.monitorSubmits=[];mock.monitorWait=null;
+ root=await mkdtemp(path.join(os.tmpdir(),'brand-report-service-'));db=new MemoryDb();mock.runs=[];mock.pending.clear();mock.monitorSubmits=[];mock.monitorWait=null;mock.workflowHash='workflow-v2';
  mock.ports={agentOperations:table('operations'),agentTasks:table('tasks'),assertActorAllowed:()=>{},lockAccountRecord:async()=>{},lockCustomerProjectBusinessWrite:async()=>{},getDashboardWorkspace:async()=>({payload:profile}),createCredentialAgentClient:()=>{throw new Error('XTY must never run');}};
 });
 afterEach(async()=>{for(const operation of db.data.operations){const service=makeService();await service.stop(operation.id).catch(()=>{});await service.schedule(operation.id);}await rm(root,{recursive:true,force:true});});
@@ -66,6 +66,35 @@ describe('DeepSeek report durable lifecycle',()=>{
   expect(db.data.operations[0]).toMatchObject({provider:'deepseek',upstreamModel:'deepseek-flash',apiCredentialId:'server:brand-report:deepseek'});
   await expect(makeService({enterpriseProjectId:'project-b'}).processView(id,0)).rejects.toMatchObject({code:'REPORT_NOT_FOUND'});
   await expect(service.start({clientRequestId:id,includeKnowledge:true,profileHash:intentHash(profile)})).rejects.toMatchObject({code:'IDEMPOTENCY_CONFLICT'});
+ });
+ it('reuses an active report only for the same frozen inputs and workflow',async()=>{
+  const {id,service}=await begin();
+  const repeated=await service.start({clientRequestId:randomUUID(),includeKnowledge:false,profileHash:intentHash(profile)});
+  expect(repeated.id).toBe(id);expect(db.data.operations).toHaveLength(1);expect(mock.runs).toHaveLength(1);
+ });
+ it('rejects a new request with a different subject, company snapshot or workflow while a report is active',async()=>{
+  const {id,service}=await begin();
+  const request=()=>({clientRequestId:randomUUID(),includeKnowledge:false,profileHash:intentHash(profile)});
+  await expect(service.start({...request(),subjectScope:'医学美容科'})).rejects.toMatchObject({code:'REPORT_ALREADY_ACTIVE'});
+  const updatedProfile={...profile,summary:'已更新的企业介绍'};
+  mock.ports.getDashboardWorkspace=async()=>({payload:updatedProfile});
+  await expect(service.start({...request(),profileHash:intentHash(updatedProfile)})).rejects.toMatchObject({code:'REPORT_ALREADY_ACTIVE'});
+  mock.ports.getDashboardWorkspace=async()=>({payload:profile});mock.workflowHash='workflow-v3';
+  await expect(service.start(request())).rejects.toMatchObject({code:'REPORT_ALREADY_ACTIVE'});
+  expect(state(id).context.profile).toEqual(profile);expect(state(id).context.subject.scope).toBe('');
+  expect(db.data.operations).toHaveLength(1);expect(mock.runs).toHaveLength(1);
+ });
+ it('compares the full frozen knowledge snapshot before reusing a waiting report',async()=>{
+  let documents=[{title:'产品资料',text:'已核实的原始内容'}];
+  db.execute=async()=>[[{id:'knowledge-1',documentCount:1,documents}]];
+  const id=randomUUID(),service=makeService(),request=()=>({clientRequestId:randomUUID(),includeKnowledge:true,profileHash:intentHash(profile)});
+  await service.start({...request(),clientRequestId:id});await until(()=>mock.pending.has(state(id).job?.id));
+  await finishStage(id,service);state(id).phase='awaiting_confirmation';
+  expect((await service.start(request())).id).toBe(id);
+  documents=[{title:'产品资料',text:'同一知识库中的更新内容'}];
+  await expect(service.start(request())).rejects.toMatchObject({code:'REPORT_ALREADY_ACTIVE'});
+  expect(state(id).context.knowledge).toEqual([{title:'产品资料',text:'已核实的原始内容'}]);
+  expect(db.data.operations).toHaveLength(1);expect(mock.runs).toHaveLength(1);
  });
  it('shows public progress while running, persists complete stage documents and paginates without replay',async()=>{
   const {id,service}=await begin();const before=await service.processView(id,0);expect(before.events.some(e=>e.message==='正在核实企业资料。')).toBe(true);
