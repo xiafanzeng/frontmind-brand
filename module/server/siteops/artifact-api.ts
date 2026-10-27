@@ -38,8 +38,11 @@ import { Readable } from "node:stream";
 import express from "express";
 import JSZip from "jszip";
 import { and, eq, sql, type SQLWrapper } from "drizzle-orm";
+import { z } from "zod";
 
 import { siteContentPlanV2Schema } from "../../contracts/siteops-content-plan.js";
+import { staticTemplateExecutionAdmissionEvidenceSchema } from "../../contracts/siteops.js";
+import { openStaticTemplateCatalogVersionDist } from "./static-template-catalog.js";
 import { previewNavigationBridgeSource } from "./preview-routing.js";
 import { siteAssistantApiOrigin } from "./site-assistant-widget.js";
 import { customerVisibleStyleBatchStatusCondition } from "./visual-batch-visibility.js";
@@ -601,13 +604,18 @@ export async function createSandboxedPreviewDocument(input: {
   return { bytes: Buffer.from(html, "utf8"), nonce };
 }
 
-export function sandboxedPreviewContentSecurityPolicy(nonce: string) {
+export function sandboxedPreviewContentSecurityPolicy(
+  nonce: string,
+  options: { frameAncestors?: string } = {},
+) {
   if (!/^[A-Za-z0-9_-]{16,64}$/u.test(nonce)) {
     throw new Error("SITEOPS_PREVIEW_NONCE_INVALID");
   }
-  // The preview must faithfully preview the shipped floating assistant, whose
-  // only network capability is the module's public Q&A API origin.
-  return `sandbox allow-scripts; default-src 'none'; img-src data: blob:; font-src data:; style-src 'nonce-${nonce}'; style-src-attr 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ${siteAssistantApiOrigin()}; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; media-src data: blob:; manifest-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`;
+  const frameAncestors = options.frameAncestors ?? "'none'";
+  if (!/^'(?:none|self)'$/u.test(frameAncestors)) {
+    throw new Error("SITEOPS_PREVIEW_FRAME_ANCESTORS_INVALID");
+  }
+  return `sandbox allow-scripts; default-src 'none'; img-src data: blob:; font-src data:; style-src 'nonce-${nonce}'; style-src-attr 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ${siteAssistantApiOrigin()}; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; media-src data: blob:; manifest-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'none'`;
 }
 
 export function rewriteSiteOpsPreviewDocument(input: {
@@ -812,6 +820,94 @@ function nonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : null;
+}
+
+const staticTemplatePreviewMetadataSchema = z
+  .object({
+    schemaVersion: z.literal(7),
+    renderer: z.literal("frontmind_static_template_catalog_v1"),
+    workflowVersion: z.enum(["2.8.0", "2.9.0"]),
+    catalogVersion: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._-]{0,190}$/u),
+    catalogPosition: z.number().int().min(1).max(35),
+    catalogCandidateId: z
+      .string()
+      .regex(/^static-template-[0-9]{2,3}-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u),
+    providerTemplateId: z.string().trim().min(1).max(191),
+    providerSlug: z.string().trim().min(1).max(191),
+    providerVersion: z.string().regex(/^[a-f0-9]{40}$/u),
+    sourceOwner: z.string().trim().min(1).max(191),
+    sourceRepo: z.string().trim().min(1).max(191),
+    sourceCommitSha: z.string().regex(/^[a-f0-9]{40}$/u),
+    sourceSubdirectory: z.string().trim().min(1).max(1_024).nullable(),
+    sourceLicense: z.enum(["MIT", "Apache-2.0"]),
+    sourceAssetId: z.string().trim().min(1).max(512),
+    sourceArchiveSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    sourceArchiveBytes: z.number().int().positive().max(MAX_ARCHIVE_BYTES * 2),
+    previewAssetId: z.string().trim().min(1).max(512),
+    previewSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    executionAdmission: staticTemplateExecutionAdmissionEvidenceSchema,
+  })
+  .passthrough();
+
+/** Resolve a saved selection against its frozen catalog, never current active. */
+export async function openFrozenStaticTemplatePreviewDist(
+  metadata: unknown,
+  options: { rootDir?: string } = {},
+) {
+  const parsed = staticTemplatePreviewMetadataSchema.safeParse(metadata);
+  if (!parsed.success) {
+    throw new Error("NOT_FOUND");
+  }
+  const frozen = parsed.data;
+  const evidence = frozen.executionAdmission;
+  if (evidence.status !== "admitted") {
+    throw new Error("NOT_FOUND");
+  }
+  const opened = await openStaticTemplateCatalogVersionDist(
+    frozen.catalogVersion,
+    frozen.catalogCandidateId,
+    options,
+  );
+  const entry = opened.entry;
+  const admission = entry.executionAdmission;
+  const valid =
+    entry.order === frozen.catalogPosition &&
+    entry.providerTemplateId === frozen.providerTemplateId &&
+    entry.providerSlug === frozen.providerSlug &&
+    entry.providerVersion === frozen.providerVersion &&
+    entry.sourceOwner === frozen.sourceOwner &&
+    entry.sourceRepo === frozen.sourceRepo &&
+    entry.sourceCommitSha === frozen.sourceCommitSha &&
+    entry.sourceSubdirectory === frozen.sourceSubdirectory &&
+    entry.sourceLicense === frozen.sourceLicense &&
+    entry.sourceAssetId === frozen.sourceAssetId &&
+    entry.sourceSha256 === frozen.sourceArchiveSha256 &&
+    entry.sourceBytes === frozen.sourceArchiveBytes &&
+    entry.previewAssetId === frozen.previewAssetId &&
+    entry.previewSha256 === frozen.previewSha256 &&
+    admission.binding.catalogVersion === frozen.catalogVersion &&
+    admission.binding.candidateId === frozen.catalogCandidateId &&
+    admission.binding.rawSourceSha256 === evidence.rawSourceSha256 &&
+    admission.normalizedSourceSha256 === evidence.normalizedSourceSha256 &&
+    admission.sourceTreeSha256 === evidence.sourceTreeSha256 &&
+    admission.runtimeContractSha256 === evidence.runtimeContractSha256 &&
+    admission.executionShellSha256 === evidence.executionShellSha256 &&
+    admission.deliveryContractSha256 === evidence.deliveryContractSha256 &&
+    admission.distSha256 === evidence.distSha256 &&
+    admission.qaSha256 === evidence.qaSha256 &&
+    admission.browserReceiptSha256 === evidence.browserReceiptSha256 &&
+    admission.qaStatus === evidence.qaStatus &&
+    admission.admissionEvidenceSha256 === evidence.admissionEvidenceSha256 &&
+    admission.admissionMode === evidence.admissionMode &&
+    admission.referencePreviewSha256 === evidence.referencePreviewSha256 &&
+    admission.fallbackReasonCode === evidence.fallbackReasonCode;
+  if (!valid) {
+    opened.stream.destroy();
+    throw new Error("NOT_FOUND");
+  }
+  return opened;
 }
 
 /**
@@ -1125,6 +1221,83 @@ siteOpsArtifactApi.get("/builds/:buildId/source", async (req, res) => {
       localAssetId: owned.build.sourceLocalAssetId,
       expectedSha256: owned.build.sourceHash,
     });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+siteOpsArtifactApi.get("/template-previews/:sampleId", async (req, res) => {
+  try {
+    const userId = requestActor(req) ? enterpriseWorkspaceUserId(requestActor(req)!.id) : undefined;
+    if (!userId) return notFound(res);
+    const db = await requireDb();
+    const rows = await db
+      .select({
+        sourceMetadata: websiteStyleSamples.sourceMetadata,
+      })
+      .from(websiteStyleSamples)
+      .innerJoin(
+        websiteStyleSampleBatches,
+        eq(websiteStyleSampleBatches.id, websiteStyleSamples.batchId),
+      )
+      .where(
+        and(
+          eq(websiteStyleSamples.id, req.params.sampleId),
+          eq(websiteStyleSampleBatches.userId, userId),
+          ownedSiteProjectCondition(websiteStyleSampleBatches.siteProjectId, userId),
+          eq(websiteStyleSampleBatches.sourceKind, "siteops_21st"),
+          customerVisibleStyleBatchStatusCondition(),
+        ),
+      )
+      .limit(1);
+    const metadata =
+      rows[0]?.sourceMetadata &&
+      typeof rows[0].sourceMetadata === "object" &&
+      !Array.isArray(rows[0].sourceMetadata)
+        ? (rows[0].sourceMetadata as Record<string, unknown>)
+        : null;
+    if (!metadata) return notFound(res);
+    const opened = await openFrozenStaticTemplatePreviewDist(metadata);
+    const archive = await streamToBuffer(opened.stream, MAX_ARCHIVE_BYTES);
+    const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
+    const entries = Object.values(zip.files).filter((entry) => !entry.dir);
+    if (entries.length < 1 || entries.length > MAX_ARCHIVE_ENTRIES) {
+      throw new Error("SITEOPS_DIST_STRUCTURE_INVALID");
+    }
+    const entry = zip.file("index.html");
+    if (!entry || entry.name.includes("\\") || entry.name.includes("..")) {
+      return notFound(res);
+    }
+    const mode = Number(entry.unixPermissions ?? 0);
+    if (mode && (mode & 0o170000) === 0o120000) {
+      throw new Error("SITEOPS_DIST_SYMLINK_REJECTED");
+    }
+    const document = await createSandboxedPreviewDocument({
+      zip,
+      entryName: entry.name,
+      previewPrefix: `/api/site-ops/template-previews/${encodeURIComponent(req.params.sampleId)}/`,
+      previewRoutingMode: "canonical_pathname",
+    });
+    res.setHeader("Cache-Control", "private, no-store, max-age=0");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    res.setHeader(
+      "Permissions-Policy",
+      "camera=(), geolocation=(), microphone=()",
+    );
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+    // The builder embeds this document in a same-origin iframe; build previews
+    // stay top-level-only.
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader(
+      "Content-Security-Policy",
+      sandboxedPreviewContentSecurityPolicy(document.nonce, {
+        frameAncestors: "'self'",
+      }),
+    );
+    res.setHeader("Content-Length", String(document.bytes.length));
+    res.send(document.bytes);
   } catch (error) {
     sendError(res, error);
   }
