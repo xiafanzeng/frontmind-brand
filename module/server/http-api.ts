@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import {z} from "zod";
 import {requestQuestionTemplate} from "./question-template-request.js";
+import {createQuestionTemplateCatalogService,QuestionTemplateCatalogError} from "./question-template-catalog-service.js";
 // 包名导入保持运行时从模块自身 dist 加载；相对导入会被 Dashboard 构建内联进 bundle，破坏 workflow 清单路径解析。
 import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
 import {assembleResponseLogicCore} from "@frontmind/module-brand/server/response-logic-runtime";
@@ -132,6 +133,18 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  };
  router.post("/question-templates/recommend-core-words",recommendQuestionTemplates("recommend-core-words"));
  router.post("/question-templates/recommend-questions",recommendQuestionTemplates("recommend-questions"));
+ router.post("/question-templates/save",async(req,res)=>{
+  res.setHeader("Cache-Control","no-store");
+  try {res.json(await createQuestionTemplateCatalogService(core,req).save(req.body));}
+  catch(error){
+   const known=error instanceof QuestionTemplateCatalogError,invalid=error instanceof z.ZodError;
+   const denied=error instanceof Error&&["FORBIDDEN","ACTOR_INVALID","CAPABILITY_UNAVAILABLE"].includes(String((error as Error&{code?:string}).code));
+   res.status(known?error.status:invalid?400:denied?403:503).json({error:{
+    code:known?error.code:invalid?"INVALID_INPUT":denied?"FORBIDDEN":"CATALOG_UNAVAILABLE",
+    message:known?error.message:invalid?"请选择有效的推荐问题。":denied?"当前账号暂无词库保存权限。":"词库保存暂不可用，请稍后重试。",
+   }});
+  }
+ });
  // Response-logic full API — generation, materials, adopt, task status,
  // evaluation, judge, optimizer — all mounted via the original Intent
  // router factory (response-logic-api.ts, 2,236 lines) with runtime ports

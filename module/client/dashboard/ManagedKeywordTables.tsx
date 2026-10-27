@@ -1,12 +1,10 @@
-import { captureWorkspaceRestOperation } from "../lib/workspace-rest-scope";
-import { BusinessExecutionActivity } from "../components/BusinessExecutionActivity";
 import { useBusinessFlowState, readFlowString } from "./useBusinessFlowState";
 import {
   keywordPickerRows,
   type KeywordSelection,
 } from "./workflow/KeywordPicker";
 import { Database, Search, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   useBusinessWorkspace,
   useBusinessWorkspaceSummary,
@@ -23,9 +21,6 @@ import {
   type KeywordCategoryKey,
 } from "@frontmind/module-ui/keyword-categories";
 import { trpc } from "../api-hooks";
-import { projectWorkspaceUrl } from "../host";
-import { requestWorkspaceNavigation } from "../host";
-import { navigate } from "wouter/use-browser-location";
 import QuestionTemplateApiFlow from "./QuestionTemplateApiFlow";
 
 export type ManagedKeywordTable = {
@@ -72,7 +67,7 @@ export type ManagedKeywordTablesProps = {
 };
 
 const KEYWORD_SOURCE_DESCRIPTION =
-  "基于百度营销、小红书蒲公英、抖音巨量指数等平台数据综合整理 GEO 优化问题，支持按主分类与问题细分筛选。";
+  "全域词库汇总已保存的问题。上方可推荐并保存新问题，下方可筛选已有问题并导入优化工作台。";
 
 function normalizedColumnName(value: unknown) {
   return String(value ?? "")
@@ -169,360 +164,9 @@ function KeywordEmptyPanel({
   );
 }
 
-function brandQuestionUniverseStatus(
-  observation:
-    | {
-        reason: string;
-        operation: {
-          status: string;
-          repairAttempts: number;
-          publicationOutcome: string | null;
-        } | null;
-      }
-    | undefined,
-) {
-  if (!observation) return "正在检查抓取条件…";
-  const operation = observation.operation;
-  if (operation?.status === "queued") return "任务已排队，正在上传安全知识包。";
-  if (operation?.status === "running") {
-    return operation.repairAttempts > 0
-      ? `正在修复并校验结果（${operation.repairAttempts}/3）。`
-      : "正在抓取并生成 160 条品牌问题。";
-  }
-  if (operation?.status === "result_pending")
-    return "结果已返回，正在校验和发布。";
-  if (operation?.status === "succeeded") {
-    if (operation.publicationOutcome === "engineer_won") {
-      return "工程师正式版本已生效，自动结果未覆盖。";
-    }
-    if (operation.publicationOutcome === "newer_auto_won") {
-      return "更新的自动版本已生效，本次结果未覆盖。";
-    }
-    if (operation.publicationOutcome === "snapshot_superseded") {
-      return "知识库已更新，本次结果未发布；可重新抓取。";
-    }
-    return "品牌全域词库已生成并发布。";
-  }
-  if (operation?.status === "failed") return "本次抓取未完成，请重试。";
-  if (operation?.status === "attention_required") {
-    return "任务需要人工检查，请联系 FrontMind 支持。";
-  }
-  if (observation.reason === "knowledge_required")
-    return "请先完成并发布当前认证知识库。";
-  if (observation.reason === "safe_knowledge_required")
-    return "当前认证知识库没有可用于词库生成的公开内容。";
-  if (observation.reason === "knowledge_scope_exceeded")
-    return "当前知识库超过自动处理范围，请联系 FrontMind 协助。";
-  if (observation.reason === "credential_required")
-    return "自动生成服务尚未就绪，请联系 FrontMind。";
-  if (observation.reason === "engineer_version")
-    return "工程师正式版本已发布，自动抓取已停用。";
-  if (observation.reason === "operation_active")
-    return "品牌全域词库正在抓取。";
-  return "已就绪，可基于当前知识库抓取品牌全域词库。";
-}
-
-export function BrandQuestionUniverseGenerationControl({
-  knowledgePublished,
-  presentation = "empty",
-}: {
-  knowledgePublished?: boolean;
-  presentation?: "empty" | "catalog";
-}) {
-  const { isWorkbench, task } = useBusinessWorkspace();
-  const [bindingError, setBindingError] = useState<string | null>(null);
-  const [binding, setBinding] = useState(false);
-  const [readTimedOut, setReadTimedOut] = useState(false);
-  const [readAttempt, setReadAttempt] = useState(0);
-  const inFlight = useRef(false);
-  const utils = trpc.useUtils();
-  const observation = trpc.workspace.brandQuestionUniverse.observe.useQuery(
-    undefined,
-    {
-      enabled: knowledgePublished !== false,
-      retry: false,
-      refetchInterval: 5_000,
-      refetchOnWindowFocus: true,
-      trpc: { abortOnUnmount: true },
-    },
-  );
-  const start = trpc.workspace.brandQuestionUniverse.start.useMutation();
-  const [submitted, setSubmitted] = useState<typeof observation.data>();
-  const generationIntent = useRef<{
-    fingerprint: string;
-    clientRequestId: string;
-  } | null>(null);
-  const refreshedRun = useRef<string | null>(null);
-  const data = observation.data;
-  // Existing catalog visits show eligibility only. A new click owns the process
-  // below its action; unrelated or old observations cannot replace that run.
-  const current = submitted?.execution?.runId
-    ? data?.execution?.runId === submitted.execution.runId
-      ? data
-      : submitted
-    : undefined;
-  useEffect(() => {
-    setReadTimedOut(false);
-    if (knowledgePublished === false || data || observation.error) return;
-    const timeout = window.setTimeout(() => setReadTimedOut(true), 12_000);
-    return () => window.clearTimeout(timeout);
-  }, [knowledgePublished, data, observation.error, readAttempt]);
-  useEffect(() => {
-    const runId = current?.execution?.runId;
-    if (
-      !runId ||
-      current.operation?.status !== "succeeded" ||
-      refreshedRun.current === runId
-    )
-      return;
-    refreshedRun.current = runId;
-    void utils.workspace.dashboard.invalidate();
-  }, [current, utils]);
-  const openKnowledge = () =>
-    requestWorkspaceNavigation(() =>
-      navigate(projectWorkspaceUrl("/?view=knowledge")),
-    );
-  const knowledgeAction = (
-    <button
-      type="button"
-      className="operator-secondary-button keyword-action-button"
-      onClick={openKnowledge}
-    >
-      前往智能知识库
-    </button>
-  );
-  const retryRead = () =>
-    void (async () => {
-      setBindingError(null);
-      setReadTimedOut(false);
-      setReadAttempt((value) => value + 1);
-      try {
-        await utils.workspace.brandQuestionUniverse.observe.cancel();
-        await observation.refetch();
-        await utils.workspace.dashboard.invalidate();
-      } catch (cause) {
-        setBindingError(
-          cause instanceof Error ? cause.message : "读取失败，请重试。",
-        );
-      }
-    })();
-  const renderNotice = (
-    title: string,
-    description: string,
-    actions: ReactNode,
-  ) =>
-    presentation === "catalog" ? (
-      <div className="keyword-catalog-generation keyword-generation-control">
-        <p role="status">{description}</p>
-        {actions}
-      </div>
-    ) : (
-      <KeywordEmptyPanel
-        title={title}
-        description={description}
-        actions={actions}
-      />
-    );
-  if (presentation === "catalog" && !submitted) return null;
-  if (knowledgePublished === false || data?.reason === "knowledge_required") {
-    return renderNotice(
-      "先完成企业知识库",
-      "完成首轮知识节点确认后，系统会自动发布知识库。品牌全域词库将基于已发布的知识版本生成。",
-      knowledgeAction,
-    );
-  }
-  if (!data) {
-    const failed = Boolean(
-      observation.error ||
-        readTimedOut ||
-        observation.isSuccess ||
-        bindingError,
-    );
-    return renderNotice(
-      failed ? "暂时无法读取词库状态" : "正在读取词库生成条件",
-      failed
-        ? bindingError ||
-            observation.error?.message ||
-            (readTimedOut
-              ? "读取超时。可以重新读取，或先检查知识库是否已经发布。"
-              : "未能取得有效状态，请重新读取。")
-        : "正在读取当前项目的知识版本和词库状态。",
-      <div className="keyword-start-actions">
-        {failed && (
-          <button
-            type="button"
-            className="operator-secondary-button keyword-action-button"
-            onClick={retryRead}
-          >
-            重新读取
-          </button>
-        )}
-        {presentation === "empty" && knowledgeAction}
-      </div>,
-    );
-  }
-  const readiness = brandQuestionUniverseStatus({ ...data, operation: null });
-  const currentActive =
-    current?.operation &&
-    ["queued", "running", "result_pending"].includes(current.operation.status);
-  const disabled =
-    !data.canStart || start.isPending || binding || Boolean(currentActive);
-  const status =
-    bindingError ||
-    start.error?.message ||
-    observation.error?.message ||
-    (binding
-      ? "正在提交抓取请求…"
-      : current
-        ? brandQuestionUniverseStatus(current)
-        : presentation === "catalog" && data.canStart
-          ? ""
-          : readiness);
-  const begin = async () => {
-    if (!data.knowledgeSnapshotId || disabled || inFlight.current) return;
-    inFlight.current = true;
-    setBinding(true);
-    setBindingError(null);
-    setSubmitted(undefined);
-    const fingerprint = JSON.stringify([
-      data.knowledgeSnapshotId,
-      data.dashboardRevision,
-    ]);
-    if (generationIntent.current?.fingerprint !== fingerprint) {
-      generationIntent.current = {
-        fingerprint,
-        clientRequestId: crypto.randomUUID(),
-      };
-    }
-    const requestId = generationIntent.current.clientRequestId;
-    try {
-      if (isWorkbench && task) {
-        await task.saveState({
-          step: "keyword-generating",
-          resources: [
-            { kind: "knowledge_snapshot", id: data.knowledgeSnapshotId },
-          ],
-          record: {
-            id: requestId,
-            label: "生成品牌全域词库",
-            status: "pending",
-          },
-        });
-      }
-      const result = await start.mutateAsync({
-        knowledgeSnapshotId: data.knowledgeSnapshotId,
-        clientRequestId: requestId,
-        expectedDashboardRevision: data.dashboardRevision,
-      });
-      setSubmitted(result);
-      // Acknowledged requests can be regenerated after they finish. Uncertain
-      // submissions retain their idempotency key for a safe retry instead.
-      generationIntent.current = null;
-      void utils.workspace.brandQuestionUniverse.observe.invalidate();
-      if (isWorkbench && task) {
-        void task
-          .saveState({
-            step: "keyword-observing",
-            record: {
-              id: requestId,
-              label: "已提交词库生成",
-              status: "completed",
-              detail: "生成进度与正式词库以当前服务返回为准。",
-            },
-          })
-          .catch(() =>
-            setBindingError(
-              "生成请求已提交，任务记录同步失败；刷新页面可重新读取。",
-            ),
-          );
-      }
-    } catch (cause) {
-      setBindingError(
-        cause instanceof Error ? cause.message : "生成未能开始，请重试。",
-      );
-    } finally {
-      inFlight.current = false;
-      setBinding(false);
-    }
-  };
-  const actions =
-    presentation === "catalog" ? null : (
-      <div className="keyword-start-actions">
-        <BrandQuestionUniverseGenerationAction
-          disabled={disabled}
-          label="抓取品牌全域词库"
-          status={status}
-          onStart={() => void begin()}
-        />
-        {(!data.canStart || Boolean(observation.error)) && (
-          <button
-            type="button"
-            className="operator-secondary-button keyword-action-button"
-            onClick={retryRead}
-          >
-            刷新词库状态
-          </button>
-        )}
-        {["safe_knowledge_required", "knowledge_scope_exceeded"].includes(
-          data.reason,
-        ) && knowledgeAction}
-      </div>
-    );
-  return (
-    <section className="keyword-generation-control" aria-label="词库生成">
-      {presentation === "catalog" ? (
-        <div className="keyword-catalog-generation">{actions}</div>
-      ) : (
-        <KeywordEmptyPanel
-          title="生成品牌全域词库"
-          description="从已发布的企业知识出发，整理可用于后续优化的问题。生成后，词库将直接显示在这里。"
-          actions={actions}
-        />
-      )}
-      {current?.execution && (
-        <div
-          className="keyword-generation-progress"
-          aria-label="本次词库生成过程"
-        >
-          <BusinessExecutionActivity
-            execution={current.execution}
-            thinkingDisplay="inline"
-          />
-        </div>
-      )}
-    </section>
-  );
-}
-
-export function BrandQuestionUniverseGenerationAction({
-  disabled,
-  status,
-  onStart,
-  label = "抓取品牌全域词库",
-}: {
-  disabled: boolean;
-  status: string;
-  onStart: () => void;
-  label?: string;
-}) {
-  return (
-    <div className="flex max-w-md flex-col items-start gap-2">
-      <button
-        type="button"
-        className="operator-primary-button keyword-action-button disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={disabled}
-        onClick={onStart}
-      >
-        {label}
-      </button>
-      {status && (
-        <span className="text-xs text-slate-500" role="status">
-          {safeText(status)}
-        </span>
-      )}
-    </div>
-  );
-}
+/** Legacy host imports remain compatible without offering a generation action. */
+export function BrandQuestionUniverseGenerationControl(_props: {knowledgePublished?: boolean;presentation?: "empty" | "catalog"}) {return null;}
+export function BrandQuestionUniverseGenerationAction(_props: {disabled: boolean;status: string;onStart: () => void;label?: string}) {return null;}
 
 function KeywordPanel({
   title,
@@ -557,6 +201,7 @@ export default function ManagedKeywordTables({
   selectedKeyword,
 }: ManagedKeywordTablesProps) {
   const { isWorkbench } = useBusinessWorkspace();
+  const utils = trpc.useUtils();
   // The confirmation modal is pure ephemeral UI state: it must stay closed on
   // first entry, refresh, navigation and project switches, and open only from
   // an explicit 选择词条 click. Filters below remain persisted flow state.
@@ -709,7 +354,7 @@ export default function ManagedKeywordTables({
         />
       )}
       {generationEnabled && (
-        <QuestionTemplateApiFlow />
+        <QuestionTemplateApiFlow onSaved={() => utils.workspace.dashboard.invalidate()} />
       )}
       {tables.length === 0 ? (
         loading ? (

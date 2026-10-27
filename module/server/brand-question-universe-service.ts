@@ -2211,8 +2211,8 @@ async function observeBrandQuestionUniverse(actor: AuthenticatedUser) {
             ? knowledgeReadiness.reason
             : "ready";
   return {
-    canStart: reason === "ready",
-    reason,
+    canStart: false,
+    reason: operationActive ? reason : "generation_retired",
     knowledgeSnapshotId: snapshot?.id ?? null,
     knowledgeVersion: snapshot?.version ?? null,
     dashboardRevision: workspace.revision,
@@ -2228,138 +2228,13 @@ async function startBrandQuestionUniverse(input: {
   value: z.infer<typeof brandQuestionUniverseStartInputSchema>;
 }) {
   assertCustomer(input.actor);
-  const value = brandQuestionUniverseStartInputSchema.parse(input.value);
-  const replay = await findOperationByClientRequest(
-    enterpriseWorkspaceUserId(input.actor.id),
-    value.clientRequestId,
+  throw new BrandQuestionUniverseServiceError(
+    "GENERATION_RETIRED",
+    410,
+    "旧词库生成入口已停用，请使用推荐核心词与问题，并保存到全域词库。",
   );
-  if (replay) {
-    assertIdempotentReplay({
-      owned: replay,
-      context: await readOperationContext(replay.task.id),
-      value,
-    });
-    return observeBrandQuestionUniverse(input.actor);
-  }
-  const [snapshot, workspace, credential] = await Promise.all([
-    authenticatedSnapshot(enterpriseWorkspaceUserId(input.actor.id)),
-    getDashboardWorkspace(enterpriseWorkspaceUserId(input.actor.id)),
-    validPersonalCredential(enterpriseWorkspaceUserId(input.actor.id)),
-  ]);
-  if (!snapshot || snapshot.id !== value.knowledgeSnapshotId) {
-    throw new BrandQuestionUniverseServiceError(
-      "KNOWLEDGE_SNAPSHOT_NOT_READY",
-      412,
-      "请先完成并发布当前认证知识库，再抓取品牌全域词库。",
-    );
-  }
-  if (!credential) {
-    throw new BrandQuestionUniverseServiceError(
-      "CUSTOMER_CREDENTIAL_REQUIRED",
-      412,
-      "请先配置并验证当前客户账号的个人网站 AI 凭据。",
-    );
-  }
-  if (workspace.revision !== value.expectedDashboardRevision) {
-    throw new BrandQuestionUniverseServiceError(
-      "DASHBOARD_REVISION_CONFLICT",
-      409,
-      "企业看板已更新，请刷新后重新抓取。",
-    );
-  }
-  if (!keywordTablesAreAutomaticallyManaged(workspace.payload.keywordTables)) {
-    throw new BrandQuestionUniverseServiceError(
-      "ENGINEER_VERSION_PRESENT",
-      409,
-      "工程师正式词库已发布，自动抓取不会覆盖该版本。",
-    );
-  }
-  if (!snapshot.archiveHash) {
-    throw new BrandQuestionUniverseServiceError(
-      "KNOWLEDGE_ARCHIVE_HASH_REQUIRED",
-      412,
-      "当前知识库缺少认证归档哈希，请重新发布知识库。",
-    );
-  }
-  const classification = classifyBrandQuestionUniverseKnowledgeDocuments(
-    snapshot.documents,
-  );
-  const knowledgeReadiness =
-    brandQuestionUniverseKnowledgeReadiness(classification);
-  if (!knowledgeReadiness.ready) {
-    throw knowledgeReadinessError(knowledgeReadiness);
-  }
-  const operationId = deterministicUuid(
-    `${BRAND_QUESTION_UNIVERSE_OPERATION_TYPE}:${enterpriseWorkspaceUserId(input.actor.id)}:${value.clientRequestId}${getEnterpriseProjectScope() && !getEnterpriseProjectScope()!.isLegacyDefault ? `:${currentEnterpriseProjectId()}` : ""}`,
-  );
-  const operationToken = `brand-question-universe:${operationId}`;
-  const runtimeContext: BrandQuestionUniverseRuntimeContext = {
-    operationToken,
-    brandName: workspace.payload.brandName.trim(),
-    snapshot: {
-      id: snapshot.id,
-      version: snapshot.version,
-      archiveHash: snapshot.archiveHash,
-      sourceFileName: snapshot.sourceFileName,
-      documents: snapshot.documents,
-    },
-  };
-  const { upstream, adapter, knowledge } =
-    await prepareBrandQuestionUniverseArchives({
-      actorId: enterpriseWorkspaceUserId(input.actor.id),
-      runtimeContext,
-      classification,
-    });
-  const context = operationContextSchema.parse({
-    schemaVersion: 1,
-    kind: "brand_question_universe_context",
-    clientRequestId: value.clientRequestId,
-    operationToken,
-    knowledgeSnapshotId: snapshot.id,
-    knowledgeSnapshotVersion: snapshot.version,
-    knowledgeArchiveHash: snapshot.archiveHash,
-    expectedDashboardRevision: value.expectedDashboardRevision,
-    baselineKeywordTablesFingerprint: keywordTablesFingerprint(
-      workspace.payload.keywordTables,
-    ),
-    brandName: runtimeContext.brandName,
-    inputHashes: {
-      upstream: upstream.contentHash,
-      adapter: adapter.contentHash,
-      knowledge: knowledge.contentHash,
-    },
-    firstDispatchState: "send_ready",
-    firstDispatchReservedAtMs: null,
-    repairAttempts: 0,
-    repairState: "none",
-    repairToken: null,
-    repairReservedAtMs: null,
-    repairErrors: [],
-    lastRejectedEventId: null,
-    resultArtifacts: null,
-    workbookSha256: null,
-    tableId: null,
-    publicationOutcome: null,
-    publishedDashboardRevision: null,
-  });
-  const requestHash = brandQuestionUniverseFrozenRequestHash(context);
-  const reserved = await reserveOperation({
-    actor: input.actor,
-    credential,
-    value,
-    context,
-    requestHash,
-  });
-  if (reserved.acquired) {
-    await dispatchOperation({
-      owned: reserved,
-      credential,
-      context,
-      archives: { upstream, adapter, knowledge },
-    });
-  }
-  return observeBrandQuestionUniverse(input.actor);
 }
+
 
 /**
  * Reconciles durable managed-user operations without needing an open browser.
