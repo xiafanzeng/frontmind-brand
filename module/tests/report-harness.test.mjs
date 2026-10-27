@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,symlink,writeFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
-import {createRequire} from 'node:module';
+import {createRequire,findPackageJSON} from 'node:module';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
@@ -103,6 +103,20 @@ test('production patch fixes the official model route and disables shell tools',
  for(const id of ['persistent-bash','persistent-pwsh','terminal-bash','terminal-pwsh','session-log-deepseek','llm-deepseek'])assert.ok(patch.some(row=>row.id===id&&row.disabled===true));
  const provider=patch.find(row=>row.insert).insert.find(row=>row.id==='llm-pi-ai').config.providers['frontmind-deepseek'];
  assert.equal(provider.baseURL,'https://api.deepseek.com/v1');assert.equal(provider.models[0].id,'deepseek-flash');assert.equal(provider.apiKeyEnv,'REPORT_DEEPSEEK_API_KEY');assert.ok(!JSON.stringify(patch).includes('xty'));
+});
+
+test('official 1M context accepts the observed cached input without increasing report output budgets',async()=>{
+ const adapterPath=createRequire(import.meta.url).resolve('@deepseek-ai/dsh-llm-pi-ai');
+ const piPackage=findPackageJSON('@earendil-works/pi-ai',adapterPath);
+ const {isContextOverflow}=await import(path.join(path.dirname(piPackage),'dist/utils/overflow.js'));
+ const patch=reportRuntimePatch({root:'/safe/report',stageConfig:'/safe/report/current-stage.json'});
+ const plugins=patch.find(row=>row.insert).insert;
+ const model=plugins.find(row=>row.id==='llm-pi-ai').config.providers['frontmind-deepseek'].models[0];
+ const observed={stopReason:'stop',usage:{input:196,cacheRead:137728,output:6053}};
+ assert.equal(isContextOverflow(observed,131072),true);
+ assert.equal(model.contextWindow,1000000);assert.equal(isContextOverflow(observed,model.contextWindow),false);
+ assert.equal(isContextOverflow({...observed,usage:{...observed.usage,cacheRead:1000000}},model.contextWindow),true);
+ assert.equal(model.maxTokens,16384);assert.equal(plugins.find(row=>row.id==='compaction-basic').config.maxTokens,6000);
 });
 
 test('official SDK initializes without a model call, executes a local mock tool and reuses its session',{timeout:90000},async(t)=>{

@@ -104,7 +104,7 @@ describe('DeepSeek report durable lifecycle',()=>{
  });
  it('allows session recovery for a new stage without treating new research as a stage retry',async()=>{
   const {id,service}=await begin();expect(mock.runs[0].resumeCurrentStage).toBe(false);
-  await finishStage(id,service);void service.schedule(id);await until(()=>mock.runs.length===2);
+  await finishStage(id,service);void service.schedule(id);await until(()=>mock.runs.length===2&&mock.pending.has(mock.runs[1].jobId));
   expect(mock.runs[1].input.stageId).toBe('S2');
   expect(mock.runs[1].recovery).toBe(true);expect(mock.runs[1].resumeCurrentStage).toBe(false);
  });
@@ -145,6 +145,16 @@ describe('DeepSeek report durable lifecycle',()=>{
   await service.advance(id);expect(state(id).error.code).toBe('HARNESS_INTERRUPTED');expect(mock.runs).toHaveLength(1);
   await service.retry(id);await until(()=>mock.runs.length===2);expect(mock.runs[1].jobId).toBe(mock.runs[0].jobId);
   expect(mock.runs[1].recovery).toBe(true);expect(mock.runs[1].resumeCurrentStage).toBe(true);
+ });
+ it('reports context capacity failure clearly while preserving current-stage recovery',async()=>{
+  const {id,service}=await begin();
+  mock.pending.get(state(id).job.id).reject(new Error('REPORT_HARNESS_TURN_ERROR: pi-ai detected context overflow for model "deepseek-flash"'));
+  await service.schedule(id);
+  const view=reportView(owned(id));
+  expect(view).toMatchObject({phase:'failed',canRetry:true,error:{code:'REPORT_CONTEXT_LIMIT'}});
+  expect(view.error?.message).toContain('上下文容量不足');expect(view.error?.message).toContain('已有采集结果会继续复用');
+  expect(state(id).job.input.operationToken).toBe(mock.runs[0].input.operationToken);
+  expect((await service.processView(id,0)).events.at(-1)?.message).toBe(view.error?.message);
  });
  it('freezes a department subject without rewriting the enterprise background',async()=>{
   const id=randomUUID(),service=makeService();
