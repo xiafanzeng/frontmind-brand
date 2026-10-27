@@ -90,6 +90,19 @@ function harness() {
     ledger: () => ledger!};
 }
 describe("优化模型持久化任务", () => {
+  it("大量事件连续读取时稳定保留最近24条，不回跳旧事件", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    const timestamp = Date.now();
+    h.client.listAllMessages.mockResolvedValue(Array.from({length: 30}, (_, index) => ({
+      id: `event-${index}`, type: "assistant_message", timestamp: timestamp + index,
+    })));
+    const first = (await h.service.poll()).state.jobs![0].progress!.events;
+    const second = (await h.service.poll()).state.jobs![0].progress!.events;
+    expect(first).toHaveLength(24);
+    expect(second).toEqual(first);
+    expect(first[0].at).toBe(new Date(timestamp + 6).toISOString());
+    expect(first.at(-1)!.at).toBe(new Date(timestamp + 29).toISOString());
+  });
   it("任务动态只保存公开标签，重复读取去重且不暴露原始内容", async () => {
     const h = harness(); await h.intake(); await h.service.command(h.request);
     h.client.listAllMessages.mockResolvedValue([{id: "private-id", type: "assistant_message", timestamp: Date.now(),

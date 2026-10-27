@@ -218,9 +218,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         at: Number.isFinite(event.timestamp) && event.timestamp > 0 && event.timestamp < 8.64e15 ?
           new Date(event.timestamp).toISOString() : previousEvents.find(item => item.id === digest(event.id))?.at ?? job!.createdAt,
       }));
-      const mergedEvents = new Map([...previousEvents, ...publicEvents].map(event => [event.id, event]));
+      const mergedEvents = new Map([...publicEvents, ...previousEvents].map(event => [event.id, event]));
       progress = {stage: job.repair ? "repairing" : allEvents.some(event => event.type === "structured_output_result") ? "validating" : allEvents.length ? "analyzing" : "submitted",
-        updatedAt: new Date().toISOString(), events: [...mergedEvents.values()].slice(-24)};
+        updatedAt: new Date().toISOString(), events: [...mergedEvents.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-24)};
       // A repair turn may never borrow the original turn's result or terminal event.
       const baseline = new Set(job.repair?.baselineEventIds ?? []);
       const events = allEvents.filter(event => !baseline.has(event.id));

@@ -72,6 +72,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const container = useRef<HTMLDivElement>(null);
   useEffect(() => {
     mounted.current = true; generation.current++; running.current = false;
+    setView(initialView); setProgressJobId(undefined);
     setWorkspace(null); setDrafts([]); setDraftDirty(false); setReceived([]); setSelected([]);
     void run(() => api.observe(), undefined, true);
     return () => {mounted.current = false; generation.current++;};
