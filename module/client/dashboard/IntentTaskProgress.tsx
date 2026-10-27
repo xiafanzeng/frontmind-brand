@@ -9,12 +9,13 @@ export default function IntentTaskProgress({job, count, kind, error, pending, on
   onBack: () => void; onReload: () => void;
 }) {
   const [now, setNow] = useState(Date.now());
+  const [startedAt] = useState(Date.now());
   useEffect(() => {const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer);}, []);
   const stage = job?.progress?.stage;
   const step = job?.status === "succeeded" ? 4 : stage === "validating" || stage === "repairing" ? 3 :
     stage === "analyzing" ? 2 : job?.status === "running" || job?.status === "create_unknown" ? 1 : 0;
   const created = Date.parse(job?.createdAt ?? "");
-  const seconds = Number.isFinite(created) ? Math.max(0, Math.floor((now - created) / 1000)) : 0;
+  const seconds = Math.max(0, Math.floor((now - (Number.isFinite(created) ? created : startedAt)) / 1000));
   const failed = job?.status === "failed" || Boolean(error);
   return <div className="iw-task-progress">
     <button className="iw-back" onClick={onBack}><ArrowLeft size={15}/>返回问题列表</button>
