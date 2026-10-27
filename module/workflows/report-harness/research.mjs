@@ -50,13 +50,74 @@ export function searchResults(html){
  }
  return results;
 }
-export async function researchSearch(query,{root,stage,signal}={}){
+/** Reject only clearly unrelated result sets. This is a lexical sanity check,
+ * not a claim that a matching page is true or authoritative. */
+export function searchRelevance(query,results){
+ const normalized=query.normalize('NFKC').toLowerCase();
+ const units=new Set(normalized.match(/[a-z0-9][a-z0-9.+-]{2,}/g)??[]);
+ for(const word of normalized.match(/[\p{Script=Han}]+/gu)??[]){
+  if(word.length===1)continue;
+  for(let i=0;i<word.length-1;i++)units.add(word.slice(i,i+2));
+ }
+ if(!units.size)return {related:results.length>0,coverage:null};
+ const coverage=Math.max(0,...results.map(result=>{
+  const text=`${result.title} ${result.snippet}`.normalize('NFKC').toLowerCase();
+  return [...units].filter(unit=>text.includes(unit)).length/units.size;
+ }));
+ return {related:results.length>0&&coverage>=0.2,coverage};
+}
+export function sogouSearchResults(html){
+ const headings=[...html.matchAll(/<h3\b[^>]*class=["'][^"']*\bvr-title\b[^"']*["'][^>]*>([\s\S]*?)<\/h3>/gi)],results=[];
+ for(let index=0;index<headings.length;index++){
+  const match=headings[index],anchor=match[1].match(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);if(!anchor)continue;
+  let url;try{url=publicResearchUrl(new URL(anchor[1].replace(/&amp;/g,'&'),'https://www.sogou.com').href).href;}catch{continue;}
+  const block=html.slice(match.index+match[0].length,headings[index+1]?.index??html.length);
+  const summary=block.match(/<(?:div|p)\b[^>]*class=["'][^"']*\b(?:fz-mid|str_info)\b[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|p)>/i)?.[1]??'';
+  const title=htmlText(anchor[2]).slice(0,250);
+  results.push({title,url,snippet:`${title} ${htmlText(summary)}`.trim().slice(0,1400)});if(results.length===8)break;
+ }
+ return results;
+}
+export function sogouRedirectTarget(html){
+ // Parse a literal from the observed redirect page; never evaluate its script.
+ const literal=html.match(/window\.location\.replace\(\s*("(?:[^"\\]|\\.)*")\s*\)/)?.[1];
+ if(!literal)throw new Error('REPORT_SEARCH_REDIRECT_UNREADABLE');
+ return publicResearchUrl(JSON.parse(literal)).href;
+}
+async function resolveSogouResult(result,{signal,loadPage,dnsLookup}){
+ const url=new URL(result.url);
+ if(url.hostname!=='www.sogou.com'||url.pathname!=='/link')return result;
+ const page=await loadPage(url.href,{signal});
+ const target=page.url===url.href?sogouRedirectTarget(page.html):publicResearchUrl(page.url).href;
+ if(new URL(target).hostname==='www.sogou.com')throw new Error('REPORT_SEARCH_REDIRECT_UNREADABLE');
+ const addresses=await dnsLookup(new URL(target).hostname,{family:4,all:true});
+ if(!addresses.length||addresses.some(row=>!publicAddress(row.address)))throw new Error('REPORT_RESEARCH_ADDRESS_DENIED');
+ return {...result,url:target};
+}
+export async function researchSearch(query,{root,stage,signal,loadPage=fetchPublicPage,dnsLookup=lookup}={}){
  if(typeof query!=='string'||query.length<2||query.length>300)throw new Error('REPORT_RESEARCH_QUERY_INVALID');
- const page=await fetchPublicPage(`https://www.bing.com/search?q=${encodeURIComponent(query)}`,{signal});
- const results=searchResults(page.html);if(!results.length)throw new Error('REPORT_SEARCH_NO_READABLE_RESULTS: 搜索引擎未返回可读取结果；请根据已知官网直接抓取，不得虚构检索结果。');
- const text=JSON.stringify({query,engine:'Bing public web',fetchedAt:page.fetchedAt,results},null,2);
- const artifact=`work/${stage}-search-${createHash('sha256').update(query).digest('hex').slice(0,12)}.json`;await writeDocument(root,artifact,text);
- return {artifact,query,results};
+ const attempts=[],artifact=`work/${stage}-search-${createHash('sha256').update(query).digest('hex').slice(0,12)}.json`;
+ const engines=[{name:'Bing public web',url:`https://www.bing.com/search?q=${encodeURIComponent(query)}`,parse:searchResults},
+  {name:'Sogou public web',url:`https://www.sogou.com/web?query=${encodeURIComponent(query)}`,parse:sogouSearchResults}];
+ for(const engine of engines){
+  signal?.throwIfAborted();
+  try{
+   const page=await loadPage(engine.url,{signal});let results=engine.parse(page.html);
+   let relevance=searchRelevance(query,results);
+   if(!relevance.related){attempts.push({engine:engine.name,url:page.url,reason:results.length?'unrelated_results':'no_readable_results',coverage:relevance.coverage,resultCount:results.length});continue;}
+   if(engine.name==='Sogou public web'){
+    const resolved=await Promise.allSettled(results.map(result=>resolveSogouResult(result,{signal,loadPage,dnsLookup})));
+    signal?.throwIfAborted();results=resolved.flatMap(result=>result.status==='fulfilled'?[result.value]:[]);
+    relevance=searchRelevance(query,results);
+    if(!relevance.related){attempts.push({engine:engine.name,url:page.url,reason:'no_safe_related_targets',coverage:relevance.coverage,resultCount:results.length});continue;}
+   }
+   const result={artifact,query,engine:engine.name,searchUrl:page.url,fetchedAt:page.fetchedAt,results,
+    ...(attempts.length?{fallbackReason:'前序搜索未得到相关、可读取的结果，已切换公开搜索引擎。',attempts}:{})};
+   await writeDocument(root,artifact,JSON.stringify(result,null,2));return result;
+  }catch(error){signal?.throwIfAborted();attempts.push({engine:engine.name,url:engine.url,reason:String(error?.message??error).slice(0,300)});}
+ }
+ await writeDocument(root,artifact,JSON.stringify({query,status:'failed',attempts},null,2));
+ throw new Error('REPORT_SEARCH_NO_RELEVANT_RESULTS: 公开搜索没有返回相关且可安全访问的结果，诊断已保存。请根据已知官网直接核查并注明检索限制，不得引用无关结果或虚构来源。');
 }
 export async function researchFetch(url,{root,stage,signal}={}){
  const page=await fetchPublicPage(url,{signal});const text=htmlText(page.html).slice(0,50000);

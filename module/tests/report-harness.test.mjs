@@ -10,7 +10,7 @@ import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {readDocument,writeDocument,listDocuments} from '../workflows/report-harness/safe-files.mjs';
-import {publicAddress,publicResearchUrl,searchResults,fetchPublicPage} from '../workflows/report-harness/research.mjs';
+import {publicAddress,publicResearchUrl,searchResults,searchRelevance,sogouSearchResults,sogouRedirectTarget,researchSearch,fetchPublicPage} from '../workflows/report-harness/research.mjs';
 import {publicEvents} from '../workflows/report-harness/events.mjs';
 import {reportRuntimePatch} from '../workflows/report-harness/runtime-config.mjs';
 
@@ -40,6 +40,43 @@ test('research excludes private IPs, business APIs, credentials and internal fro
 test('search parses observed results and preserves source URLs',()=>{
  assert.deepEqual(searchResults('<li class="b_algo"><h2><a href="https://example.org/about">真实官网</a></h2><p>公开信息</p></li>'),[{title:'真实官网',url:'https://example.org/about',snippet:'真实官网 公开信息'}]);
  assert.deepEqual(searchResults('captcha'),[]);
+});
+
+test('search relevance rejects unrelated Bing results without requiring an exact query match',()=>{
+ assert.equal(searchRelevance('东莞台心医院 医学美容科',[{title:'Speedtest by Ookla',snippet:'Test your internet connection.'}]).related,false);
+ assert.equal(searchRelevance('东莞台心医院 医学美容科',[{title:'东莞市人民政府',snippet:'东莞旅游景点与城市介绍'}]).related,false);
+ assert.equal(searchRelevance('东莞台心医院 医学美容科',[{title:'台心医院美容科介绍',snippet:'公开介绍'}]).related,true);
+ assert.equal(searchRelevance('Microsoft official website',[{title:'Microsoft – Cloud, Productivity and Gaming',snippet:'Explore our products'}]).related,true);
+ assert.equal(searchRelevance('工业机器人 伺服电机 精度',[{title:'伺服电机的控制精度',snippet:'工业应用'}]).related,true);
+});
+
+const sogouFixture='<div class="vrwrap"><div class="struct201102"><h3 class="vr-title  " vrcid="title.ba18e87"><a target="_blank" href="/link?url=observed&amp;x=1"><em><!--red_beg-->示例企业<!--red_end--></em>电池技术</a></h3><div class="fz-mid space-txt">公开的<em>电池</em>研发资料</div></div></div>';
+test('Sogou parses observed vr-title structure and validates literal redirect targets',()=>{
+ assert.deepEqual(sogouSearchResults(sogouFixture),[{title:'示例企业 电池技术',url:'https://www.sogou.com/link?url=observed&x=1',snippet:'示例企业 电池技术 公开的 电池 研发资料'}]);
+ assert.equal(sogouRedirectTarget('<script>window.location.replace("https://example.org/research?a=1&b=2")</script>'),'https://example.org/research?a=1&b=2');
+ for(const target of ['http://example.org','https://127.0.0.1/','https://brand.frontmind.cn/','https://example.org/api/private'])assert.throws(()=>sogouRedirectTarget(`<script>window.location.replace(${JSON.stringify(target)})</script>`));
+ assert.throws(()=>sogouRedirectTarget('<script>window.location.replace(getTarget())</script>'),/UNREADABLE/);
+});
+
+test('unrelated Bing results fall back with observed engine, reason and safe final URLs',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'report-search-'));
+ try{
+  const calls=[];
+  const result=await researchSearch('示例企业 电池技术',{root,stage:'S3',dnsLookup:async()=>[{address:'8.8.8.8'}],loadPage:async url=>{
+   calls.push(url);return {url,fetchedAt:'2026-10-27T00:00:00Z',html:url.includes('bing.com')?'<li class="b_algo"><h2><a href="https://speedtest.net/">Speedtest</a></h2><p>Internet speed test</p></li>':url.includes('/web?')?sogouFixture:'<script>window.location.replace("https://example.org/research")</script>'};
+  }});
+  assert.equal(result.engine,'Sogou public web');assert.equal(result.attempts[0].reason,'unrelated_results');assert.equal(result.results[0].url,'https://example.org/research');assert.equal(calls.length,3);
+  assert.equal(JSON.parse(await readDocument(root,result.artifact)).results[0].url,result.results[0].url);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('a Sogou redirect resolving to a private address fails with durable diagnostics',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'report-search-'));
+ try{
+  await assert.rejects(researchSearch('示例企业 电池技术',{root,stage:'S3',dnsLookup:async()=>[{address:'10.0.0.1'}],loadPage:async url=>({url,html:url.includes('bing.com')?'captcha':url.includes('/web?')?sogouFixture:'<script>window.location.replace("https://example.org/private")</script>'})}),/NO_RELEVANT_RESULTS/);
+  const documents=await listDocuments(root);const diagnostic=JSON.parse(await readDocument(root,documents[0].id));
+  assert.equal(diagnostic.status,'failed');assert.equal(diagnostic.attempts.at(-1).reason,'no_safe_related_targets');
+ }finally{await rm(root,{recursive:true,force:true});}
 });
 
 test('pinned public DNS supports both Node lookup callback modes',async()=>{
