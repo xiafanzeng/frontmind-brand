@@ -1,7 +1,7 @@
-import type { ComponentType, ReactNode } from "react";
+import { ComponentType, useEffect, useRef, useState } from "react";
 import { configureIntentWorkspaceHost } from "./response-logic-runtime-host.js";
 import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
-import type { IntentWorkspaceHost, IntentToast, StartResponseLogicTask, UploadIntentAsset, IntentRestOperation, IntentVisualComponents } from "./response-logic-host.js";
+import type { IntentWorkspaceHost, IntentToast, StartResponseLogicTask, UploadIntentAsset, IntentRestOperation, IntentVisualComponents, IntentTrpcHost } from "./response-logic-host.js";
 
 /**
  * Brand-side adapter that implements the IntentWorkspaceHost contract for the
@@ -24,10 +24,43 @@ const RL_API_BASE = RESPONSE_LOGIC_API_BASE;
 export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInput): IntentWorkspaceHost {
   const rest = input.captureRestOperation;
 
-  const loadRecords = async () => {
-    const response = await rest().fetch(RL_API_BASE, { method: "GET", headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`加载应答逻辑失败（${response.status}）`);
-    return response.json();
+  // ── Reactive records store ──
+  // The workspace's PersistentResponseLogicWorkspace calls
+  // trpc.workspace.responseLogic.useQuery() during its render; this store
+  // notifies subscribed components when records change so React re-renders.
+  type RecordsData = { records: unknown[] };
+  let storeData: RecordsData | undefined;
+  let storeError: string | undefined;
+  let storeLoading = false;
+  let storeVersion = 0;
+  const storeListeners = new Set<() => void>();
+
+  const notifyStore = () => {
+    storeVersion++;
+    storeListeners.forEach(fn => fn());
+  };
+
+  const fetchRecords = async (): Promise<void> => {
+    if (storeLoading) return;
+    storeLoading = true;
+    storeError = undefined;
+    notifyStore();
+    try {
+      const response = await rest().fetch(RL_API_BASE, { method: "GET", headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error(`加载应答逻辑失败（${response.status}）`);
+      storeData = await response.json();
+    } catch (error) {
+      storeError = error instanceof Error ? error.message : "加载应答逻辑失败";
+    } finally {
+      storeLoading = false;
+      notifyStore();
+    }
+  };
+
+  const loadRecords = async (): Promise<RecordsData> => {
+    await fetchRecords();
+    if (storeError) throw new Error(storeError);
+    return storeData ?? { records: [] };
   };
 
   const saveRecord = async (value: unknown) => {
@@ -59,7 +92,7 @@ export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInp
     return body as { id: string; operationRevision?: number };
   };
 
-  const uploadAsset: UploadIntentAsset = async (file, onProgress, options) => {
+  const uploadAsset: UploadIntentAsset = async (file, _onProgress, options) => {
     // Core's authenticated local-asset endpoint (same contract as the Intent
     // standalone host): raw octet-stream body plus the three X-FrontMind-*
     // headers; the declared size must match the streamed bytes exactly.
@@ -81,7 +114,7 @@ export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInp
     if (!response.ok || !payload.localAssetId?.startsWith("asset_")) {
       throw new Error(payload.error?.message ?? `材料上传失败（${response.status}）`);
     }
-    onProgress?.(100);
+    onProgressFallback(_onProgress);
     return {
       fileId: payload.localAssetId,
       filename: payload.filename ?? file.name,
@@ -89,6 +122,7 @@ export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInp
       expiresAt: payload.expiresAt ?? 0,
     };
   };
+  const onProgressFallback = (fn?: (percent: number) => void) => fn?.(100);
 
   const host: IntentWorkspaceHost = {
     captureRestOperation: (signal?: AbortSignal | null): IntentRestOperation => {
@@ -100,17 +134,78 @@ export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInp
     useSearch: () => typeof window !== "undefined" ? window.location.search : "",
     activeEnterpriseProjectId: () => undefined,
     trpc: {
+      useUtils: () => ({
+        workspace: {
+          responseLogic: {
+            setData: (
+              _input: undefined,
+              updater: (current: RecordsData | undefined) => RecordsData | undefined,
+            ) => {
+              storeData = updater(storeData);
+              notifyStore();
+            },
+          },
+        },
+      }),
       workspace: {
         responseLogic: {
-          useQuery: () => {
-            let data: { records: unknown[] } | undefined;
-            let isLoading = true;
-            loadRecords().then(r => { data = r; isLoading = false; }).catch(() => { isLoading = false; });
-            return { data, isLoading, isFetching: isLoading, isSuccess: !isLoading && !!data, isError: !isLoading && !data, refetch: async () => { data = await loadRecords(); return { data }; } };
+          useQuery: (
+            _input?: undefined,
+            queryOptions?: { refetchInterval?: number },
+          ) => {
+            // These hooks execute in the consumer component's render context
+            // (PersistentResponseLogicWorkspace / ConfirmationBoard), so React
+            // binds them to that component's fiber — standard rules-of-hooks.
+            const [, forceRender] = useState(0);
+            const subscribedVersion = useRef(storeVersion);
+
+            useEffect(() => {
+              const listener = () => {
+                if (subscribedVersion.current !== storeVersion) {
+                  subscribedVersion.current = storeVersion;
+                  forceRender(n => n + 1);
+                }
+              };
+              storeListeners.add(listener);
+              void fetchRecords();
+              const intervalMs = queryOptions?.refetchInterval ?? 0;
+              const interval = intervalMs > 0
+                ? window.setInterval(() => void fetchRecords(), intervalMs)
+                : null;
+              return () => {
+                storeListeners.delete(listener);
+                if (interval) window.clearInterval(interval);
+              };
+            }, [queryOptions?.refetchInterval]);
+
+            return {
+              data: storeData,
+              isLoading: !storeData,
+              isFetching: storeLoading,
+              isSuccess: Boolean(storeData) && !storeError,
+              isError: !storeData && Boolean(storeError),
+              error: storeError ? { message: storeError } : null,
+              refetch: async () => {
+                await fetchRecords();
+                return {
+                  data: storeData,
+                  error: storeError ? { message: storeError } : undefined,
+                };
+              },
+            };
           },
         },
         saveResponseLogic: {
-          useMutation: () => ({ mutateAsync: async (value: unknown) => saveRecord(value), isPending: false }),
+          useMutation: (mutationOptions?: { onSuccess?: (value: { record: unknown }) => void }) => ({
+            mutateAsync: async (value: unknown) => {
+              const result = await saveRecord(value);
+              if (mutationOptions?.onSuccess) mutationOptions.onSuccess(result);
+              // Refresh the store so list views reflect the save.
+              void fetchRecords();
+              return result;
+            },
+            isPending: false,
+          }),
         },
       },
     } as never,

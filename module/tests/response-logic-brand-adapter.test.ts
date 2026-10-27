@@ -1,5 +1,5 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import { createBrandResponseLogicHost } from "../client/response-logic-brand-adapter";
 import { RESPONSE_LOGIC_API_BASE } from "../client/response-logic-api-base";
 
@@ -8,7 +8,7 @@ type CapturedCall = { input: string; init?: RequestInit };
 function createHarness() {
   const calls: CapturedCall[] = [];
   let respond: () => Promise<Response> = async () =>
-    ({ ok: true, status: 200, json: async () => ({}) }) as unknown as Response;
+    ({ ok: true, status: 200, json: async () => ({ records: [] }) }) as unknown as Response;
   const capture = () => ({
     signal: new AbortController().signal,
     assertActive: () => {},
@@ -30,35 +30,60 @@ function createHarness() {
   });
   return {
     calls,
-    setResponse: (impl: () => Promise<Response>) => {
-      respond = impl;
-    },
+    setResponse: (impl: () => Promise<Response>) => { respond = impl; },
     host,
   };
 }
 
 describe("brand response-logic adapter REST wiring", () => {
-  it("lists records through the module namespace", async () => {
+  it("lists records through the module namespace via a reactive query hook", async () => {
     const harness = createHarness();
     harness.setResponse(async () =>
-      ({ ok: true, status: 200, json: async () => ({ records: [] }) }) as unknown as Response);
-    const query = harness.host.trpc.workspace.responseLogic.useQuery();
-    const result = await query.refetch();
-    expect(harness.calls.length).toBeGreaterThanOrEqual(1);
-    const call = harness.calls[harness.calls.length - 1];
-    expect(call.input).toBe(RESPONSE_LOGIC_API_BASE);
-    expect(call.init?.method).toBe("GET");
-    expect(result.data).toEqual({ records: [] });
+      ({ ok: true, status: 200, json: async () => ({ records: [{ questionId: "t:1" }] }) }) as unknown as Response);
+
+    const { result } = renderHook(() =>
+      harness.host.trpc.workspace.responseLogic.useQuery(undefined, { refetchInterval: 0 }),
+    );
+
+    // Initial render: loading (no data yet, fetch pending)
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.data).toBeUndefined();
+
+    // After the fetch resolves, the store notifies and the hook re-renders
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.isSuccess).toBe(true);
+    });
+    expect(result.current.data).toEqual({ records: [{ questionId: "t:1" }] });
+
+    // The request went to the module namespace
+    const listCall = harness.calls.find(call => call.input === RESPONSE_LOGIC_API_BASE);
+    expect(listCall).toBeDefined();
+    expect(listCall?.init?.method).toBe("GET");
   });
 
-  it("saves records through the module namespace", async () => {
+  it("exposes a working useUtils with setData (fixes the white-screen crash)", () => {
+    const harness = createHarness();
+    const utils = harness.host.trpc.useUtils();
+    expect(utils).toBeDefined();
+    expect(utils.workspace).toBeDefined();
+    expect(utils.workspace.responseLogic).toBeDefined();
+    expect(typeof utils.workspace.responseLogic.setData).toBe("function");
+
+    // setData applies the updater and does not throw
+    utils.workspace.responseLogic.setData(undefined, () => ({ records: [{ questionId: "x" }] }));
+  });
+
+  it("saves records through the module namespace and calls onSuccess", async () => {
     const harness = createHarness();
     const record = { questionId: "t:1", revision: 2 };
     harness.setResponse(async () =>
       ({ ok: true, status: 200, json: async () => ({ record }) }) as unknown as Response);
-    const mutation = harness.host.trpc.workspace.saveResponseLogic.useMutation();
+    const onSuccess = vi.fn();
+    const mutation = harness.host.trpc.workspace.saveResponseLogic.useMutation({ onSuccess });
     const saved = await mutation.mutateAsync({ questionId: "t:1" });
     expect(saved).toEqual({ record });
+    expect(onSuccess).toHaveBeenCalledWith({ record });
     expect(harness.calls[0].input).toBe(RESPONSE_LOGIC_API_BASE);
     expect(harness.calls[0].init?.method).toBe("POST");
     expect(JSON.parse(String(harness.calls[0].init?.body))).toEqual({ questionId: "t:1" });
@@ -131,5 +156,21 @@ describe("brand response-logic adapter REST wiring", () => {
     harness.setResponse(async () =>
       ({ ok: true, status: 201, json: async () => ({ localAssetId: "task_9" }) }) as unknown as Response);
     await expect(harness.host.uploadChatLocalAsset(file)).rejects.toThrow("材料上传失败（201）");
+  });
+
+  it("shows an error state when the query fails (not a white screen)", async () => {
+    const harness = createHarness();
+    harness.setResponse(async () =>
+      ({ ok: false, status: 503, json: async () => ({ error: { message: "服务不可用" } }) }) as unknown as Response);
+
+    const { result } = renderHook(() =>
+      harness.host.trpc.workspace.responseLogic.useQuery(undefined, { refetchInterval: 0 }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.isError).toBe(true);
+    });
+    expect(result.current.error?.message).toContain("503");
+    expect(result.current.data).toBeUndefined();
   });
 });
