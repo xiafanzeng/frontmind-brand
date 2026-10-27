@@ -828,6 +828,16 @@ async function linkHostDependencies(root: string, dependencies: string[]) {
   for (const dependency of dependencies) {
     const target = path.join(modules, ...dependency.split("/"));
     await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    // Windows rejects unprivileged directory symlinks (EPERM without
+    // Developer Mode); junctions keep the staging build runnable there.
+    if (process.platform === "win32") {
+      await (await import("node:fs/promises")).symlink(
+        hostPackageRoot(dependency),
+        target,
+        "junction",
+      );
+      continue;
+    }
     await symlink(hostPackageRoot(dependency), target, "dir");
   }
 }
@@ -864,7 +874,8 @@ function resolveHostModule(name: string) {
   }
 }
 
-function controlledViteBuilderSource(input: {
+/** @internal Child build program, also exercised by platform boundary regressions. */
+export function controlledViteBuilderSource(input: {
   viteModuleUrl: string;
   tailwindModuleUrl: string | null;
   tailwindV3ModuleUrl: string | null;
@@ -907,12 +918,12 @@ const sourceBoundary = {
       throw Object.assign(new Error("NATIVE_BUILD_SOURCE_BOUNDARY"), { code: "NATIVE_BUILD_SOURCE_BOUNDARY" });
     }
     if (!importer || !path.isAbsolute(importer)) return null;
-    const importerRelative = path.relative(root, importer.split("?", 1)[0]);
-    if (importerRelative.startsWith("../") || path.isAbsolute(importerRelative) || importerRelative.startsWith("node_modules/")) return null;
+    const importerRelative = path.relative(root, importer.split("?", 1)[0]).replaceAll("\\\\", "/");
+    if (importerRelative === ".." || importerRelative.startsWith("../") || path.isAbsolute(importerRelative) || importerRelative.startsWith("node_modules/")) return null;
     if (clean.startsWith(".")) {
       const target = path.resolve(path.dirname(importer), clean);
-      const relative = path.relative(root, target);
-      if (relative.startsWith("../") || path.isAbsolute(relative)) {
+      const relative = path.relative(root, target).replaceAll("\\\\", "/");
+      if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
         throw Object.assign(new Error("NATIVE_BUILD_SOURCE_BOUNDARY"), { code: "NATIVE_BUILD_SOURCE_BOUNDARY" });
       }
       return null;
