@@ -90,6 +90,22 @@ function harness() {
     ledger: () => ledger!};
 }
 describe("优化模型持久化任务", () => {
+  it("任务动态只保存公开标签，重复读取去重且不暴露原始内容", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.client.listAllMessages.mockResolvedValue([{id: "private-id", type: "assistant_message", timestamp: Date.now(),
+      assistant_message: {content: "secret reasoning and unvalidated score 99"}},
+    {id: "unknown", type: "reasoning", timestamp: Date.now(), content: "private"}]);
+    await h.service.poll();
+    const progress = (await h.service.poll()).state.jobs![0].progress!;
+    expect(progress.stage).toBe("analyzing");
+    expect(progress.events).toHaveLength(1);
+    expect(progress.events[0].label).toBe("模型返回了一条任务消息");
+    expect(JSON.stringify(progress)).not.toMatch(/secret reasoning|private-id|unvalidated score/);
+    h.send(); const completed = await h.service.poll();
+    expect(completed.state.jobs![0].progress!.stage).toBe("completed");
+    expect(completed.state.evaluations).toHaveLength(1);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
   it("延迟轮询先读取已完成结果，不能仅凭本地时长判超时", async () => {
     const h = harness(); await h.intake(); await h.service.command(h.request); h.send();
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 60_000);

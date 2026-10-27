@@ -50,7 +50,7 @@ describe("优化工作台任务入口", () => {
     await screen.findByRole("heading", {name: "正在评估 1 条问题"});
     expect(api.waitForJob).toHaveBeenCalledWith("job-1", expect.any(Function));
     expect(api.command).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", {name: "查看当前任务"})).toHaveProperty("disabled", false);
+    expect(screen.getByRole("progressbar", {name: "评估阶段进度"})).toHaveProperty("max", 4);
     fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
     fireEvent.click(screen.getByRole("checkbox", {name: `选择${question.question}`}));
     expect(screen.getByRole("button", {name: "批量评估并优化（1）"})).toHaveProperty("disabled", true);
@@ -104,7 +104,7 @@ describe("优化工作台任务入口", () => {
     await waitFor(() => expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "evaluate", questionIds: ["q2"]})));
     await act(async () => finish(initial));
   });
-  it("确认交接后保留列表、选中实际接收问题并自动评估，失败保留重试入口", async () => {
+  it("确认交接后进入进度页，返回列表保留选择，失败保留重试入口", async () => {
     const initial = workspace();
     initial.state.questions = [];
     const received = workspace();
@@ -120,6 +120,8 @@ describe("优化工作台任务入口", () => {
     const confirm = await screen.findByRole("button", {name: "确认选择并交给问题优化（1）"});
     await waitFor(() => expect(confirm).toHaveProperty("disabled", false));
     fireEvent.click(confirm);
+    await screen.findByRole("heading", {name: "正在评估 1 条问题"});
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
     await screen.findByText("已从品牌全域词库接收 1 条问题");
     expect(screen.getByText("新加入")).toBeTruthy();
     expect(screen.getByRole("checkbox", {name: `选择${question.question}`})).toHaveProperty("checked", true);
@@ -132,6 +134,21 @@ describe("优化工作台任务入口", () => {
     expect(screen.getByRole("heading", {name: "优化问题"})).toBeTruthy();
     expect(screen.getByRole("button", {name: "批量评估并优化（1）"})).toHaveProperty("disabled", false);
     expect(api.command).toHaveBeenCalledTimes(2);
+  });
+  it("流式更新任务动态时不显示未经校验评分", async () => {
+    const initial = workspace("running");
+    const {api, finish} = pendingApi(initial);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    await screen.findByRole("progressbar");
+    const update = vi.mocked(api.waitForJob!).mock.calls[0][1];
+    const next = workspace("running");
+    next.state.jobs![0].progress = {stage: "analyzing", updatedAt: "2026-10-27T00:00:00Z",
+      events: [{id: "public-1", label: "工具处理已返回", at: "2026-10-27T00:00:00Z"}]};
+    await act(async () => update(next));
+    expect(screen.getByText("工具处理已返回")).toBeTruthy();
+    expect(screen.queryByText("回答要点支撑矩阵")).toBeNull();
+    await act(async () => finish(workspace("succeeded")));
+    await screen.findByText("回答要点支撑矩阵");
   });
   it("批量摘要由真实评估计算，不使用原型里的固定分数", async () => {
     const initial = workspace("succeeded");

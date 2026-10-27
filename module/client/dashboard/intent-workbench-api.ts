@@ -1,5 +1,5 @@
 import {captureWorkspaceRestOperation} from "../lib/workspace-rest-scope";
-import type {IntentWorkspace} from "../../contracts/intent-workbench";
+import type {IntentWorkspace, IntentSkillJob} from "../../contracts/intent-workbench";
 export interface IntentWorkbenchApi {
   observe(): Promise<IntentWorkspace>;
   command(input: unknown): Promise<IntentWorkspace>;
@@ -46,8 +46,57 @@ export const liveIntentWorkbenchApi: IntentWorkbenchApi = {
   rollback: input => request("/rollback", input),
   async waitForJob(jobId, onUpdate) {
     const operation = captureWorkspaceRestOperation();
+    let snapshot = await request("", undefined, operation);
+    onUpdate(snapshot);
+    const initialJob = snapshot.state.jobs?.find(item => item.id === jobId);
+    if (!initialJob) throw new Error("当前工作区的优化任务已变化，请重新读取");
+    if (initialJob.status === "failed") throw new Error(initialJob.error ?? "模型生成失败，请重新评估");
+    if (initialJob.status === "succeeded") return snapshot;
+    // Use fetch rather than EventSource so the captured workspace headers and
+    // cancellation signal apply to the entire stream.
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let terminal = false;
+    const streamController = new AbortController();
+    let idleTimer = setTimeout(() => streamController.abort(), 45_000);
+    try {
+      const response = await operation.fetch(`/api/modules/brand/intent/stream?jobId=${encodeURIComponent(jobId)}`, {
+        credentials: "same-origin", headers: operation.headers({Accept: "text/event-stream"}),
+        signal: operation.signal ? AbortSignal.any([operation.signal, streamController.signal]) : streamController.signal,
+      });
+      if (response.ok && response.headers.get("content-type")?.includes("text/event-stream") && response.body) {
+        reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const chunk = await reader.read();
+          operation.assertActive();
+          if (chunk.done) break;
+          clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => streamController.abort(), 45_000);
+          buffer += decoder.decode(chunk.value, {stream: true}).replace(/\r\n/g, "\n");
+          let end: number;
+          while ((end = buffer.indexOf("\n\n")) >= 0) {
+            const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+            if (!frame.startsWith("event: progress\n")) continue;
+            const job = JSON.parse(frame.split("\n").find(line => line.startsWith("data: "))!.slice(6)) as IntentSkillJob;
+            if (job.id !== jobId) continue;
+            snapshot = {...snapshot, state: {...snapshot.state, jobs: snapshot.state.jobs?.map(item => item.id === job.id ? job : item)}};
+            onUpdate(snapshot);
+            if (["succeeded", "failed"].includes(job.status)) {terminal = true; break;}
+          }
+          if (terminal) break;
+        }
+      }
+    } catch {
+      operation.assertActive();
+      // Interrupted streams only fall back to reads; never repeat a command.
+    } finally {
+      clearTimeout(idleTimer);
+      streamController.abort();
+      if (reader) {await reader.cancel().catch(() => {}); reader.releaseLock();}
+    }
     for (let attempt = 0; attempt < 800; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, 2500));
+      if (!terminal) await new Promise(resolve => setTimeout(resolve, 2500));
       const workspace = await request("", undefined, operation);
       onUpdate(workspace);
       const job = workspace.state.jobs?.find(item => item.id === jobId);
