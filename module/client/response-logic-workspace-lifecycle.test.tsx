@@ -13,7 +13,8 @@ const h = vi.hoisted(() => {
     isLoading: true,
     records: undefined as undefined | Array<Record<string, unknown>>,
     restCalls: [] as string[],
-    router: async () => new Response("{}", { status: 404 }),
+    router: async (_url: string, _init?: RequestInit): Promise<Response> =>
+      new Response("{}", { status: 404 }),
   };
   return control;
 });
@@ -197,6 +198,7 @@ describe("completed terminal path", () => {
   it("coalesces concurrent completed observations into a single adopt request", async () => {
     let adoptCalls = 0;
     let releaseAdopt: (() => void) | null = null;
+    const release = (): void => releaseAdopt?.();
     h.router = async (url: string) => {
       if (url.includes("/tasks/task-1/status")) return respondJson(completedEnvelope, 200);
       if (url.includes("/adopt-result")) {
@@ -221,7 +223,7 @@ describe("completed terminal path", () => {
     });
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(adoptCalls).toBe(1);
-    releaseAdopt?.();
+    release();
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(adoptCalls).toBe(1);
   });
