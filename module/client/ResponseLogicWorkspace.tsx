@@ -527,12 +527,51 @@ export type ResponseLogicGenerationState = {
   startedAt?: number;
   execution?: GeneralExecutionDto;
   completedAt?: number;
+  /** Verified result is being adopted (saving) — distinct from model running. */
+  adopting?: boolean;
+  /** Status queries keep failing transiently; polling continues safely. */
+  degraded?: boolean;
   failure?: {
     message: string;
     retryable: boolean;
     retryAdoptionOnly?: boolean;
   };
 };
+
+/**
+ * Throttle for lifecycle pokes (focus / pageshow / visibilitychange). A page
+ * returning to the foreground must immediately re-query a running task because
+ * the browser may have frozen background timers; back-to-back events within
+ * the window coalesce into one poll. Pure for tests.
+ */
+export function shouldPokePolling(
+  lastPokeAt: number,
+  now: number,
+  minIntervalMs = 2_000,
+): boolean {
+  return now - lastPokeAt >= minIntervalMs;
+}
+
+/**
+ * Terminal fallback when the task status says completed but the local running
+ * context is incomplete (missing taskId/conversationId/operationRevision):
+ * end the loading state with an adoption-only retry instead of leaving an
+ * eternal "generating" card. Pure for tests.
+ */
+export function incompleteGenerationContextFailure(
+  generation: ResponseLogicGenerationState | null,
+): ResponseLogicGenerationState | null {
+  if (!generation) return null;
+  return {
+    ...generation,
+    phase: "failed",
+    failure: {
+      message: "任务已完成，但本地状态不完整；请刷新页面后采用已生成的结果。",
+      retryable: true,
+      retryAdoptionOnly: true,
+    },
+  };
+}
 
 type GenerationStoreListener = () => void;
 const generationStore = new Map<string, ResponseLogicGenerationState>();
@@ -1269,13 +1308,14 @@ function ResponseLogicQuestionEditor({
 
   // Re-arm the polling state machine from the authoritative record when the
   // in-memory generation state is absent but the record still carries a bound,
-  // unadopted task. Runs once per mount; the polling effect above then observes
-  // the task to completion (auto-adopt on completed, failed state on error).
-  const recoveryCheckedRef = useRef(false);
+  // unadopted task. The one-shot guard is keyed by questionId: switching to
+  // another question in the same mounted workspace re-evaluates recovery for
+  // the new question instead of inheriting the previous question's verdict.
+  const recoveryCheckedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (recoveryCheckedRef.current) return;
+    if (recoveryCheckedRef.current === questionId) return;
     if (generation) {
-      recoveryCheckedRef.current = true;
+      recoveryCheckedRef.current = questionId;
       return;
     }
     const recovered = recoverResponseLogicGenerationFromRecord({
@@ -1285,11 +1325,12 @@ function ResponseLogicQuestionEditor({
       record: persistedRecord ?? null,
     });
     if (!recovered) {
-      // Wait for the record load; once loaded with no recoverable task, settle.
-      if (persistedRecord) recoveryCheckedRef.current = true;
+      // Wait for the record load; once loaded with no recoverable task, settle
+      // for THIS question only.
+      if (persistedRecord) recoveryCheckedRef.current = questionId;
       return;
     }
-    recoveryCheckedRef.current = true;
+    recoveryCheckedRef.current = questionId;
     setResponseLogicGeneration(scope, questionId, recovered);
     // The record snapshot can only change through persistence refresh; the
     // one-shot guard above makes repeated runs a no-op.
@@ -1577,15 +1618,33 @@ function ResponseLogicQuestionEditor({
       attempt?: number,
     ) => Promise<void>
   >(async () => undefined);
+  const adoptInFlightRef = useRef(false);
   adoptCompletedObservationRef.current = async (observation, attempt = 0) => {
+    // One adoption at a time per question: concurrent completed observations
+    // (poll + lifecycle poke) must not fire duplicate adopt requests. The
+    // superseded-result retry recurses with attempt>0 and bypasses the guard.
+    if (attempt === 0 && adoptInFlightRef.current) return;
+    if (attempt === 0) adoptInFlightRef.current = true;
+    try {
     const context = generationRef.current;
     if (
       !context ||
       !context.taskId ||
       !context.conversationId ||
       !context.operationRevision
-    )
+    ) {
+      // Completed upstream but the running context is incomplete: end the
+      // loading state with an adoption-only retry instead of an eternal
+      // "generating" card.
+      const failure = incompleteGenerationContextFailure(generationRef.current);
+      if (failure) setResponseLogicGeneration(scope, questionId, failure);
       return;
+    }
+    // Distinguish "saving the verified result" from "the model is still
+    // generating" while the adopt request is in flight.
+    if (context.phase === "running") {
+      setResponseLogicGeneration(scope, questionId, { ...context, adopting: true });
+    }
     const finish = (completed: boolean) =>
       setResponseLogicGeneration(scope, questionId, {
         ...context,
@@ -1638,6 +1697,9 @@ function ResponseLogicQuestionEditor({
         },
       });
     }
+    } finally {
+      adoptInFlightRef.current = false;
+    }
   };
 
   // Poll the running first-generation task directly under the question.
@@ -1647,6 +1709,36 @@ function ResponseLogicQuestionEditor({
   const pollOperationRevision = generation?.operationRevision;
   const pollStartedAt = generation?.startedAt;
   const pollCompletedAt = generation?.completedAt;
+
+  // Lifecycle recovery: browsers may freeze background-tab timers, silently
+  // stopping polling while the task finishes upstream (observed live on
+  // 2026-10-28: task completed in ~2min, zero status requests from the page).
+  // On focus / pageshow / returning visible, bump a token that restarts the
+  // polling effect below — its first action is an instant status query. The
+  // effect's own cleanup cancels the previous cycle, so repeated events cannot
+  // run concurrent polls or let a stale response overwrite a newer one.
+  const lastLifecyclePokeRef = useRef(0);
+  const [lifecyclePoke, setLifecyclePoke] = useState(0);
+  useEffect(() => {
+    const poke = () => {
+      const now = Date.now();
+      if (!shouldPokePolling(lastLifecyclePokeRef.current, now)) return;
+      lastLifecyclePokeRef.current = now;
+      setLifecyclePoke((token) => token + 1);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") poke();
+    };
+    window.addEventListener("focus", poke);
+    window.addEventListener("pageshow", poke);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", poke);
+      window.removeEventListener("pageshow", poke);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
   useEffect(() => {
     if (pollPhase !== "running") return;
     if (!pollTaskId || !pollConversationId || !pollOperationRevision) return;
@@ -1677,6 +1769,7 @@ function ResponseLogicQuestionEditor({
           setResponseLogicGeneration(scope, questionId, {
             ...current,
             execution: observation.execution,
+            ...(current.degraded ? { degraded: false } : {}),
           });
         }
         schedule(
@@ -1715,6 +1808,18 @@ function ResponseLogicQuestionEditor({
           return;
         }
         failures += 1;
+        // Transient network failures never look like a model failure; after a
+        // few consecutive misses surface a degraded hint while polling safely
+        // continues (never a new task, never a fake terminal state).
+        if (failures >= 5) {
+          const current = generationRef.current;
+          if (current && current.phase === "running" && !current.degraded) {
+            setResponseLogicGeneration(scope, questionId, {
+              ...current,
+              degraded: true,
+            });
+          }
+        }
         schedule(
           getResponseLogicPollDelay(
             Date.now() - (pollStartedAt ?? Date.now()),
@@ -1730,6 +1835,7 @@ function ResponseLogicQuestionEditor({
     };
   }, [
     applyAuthoritativeRecord,
+    lifecyclePoke,
     pollCompletedAt,
     pollConversationId,
     pollOperationRevision,
@@ -1973,8 +2079,14 @@ function ResponseLogicQuestionEditor({
             {generation.phase === "running" && !generation.completedAt ? (
               <>
                 <Loader2 size={15} className="animate-spin" />
-                <strong>正在生成应答逻辑…</strong>
-                <span>生成期间材料与正文修改已冻结</span>
+                <strong>
+                  {generation.adopting ? "正在保存生成结果…" : "正在生成应答逻辑…"}
+                </strong>
+                <span>
+                  {generation.degraded
+                    ? "暂时无法确认任务状态，正在自动重试查询；不会重复创建任务"
+                    : "生成期间材料与正文修改已冻结"}
+                </span>
               </>
             ) : generation.phase === "failed" ? (
               <>
