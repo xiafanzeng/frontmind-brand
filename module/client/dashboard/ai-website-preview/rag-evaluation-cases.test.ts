@@ -20,6 +20,25 @@ describe("synthetic RAG evaluation cases", () => {
     expect(RAG_SAMPLE_CASES.filter((sample) => sample.category === "challenge")).toHaveLength(5);
   });
 
+  it("documents the three-step website design flow without the retired assistant step or source toggle", () => {
+    const workflow = RAG_SAMPLE_CASES.find((sample) => sample.id === "syn-assistant-workflow")!;
+    const visibleCopy = [
+      workflow.answer,
+      workflow.improvement.title,
+      ...workflow.improvement.steps,
+      workflow.improvement.answer,
+      ...workflow.claims.map((claim) => `${claim.text} ${claim.note}`),
+      ...workflow.sources.map((source) => `${source.section} ${source.excerpt}`),
+    ].join("\n");
+
+    expect(visibleCopy).toContain("选择模板、网站设计、建设评估");
+    expect(visibleCopy).toContain("网站基础、页面与栏目、主题颜色和助手设置");
+    expect(visibleCopy).toContain("同一个设计草稿");
+    expect(visibleCopy).not.toContain("确认结构");
+    expect(visibleCopy).not.toContain("来源展示");
+    expect(visibleCopy).not.toContain("四步");
+  });
+
   it.each(expectedCases)("derives $id score and gate conclusion from its judgments", (expected) => {
     const sample = RAG_SAMPLE_CASES.find((item) => item.id === expected.id)!;
     expect(sample).toBeDefined();

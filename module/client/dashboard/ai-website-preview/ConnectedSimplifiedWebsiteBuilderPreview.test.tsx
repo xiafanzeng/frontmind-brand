@@ -38,7 +38,7 @@ vi.mock("./SimplifiedWebsiteBuilderPreview", () => ({
         data-testid="designed-website-builder"
         onClick={() => (props.onOpenSiteOpsRelease as (() => void) | undefined)?.()}
       >
-        四步建站
+        三步建站
       </button>
     );
   },
@@ -53,7 +53,7 @@ describe("connected redesigned website builder", () => {
 
     render(
       <ConnectedSimplifiedWebsiteBuilderPreview
-        initialStep="assistant"
+        initialStep="design"
         onOpenRag={onOpenRag}
         onStepChange={onStepChange}
       />,
@@ -61,7 +61,7 @@ describe("connected redesigned website builder", () => {
 
     expect(screen.getByTestId("designed-website-builder")).toBeTruthy();
     expect(mocks.received).toMatchObject({
-      initialStep: "assistant",
+      initialStep: "design",
       onOpenRag,
       onOpenSiteOpsRelease: expect.any(Function),
       onStepChange,
@@ -78,7 +78,7 @@ describe("connected redesigned website builder", () => {
 
     expect(page.queryByTestId("designed-website-builder")).toBeNull();
     expect(page.getByTestId("established-siteops-panel")).toBeTruthy();
-    fireEvent.click(page.getByRole("button", { name: "返回四步建站" }));
+    fireEvent.click(page.getByRole("button", { name: "返回三步建站" }));
 
     expect(page.queryByTestId("established-siteops-panel")).toBeNull();
     expect(page.getByTestId("designed-website-builder")).toBeTruthy();

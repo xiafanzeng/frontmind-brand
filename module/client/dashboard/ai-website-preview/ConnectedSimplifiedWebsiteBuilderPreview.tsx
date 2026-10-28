@@ -4,11 +4,13 @@ import { useLocation } from "wouter";
 import { useRuntimeContext } from "../../host";
 import {
   SimplifiedWebsiteBuilderPreview,
+  normalizeWebsiteBuildStep,
   type BuildStep,
+  type LegacyBuildStep,
 } from "./SimplifiedWebsiteBuilderPreview";
 
 export type ConnectedSimplifiedWebsiteBuilderPreviewProps = {
-  initialStep?: BuildStep;
+  initialStep?: BuildStep | LegacyBuildStep;
   onOpenRag?: () => void;
   onStepChange?: (step: BuildStep) => void;
   storageScope?: string;
@@ -17,7 +19,7 @@ export type ConnectedSimplifiedWebsiteBuilderPreviewProps = {
 /**
  * Production transport for the redesigned website builder. The established
  * SiteOps controller still owns idempotency, polling, uploads and retries.
- * The controller can switch between the four-step view and its established
+ * The controller can switch between the three-step view and its established
  * Aliyun/domain/release UI without mounting a second transport.
  */
 export default function ConnectedSimplifiedWebsiteBuilderPreview({
@@ -32,7 +34,7 @@ export default function ConnectedSimplifiedWebsiteBuilderPreview({
   const storageScope = explicitStorageScope
     ?? `live:${runtime.accountId}:${runtime.workspaceId}`;
   const openRag = onOpenRag ?? (() => {
-    const returnStep = initialStep ?? "template";
+    const returnStep = normalizeWebsiteBuildStep(initialStep) ?? "template";
     navigate(`/?view=enterprise-qa&returnStep=${returnStep}`);
   });
   const changeStep = onStepChange ?? ((step: BuildStep) => {
@@ -50,7 +52,7 @@ export default function ConnectedSimplifiedWebsiteBuilderPreview({
             className="siteops-secondary-button"
             onClick={() => setShowSiteOpsRelease(false)}
           >
-            返回四步建站
+            返回三步建站
           </button>
         </div>
       )}

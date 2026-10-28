@@ -245,25 +245,25 @@ describe("connected SiteOps design transport", () => {
     mocks.saveDesignPreferences.mockRejectedValueOnce(
       new Error("save boundary reached"),
     );
-    let props: SiteOpsConversationPanelProps | null = null;
+    const propsRef: { current: SiteOpsConversationPanelProps | null } = { current: null };
     render(
       <ConnectedSiteOpsConversationPanel
         render={(value) => {
-          props = value;
+          propsRef.current = value;
           return <div data-testid="connected-design-transport" />;
         }}
       />,
     );
 
     await act(async () => {
-      props?.onRequestDesignRecommendation?.(request);
+      propsRef.current?.onRequestDesignRecommendation?.(request);
     });
     await waitFor(() =>
       expect(mocks.recommendationInput).toEqual(request),
     );
-    expect(props?.designRecommendation?.request).toEqual(request);
+    expect(propsRef.current?.designRecommendation?.request).toEqual(request);
 
-    await expect(props?.onSaveDesignPreferences?.(saveInput)).rejects.toThrow(
+    await expect(propsRef.current?.onSaveDesignPreferences?.(saveInput)).rejects.toThrow(
       "save boundary reached",
     );
     expect(mocks.saveDesignPreferences).toHaveBeenCalledWith(saveInput);
@@ -292,26 +292,26 @@ describe("connected SiteOps design transport", () => {
       latestSequence: 7,
     }));
     mocks.sendMessage.mockResolvedValueOnce(controllerObservation(7));
-    let props: SiteOpsConversationPanelProps | null = null;
+    const propsRef: { current: SiteOpsConversationPanelProps | null } = { current: null };
     render(
       <ConnectedSiteOpsConversationPanel
         render={(value) => {
-          props = value;
+          propsRef.current = value;
           return <div data-testid="connected-design-occ" />;
         }}
       />,
     );
     await waitFor(() =>
-      expect(props?.observation?.project.revision).toBe(5),
+      expect(propsRef.current?.observation?.project.revision).toBe(5),
     );
 
     await act(async () => {
-      await props?.onSaveDesignPreferences?.(saveInput);
+      await propsRef.current?.onSaveDesignPreferences?.(saveInput);
     });
-    expect(props?.observation?.project.revision).toBe(6);
+    expect(propsRef.current?.observation?.project.revision).toBe(6);
 
     await act(async () => {
-      await props?.onAction?.({ action: "approve_build", input: {} });
+      await propsRef.current?.onAction?.({ action: "approve_build", input: {} });
     });
     expect(mocks.actFast).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: saveInput.conversationId,
@@ -320,7 +320,7 @@ describe("connected SiteOps design transport", () => {
     }));
 
     await act(async () => {
-      await props?.onSubmitRevision?.({
+      await propsRef.current?.onSubmitRevision?.({
         text: "请按已保存的网站设计配置生成新版本。",
         files: [],
         onProgress: vi.fn(),

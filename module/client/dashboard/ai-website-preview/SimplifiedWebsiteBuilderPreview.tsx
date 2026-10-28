@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type SetStateAction } from "react";
 import {
   Bot,
   Check,
@@ -21,6 +21,8 @@ import type { SiteOpsConversationPanelProps } from "../siteops/SiteOpsConversati
 import {
   siteDesignPreferencesDraftSchema,
   siteDesignRecommendationMatchesRequest,
+  siteDesignRouteIdSchema,
+  siteDesignTemplateCoordinateSchema,
   type SiteDesignPreferencesDraft,
   type SiteDesignRecommendationInput,
 } from "../../../contracts/site-design-preferences";
@@ -54,12 +56,19 @@ import {
 import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
 import "./simplified-product-preview.css";
 
-export type BuildStep = "template" | "structure" | "assistant" | "evaluation";
+export type BuildStep = "template" | "design" | "evaluation";
+export type LegacyBuildStep = "structure" | "assistant";
 type PreviewDevice = "desktop" | "mobile";
 type SiteLanguage = "zh-CN" | "en-US";
 
+export function normalizeWebsiteBuildStep(value: unknown): BuildStep | null {
+  if (value === "template" || value === "design" || value === "evaluation") return value;
+  if (value === "structure" || value === "assistant") return "design";
+  return null;
+}
+
 export type SimplifiedWebsiteBuilderPreviewProps = {
-  initialStep?: BuildStep;
+  initialStep?: BuildStep | LegacyBuildStep;
   onOpenRag?: () => void;
   /** Opens the established SiteOps UI for Aliyun, domain and release controls. */
   onOpenSiteOpsRelease?: () => void;
@@ -84,9 +93,8 @@ const steps: ReadonlyArray<{
   label: string;
 }> = [
   { id: "template", number: "1", label: "选择模板" },
-  { id: "structure", number: "2", label: "确认结构" },
-  { id: "assistant", number: "3", label: "AI 助手" },
-  { id: "evaluation", number: "4", label: "建设评估" },
+  { id: "design", number: "2", label: "网站设计" },
+  { id: "evaluation", number: "3", label: "建设评估" },
 ];
 
 type EvaluationStatus =
@@ -179,7 +187,7 @@ function draftVersion(value: unknown) {
     hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 16_777_619);
   }
-  return `draft-v1-${(hash >>> 0).toString(16)}`;
+  return `draft-v2-${(hash >>> 0).toString(16)}`;
 }
 
 function scopedStorageKey(key: string, scope?: string) {
@@ -239,11 +247,11 @@ const initialPages = [
 
 export const WEBSITE_DRAFT_STORAGE_KEY = "frontmind.website-builder.draft";
 
-export type WebsiteDraftV1 = {
+type WebsiteDraftV1 = {
   version: 1;
   updatedAt: number;
   confirmed: boolean;
-  completedStepIds: BuildStep[];
+  completedStepIds: Array<BuildStep | LegacyBuildStep>;
   selectedTemplateId: string;
   templateSourceUrl: string;
   disabledPageIds: string[];
@@ -266,30 +274,49 @@ export type WebsiteDraftV1 = {
   };
 };
 
-const defaultDraft = (): WebsiteDraftV1 => ({
-  version: 1,
+export type WebsiteDesignDraft = {
+  siteName: string;
+  siteGoal: string;
+  featuredPageIds: string[];
+  siteAccent: string;
+  assistant: {
+    name: string;
+    welcome: string;
+    accent: string;
+    followSiteAccent: boolean;
+    tested: boolean;
+  };
+};
+
+export type WebsiteDraftV2 = {
+  version: 2;
+  updatedAt: number;
+  confirmed: boolean;
+  completedStepIds: BuildStep[];
+  selectedTemplateId: string;
+  templateSourceUrl: string;
+  design: WebsiteDesignDraft;
+};
+
+const defaultDraft = (): WebsiteDraftV2 => ({
+  version: 2,
   updatedAt: 0,
   confirmed: false,
   completedStepIds: [],
   selectedTemplateId: "help-center",
   templateSourceUrl: "",
-  disabledPageIds: [],
-  brand: {
+  design: {
     siteName: "FrontMind 帮助中心",
     siteGoal: "帮助访客快速找到可信的企业资料、产品与服务答案",
-    siteLanguage: "zh-CN",
-    brandMark: "FM",
-    officialUrl: "",
-    recognized: false,
+    featuredPageIds: initialPages.slice(0, 3).map((page) => page.id),
     siteAccent: "#6f35a5",
-  },
-  assistant: {
-    name: "FrontMind 企业助手",
-    welcome: "您好，我可以根据企业资料回答产品、服务与使用问题。",
-    accent: "#6f35a5",
-    followSiteAccent: true,
-    showSources: true,
-    tested: false,
+    assistant: {
+      name: "FrontMind 企业助手",
+      welcome: "您好，我可以根据企业资料回答产品、服务与使用问题。",
+      accent: "#6f35a5",
+      followSiteAccent: true,
+      tested: false,
+    },
   },
 });
 
@@ -306,7 +333,24 @@ function isHttpUrl(value: string) {
   }
 }
 
-export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV1 {
+function persistedTemplateId(value: unknown) {
+  const parsed = siteDesignTemplateCoordinateSchema.shape.id.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function persistedRouteIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const result: string[] = [];
+  for (const candidate of value) {
+    const parsed = siteDesignRouteIdSchema.safeParse(candidate);
+    if (!parsed.success || result.includes(parsed.data)) continue;
+    result.push(parsed.data);
+    if (result.length === 3) break;
+  }
+  return result;
+}
+
+export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV2 {
   const fallback = defaultDraft();
   if (typeof window === "undefined") return fallback;
 
@@ -316,77 +360,86 @@ export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV1 {
     );
     if (!raw) return fallback;
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed) || parsed.version !== 1) return fallback;
+    if (!isRecord(parsed) || (parsed.version !== 1 && parsed.version !== 2)) return fallback;
 
-    const brand = isRecord(parsed.brand) ? parsed.brand : {};
-    const assistant = isRecord(parsed.assistant) ? parsed.assistant : {};
-    const templateIds = new Set(templates.map((template) => template.id));
+    const legacy = parsed.version === 1;
+    const legacyBrand = legacy && isRecord(parsed.brand) ? parsed.brand : {};
+    const design = !legacy && isRecord(parsed.design) ? parsed.design : {};
+    const assistantValue = legacy ? parsed.assistant : design.assistant;
+    const assistant = isRecord(assistantValue) ? assistantValue : {};
     const pageIds = new Set(initialPages.map((page) => page.id));
     const validAccent = (value: unknown, defaultValue: string) =>
       typeof value === "string" && accentOptions.some((option) => option === value) ? value : defaultValue;
-    const officialUrl = typeof brand.officialUrl === "string" && isHttpUrl(brand.officialUrl) ? brand.officialUrl : "";
     const templateSourceUrl =
       typeof parsed.templateSourceUrl === "string" && isHttpUrl(parsed.templateSourceUrl)
         ? parsed.templateSourceUrl
         : "";
-    const hasValidTemplateSelection = typeof parsed.selectedTemplateId === "string"
-      && templateIds.has(parsed.selectedTemplateId as (typeof templates)[number]["id"]);
-    const selectedTemplateId = hasValidTemplateSelection ? parsed.selectedTemplateId as string : fallback.selectedTemplateId;
-    const disabledPageIds = Array.isArray(parsed.disabledPageIds)
-      ? Array.from(new Set(parsed.disabledPageIds.filter((id): id is string => typeof id === "string" && pageIds.has(id))))
-      : fallback.disabledPageIds;
-    const siteName = typeof brand.siteName === "string" ? brand.siteName.slice(0, 80) : fallback.brand.siteName;
-    const siteGoal = typeof brand.siteGoal === "string" ? brand.siteGoal.slice(0, 200) : fallback.brand.siteGoal;
-    const brandMark = typeof brand.brandMark === "string" ? brand.brandMark.slice(0, 3) : fallback.brand.brandMark;
-    const siteAccent = validAccent(brand.siteAccent, fallback.brand.siteAccent);
-    const assistantName = typeof assistant.name === "string" ? assistant.name.slice(0, 60) : fallback.assistant.name;
-    const assistantWelcome = typeof assistant.welcome === "string" ? assistant.welcome.slice(0, 140) : fallback.assistant.welcome;
-    const assistantAccent = validAccent(assistant.accent, fallback.assistant.accent);
+    // Candidate and route IDs are opaque server-owned identifiers. Validate
+    // them with the same storage-safe bounds as the SiteDesign contract
+    // instead of restricting a live draft to the built-in demo catalog.
+    const parsedTemplateId = persistedTemplateId(parsed.selectedTemplateId);
+    const hasValidTemplateSelection = parsedTemplateId !== null;
+    const selectedTemplateId = parsedTemplateId ?? fallback.selectedTemplateId;
+    const legacyDisabledPageIds = legacy && Array.isArray(parsed.disabledPageIds)
+      ? new Set(parsed.disabledPageIds.filter((id): id is string => typeof id === "string" && pageIds.has(id)))
+      : new Set<string>();
+    const rawFeaturedPageIds = legacy
+      ? initialPages.filter((page) => !legacyDisabledPageIds.has(page.id)).map((page) => page.id)
+      : Array.isArray(design.featuredPageIds) ? design.featuredPageIds : fallback.design.featuredPageIds;
+    const featuredPageIds = legacy
+      ? Array.from(new Set(rawFeaturedPageIds.filter(
+          (id): id is string => typeof id === "string" && pageIds.has(id),
+        ))).slice(0, 3)
+      : persistedRouteIds(rawFeaturedPageIds);
+    const source = legacy ? legacyBrand : design;
+    const siteName = typeof source.siteName === "string" ? source.siteName.slice(0, 80) : fallback.design.siteName;
+    const siteGoal = typeof source.siteGoal === "string" ? source.siteGoal.slice(0, 200) : fallback.design.siteGoal;
+    const siteAccent = validAccent(source.siteAccent, fallback.design.siteAccent);
+    const assistantName = typeof assistant.name === "string" ? assistant.name.slice(0, 80) : fallback.design.assistant.name;
+    const assistantWelcome = typeof assistant.welcome === "string" ? assistant.welcome.slice(0, 500) : fallback.design.assistant.welcome;
+    const assistantAccent = validAccent(assistant.accent, fallback.design.assistant.accent);
     const assistantFollowsSite = typeof assistant.followSiteAccent === "boolean"
       ? assistant.followSiteAccent
       : assistantAccent === siteAccent;
-    const assistantTested = assistant.tested === true && Boolean(assistantName.trim()) && Boolean(assistantWelcome.trim());
-    const validCompletedSteps = new Set<BuildStep>(["template", "structure", "assistant"]);
-    let completedStepIds = Array.isArray(parsed.completedStepIds)
-      ? Array.from(new Set(parsed.completedStepIds.filter(
-          (step): step is BuildStep => typeof step === "string" && validCompletedSteps.has(step as BuildStep),
-        )))
-      : fallback.completedStepIds;
-    const hasEnabledPage = initialPages.some((page) => !disabledPageIds.includes(page.id));
+    // Legacy trial state was not bound to a knowledge/template coordinate, so
+    // preserve its design fields but require one fresh exchange after migration.
+    const assistantTested = !legacy && assistant.tested === true && Boolean(assistantName.trim()) && Boolean(assistantWelcome.trim());
+    const rawCompletedStepIds = Array.isArray(parsed.completedStepIds)
+      ? parsed.completedStepIds.filter((step): step is string => typeof step === "string")
+      : [];
+    let completedStepIds: BuildStep[] = [];
+    if (rawCompletedStepIds.includes("template")) completedStepIds.push("template");
+    if (
+      rawCompletedStepIds.includes("design")
+      || (legacy && rawCompletedStepIds.includes("structure") && rawCompletedStepIds.includes("assistant"))
+    ) completedStepIds.push("design");
+    const hasEnabledPage = featuredPageIds.length > 0;
     if (!hasValidTemplateSelection) completedStepIds = completedStepIds.filter((step) => step !== "template");
-    if (!hasEnabledPage || !siteName.trim() || !brandMark.trim()) {
-      completedStepIds = completedStepIds.filter((step) => step !== "structure");
-    }
-    if (!assistantName.trim() || !assistantWelcome.trim() || !assistantTested) {
-      completedStepIds = completedStepIds.filter((step) => step !== "assistant");
+    if (!hasEnabledPage || !siteName.trim() || !siteGoal.trim() || !assistantName.trim() || !assistantWelcome.trim() || !assistantTested) {
+      completedStepIds = completedStepIds.filter((step) => step !== "design");
     }
     const confirmed = parsed.confirmed === true
-      && ["template", "structure", "assistant"].every((step) => completedStepIds.includes(step as BuildStep));
+      && ["template", "design"].every((step) => completedStepIds.includes(step as BuildStep));
 
     return {
-      version: 1,
+      version: 2,
       updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
       confirmed,
       completedStepIds,
       selectedTemplateId,
       templateSourceUrl,
-      disabledPageIds,
-      brand: {
+      design: {
         siteName,
         siteGoal,
-        siteLanguage: brand.siteLanguage === "en-US" || brand.siteLanguage === "zh-CN" ? brand.siteLanguage : fallback.brand.siteLanguage,
-        brandMark,
-        officialUrl,
-        recognized: Boolean(officialUrl && brand.recognized === true),
+        featuredPageIds,
         siteAccent,
-      },
-      assistant: {
-        name: assistantName,
-        welcome: assistantWelcome,
-        accent: assistantAccent,
-        followSiteAccent: assistantFollowsSite,
-        showSources: typeof assistant.showSources === "boolean" ? assistant.showSources : fallback.assistant.showSources,
-        tested: assistantTested,
+        assistant: {
+          name: assistantName,
+          welcome: assistantWelcome,
+          accent: assistantAccent,
+          followSiteAccent: assistantFollowsSite,
+          tested: assistantTested,
+        },
       },
     };
   } catch {
@@ -394,7 +447,7 @@ export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV1 {
   }
 }
 
-export function saveWebsiteDraft(draft: WebsiteDraftV1, storageScope?: string) {
+export function saveWebsiteDraft(draft: WebsiteDraftV2, storageScope?: string) {
   if (typeof window === "undefined") return false;
   try {
     window.localStorage.setItem(
@@ -446,11 +499,35 @@ type WebsitePageDraft = {
   importanceRank?: number;
   recommendationReason?: string;
 };
+type EditableWebsiteDesignDraft = {
+  pages: WebsitePageDraft[];
+  siteName: string;
+  siteGoal: string;
+  siteAccent: string;
+  assistantName: string;
+  welcome: string;
+  assistantAccent: string;
+  assistantFollowsSite: boolean;
+  assistantTested: boolean;
+};
+
+function resolveStateAction<T>(current: T, next: SetStateAction<T>) {
+  return typeof next === "function"
+    ? (next as (value: T) => T)(current)
+    : next;
+}
+
 type WidgetMessage = {
   id: number;
   from: "visitor" | "assistant";
   text: string;
   sources: string[];
+};
+
+type AssistantExchangeBinding = {
+  designEditSequence: number;
+  assistantName: string;
+  welcome: string;
 };
 
 function resolveAssistantReply(question: string): { text: string; sources: string[] } {
@@ -469,6 +546,7 @@ function MiniSitePreview({
   assistantName,
   brandMark,
   device,
+  exchangeBinding,
   onExchange,
   pages,
   showAssistant,
@@ -484,7 +562,12 @@ function MiniSitePreview({
   assistantName: string;
   brandMark: string;
   device: PreviewDevice;
-  onExchange?: (question: string, answered: boolean) => void;
+  exchangeBinding: AssistantExchangeBinding;
+  onExchange?: (
+    question: string,
+    answered: boolean,
+    binding: AssistantExchangeBinding,
+  ) => void;
   pages: PreviewPage[];
   showAssistant: boolean;
   showSources: boolean;
@@ -532,6 +615,7 @@ function MiniSitePreview({
     const value = raw.trim();
     if (!value || pending) return;
     const reply = resolveAssistantReply(value);
+    const submittedBinding = exchangeBinding;
     setMessages((current) => [...current, { id: messageIdRef.current++, from: "visitor", text: value, sources: [] }]);
     setQuestion("");
     setWidgetOpen(true);
@@ -544,7 +628,7 @@ function MiniSitePreview({
         ...current,
         { id: messageIdRef.current++, from: "assistant", text: reply.text, sources: reply.sources },
       ]);
-      onExchange?.(value, reply.sources.length > 0);
+      onExchange?.(value, reply.sources.length > 0, submittedBinding);
     }, 500);
   };
 
@@ -705,29 +789,80 @@ export function SimplifiedWebsiteBuilderPreview({
   siteOps,
   storageScope,
 }: SimplifiedWebsiteBuilderPreviewProps) {
+  const normalizedInitialStep = normalizeWebsiteBuildStep(initialStep) ?? "template";
   const auditStorage = useMemo(() => scopedEvaluationStorage(storageScope), [storageScope]);
-  const [draftSeed] = useState<WebsiteDraftV1>(() => loadWebsiteDraft(storageScope));
-  const [activeStep, setActiveStep] = useState<BuildStep>(initialStep);
+  const [draftSeed] = useState<WebsiteDraftV2>(() => loadWebsiteDraft(storageScope));
+  const [activeStep, setActiveStep] = useState<BuildStep>(normalizedInitialStep);
   const [isConfirmed, setIsConfirmed] = useState(draftSeed.confirmed);
   const [completedStepIds, setCompletedStepIds] = useState<BuildStep[]>(draftSeed.completedStepIds);
   const [selectedTemplateId, setSelectedTemplateId] = useState(draftSeed.selectedTemplateId);
-  const [pages, setPages] = useState<WebsitePageDraft[]>(() => {
-    const disabledPageIds = new Set(draftSeed.disabledPageIds);
-    return initialPages.map((page) => ({ ...page, enabled: !disabledPageIds.has(page.id) }));
+  const [designDraft, setDesignDraft] = useState<EditableWebsiteDesignDraft>(() => {
+    const featuredPageIds = new Set(draftSeed.design.featuredPageIds);
+    const hasStaticFeaturedPage = initialPages.some((page) => featuredPageIds.has(page.id));
+    const staticFallbackPageIds = new Set(defaultDraft().design.featuredPageIds);
+    return {
+      // Opaque live route IDs are retained in draftSeed for real brief
+      // hydration. Before the real brief arrives, live mode renders no demo
+      // routes. Static mode safely falls back only when a non-empty draft
+      // contains no built-in route; an explicit empty selection stays empty.
+      pages: siteOps
+        ? []
+        : initialPages.map((page) => ({
+            ...page,
+            enabled: draftSeed.design.featuredPageIds.length === 0
+              ? false
+              : hasStaticFeaturedPage
+                ? featuredPageIds.has(page.id)
+                : staticFallbackPageIds.has(page.id),
+          })),
+      siteName: draftSeed.design.siteName,
+      siteGoal: draftSeed.design.siteGoal,
+      siteAccent: draftSeed.design.siteAccent,
+      assistantName: draftSeed.design.assistant.name,
+      welcome: draftSeed.design.assistant.welcome,
+      assistantAccent: draftSeed.design.assistant.accent,
+      assistantFollowsSite: draftSeed.design.assistant.followSiteAccent,
+      assistantTested: draftSeed.design.assistant.tested,
+    };
   });
-  const [siteName, setSiteName] = useState(draftSeed.brand.siteName);
-  const [siteGoal, setSiteGoal] = useState(draftSeed.brand.siteGoal);
-  const [siteLanguage, setSiteLanguage] = useState<SiteLanguage>(draftSeed.brand.siteLanguage);
-  const [brandMark, setBrandMark] = useState(draftSeed.brand.brandMark);
-  const [officialUrl, setOfficialUrl] = useState(draftSeed.brand.officialUrl);
-  const [brandRecognized, setBrandRecognized] = useState(draftSeed.brand.recognized);
-  const [siteAccent, setSiteAccent] = useState(draftSeed.brand.siteAccent);
-  const [assistantName, setAssistantName] = useState(draftSeed.assistant.name);
-  const [welcome, setWelcome] = useState(draftSeed.assistant.welcome);
-  const [assistantAccent, setAssistantAccent] = useState(draftSeed.assistant.accent);
-  const [assistantFollowsSite, setAssistantFollowsSite] = useState(draftSeed.assistant.followSiteAccent);
-  const [assistantTested, setAssistantTested] = useState(draftSeed.assistant.tested);
-  const [showSources, setShowSources] = useState(draftSeed.assistant.showSources);
+  const {
+    pages,
+    siteName,
+    siteGoal,
+    siteAccent,
+    assistantName,
+    welcome,
+    assistantAccent,
+    assistantFollowsSite,
+    assistantTested,
+  } = designDraft;
+  const setPages = useCallback((next: SetStateAction<WebsitePageDraft[]>) => {
+    setDesignDraft((current) => ({ ...current, pages: resolveStateAction(current.pages, next) }));
+  }, []);
+  const setSiteName = useCallback((next: SetStateAction<string>) => {
+    setDesignDraft((current) => ({ ...current, siteName: resolveStateAction(current.siteName, next) }));
+  }, []);
+  const setSiteGoal = useCallback((next: SetStateAction<string>) => {
+    setDesignDraft((current) => ({ ...current, siteGoal: resolveStateAction(current.siteGoal, next) }));
+  }, []);
+  const setSiteAccent = useCallback((next: SetStateAction<string>) => {
+    setDesignDraft((current) => ({ ...current, siteAccent: resolveStateAction(current.siteAccent, next) }));
+  }, []);
+  const setAssistantName = useCallback((next: SetStateAction<string>) => {
+    setDesignDraft((current) => ({ ...current, assistantName: resolveStateAction(current.assistantName, next) }));
+  }, []);
+  const setWelcome = useCallback((next: SetStateAction<string>) => {
+    setDesignDraft((current) => ({ ...current, welcome: resolveStateAction(current.welcome, next) }));
+  }, []);
+  const setAssistantAccent = useCallback((next: SetStateAction<string>) => {
+    setDesignDraft((current) => ({ ...current, assistantAccent: resolveStateAction(current.assistantAccent, next) }));
+  }, []);
+  const setAssistantFollowsSite = useCallback((next: SetStateAction<boolean>) => {
+    setDesignDraft((current) => ({ ...current, assistantFollowsSite: resolveStateAction(current.assistantFollowsSite, next) }));
+  }, []);
+  const setAssistantTested = useCallback((next: SetStateAction<boolean>) => {
+    setDesignDraft((current) => ({ ...current, assistantTested: resolveStateAction(current.assistantTested, next) }));
+  }, []);
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [templateUrl, setTemplateUrl] = useState(draftSeed.templateSourceUrl);
   const [notice, setNotice] = useState("");
@@ -747,6 +882,21 @@ export function SimplifiedWebsiteBuilderPreview({
   const didMountDraftRef = useRef(false);
   const appliedLiveBriefKeyRef = useRef<string | null>(null);
   const designEditSequenceRef = useRef(0);
+  const liveBriefHydrationRef = useRef<{
+    projectId: string;
+    editSequence: number;
+  } | null>(null);
+  const currentAssistantTrialBindingRef = useRef<AssistantExchangeBinding>({
+    designEditSequence: 0,
+    assistantName,
+    welcome,
+  });
+  const assistantTrialBinding: AssistantExchangeBinding = {
+    designEditSequence: designEditSequenceRef.current,
+    assistantName,
+    welcome,
+  };
+  currentAssistantTrialBindingRef.current = assistantTrialBinding;
   const manuallyEditedRecommendationFieldsRef = useRef(
     new Set<"siteName" | "siteGoal" | "featuredRoutes">(),
   );
@@ -816,9 +966,29 @@ export function SimplifiedWebsiteBuilderPreview({
   const isLiveBuilder = Boolean(siteOps);
   const serverSelectedCandidateId = liveCandidates.find((candidate) => candidate.selected)?.id ?? null;
   const templateSelectionOpen = liveObservation?.interactionState === "awaiting_visual_selection";
+  const priorLiveBriefHydration = liveBriefHydrationRef.current;
+  const canHydrateCurrentServerDesign = !priorLiveBriefHydration
+    || priorLiveBriefHydration.projectId !== liveObservation?.project.id
+    || priorLiveBriefHydration.editSequence === designEditSequenceRef.current;
+  const serverDesignTemplate = canHydrateCurrentServerDesign
+    ? liveObservation?.brief?.designPreferences?.template ?? null
+    : null;
+  const serverPreferredCandidateId = serverDesignTemplate
+    ? liveCandidates.find((candidate) =>
+        candidate.templateCoordinate?.id === serverDesignTemplate.id
+        && candidate.templateCoordinate.version === serverDesignTemplate.version,
+      )?.id ?? null
+    : null;
+  const staticSelectedTemplateId = templates.some(
+    (template) => template.id === selectedTemplateId,
+  )
+    ? selectedTemplateId
+    : defaultDraft().selectedTemplateId;
   const effectiveSelectedTemplateId = isLiveBuilder
-    ? serverSelectedCandidateId ?? (templateSelectionOpen ? selectedTemplateId : "")
-    : selectedTemplateId;
+    ? serverPreferredCandidateId
+      ?? serverSelectedCandidateId
+      ?? (templateSelectionOpen ? selectedTemplateId : "")
+    : staticSelectedTemplateId;
   const selectedTemplate = templateOptions.find((template) => template.id === effectiveSelectedTemplateId)
     ?? (!isLiveBuilder || templateSelectionOpen
       ? templateOptions.find((template) => template.executionAdmitted)
@@ -834,8 +1004,6 @@ export function SimplifiedWebsiteBuilderPreview({
       executionAdmissionMode: null,
       executionUnavailableReason: "服务端尚未确认当前构建模板。",
     };
-  const selectedTemplateUsesPreviewFallback =
-    selectedTemplate.executionAdmissionMode === "preview_reference_fallback";
   const latestBuild = liveObservation?.builds[0] ?? null;
   // Only the editable project brief participates in OCC and recommendation
   // suppression. A build-level copy is a frozen historical snapshot and must
@@ -871,13 +1039,6 @@ export function SimplifiedWebsiteBuilderPreview({
   const liveEvaluationObservedAt = liveObservation
     ? siteOpsWebsiteEvaluationObservedAt(liveObservation)
     : null;
-  const selectedTemplatePreviewUrl = useMemo(() => {
-    if (!siteOps || !selectedTemplate.executionAdmitted || !selectedTemplate.previewUrl) return null;
-    const marker = "/style-previews/";
-    const at = selectedTemplate.previewUrl.indexOf(marker);
-    if (at === -1) return null;
-    return `${selectedTemplate.previewUrl.slice(0, at)}/template-previews/${encodeURIComponent(selectedTemplate.id)}`;
-  }, [selectedTemplate.executionAdmitted, selectedTemplate.id, selectedTemplate.previewUrl, siteOps]);
   const liveRevisionEditable = Boolean(
     latestBuild?.id
     && liveObservation
@@ -914,20 +1075,33 @@ export function SimplifiedWebsiteBuilderPreview({
   const completedStepSet = useMemo(() => new Set(completedStepIds), [completedStepIds]);
   const stepIndex = steps.findIndex((step) => step.id === activeStep);
   const effectiveAssistantAccent = assistantFollowsSite ? siteAccent : assistantAccent;
+  const siteLanguage: SiteLanguage = liveObservation?.brief?.primaryLanguage.toLowerCase().startsWith("zh") === false
+    ? "en-US"
+    : "zh-CN";
+  const brandMark = useMemo(() => {
+    const mark = siteName
+      .trim()
+      .split(/\s+/u)
+      .map((part) => part[0])
+      .join("")
+      .slice(0, 3)
+      .toUpperCase();
+    return mark || "AI";
+  }, [siteName]);
+  const showSources = true;
   const previewPages = useMemo(
     () => enabledPages.map((page) => ({ name: page.name, detail: page.detail })),
     [enabledPages],
   );
-  const previewDomain = useMemo(() => {
-    if (officialUrl && isHttpUrl(officialUrl)) {
-      try {
-        return new URL(officialUrl).hostname;
-      } catch {
-        /* fall through */
-      }
-    }
-    return "help.frontmind.example";
-  }, [officialUrl]);
+  const previewDomain = latestGlobalDeployment?.publicUrl
+    ? (() => {
+        try {
+          return new URL(latestGlobalDeployment.publicUrl).hostname;
+        } catch {
+          return "preview.frontmind.example";
+        }
+      })()
+    : liveObservation?.domainState?.displayDomain || "preview.frontmind.example";
   const templateReady = isLiveBuilder
     ? Boolean(
         effectiveSelectedTemplateId
@@ -937,22 +1111,19 @@ export function SimplifiedWebsiteBuilderPreview({
       )
     : Boolean(selectedTemplateId);
   const structureReady = enabledPages.length > 0;
-  const brandReady = Boolean(siteName.trim() && siteGoal.trim() && (isLiveBuilder || brandMark.trim()));
+  const brandReady = Boolean(siteName.trim() && siteGoal.trim());
   const assistantReady = Boolean(assistantName.trim() && welcome.trim());
   // 两种模式都要求在助手预览中完成一次真实问答试用，步骤才算配置完成；
   // SiteOps 真实提交仍按原有时序在试用通过后执行。
   const assistantVerified = assistantReady && assistantTested;
   const templateComplete = templateReady && completedStepSet.has("template");
-  const structureComplete = structureReady && completedStepSet.has("structure");
-  const brandComplete = brandReady && completedStepSet.has("structure");
-  const assistantComplete = assistantVerified && completedStepSet.has("assistant");
-  const canComplete = templateComplete && structureComplete && brandComplete && assistantComplete;
-  const configurationConfirmedCount = [templateComplete, structureComplete, brandComplete, assistantComplete]
+  const designComplete = structureReady && brandReady && assistantVerified && completedStepSet.has("design");
+  const canComplete = templateComplete && designComplete;
+  const configurationConfirmedCount = [templateComplete, structureReady && brandReady && designComplete, assistantVerified && designComplete, canComplete]
     .filter(Boolean).length;
   const completedSteps: Record<BuildStep, boolean> = {
     template: templateComplete,
-    structure: structureComplete && brandComplete,
-    assistant: assistantComplete,
+    design: designComplete,
     evaluation: false,
   };
   const websiteSubject = latestBuild && liveObservation
@@ -967,18 +1138,18 @@ export function SimplifiedWebsiteBuilderPreview({
         version: draftVersion({
           selectedTemplateId: effectiveSelectedTemplateId,
           templateUrl,
-          enabledPageIds: enabledPages.map((page) => page.id),
-          siteName,
-          siteGoal,
-          siteLanguage,
-          brandMark,
-          officialUrl,
-          brandRecognized,
-          siteAccent,
-          assistantName,
-          welcome,
-          assistantAccent: effectiveAssistantAccent,
-          showSources,
+          design: {
+            featuredPageIds: enabledPages.map((page) => page.id),
+            siteName,
+            siteGoal,
+            siteAccent,
+            assistant: {
+              name: assistantName,
+              welcome,
+              accentMode: assistantFollowsSite ? "follow_site" : "custom",
+              customAccent: assistantAccent,
+            },
+          },
         }),
       };
 
@@ -998,46 +1169,67 @@ export function SimplifiedWebsiteBuilderPreview({
   useEffect(() => {
     if (!siteOps || !liveObservation?.brief) return;
     const brief = liveObservation.brief;
-    const briefKey = JSON.stringify(brief);
+    const projectId = liveObservation.project.id;
+    const briefKey = JSON.stringify({ projectId, brief });
     if (appliedLiveBriefKeyRef.current === briefKey) return;
+    const previousHydration = liveBriefHydrationRef.current;
+    const firstHydrationForProject = previousHydration?.projectId !== projectId;
+    // A server echo for an older save must not replace edits made while that
+    // request was pending. The first hydration remains authoritative when the
+    // project already has persisted designPreferences.
+    if (
+      !firstHydrationForProject
+      && previousHydration
+      && designEditSequenceRef.current !== previousHydration.editSequence
+    ) {
+      return;
+    }
     appliedLiveBriefKeyRef.current = briefKey;
     const designPreferences = brief.designPreferences ?? null;
     const featuredRouteIds = new Set(
       designPreferences?.featuredRouteIds ?? [],
     );
-    setPages(brief.routes.map((route) => ({
-      id: route.id,
-      name: route.title,
-      detail: `${route.sourceDocumentIds.length} 个知识来源`,
-      // Do not guess importance on the client. Until the read-only
-      // recommendation arrives, users may explicitly choose up to three.
-      enabled: designPreferences
-        ? featuredRouteIds.has(route.id)
-        : false,
-    })));
-    setSiteName(designPreferences?.siteName ?? brief.companyName);
-    setSiteGoal(designPreferences?.siteGoal ?? brief.conversionGoal);
-    setSiteLanguage(brief.primaryLanguage.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US");
-    if (designPreferences) {
-      setSiteAccent(designPreferences.siteAccent);
-      setAssistantName(designPreferences.assistant.name);
-      setWelcome(designPreferences.assistant.welcome);
-      setAssistantFollowsSite(
-        designPreferences.assistant.accentMode === "follow_site",
+    setDesignDraft((current) => {
+      const localFeaturedRouteIds = new Set(
+        firstHydrationForProject
+          ? draftSeed.design.featuredPageIds
+          : current.pages.filter((page) => page.enabled).map((page) => page.id),
       );
-      setAssistantAccent(
-        designPreferences.assistant.customAccent
-        ?? designPreferences.siteAccent,
-      );
-    }
-    const mark = brief.companyName
-      .split(/\s+/u)
-      .map((part) => part[0])
-      .join("")
-      .slice(0, 3)
-      .toUpperCase();
-    if (mark) setBrandMark(mark);
-  }, [liveObservation?.brief, siteOps]);
+      const nextAssistantName = designPreferences?.assistant.name ?? current.assistantName;
+      const nextWelcome = designPreferences?.assistant.welcome ?? current.welcome;
+      const assistantIdentityChanged =
+        nextAssistantName !== current.assistantName || nextWelcome !== current.welcome;
+      return {
+        ...current,
+        pages: brief.routes.map((route) => ({
+          id: route.id,
+          name: route.title,
+          detail: `${route.sourceDocumentIds.length} 个知识来源`,
+          // Persisted server preferences win. Otherwise retain the route IDs
+          // from the local unified draft until the user saves them.
+          enabled: designPreferences
+            ? featuredRouteIds.has(route.id)
+            : localFeaturedRouteIds.has(route.id),
+        })),
+        siteName: designPreferences?.siteName ?? brief.companyName,
+        siteGoal: designPreferences?.siteGoal ?? brief.conversionGoal,
+        siteAccent: designPreferences?.siteAccent ?? current.siteAccent,
+        assistantName: nextAssistantName,
+        welcome: nextWelcome,
+        assistantFollowsSite: designPreferences
+          ? designPreferences.assistant.accentMode === "follow_site"
+          : current.assistantFollowsSite,
+        // customAccent is intentionally retained while follow_site is active.
+        assistantAccent: designPreferences?.assistant.customAccent
+          ?? current.assistantAccent,
+        assistantTested: assistantIdentityChanged ? false : current.assistantTested,
+      };
+    });
+    liveBriefHydrationRef.current = {
+      projectId,
+      editSequence: designEditSequenceRef.current,
+    };
+  }, [draftSeed.design.featuredPageIds, liveObservation?.brief, liveObservation?.project.id, siteOps]);
 
   useEffect(() => {
     if (!siteOps) return;
@@ -1048,13 +1240,14 @@ export function SimplifiedWebsiteBuilderPreview({
         candidate.id === selectedTemplateId &&
         candidate.executionAdmitted !== false,
     );
-    const nextTemplateId = serverSelectedCandidateId
+    const nextTemplateId = serverPreferredCandidateId
+      ?? serverSelectedCandidateId
       ?? (templateSelectionOpen && !hasSelectableSelection
         ? liveCandidates.find((candidate) => candidate.executionAdmitted !== false)?.id
         : null);
     if (!nextTemplateId || selectedTemplateId === nextTemplateId) return;
     setSelectedTemplateId(nextTemplateId);
-  }, [liveCandidates, selectedTemplateId, serverSelectedCandidateId, siteOps, templateSelectionOpen]);
+  }, [liveCandidates, selectedTemplateId, serverPreferredCandidateId, serverSelectedCandidateId, siteOps, templateSelectionOpen]);
 
   useEffect(() => {
     if (
@@ -1156,32 +1349,33 @@ export function SimplifiedWebsiteBuilderPreview({
       response.previewBlocks.map((block) => [block.routeId, block]),
     );
     const featuredRouteIds = new Set(response.featuredRouteIds);
-    if (!manuallyEditedRecommendationFieldsRef.current.has("featuredRoutes")) {
-      setPages(response.candidates.map((candidate) => {
-        const block = previewBlocksByRoute.get(candidate.id);
-        return {
-          id: candidate.id,
-          name: candidate.title,
-          detail: block?.title
-            ?? `${candidate.evidenceDocumentCount} 个知识来源`,
-          enabled: featuredRouteIds.has(candidate.id),
-          importanceRank: candidate.importanceRank,
-          recommendationReason: candidate.recommendationReason,
-        };
-      }));
-    }
-    // A successful "needs confirmation" response is authoritative about the
-    // absence of trusted evidence. Keep it empty instead of retaining a
-    // server-brief fallback that could look like an AI-backed recommendation.
-    if (!manuallyEditedRecommendationFieldsRef.current.has("siteName")) {
-      setSiteName(response.siteName.value ?? "");
-    }
-    if (!manuallyEditedRecommendationFieldsRef.current.has("siteGoal")) {
-      setSiteGoal(response.siteGoal.value ?? "");
-    }
-    setCompletedStepIds((current) =>
-      current.filter((step) => step !== "structure" && step !== "assistant"),
-    );
+    setDesignDraft((current) => ({
+      ...current,
+      pages: manuallyEditedRecommendationFieldsRef.current.has("featuredRoutes")
+        ? current.pages
+        : response.candidates.map((candidate) => {
+            const block = previewBlocksByRoute.get(candidate.id);
+            return {
+              id: candidate.id,
+              name: candidate.title,
+              detail: block?.title
+                ?? `${candidate.evidenceDocumentCount} 个知识来源`,
+              enabled: featuredRouteIds.has(candidate.id),
+              importanceRank: candidate.importanceRank,
+              recommendationReason: candidate.recommendationReason,
+            };
+          }),
+      // A successful "needs confirmation" response is authoritative about
+      // missing evidence. Empty values remain empty instead of retaining a
+      // server-brief fallback that could look like a recommendation.
+      siteName: manuallyEditedRecommendationFieldsRef.current.has("siteName")
+        ? current.siteName
+        : response.siteName.value ?? "",
+      siteGoal: manuallyEditedRecommendationFieldsRef.current.has("siteGoal")
+        ? current.siteGoal
+        : response.siteGoal.value ?? "",
+    }));
+    setCompletedStepIds((current) => current.filter((step) => step !== "design"));
     setIsConfirmed(false);
     setNotice(
       response.featuredRouteIds.length > 0
@@ -1199,37 +1393,33 @@ export function SimplifiedWebsiteBuilderPreview({
     templateSelectionOpen,
   ]);
 
-  useEffect(() => setActiveStep(initialStep), [initialStep]);
+  useEffect(() => setActiveStep(normalizedInitialStep), [normalizedInitialStep]);
 
   useEffect(() => {
     const saved = saveWebsiteDraft({
-      version: 1,
+      version: 2,
       updatedAt: Date.now(),
       confirmed: isConfirmed,
       completedStepIds,
       selectedTemplateId,
       templateSourceUrl: templateUrl,
-      disabledPageIds: pages.filter((page) => !page.enabled).map((page) => page.id),
-      brand: {
+      design: {
         siteName,
         siteGoal,
-        siteLanguage,
-        brandMark,
-        officialUrl,
-        recognized: brandRecognized,
+        featuredPageIds: pages.filter((page) => page.enabled).map((page) => page.id),
         siteAccent,
-      },
-      assistant: {
-        name: assistantName,
-        welcome,
-        accent: effectiveAssistantAccent,
-        followSiteAccent: assistantFollowsSite,
-        showSources,
-        tested: assistantTested,
+        assistant: {
+          name: assistantName,
+          welcome,
+          // Preserve the last custom color while the UI follows siteAccent.
+          accent: assistantAccent,
+          followSiteAccent: assistantFollowsSite,
+          tested: assistantTested,
+        },
       },
     }, storageScope);
     setStorageAvailable(saved);
-  }, [assistantFollowsSite, assistantName, assistantTested, brandMark, brandRecognized, completedStepIds, effectiveAssistantAccent, isConfirmed, officialUrl, pages, selectedTemplateId, showSources, siteAccent, siteGoal, siteLanguage, siteName, storageScope, templateUrl, welcome]);
+  }, [assistantAccent, assistantFollowsSite, assistantName, assistantTested, completedStepIds, isConfirmed, pages, selectedTemplateId, siteAccent, siteGoal, siteName, storageScope, templateUrl, welcome]);
 
   useEffect(() => {
     if (!didMountDraftRef.current) {
@@ -1237,7 +1427,7 @@ export function SimplifiedWebsiteBuilderPreview({
       return;
     }
     if (isConfirmed) setIsConfirmed(false);
-  }, [assistantFollowsSite, assistantName, brandMark, brandRecognized, completedStepIds, effectiveAssistantAccent, officialUrl, pages, selectedTemplateId, showSources, siteAccent, siteGoal, siteLanguage, siteName, templateUrl, welcome]);
+  }, [assistantAccent, assistantFollowsSite, assistantName, completedStepIds, pages, selectedTemplateId, siteAccent, siteGoal, siteName, templateUrl, welcome]);
 
   const runLiveAction = async (
     key: string,
@@ -1293,41 +1483,6 @@ export function SimplifiedWebsiteBuilderPreview({
         ? "模板参考链接已保存。"
         : "请输入以 http:// 或 https:// 开头的外部模板链接。",
     );
-  };
-
-  const recognizeBrand = (event: FormEvent) => {
-    event.preventDefault();
-    const value = officialUrl.trim();
-    if (!isHttpUrl(value)) {
-      setBrandRecognized(false);
-      setNotice("请输入以 http:// 或 https:// 开头的企业官网 URL。");
-      return;
-    }
-
-    const parsed = new URL(value);
-    const hostname = parsed.hostname.replace(/^www\./i, "");
-    const domainName = hostname.split(".")[0] || "Enterprise";
-    const isFrontMind = /frontmind/i.test(domainName);
-    const displayName = isFrontMind
-      ? "FrontMind"
-      : domainName.replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-    const mark = isFrontMind
-      ? "FM"
-      : displayName.split(/\s+/).map((part) => part[0]).join("").slice(0, 3).toUpperCase();
-
-    manuallyEditedRecommendationFieldsRef.current.add("siteName");
-    invalidateSteps("structure");
-    setOfficialUrl(parsed.toString());
-    setSiteName(`${displayName} 帮助中心`);
-    setBrandMark(mark || "AI");
-    if (!siteOps) {
-      setSiteLanguage(hostname.endsWith(".cn") ? "zh-CN" : siteLanguage);
-    }
-    if (isFrontMind) setSiteAccent("#6f35a5");
-    setBrandRecognized(true);
-    setNotice(siteOps
-      ? "已根据官网 URL 生成一组品牌建议；请核对网站名称、标识和主题色。"
-      : "已根据官网 URL 生成一组品牌建议；请核对网站名称、标识、语言和主题色。" );
   };
 
   const goTo = (step: BuildStep) => {
@@ -1413,14 +1568,29 @@ export function SimplifiedWebsiteBuilderPreview({
       setNotice(selectedCandidate?.executionUnavailableReason || "请选择一个可用于真实生成的模板。");
       return false;
     }
+    const submittedEditSequence = designEditSequenceRef.current;
+    const submissionStillCurrent = () =>
+      designEditSequenceRef.current === submittedEditSequence;
     setLiveAction("configure_and_build");
     setLiveError(null);
     try {
       await saveLiveDesignPreferences();
+      if (!submissionStillCurrent()) {
+        setNotice("保存期间网站设计已更新；新内容已保留，请重新提交后再开始生成。");
+        return false;
+      }
       await siteOps.onAction({
         action: "select_visual",
         input: { sampleId: selectedCandidate.id },
       });
+      if (!submissionStillCurrent()) {
+        setNotice("生成任务提交期间网站设计已更新；当前页面不会将旧草稿标记完成，请重新提交最新设计。");
+        return false;
+      }
+      liveBriefHydrationRef.current = {
+        projectId: liveObservation.project.id,
+        editSequence: submittedEditSequence,
+      };
       setNotice("真实建站配置已保存，已使用所选模板提交生成；页面会同步服务端状态。");
       return true;
     } catch (error) {
@@ -1445,15 +1615,30 @@ export function SimplifiedWebsiteBuilderPreview({
         : "当前真实构建不能提交修改，请等待构建完成或刷新状态后重试。");
       return false;
     }
+    const submittedEditSequence = designEditSequenceRef.current;
+    const submissionStillCurrent = () =>
+      designEditSequenceRef.current === submittedEditSequence;
     setLiveAction("submit_revision");
     setLiveError(null);
     try {
       await saveLiveDesignPreferences();
+      if (!submissionStillCurrent()) {
+        setNotice("保存期间网站设计已更新；新内容已保留，请重新提交最新改版。");
+        return false;
+      }
       await siteOps.onSubmitRevision({
         text: buildLiveSiteOpsRevisionMessage(),
         files: [],
         onProgress: () => undefined,
       });
+      if (!submissionStillCurrent()) {
+        setNotice("改版任务提交期间网站设计已更新；当前页面不会将旧草稿标记完成，请重新提交最新设计。");
+        return false;
+      }
+      liveBriefHydrationRef.current = {
+        projectId: liveObservation.project.id,
+        editSequence: submittedEditSequence,
+      };
       setNotice("真实改版要求已提交；旧预览会保留到新版本完成，页面会同步新的构建状态。");
       return true;
     } catch (error) {
@@ -1470,33 +1655,27 @@ export function SimplifiedWebsiteBuilderPreview({
       setNotice("请先选择一个模板版式。");
       return;
     }
-    if (activeStep === "structure" && (!structureReady || !brandReady)) {
-      setNotice(siteOps
-        ? "请确认真实页面路由，并补充网站名称与站点简介 / 建站目标。"
-        : "请至少保留一个网站栏目，并补充网站名称、站点简介和品牌标识。");
+    if (activeStep === "design" && (!structureReady || !brandReady)) {
+      setNotice("请至少选择一个主栏目，并补充网站名称与站点简介 / 建站目标。");
       return;
     }
-    if (activeStep === "assistant" && !assistantReady) {
+    if (activeStep === "design" && !assistantReady) {
       setNotice("请补充助手名称和欢迎语。");
       return;
     }
-    if (activeStep === "assistant" && siteOps && !structureReady) {
-      setNotice("请至少选择一个真实主栏目后再保存网站设计。可返回页面与栏目列表进行选择。");
-      return;
-    }
-    if (activeStep === "assistant" && !assistantTested) {
-      setNotice("请先在右侧“网站内效果”预览中提问一次并得到回答，完成助手试用后再继续。");
+    if (activeStep === "design" && !assistantTested) {
+      setNotice("请先在右侧统一预览中提问一次并得到回答，完成助手试用后再继续。");
       return;
     }
     if (
-      activeStep === "assistant"
+      activeStep === "design"
       && siteOps
       && liveObservation?.interactionState === "awaiting_visual_selection"
     ) {
       const accepted = await submitLiveConfigurationAndBuild();
       if (!accepted) return;
     }
-    if (activeStep === "assistant" && siteOps && liveRevisionEditable) {
+    if (activeStep === "design" && siteOps && liveRevisionEditable) {
       const accepted = await submitLiveRevision();
       if (!accepted) return;
     }
@@ -1513,7 +1692,7 @@ export function SimplifiedWebsiteBuilderPreview({
       statusLabel: "待核实",
       weight: 20,
       actionLabel: "查看结构",
-      onAction: () => goTo("structure"),
+      onAction: () => goTo("design"),
     },
     {
       id: "website-navigation-contact",
@@ -1523,7 +1702,7 @@ export function SimplifiedWebsiteBuilderPreview({
       statusLabel: "未执行",
       weight: 10,
       actionLabel: "查看结构",
-      onAction: () => goTo("structure"),
+      onAction: () => goTo("design"),
     },
     {
       id: "website-responsive-accessibility",
@@ -1535,7 +1714,7 @@ export function SimplifiedWebsiteBuilderPreview({
       actionLabel: "手机预览",
       onAction: () => {
         setDevice("mobile");
-        goTo("assistant");
+        goTo("design");
       },
     },
   ];
@@ -1550,7 +1729,7 @@ export function SimplifiedWebsiteBuilderPreview({
       weight: 20,
       critical: true,
       actionLabel: "查看知识范围",
-      onAction: onOpenRag ?? (() => goTo("assistant")),
+      onAction: onOpenRag ?? (() => goTo("design")),
     },
     {
       id: "website-public-boundary",
@@ -1561,7 +1740,7 @@ export function SimplifiedWebsiteBuilderPreview({
       weight: 20,
       critical: true,
       actionLabel: "查看来源设置",
-      onAction: onOpenRag ?? (() => goTo("assistant")),
+      onAction: onOpenRag ?? (() => goTo("design")),
     },
   ];
 
@@ -2040,7 +2219,7 @@ export function SimplifiedWebsiteBuilderPreview({
                 <label
                   key={template.id}
                   data-testid="website-template-card"
-                  className={`${template.id === selectedTemplateId ? "is-selected" : ""}${template.executionAdmitted ? "" : " is-disabled"}`}
+                  className={`${template.id === effectiveSelectedTemplateId ? "is-selected" : ""}${template.executionAdmitted ? "" : " is-disabled"}`}
                 >
                   <input
                     type="radio"
@@ -2050,10 +2229,9 @@ export function SimplifiedWebsiteBuilderPreview({
                     disabled={!template.executionAdmitted || liveInteractionPending || Boolean(siteOps && !templateSelectionOpen)}
                     onChange={() => {
                       if (siteOps && !templateSelectionOpen) return;
-                      invalidateSteps("template", "structure");
+                      invalidateSteps("template", "design");
                       setSelectedTemplateId(template.id);
                       setSiteAccent(template.accent);
-                      setBrandRecognized(false);
                     }}
                   />
                   <div className="sfp-template-thumb" style={{ "--sfp-template-accent": template.accent } as CSSProperties}>
@@ -2089,63 +2267,24 @@ export function SimplifiedWebsiteBuilderPreview({
           </div>
         )}
 
-        {activeStep === "structure" && (
+        {activeStep === "design" && (
           <div className="sfp-workspace-grid">
-            <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--structure">
+            <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--design">
               <div className="sfp-section-heading sfp-section-heading--compact">
-                <div><h2>确认网站结构与品牌</h2><p>{siteOps ? "网站名称、建站目标、主栏目与网站/助手配色会保存为结构化网站设计；站点语言由服务端确定。" : "系统已按知识库生成栏目；补充少量品牌信息即可完成网站骨架。"}</p></div>
+                <div><h2>网站设计</h2><p>网站结构、主题与助手共用同一份设计草稿；语言由服务端根据当前知识确定。</p></div>
               </div>
-              <form className="sfp-brand-import" onSubmit={recognizeBrand}>
-                <Globe2 size={19} />
-                <div>
-                  <strong>从企业官网获取品牌建议</strong>
-                </div>
-                <input
-                  type="url"
-                  aria-label="企业官网 URL（生成品牌建议，可选）"
-                  placeholder="https://company.example"
-                  value={officialUrl}
-                  disabled={Boolean(siteOps && !liveConfigurationEditable)}
-                  onChange={(event) => {
-                    invalidateSteps("structure");
-                    setOfficialUrl(event.currentTarget.value);
-                    setBrandRecognized(false);
-                  }}
-                />
-                <button type="submit" disabled={Boolean(siteOps && !liveConfigurationEditable)}>生成建议</button>
-              </form>
+              <div className="sfp-design-section" data-design-section="site">
+                <header><span>1</span><div><h3>网站基础</h3><p>推荐内容来自当前发布知识，您可以继续编辑。</p></div></header>
               <div className="sfp-brand-fields">
                 <label className="sfp-brand-name">
                   <span>网站名称{siteOps && <small>真实 brief 字段</small>}</span>
-                  <input aria-label="网站名称" data-testid="website-site-name" maxLength={80} value={siteName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteName"); invalidateSteps("structure"); setSiteName(event.currentTarget.value); setBrandRecognized(false); }} />
+                  <input aria-label="网站名称" data-testid="website-site-name" maxLength={80} value={siteName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteName"); invalidateSteps("design"); setSiteName(event.currentTarget.value); }} />
                 </label>
                 <label className="sfp-brand-name">
                   <span>站点简介 / 建站目标{siteOps && <small>真实 brief 字段</small>}</span>
-                  <textarea aria-label="站点简介 / 建站目标" data-testid="website-site-goal" maxLength={200} value={siteGoal} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteGoal"); invalidateSteps("structure"); setSiteGoal(event.currentTarget.value); }} />
+                  <textarea aria-label="站点简介 / 建站目标" data-testid="website-site-goal" maxLength={200} value={siteGoal} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteGoal"); invalidateSteps("design"); setSiteGoal(event.currentTarget.value); }} />
                 </label>
-                <label>
-                  <span>Logo / 品牌标识{siteOps && <small>仅本地示意，不进入真实生成协议</small>}</span>
-                  <input aria-label="Logo / 品牌标识" maxLength={3} value={brandMark} onChange={(event) => { invalidateSteps("structure"); setBrandMark(event.currentTarget.value.toUpperCase()); setBrandRecognized(false); }} />
-                </label>
-                {!siteOps && (
-                  <label>
-                    <span>站点语言</span>
-                    <select aria-label="站点语言" value={siteLanguage} onChange={(event) => { invalidateSteps("structure"); setSiteLanguage(event.currentTarget.value as SiteLanguage); setBrandRecognized(false); }}>
-                      <option value="zh-CN">中文（简体）</option>
-                      <option value="en-US">English</option>
-                    </select>
-                  </label>
-                )}
-                <fieldset className="sfp-brand-color">
-                  <legend>网站主题色{siteOps && <small>生成偏好，以真实预览为准</small>}</legend>
-                  <div className="sfp-color-options">
-                    {accentOptions.map((color) => (
-                      <button key={color} type="button" aria-label={`选择网站主题色 ${color}`} aria-pressed={siteAccent === color} style={{ background: color }} onClick={() => { if (siteAccent !== color) invalidateSteps("structure"); setSiteAccent(color); setBrandRecognized(false); }} />
-                    ))}
-                  </div>
-                </fieldset>
               </div>
-              <div className="sfp-source-strip"><FileText size={17} /><span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 示例知识范围"}</strong><small>{siteOps ? `${liveObservation?.brief?.routes.length ?? 0} 个真实页面路由 · 项目版本 ${liveObservation?.project.revision ?? "—"}` : `${previewKnowledgeCollectionCount} 个知识集合已映射为 5 个网站栏目`}</small></span><b>{siteOps ? "真实绑定" : "已关联"}</b></div>
               {siteOps && designRecommendation?.loading && (
                 <p className="sfp-helper" role="status">正在按当前发布知识生成网站名称、建站目标和主栏目推荐…</p>
               )}
@@ -2155,6 +2294,16 @@ export function SimplifiedWebsiteBuilderPreview({
                   <button type="button" onClick={() => siteOps.onRetryDesignRecommendation?.()}>重试推荐</button>
                 </div>
               )}
+              </div>
+
+              <div className="sfp-design-section" data-design-section="pages">
+                <header><span>2</span><div><h3>页面与栏目</h3><p>最多选择三个主栏目，其余真实页面仍保留在列表中。</p></div></header>
+                <div className="sfp-knowledge-summary" data-testid="website-design-knowledge-summary">
+                  <FileText size={17} />
+                  <span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 示例知识范围"}</strong><small>{siteOps ? `项目版本 ${liveObservation?.project.revision ?? "—"} · ${pages.length} 个真实页面` : `${previewKnowledgeCollectionCount} 个知识集合 · ${previewKnowledgeFragmentCount} 个示例片段`}</small></span>
+                </div>
+                <details className="sfp-page-disclosure">
+                  <summary>共 {pages.length} 个栏目，{enabledPages.length} 个启用</summary>
               <div className="sfp-page-list">
                 {pages.map((page, index) => (
                   <div key={page.id} className={!page.enabled ? "is-muted" : ""}>
@@ -2168,16 +2317,12 @@ export function SimplifiedWebsiteBuilderPreview({
                         disabled={Boolean(siteOps && !liveConfigurationEditable)}
                         onChange={(event) => {
                           const enabled = event.currentTarget.checked;
-                          if (
-                            siteOps &&
-                            enabled &&
-                            pages.filter((item) => item.enabled).length >= 3
-                          ) {
+                          if (enabled && enabledPages.length >= 3) {
                             setNotice("主栏目最多选择 3 个；请先取消一个已选栏目再替换。");
                             return;
                           }
                           manuallyEditedRecommendationFieldsRef.current.add("featuredRoutes");
-                          invalidateSteps("structure");
+                          invalidateSteps("design");
                           setPages((current) => current.map((item) => item.id === page.id ? { ...item, enabled } : item));
                         }}
                       />
@@ -2187,74 +2332,82 @@ export function SimplifiedWebsiteBuilderPreview({
                   </div>
                 ))}
               </div>
-              <p className="sfp-helper">{siteOps ? `共 ${pages.length} 个栏目，${enabledPages.length} 个启用；最多选择 3 个主栏目。完整列表和真实来源均来自冻结知识版本。` : "仅控制栏目显示，不修改知识库。"}</p>
-            </section>
-            <section className="sfp-preview-panel sfp-builder-preview-panel">
-              {selectedTemplatePreviewUrl ? (
-                <>
-                  <div className="sfp-preview-heading"><span><strong>{selectedTemplateUsesPreviewFallback ? "安全视觉参考" : "真实模板预览"}</strong><small>{selectedTemplate.name} · {selectedTemplateUsesPreviewFallback ? "基于冻结预览图重建；并非原仓实际构建" : "已准入模板的实际构建"}；网站文案以知识库生成结果为准</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-                  <TemplatePreviewFrame device={device} previewUrl={selectedTemplatePreviewUrl} referenceFallback={selectedTemplateUsesPreviewFallback} templateName={selectedTemplate.name} />
-                </>
-              ) : (
-                <>
-                  <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地配置示意（非真实预览）" : "即时预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个栏目{siteOps ? " · 真实效果请打开上方预览链接" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-                  <MiniSitePreview assistantAccent={effectiveAssistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} pages={previewPages} showAssistant={false} showSources={showSources} siteAccent={siteAccent} siteDomain={previewDomain} siteLanguage={siteLanguage} siteName={siteName} templateId={effectiveSelectedTemplateId} welcome={welcome} />
-                </>
-              )}
-            </section>
-          </div>
-        )}
+                </details>
+              </div>
 
-        {activeStep === "assistant" && (
-          <div className="sfp-workspace-grid">
-            <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--assistant">
-              <div className="sfp-section-heading sfp-section-heading--compact">
-                <div><h2>配置 AI 助手</h2><p>{siteOps ? "名称、欢迎语与主题色会作为真实生成偏好提交；每个真实网站都会内置右下角 AI 助手悬浮窗，问答由真实 RAG 服务提供。" : "配置网站右下角的帮助窗口并直接试用。"}</p></div>
+              <div className="sfp-design-section" data-design-section="theme">
+                <header><span>3</span><div><h3>主题颜色</h3><p>网站与助手颜色会一起出现在右侧统一预览。</p></div></header>
+                <div className="sfp-design-color-grid">
+                  <fieldset>
+                    <legend>网站主题色</legend>
+                    <div className="sfp-color-options">
+                      {accentOptions.map((color) => (
+                        <button key={color} type="button" aria-label={`选择网站主题色 ${color}`} aria-pressed={siteAccent === color} style={{ background: color }} onClick={() => { if (siteAccent === color) return; invalidateSteps("design"); setSiteAccent(color); }} />
+                      ))}
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>助手主题色{assistantFollowsSite ? "（跟随网站）" : "（自定义）"}</legend>
+                    <div className="sfp-color-options">
+                      {accentOptions.map((color) => (
+                        <button key={color} type="button" aria-label={`选择助手主题色 ${color}`} aria-pressed={!assistantFollowsSite && assistantAccent === color} style={{ background: color }} onClick={() => { if (!assistantFollowsSite && assistantAccent === color) return; invalidateSteps("design"); setAssistantAccent(color); setAssistantFollowsSite(false); }} />
+                      ))}
+                    </div>
+                    <label className="sfp-color-follow">
+                      <input type="checkbox" checked={assistantFollowsSite} onChange={(event) => { invalidateSteps("design"); setAssistantFollowsSite(event.currentTarget.checked); }} />
+                      <span><strong>跟随网站主题色</strong><small>切换回自定义时会恢复上一次选择的助手颜色。</small></span>
+                    </label>
+                  </fieldset>
+                </div>
               </div>
-              <div className="sfp-rag-link-card">
-                <span><Bot size={19} /></span>
-                <div><strong>{siteOps ? "企业知识问答入口" : "企业 RAG 示例已关联"}</strong><small>{siteOps ? `${liveObservation?.knowledgeSnapshots[0]?.label ?? "当前发布知识"} · 问答入口仍由真实 RAG 服务提供` : `${previewKnowledgeCollectionCount} 个知识集合 · ${previewKnowledgeFragmentCount} 个示例片段 · 网站端来源${showSources ? "已展示" : "已隐藏"}`}</small></div>
-                <button type="button" onClick={onOpenRag}>{siteOps ? "打开真实企业问答" : "查看 RAG 示例"}</button>
-              </div>
-              <div className="sfp-form-grid">
-                <label><span>助手名称{siteOps && <small>生成偏好</small>}</span><input aria-label="助手名称" data-testid="website-assistant-name" maxLength={60} value={assistantName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("assistant"); setAssistantName(event.currentTarget.value); setAssistantTested(false); }} /></label>
-                <label className="sfp-welcome-field"><span>欢迎语{siteOps && <small>生成偏好，以真实预览为准</small>}</span><textarea aria-label="欢迎语" data-testid="website-assistant-welcome" maxLength={140} value={welcome} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("assistant"); setWelcome(event.currentTarget.value); setAssistantTested(false); }} /></label>
-                <fieldset>
-                  <legend>助手主题色{assistantFollowsSite ? "（跟随网站主题色）" : ""}{siteOps && <small>生成偏好，以真实预览为准</small>}</legend>
-                  <div className="sfp-color-options">
-                    {accentOptions.map((color) => (
-                      <button key={color} type="button" aria-label={`选择助手主题色 ${color}`} aria-pressed={effectiveAssistantAccent === color} style={{ background: color }} onClick={() => { if (effectiveAssistantAccent === color) return; invalidateSteps("assistant"); setAssistantAccent(color); setAssistantFollowsSite(false); }} />
-                    ))}
-                  </div>
-                  <label className="sfp-color-follow">
-                    <input
-                      type="checkbox"
-                      checked={assistantFollowsSite}
-                      onChange={(event) => {
-                        const follow = event.currentTarget.checked;
-                        invalidateSteps("assistant");
-                        setAssistantFollowsSite(follow);
-                        if (follow) setAssistantAccent(siteAccent);
-                      }}
-                    />
-                    <span><strong>跟随网站主题色</strong><small>在第 2 步调整网站主题色时，助手窗口同步使用相同颜色；点选其他颜色可单独自定义</small></span>
-                  </label>
-                </fieldset>
-                <label className="sfp-setting-row"><span><strong>展示回答来源</strong><small>{siteOps ? "真实网站的助手回答始终展示知识来源；此开关仅影响本地示意预览" : "让访客可以核对回答依据"}</small></span><input type="checkbox" checked={showSources} onChange={(event) => { invalidateSteps("assistant"); setShowSources(event.currentTarget.checked); }} /></label>
-              </div>
-              <div className={`sfp-assistant-trial ${assistantTested ? "is-done" : ""}`}>
-                {assistantTested ? <Check size={17} /> : <CircleAlert size={17} />}
-                <span>
-                  <strong>{assistantTested ? "助手试用已完成" : "助手试用未完成"}</strong>
-                  <small>{assistantTested
-                    ? "已在右侧预览中完成一次真实问答；修改名称或欢迎语后需重新试用。"
-                    : "请在右侧“网站内效果”预览中提问一次并得到回答，本步骤才会标记完成。"}</small>
-                </span>
+
+              <div className="sfp-design-section" data-design-section="assistant">
+                <header><span>4</span><div><h3>助手设置</h3><p>助手问答使用同一知识快照，来源按产品策略始终可核对。</p></div></header>
+                <div className="sfp-form-grid">
+                  <label><span>助手名称{siteOps && <small>真实设计字段</small>}</span><input aria-label="助手名称" data-testid="website-assistant-name" maxLength={80} value={assistantName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("design"); setAssistantName(event.currentTarget.value); setAssistantTested(false); }} /></label>
+                  <label className="sfp-welcome-field"><span>欢迎语{siteOps && <small>真实设计字段</small>}</span><textarea aria-label="欢迎语" data-testid="website-assistant-welcome" maxLength={500} value={welcome} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("design"); setWelcome(event.currentTarget.value); setAssistantTested(false); }} /></label>
+                </div>
+                <div className={`sfp-assistant-trial ${assistantTested ? "is-done" : ""}`}>
+                  {assistantTested ? <Check size={17} /> : <CircleAlert size={17} />}
+                  <span>
+                    <strong>{assistantTested ? "助手试用已完成" : "助手试用未完成"}</strong>
+                    <small>{assistantTested
+                      ? "已在右侧统一预览中完成一次问答；修改名称或欢迎语后需重新试用。"
+                      : "请在右侧统一预览中提问一次并得到回答，再进入建设评估。"}</small>
+                  </span>
+                </div>
               </div>
             </section>
-            <section className="sfp-preview-panel sfp-builder-preview-panel">
-              <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地助手示意（非真实预览）" : "网站内效果"}</strong><small>{siteOps ? "真实模板是否采用这些偏好，请以服务端预览为准；这里可实际试用问答" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-              <MiniSitePreview assistantAccent={effectiveAssistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} onExchange={() => setAssistantTested(true)} pages={previewPages} showAssistant showSources={showSources} siteAccent={siteAccent} siteDomain={previewDomain} siteLanguage={siteLanguage} siteName={siteName} templateId={effectiveSelectedTemplateId} welcome={welcome} />
+            <section className="sfp-preview-panel sfp-builder-preview-panel" aria-label="网站与助手统一预览" data-testid="website-design-preview">
+              <div className="sfp-preview-heading"><span><strong>知识驱动统一预览</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? " · 内容来自当前知识投影，最终样式以真实构建预览为准" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+              <MiniSitePreview
+                assistantAccent={effectiveAssistantAccent}
+                assistantName={assistantName}
+                brandMark={brandMark}
+                device={device}
+                exchangeBinding={assistantTrialBinding}
+                onExchange={(_question, answered, submittedBinding) => {
+                  const currentBinding = currentAssistantTrialBindingRef.current;
+                  if (
+                    !answered
+                    || submittedBinding.designEditSequence !== currentBinding.designEditSequence
+                    || submittedBinding.assistantName !== currentBinding.assistantName
+                    || submittedBinding.welcome !== currentBinding.welcome
+                  ) {
+                    return;
+                  }
+                  setAssistantTested(true);
+                }}
+                pages={previewPages}
+                showAssistant
+                showSources={showSources}
+                siteAccent={siteAccent}
+                siteDomain={previewDomain}
+                siteLanguage={siteLanguage}
+                siteName={siteName}
+                templateId={effectiveSelectedTemplateId}
+                welcome={welcome}
+              />
             </section>
           </div>
         )}
@@ -2353,10 +2506,6 @@ export function SimplifiedWebsiteBuilderPreview({
               {renderEvaluationGroup("facts-public-boundary", "企业事实与公开边界", trustBoundaryChecks)}
               {renderEvaluationGroup("flow-release-clarity", "流程与发布说明", flowAndPublishChecks)}
             </section>
-            <aside className="sfp-final-preview">
-              <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地配置示意（非真实预览）" : "当前草稿预览"}</strong><small>{siteOps ? "真实成品请使用上方服务端预览链接核验" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-              <MiniSitePreview assistantAccent={effectiveAssistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} pages={previewPages} showAssistant showSources={showSources} siteAccent={siteAccent} siteDomain={previewDomain} siteLanguage={siteLanguage} siteName={siteName} templateId={effectiveSelectedTemplateId} welcome={welcome} />
-            </aside>
           </div>
         )}
       </div>
@@ -2378,7 +2527,7 @@ export function SimplifiedWebsiteBuilderPreview({
             >
               {isConfirmed ? "草稿已确认" : "确认当前建设草稿"}
             </button>
-            {!canComplete && <span id="sfp-confirmation-requirement" className="sfp-visually-hidden">请先依次确认模板、网站结构与品牌、AI 助手配置。</span>}
+            {!canComplete && <span id="sfp-confirmation-requirement" className="sfp-visually-hidden">请先依次确认模板和网站设计。</span>}
             <button
               type="button"
               className="sfp-button sfp-button--primary"
@@ -2402,7 +2551,7 @@ export function SimplifiedWebsiteBuilderPreview({
           <button
             type="button"
             className="sfp-button sfp-button--primary"
-            data-testid={siteOps && activeStep === "assistant"
+            data-testid={siteOps && activeStep === "design"
               ? templateSelectionOpen
                 ? "website-build-start"
                 : liveRevisionEditable
@@ -2412,16 +2561,16 @@ export function SimplifiedWebsiteBuilderPreview({
             disabled={Boolean(siteOps && (
               liveInteractionPending
               || (activeStep === "template" && !templateReady)
-              || (activeStep === "assistant" && templateSelectionOpen && (!assistantReady || !brandReady || !structureReady))
-              || (activeStep === "assistant" && liveRevisionEditable && (!assistantReady || !brandReady || !structureReady))
+              || (activeStep === "design" && templateSelectionOpen && (!assistantReady || !brandReady || !structureReady))
+              || (activeStep === "design" && liveRevisionEditable && (!assistantReady || !brandReady || !structureReady))
             ))}
             onClick={goNext}
           >
             {siteOps && activeStep === "template"
               ? "继续配置真实 brief"
-              : siteOps && activeStep === "assistant" && templateSelectionOpen
+              : siteOps && activeStep === "design" && templateSelectionOpen
                 ? liveAction === "configure_and_build" ? "正在保存配置并生成…" : "保存真实配置并生成网站"
-                : siteOps && activeStep === "assistant" && liveRevisionEditable
+                : siteOps && activeStep === "design" && liveRevisionEditable
                   ? liveAction === "submit_revision" ? "正在提交修改…" : "提交修改并重新生成"
                 : "继续"}
           </button>
@@ -2457,33 +2606,6 @@ function DevicePicker({ device, onChange }: { device: PreviewDevice; onChange: (
     <div className="sfp-device-picker" aria-label="预览设备">
       <button type="button" aria-label="电脑预览" aria-pressed={device === "desktop"} onClick={() => onChange("desktop")}><Monitor size={16} /></button>
       <button type="button" aria-label="手机预览" aria-pressed={device === "mobile"} onClick={() => onChange("mobile")}><Smartphone size={16} /></button>
-    </div>
-  );
-}
-
-function TemplatePreviewFrame({
-  device,
-  previewUrl,
-  referenceFallback = false,
-  templateName,
-}: {
-  device: PreviewDevice;
-  previewUrl: string;
-  referenceFallback?: boolean;
-  templateName: string;
-}) {
-  return (
-    <div className={`sfp-site-stage sfp-template-preview-stage${device === "mobile" ? " sfp-site-stage--mobile" : ""}`}>
-      <div className="sfp-browser-bar">
-        <span><i /><i /><i /></span>
-        <p>{templateName} · {referenceFallback ? "基于冻结预览图重建" : "真实可执行模板"}</p>
-      </div>
-      <iframe
-        className="sfp-template-preview-frame"
-        src={previewUrl}
-        title={`${templateName} ${referenceFallback ? "安全视觉参考预览" : "真实模板预览"}`}
-        loading="lazy"
-      />
     </div>
   );
 }

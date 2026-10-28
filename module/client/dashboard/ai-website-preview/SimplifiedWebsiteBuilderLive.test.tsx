@@ -4,7 +4,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SiteOpsObservationV1 } from "../../../contracts/siteops-contract";
@@ -36,6 +35,47 @@ const TEMPLATE_COORDINATE = {
   id: "frontmind-help-center",
   version: "frontmind-curated-20261025-v6",
 } as const;
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function seedLiveDesignDraft(input: {
+  scope: string;
+  selectedTemplateId: string;
+  featuredRouteIds: string[];
+}) {
+  window.localStorage.setItem(
+    `${WEBSITE_DRAFT_STORAGE_KEY}.${encodeURIComponent(input.scope)}`,
+    JSON.stringify({
+      version: 2,
+      updatedAt: 123,
+      confirmed: false,
+      completedStepIds: ["template"],
+      selectedTemplateId: input.selectedTemplateId,
+      templateSourceUrl: "",
+      design: {
+        siteName: "本地未提交网站名称",
+        siteGoal: "本地未提交建站目标",
+        featuredPageIds: input.featuredRouteIds,
+        siteAccent: "#6f35a5",
+        assistant: {
+          name: "本地助手",
+          welcome: "您好，我会依据企业知识回答问题。",
+          accent: "#6f35a5",
+          followSiteAccent: true,
+          tested: true,
+        },
+      },
+    }),
+  );
+}
 
 function observation(
   interactionState: "select_snapshot" | "collecting_brief" | "visual_searching",
@@ -238,6 +278,10 @@ function fullCatalogObservation(): SiteOpsObservationV1 {
           ? "verified_normalized_cache" as const
           : "provider_source" as const,
       executionUnavailableReason: null,
+      templateCoordinate: {
+        id: `catalog-template-${catalogPosition}`,
+        version: "frontmind-curated-20261025-v6",
+      },
     };
   });
   return {
@@ -480,11 +524,111 @@ describe("redesigned live website builder setup", () => {
     ) as HTMLInputElement).disabled).toBe(false);
   });
 
+  it("hydrates unsaved live route and template IDs, then lets persisted server design preferences win", async () => {
+    const scope = "live:7:opaque-draft-hydration";
+    const base = recommendableObservation();
+    const firstCandidate = { ...base.visualCandidates[0]!, selected: false };
+    const draftCandidate = {
+      ...firstCandidate,
+      id: "33333333-3333-4333-8333-000000000002",
+      title: "本地草稿模板",
+      previewUrl: "/api/frontmind/v2/siteops/templates/preview-draft",
+      templateCoordinate: {
+        id: "draft-template-coordinate",
+        version: TEMPLATE_COORDINATE.version,
+      },
+    };
+    const withDraftCandidate: SiteOpsObservationV1 = {
+      ...base,
+      visualCandidates: [firstCandidate, draftCandidate],
+    };
+    seedLiveDesignDraft({
+      scope,
+      selectedTemplateId: draftCandidate.id,
+      featuredRouteIds: ["about"],
+    });
+    const baseProps: SiteOpsConversationPanelProps = {
+      observation: withDraftCandidate,
+      onAction: vi.fn(),
+    };
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={baseProps}
+        storageScope={scope}
+      />,
+    );
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("在网站中显示关于我们") as HTMLInputElement).checked).toBe(true);
+      expect(screen.getByText(/本地草稿模板 · 1 个主栏目/)).toBeTruthy();
+    });
+
+    const withServerDesign: SiteOpsObservationV1 = {
+      ...withDraftCandidate,
+      brief: {
+        ...withDraftCandidate.brief!,
+        designPreferences: {
+          schemaVersion: 1,
+          siteName: "服务端已保存网站",
+          siteGoal: "服务端已保存目标",
+          featuredRouteIds: ["home"],
+          siteAccent: "#315b8a",
+          assistant: {
+            name: "服务端助手",
+            welcome: "您好，这是服务端已保存的欢迎语。",
+            accentMode: "follow_site",
+            customAccent: "#315b8a",
+          },
+          knowledgeSnapshot: KNOWLEDGE_COORDINATE,
+          template: TEMPLATE_COORDINATE,
+          designRevision: 2,
+          draftHash: "c".repeat(64),
+        },
+      },
+    };
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ ...baseProps, observation: withServerDesign }}
+        storageScope={scope}
+      />,
+    );
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("服务端已保存网站");
+      expect((screen.getByLabelText("在网站中显示首页") as HTMLInputElement).checked).toBe(true);
+      expect((screen.getByLabelText("在网站中显示关于我们") as HTMLInputElement).checked).toBe(false);
+      expect(screen.getByText(/真实帮助中心模板 · 1 个主栏目/)).toBeTruthy();
+    });
+  });
+
+  it("does not invent demo routes for an opaque live draft before the real brief arrives", () => {
+    const scope = "live:7:opaque-draft-before-brief";
+    seedLiveDesignDraft({
+      scope,
+      selectedTemplateId: "33333333-3333-4333-8333-000000000009",
+      featuredRouteIds: ["home", "products:cloud"],
+    });
+
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ observation: observation("select_snapshot"), onAction: vi.fn() }}
+        storageScope={scope}
+      />,
+    );
+
+    expect(screen.getByText("共 0 个栏目，0 个启用")).toBeTruthy();
+    expect(screen.queryByLabelText("在网站中显示快速开始")).toBeNull();
+    expect(screen.queryByLabelText("在网站中显示首页")).toBeNull();
+  });
+
   it("identifies a preview fallback without presenting it as the original repository build", () => {
     const approved = liveBuildObservation("approved");
     render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="template"
         siteOps={{
           observation: {
             ...approved,
@@ -501,9 +645,11 @@ describe("redesigned live website builder setup", () => {
     );
 
     expect(screen.getByText("安全视觉参考")).toBeTruthy();
-    expect(screen.getByText(/基于冻结预览图重建；并非原仓实际构建/)).toBeTruthy();
+    expect(screen.getByText(/基于冻结预览图重建，不代表原仓源码的实际构建/)).toBeTruthy();
     expect(screen.queryByText(/已准入模板的实际构建/)).toBeNull();
-    expect(screen.getByTitle("真实帮助中心模板 安全视觉参考预览")).toBeTruthy();
+    expect(
+      screen.getByTestId("website-template-card").querySelector("img")?.getAttribute("src"),
+    ).toBe("/api/site-ops/style-previews/33333333-3333-4333-8333-333333333333");
   });
 
   it("requests source-backed recommendations and allows replacing at most three featured routes", async () => {
@@ -516,7 +662,7 @@ describe("redesigned live website builder setup", () => {
     };
     const view = render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={baseProps}
         storageScope="live:7:recommendation"
       />,
@@ -539,7 +685,7 @@ describe("redesigned live website builder setup", () => {
     expect(request).toBeTruthy();
     view.rerender(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={{
           ...baseProps,
           designRecommendation: {
@@ -557,7 +703,7 @@ describe("redesigned live website builder setup", () => {
       expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
         .toBe("远山企业官网"),
     );
-    expect(screen.getByText("共 4 个栏目，3 个启用；最多选择 3 个主栏目。完整列表和真实来源均来自冻结知识版本。")).toBeTruthy();
+    expect(screen.getByText("共 4 个栏目，3 个启用")).toBeTruthy();
     expect(screen.getAllByText("首页真实内容").length).toBeGreaterThan(0);
     expect(
       ["首页", "产品与服务", "联系我们", "关于我们"].filter(
@@ -610,7 +756,7 @@ describe("redesigned live website builder setup", () => {
     const onRequestDesignRecommendation = vi.fn();
     render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={{
           observation: frozenOnly,
           onAction: vi.fn(),
@@ -641,7 +787,7 @@ describe("redesigned live website builder setup", () => {
     };
     const view = render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={baseProps}
         storageScope="live:7:dirty-recommendation"
       />,
@@ -657,7 +803,7 @@ describe("redesigned live website builder setup", () => {
 
     view.rerender(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={{
           ...baseProps,
           designRecommendation: {
@@ -688,7 +834,7 @@ describe("redesigned live website builder setup", () => {
     };
     const view = render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={baseProps}
         storageScope="live:7:coordinate-stale-recommendation"
       />,
@@ -700,19 +846,21 @@ describe("redesigned live website builder setup", () => {
       SiteDesignRecommendationInput;
     const movedObservation: SiteOpsObservationV1 = {
       ...current,
-      knowledgeSnapshots: current.knowledgeSnapshots.map((snapshot) => ({
-        ...snapshot,
-        coordinate: {
-          ...snapshot.coordinate,
-          version: snapshot.coordinate.version + 1,
-          archiveHash: "c".repeat(64),
-        },
-      })),
+      knowledgeSnapshots: current.knowledgeSnapshots.map((snapshot) => snapshot.coordinate
+        ? {
+            ...snapshot,
+            coordinate: {
+              ...snapshot.coordinate,
+              version: snapshot.coordinate.version + 1,
+              archiveHash: "c".repeat(64),
+            },
+          }
+        : snapshot),
     };
 
     view.rerender(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={{
           ...baseProps,
           observation: movedObservation,
@@ -747,7 +895,7 @@ describe("redesigned live website builder setup", () => {
     };
     const view = render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={baseProps}
         storageScope="live:7:failed-recommendation"
       />,
@@ -762,7 +910,7 @@ describe("redesigned live website builder setup", () => {
     });
     view.rerender(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={{
           ...baseProps,
           designRecommendation: {
@@ -791,7 +939,9 @@ describe("redesigned live website builder setup", () => {
     const events: string[] = [];
     const waiting = liveBuildObservation("awaiting_visual_selection");
     const onAction = vi.fn(async () => { events.push("select"); });
-    const onSaveDesignPreferences = vi.fn(async () => {
+    const onSaveDesignPreferences = vi.fn(async (
+      _input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSaveDesignPreferences"]>>[0],
+    ) => {
       events.push("save");
       return {
         ...waiting,
@@ -822,9 +972,7 @@ describe("redesigned live website builder setup", () => {
     });
     fireEvent.click(screen.getByLabelText("在网站中显示帮助中心"));
     fireEvent.click(screen.getByRole("button", { name: "选择网站主题色 #315b8a" }));
-    expect(screen.getByText("仅本地示意，不进入真实生成协议")).toBeTruthy();
     expect(screen.queryByLabelText("站点语言")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
 
     fireEvent.change(screen.getByLabelText("助手名称"), {
       target: { value: "远山智能助手" },
@@ -832,8 +980,9 @@ describe("redesigned live website builder setup", () => {
     fireEvent.change(screen.getByLabelText("欢迎语"), {
       target: { value: "您好，我会依据企业知识为您解答。" },
     });
-    expect(screen.getByText("真实网站的助手回答始终展示知识来源；此开关仅影响本地示意预览")).toBeTruthy();
-    // 助手步骤必须先完成一次真实问答试用，才能保存配置并开始生成。
+    expect(screen.getByTestId("website-design-preview")).toBeTruthy();
+    expect(screen.queryByLabelText(/展示回答来源/)).toBeNull();
+    // 统一的网站设计步骤必须先完成一次真实问答试用，才能保存配置并开始生成。
     fireEvent.click(screen.getByTestId("website-build-start"));
     expect(screen.getByText(/完成助手试用后再继续/)).toBeTruthy();
     expect(onSaveDesignPreferences).not.toHaveBeenCalled();
@@ -876,11 +1025,85 @@ describe("redesigned live website builder setup", () => {
     expect(events).toEqual(["save", "select"]);
   });
 
+  it("keeps edits made during a pending save and does not build or advance an older design", async () => {
+    const scope = "live:7:pending-save-race";
+    const waiting = liveBuildObservation("awaiting_visual_selection");
+    seedLiveDesignDraft({
+      scope,
+      selectedTemplateId: waiting.visualCandidates[0]!.id,
+      featuredRouteIds: ["help"],
+    });
+    const saveRequest = deferred<SiteOpsObservationV1>();
+    const onSaveDesignPreferences = vi.fn((
+      _input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSaveDesignPreferences"]>>[0],
+    ) => saveRequest.promise);
+    const onAction = vi.fn(async () => undefined);
+    const onStepChange = vi.fn();
+    const baseProps: SiteOpsConversationPanelProps = {
+      observation: waiting,
+      onAction,
+      onSaveDesignPreferences,
+    };
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        onStepChange={onStepChange}
+        siteOps={baseProps}
+        storageScope={scope}
+      />,
+    );
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("在网站中显示帮助中心") as HTMLInputElement).checked).toBe(true),
+    );
+    fireEvent.click(screen.getByTestId("website-build-start"));
+    await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText("网站名称"), {
+      target: { value: "保存期间继续编辑的网站名称" },
+    });
+    const submitted = onSaveDesignPreferences.mock.calls[0]![0];
+    const echoedObservation: SiteOpsObservationV1 = {
+      ...waiting,
+      project: { ...waiting.project, revision: waiting.project.revision + 1 },
+      brief: {
+        ...waiting.brief!,
+        designPreferences: {
+          ...submitted.draft,
+          designRevision: 1,
+          draftHash: "d".repeat(64),
+        },
+      },
+    };
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        onStepChange={onStepChange}
+        siteOps={{ ...baseProps, observation: echoedObservation }}
+        storageScope={scope}
+      />,
+    );
+    expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
+      .toBe("保存期间继续编辑的网站名称");
+
+    saveRequest.resolve(echoedObservation);
+    await waitFor(() =>
+      expect(screen.getByText(/保存期间网站设计已更新/)).toBeTruthy(),
+    );
+    expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
+      .toBe("保存期间继续编辑的网站名称");
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onStepChange).not.toHaveBeenCalledWith("evaluation");
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+  });
+
   it("submits an existing real build revision without selecting or publishing again", async () => {
     const approved = liveBuildObservation("approved");
     const events: string[] = [];
     const onAction = vi.fn(async () => undefined);
-    const onSaveDesignPreferences = vi.fn(async () => {
+    const onSaveDesignPreferences = vi.fn(async (
+      _input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSaveDesignPreferences"]>>[0],
+    ) => {
       events.push("save");
       return {
         ...approved,
@@ -892,7 +1115,7 @@ describe("redesigned live website builder setup", () => {
     ) => { events.push("revision"); });
     render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={{
           observation: approved,
           onAction,
@@ -910,8 +1133,6 @@ describe("redesigned live website builder setup", () => {
     fireEvent.change(siteName, { target: { value: "远山帮助中心改版" } });
     fireEvent.change(siteGoal, { target: { value: "让客户更快完成真实自助排障" } });
     fireEvent.click(screen.getByLabelText("在网站中显示帮助中心"));
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
-
     const assistantName = screen.getByTestId("website-assistant-name") as HTMLInputElement;
     const welcome = screen.getByTestId("website-assistant-welcome") as HTMLTextAreaElement;
     expect(assistantName.disabled).toBe(false);
@@ -945,14 +1166,65 @@ describe("redesigned live website builder setup", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("blocks direct assistant navigation when no real featured route exists", async () => {
+  it("does not advance or complete an older revision when the design changes while submission is pending", async () => {
+    const scope = "live:7:pending-revision-race";
+    const approved = liveBuildObservation("approved");
+    seedLiveDesignDraft({
+      scope,
+      selectedTemplateId: approved.visualCandidates[0]!.id,
+      featuredRouteIds: ["help"],
+    });
+    const revisionRequest = deferred<void>();
+    const onSaveDesignPreferences = vi.fn(async (
+      _input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSaveDesignPreferences"]>>[0],
+    ) => approved);
+    const onSubmitRevision = vi.fn((
+      _input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSubmitRevision"]>>[0],
+    ) => revisionRequest.promise);
+    const onStepChange = vi.fn();
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        onStepChange={onStepChange}
+        siteOps={{
+          observation: approved,
+          onAction: vi.fn(),
+          onSaveDesignPreferences,
+          onSubmitRevision,
+        }}
+        storageScope={scope}
+      />,
+    );
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("在网站中显示帮助中心") as HTMLInputElement).checked).toBe(true),
+    );
+    fireEvent.click(screen.getByTestId("website-revision-submit"));
+    await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText("站点简介 / 建站目标"), {
+      target: { value: "改版提交期间继续编辑的新目标" },
+    });
+    revisionRequest.resolve(undefined);
+
+    await waitFor(() =>
+      expect(screen.getByText(/改版任务提交期间网站设计已更新/)).toBeTruthy(),
+    );
+    expect((screen.getByLabelText("站点简介 / 建站目标") as HTMLTextAreaElement).value)
+      .toBe("改版提交期间继续编辑的新目标");
+    expect(onStepChange).not.toHaveBeenCalledWith("evaluation");
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+    expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(1);
+  });
+
+  it("blocks direct design navigation when no real featured route exists", async () => {
     const onAction = vi.fn(async () => undefined);
     const onSubmitRevision = vi.fn(async () => undefined);
     const onSaveDesignPreferences = vi.fn(async () =>
       liveBuildObservation("awaiting_visual_selection"));
     render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="assistant"
+        initialStep="design"
         siteOps={{
           observation: liveBuildObservation("awaiting_visual_selection"),
           onAction,
@@ -984,7 +1256,7 @@ describe("redesigned live website builder setup", () => {
   it("keeps the color pickers and the follow toggle usable in every live state", () => {
     render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="assistant"
+        initialStep="design"
         siteOps={{ observation: observation("visual_searching") }}
         storageScope="live:7:workspace-a"
       />,
@@ -995,17 +1267,21 @@ describe("redesigned live website builder setup", () => {
     ).toBe(false);
     expect((screen.getByLabelText(/跟随网站主题色/) as HTMLInputElement).disabled).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: /确认结构$/ }));
     expect(
       (screen.getByRole("button", { name: "选择网站主题色 #3e6b57" }) as HTMLButtonElement).disabled,
     ).toBe(false);
-    // 默认跟随：改网站主题色后，助手色同步变化。
+    // 默认跟随：网站色与助手色保留在同一个设计草稿与同一页面。
     fireEvent.click(screen.getByRole("button", { name: "选择网站主题色 #3e6b57" }));
-    fireEvent.click(
-      within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /AI 助手$/ }),
-    );
     expect(
-      screen.getByRole("button", { name: "选择助手主题色 #3e6b57" }).getAttribute("aria-pressed"),
+      screen.getByRole("button", { name: "选择网站主题色 #3e6b57" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.getByRole("group", { name: "助手主题色（跟随网站）" })).toBeTruthy();
+    const followToggle = screen.getByLabelText(/跟随网站主题色/) as HTMLInputElement;
+    expect(followToggle.checked).toBe(true);
+    fireEvent.click(followToggle);
+    fireEvent.click(screen.getByRole("button", { name: "选择助手主题色 #a44f25" }));
+    expect(
+      screen.getByRole("button", { name: "选择助手主题色 #a44f25" }).getAttribute("aria-pressed"),
     ).toBe("true");
   });
 
@@ -1085,7 +1361,7 @@ describe("redesigned live website builder setup", () => {
 
     render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="structure"
+        initialStep="design"
         siteOps={{ observation: observation("select_snapshot") }}
         storageScope="live:7:workspace-a"
       />,

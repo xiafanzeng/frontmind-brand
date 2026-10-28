@@ -120,7 +120,7 @@ describe("ModuleWorkspace redesigned live routes", () => {
         preview={false}
         previewSiteOps={<div data-testid="fixture-website" />}
         websiteBuilderNavigation={{
-          initialStep: "assistant",
+          initialStep: "design",
           onOpenRag,
           onStepChange,
         }}
@@ -130,7 +130,7 @@ describe("ModuleWorkspace redesigned live routes", () => {
     expect(screen.getByTestId("live-designed-website")).toBeTruthy();
     expect(screen.queryByTestId("fixture-website")).toBeNull();
     expect(mocks.websiteProps).toMatchObject({
-      initialStep: "assistant",
+      initialStep: "design",
       onOpenRag,
       onStepChange,
       storageScope: "live:1:workspace-1",

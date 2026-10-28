@@ -18,8 +18,8 @@ import { chromium } from "playwright";
  * Credentials are accepted only
  * through environment variables and are never printed. Template selection
  * defaults to /help|帮助中心/ and can be narrowed with
- * FRONTMIND_ACCEPTANCE_TEMPLATE_PATTERN. Site/assistant fields can be set with
- * FRONTMIND_ACCEPTANCE_SITE_NAME, FRONTMIND_ACCEPTANCE_SITE_GOAL,
+ * FRONTMIND_ACCEPTANCE_TEMPLATE_PATTERN. Unified website-design fields can be
+ * set with FRONTMIND_ACCEPTANCE_SITE_NAME, FRONTMIND_ACCEPTANCE_SITE_GOAL,
  * FRONTMIND_ACCEPTANCE_ASSISTANT_NAME and FRONTMIND_ACCEPTANCE_WELCOME.
  */
 
@@ -257,11 +257,13 @@ async function configureDesignFields(page, { revision }) {
   }
   await siteNameInput.fill(siteName);
   await siteGoalInput.fill(siteGoal);
-  await page.getByRole("button", { name: "继续", exact: true }).last().click();
 
   const assistantNameInput = page.getByTestId("website-assistant-name");
   const welcomeInput = page.getByTestId("website-assistant-welcome");
-  await expectVisible(assistantNameInput, "The real assistant configuration step did not open");
+  await expectVisible(
+    assistantNameInput,
+    "The unified website-design form did not expose assistant settings",
+  );
   if (await assistantNameInput.isDisabled() || await welcomeInput.isDisabled()) {
     throw new Error("The real assistant revision fields are unexpectedly locked");
   }
@@ -282,6 +284,18 @@ async function configureDesignFields(page, { revision }) {
   }
   await assistantNameInput.fill(assistantName);
   await welcomeInput.fill(welcome);
+
+  const trialQuestion = page.getByLabel("在网站助手中提问");
+  await expectVisible(
+    trialQuestion,
+    "The unified website-and-assistant preview did not open",
+  );
+  await trialQuestion.fill("FrontMind 可以帮企业做什么？");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  await expectVisible(
+    page.getByText("助手试用已完成", { exact: true }),
+    "The unified preview did not complete the required assistant trial",
+  );
   return { assistantName, siteGoal, siteName, welcome };
 }
 
@@ -622,7 +636,7 @@ try {
           "--execute-site-revision requires an existing real build; use --execute-site for the first build",
         );
       }
-      await page.getByRole("button", { name: /确认结构/u }).click();
+      await page.getByRole("button", { name: /网站设计/u }).click();
       submittedConfiguration = await configureDesignFields(page, { revision: true });
       const revise = page.getByTestId("website-revision-submit");
       await expectVisible(
