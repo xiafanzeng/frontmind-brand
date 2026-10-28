@@ -208,10 +208,11 @@ export default function ManagedKeywordTables({
 }: ManagedKeywordTablesProps) {
   const { isWorkbench } = useBusinessWorkspace();
   const utils = trpc.useUtils();
-  const [sourceView,setSourceView]=useState<"recommended"|"saved"|"history">(generationEnabled?"recommended":"saved");
+  const [sourceView,setSourceView]=useState<"recommended"|"saved">(generationEnabled?"recommended":"saved");
+  const [sourceFilter,setSourceFilter]=useState<"all"|"recommended"|"history">("all");
   const recommendedTables = useMemo(() => tables.filter(table => table.id === "question-template-api:v1"), [tables]);
   const historyTables = useMemo(() => tables.filter(table => table.id !== "question-template-api:v1"), [tables]);
-  const sourceTables = generationEnabled ? sourceView === "history" ? historyTables : recommendedTables : tables;
+  const sourceTables = generationEnabled ? sourceFilter === "history" ? historyTables : sourceFilter === "recommended" ? recommendedTables : tables : tables;
   const recommendedCount = recommendedTables.reduce((total, table) => total + table.rows.length, 0);
   const historyCount = historyTables.reduce((total, table) => total + table.rows.length, 0);
   // The confirmation modal is pure ephemeral UI state: it must stay closed on
@@ -245,7 +246,7 @@ export default function ManagedKeywordTables({
     readFlowString,
   );
   const keyword = searchTerm.trim().toLowerCase();
-  function openSource(source: "recommended" | "saved" | "history") {
+  function openSource(source: "recommended" | "saved") {
     setSourceView(source); setTableFilter("all"); setCategoryFilter("all");
     setSubdivisionFilter("all"); setSearchTerm(""); setPages({});
   }
@@ -371,14 +372,23 @@ export default function ManagedKeywordTables({
       )}
       {generationEnabled && (
         <nav className="qt-source-tabs" aria-label="词条来源">
-          <button type="button" aria-pressed={sourceView==="recommended"} onClick={()=>openSource("recommended")}>推荐新词条<span>生成后直接加入优化</span></button>
-          <button type="button" aria-pressed={sourceView==="saved"} onClick={()=>openSource("saved")}>已保存推荐 <b>{recommendedCount}</b><span>经勾选保存的 API 推荐问题</span></button>
-          <button type="button" aria-pressed={sourceView==="history"} onClick={()=>openSource("history")}>历史词库 <b>{historyCount}</b><span>以前保存的词库，非本次推荐</span></button>
+          <button type="button" aria-pressed={sourceView==="recommended"} onClick={()=>openSource("recommended")}>生成新词条</button>
+          <button type="button" aria-pressed={sourceView==="saved"} onClick={()=>openSource("saved")}>已保存词条 <b>{totalRows}</b></button>
         </nav>
       )}
       {generationEnabled && (
         <div hidden={sourceView!=="recommended"}><QuestionTemplateApiFlow onSaved={() => utils.workspace.dashboard.invalidate()} onOptimize={onUseQuestions ?? (onUseQuestion ? items => {if(items[0])onUseQuestion(items[0]);} : undefined)} /></div>
       )}
+      {generationEnabled && sourceView === "saved" && <label className="keyword-source-filter">词条来源
+        <select aria-label="词条来源" value={sourceFilter} onChange={event => {
+          setSourceFilter(event.target.value as typeof sourceFilter);
+          setTableFilter("all"); setCategoryFilter("all"); setSubdivisionFilter("all"); setSearchTerm(""); setPages({});
+        }}>
+          <option value="all">全部来源（{totalRows}）</option>
+          <option value="recommended">已保存推荐（{recommendedCount}）</option>
+          <option value="history">历史词库（{historyCount}）</option>
+        </select>
+      </label>}
       {(!generationEnabled || sourceView!=="recommended") && (sourceTables.length === 0 ? (
         loading ? (
           <KeywordEmptyPanel
@@ -395,10 +405,10 @@ export default function ManagedKeywordTables({
             title="品牌全域词库正在准备中"
             description="内容发布后会自动显示在这里。"
           />
-        ) : <KeywordEmptyPanel title={sourceView === "history" ? "暂无历史词库" : "尚未保存推荐问题"} description="先生成推荐问题并勾选保存，即可在这里查看。"/>
+        ) : <KeywordEmptyPanel title={sourceFilter === "history" ? "暂无历史词库" : "尚未保存词条"} description="先生成推荐问题并勾选保存，即可在这里查看。"/>
       ) : (
         <>
-          {generationEnabled && <p className="keyword-source-note">{sourceView === "history" ? "这里保留以前的词库记录，不属于本次核心词推荐；仍可选择问题继续优化。" : "这里只显示通过核心词推荐流程勾选保存的问题，可能包含多次保存。已评估的问题可直接查看结果。"}</p>}
+          {generationEnabled && <p className="keyword-source-note">按来源查看已保存词条；历史词库保留原有记录，已评估的问题可点击评分查看。</p>}
           {onUseQuestions && batchItems.length > 0 && (
             <div className="keyword-batch-actions" role="status">
               <span>已选择 <strong>{batchItems.length}</strong> 条问题</span>
@@ -514,7 +524,7 @@ export default function ManagedKeywordTables({
                 : table.rows;
               return (
                 <KeywordPanel
-                  title={generationEnabled && sourceView === "history" ? `历史词库 · ${table.title}` : table.title}
+                  title={generationEnabled && table.id !== "question-template-api:v1" ? `历史词库 · ${table.title}` : table.title}
                   key={table.id}
                   actions={
                     <span className="entity-count">
@@ -572,7 +582,7 @@ export default function ManagedKeywordTables({
                                       return next;
                                     });
                                   }}/>{batchSelection[`${table.id}:${rowIndex}`] ? "已选择" : "选择词条"}</label>
-                                {evaluation && linked && onViewEvaluation ? <><small>价值 {evaluation.value} · 支撑 {evaluation.support}</small><button type="button" onClick={() => onViewEvaluation(linked.id)}>查看已有评估</button></> :
+                                {evaluation && linked && onViewEvaluation ? <button type="button" className="iw-score-link" aria-label={`查看评估：${question}`} onClick={() => onViewEvaluation(linked.id)}>价值 {evaluation.value} · 支撑 {evaluation.support}</button> :
                                   <small>{!optimizationState ? "优化状态尚未读取" : linked ? "已在优化清单 · 待评估" : "尚未加入优化"}</small>}
                               </td>}
                               {table.displayColumns.map(
