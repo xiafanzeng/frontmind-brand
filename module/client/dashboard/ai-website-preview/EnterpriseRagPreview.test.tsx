@@ -288,7 +288,10 @@ describe("enterprise RAG evidence-based review UI", () => {
         "自动评估已完成",
       ),
     );
-    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93");
+    const score = screen.getByTestId("rag-evaluation-score");
+    expect(score.textContent).toBe("93/100");
+    expect(score.classList.contains("is-ready")).toBe(true);
+    expect(screen.queryByText("服务端不可变报告")).toBeNull();
     expect(screen.getAllByTestId("rag-evaluation-dimension")).toHaveLength(6);
 
     fireEvent.click(screen.getByRole("button", { name: "查看回答依据" }));
@@ -329,6 +332,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
     expect(records.getByText("服务端自动评估记录")).toBeTruthy();
+    expect(records.getByLabelText("六维诊断评分 93，满分 100").textContent).toBe("93/100");
     expect(records.getByText(/报告：evaluation-report-1/)).toBeTruthy();
     expect(records.getByText(/人工复核不改变服务端自动报告/)).toBeTruthy();
   });
@@ -767,7 +771,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.queryByText(previewRagAnswer)).toBeNull();
     expect(screen.getByText(/尚无待评估回答/)).toBeTruthy();
     expect(screen.getByText(/此问题不在示例库/).textContent).toContain("未连接真实问答服务");
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
+    expect(evaluation().getByLabelText(/六维诊断评分/).textContent).toBe("—/100");
     expect(evaluation().getByText("评审覆盖 0%（检查完成程度）")).toBeTruthy();
     expect(evaluation().getByText("可能分数 0–100")).toBeTruthy();
     expect(screen.getByRole("button", { name: "人工评审与计算" }).hasAttribute("disabled")).toBe(true);
@@ -781,7 +785,7 @@ describe("enterprise RAG evidence-based review UI", () => {
 
     expect(screen.getByText("现有公开资料未说明离线安装能力，请向产品负责人确认。")).toBeTruthy();
     expect(screen.getByRole("button", { name: "人工评审与计算" }).hasAttribute("disabled")).toBe(false);
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
+    expect(evaluation().getByLabelText(/六维诊断评分/).textContent).toBe("—/100");
   });
 
   it("preserves unknown weight and a pending score when a saved rating lacks evidence", () => {
@@ -795,7 +799,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     confirmReview();
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
+    expect(evaluation().getByLabelText(/六维诊断评分/).textContent).toBe("—/100");
     expect(evaluation().getByText("评审覆盖 80%（检查完成程度）")).toBeTruthy();
     expect(evaluation().getByText("可能分数 80–100")).toBeTruthy();
     const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
@@ -815,10 +819,18 @@ describe("enterprise RAG evidence-based review UI", () => {
     });
     confirmReview();
 
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("100");
-    expect(evaluation().getByText("不可用·需修复")).toBeTruthy();
+    const score = evaluation().getByLabelText("重大问题，数值分不适用");
+    expect(score.textContent).toBe("!");
+    expect(score.classList.contains("is-danger")).toBe(true);
+    expect(evaluation().getByText("不可用 · 需修复")).toBeTruthy();
     expect(evaluation().getByText("关键风险已发现")).toBeTruthy();
+    expect(evaluation().queryByText(/可能分数/)).toBeNull();
     expect(evaluation().getByText(/高分不能把该回答判为可用，但不会取消网站发布选择/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
+    const records = within(screen.getByRole("dialog", { name: "评估记录" }));
+    expect(records.getByLabelText("重大问题，数值分不适用").textContent).toBe("!");
+    expect(JSON.parse(window.localStorage.getItem(historyKey) || "[]")[0].dimensions).toHaveLength(6);
   });
 
   it("invalidates the current score after editing while retaining the original reviewed snapshot", () => {
@@ -833,7 +845,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     fireEvent.change(editor.getByRole("textbox", { name: "实际回答" }), { target: { value: "这是已经修订、尚待重新核验的回答。" } });
     fireEvent.click(editor.getByRole("button", { name: "保存回答，重新评审" }));
 
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
+    expect(evaluation().getByLabelText(/六维诊断评分/).textContent).toBe("—/100");
     expect(evaluation().getByText("评审覆盖 0%（检查完成程度）")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
@@ -851,7 +863,7 @@ describe("enterprise RAG evidence-based review UI", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByText(suggestedAnswer!)).toBeTruthy();
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
+    expect(evaluation().getByLabelText(/六维诊断评分/).textContent).toBe("—/100");
     expect(evaluation().getByText("关键风险待核验")).toBeTruthy();
     expect(evaluation().getByText("评审覆盖 0%（检查完成程度）")).toBeTruthy();
     expect(window.localStorage.getItem(historyKey)).toBeNull();
@@ -942,8 +954,8 @@ describe("enterprise RAG evidence-based review UI", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "选择评估示例" }), {
       target: { value: "syn-permission-leak" },
     });
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("90");
-    expect(evaluation().getByText("不可用·需修复")).toBeTruthy();
+    expect(evaluation().getByLabelText("重大问题，数值分不适用").textContent).toBe("!");
+    expect(evaluation().getByText("不可用 · 需修复")).toBeTruthy();
     expect(evaluation().getByText("关键风险已发现")).toBeTruthy();
   });
 });
@@ -975,8 +987,10 @@ describe("rag-eval-1.3 server conclusions", () => {
     const run = gradedAutomaticRun();
     vi.spyOn(liveEnterpriseRagEvaluationApi,"latest").mockResolvedValue({latest:run,history:[run]});
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
-    await waitFor(() => expect(evaluation().getByText("可用·待改进")).toBeTruthy());
-    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("83");
+    await waitFor(() => expect(evaluation().getByText("可用 · 待改进")).toBeTruthy());
+    const score = screen.getByTestId("rag-evaluation-score");
+    expect(score.textContent).toBe("83/100");
+    expect(score.classList.contains("is-pending")).toBe(true);
     fireEvent.click(screen.getByRole("button",{name:"查看优化方案"}));
     const dialog = within(screen.getByRole("dialog",{name:"优化方案"}));
     for (const heading of ["必须修复","建议改进","待补证"]) expect(dialog.getByRole("heading",{name:heading})).toBeTruthy();
@@ -991,8 +1005,8 @@ describe("rag-eval-1.3 server conclusions", () => {
     vi.spyOn(liveEnterpriseRagEvaluationApi,"latest").mockResolvedValue({latest:run,history:[run]});
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
     await waitFor(() => expect(evaluation().getByText("待核验")).toBeTruthy());
-    expect(evaluation().queryByText("可用·待改进")).toBeNull();
-    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("—");
+    expect(evaluation().queryByText("可用 · 待改进")).toBeNull();
+    expect(screen.getByTestId("rag-evaluation-score").textContent).toBe("—/100");
   });
   it("keeps a historical report's actual rule in its explanation", async () => {
     const run = completedAutomaticRun();
@@ -1014,8 +1028,12 @@ describe("rag-eval-1.3 server conclusions", () => {
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
     await waitFor(() => expect(screen.getByTestId("rag-legacy-rule-notice").textContent).toContain("rag-eval-1.2"));
     expect(screen.queryByTestId("rag-current-rule")).toBeNull();
-    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("83");
+    expect(screen.getByTestId("rag-evaluation-score").textContent).toBe("!");
     expect(evaluation().getByText("不可用，优先修复")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
+    const records = within(screen.getByRole("dialog", { name: "评估记录" }));
+    expect(records.getByLabelText("重大问题，数值分不适用").textContent).toBe("!");
+    expect(run.report?.result.score).toBe(83);
     expect(start).not.toHaveBeenCalled();
   });
 
