@@ -19,7 +19,7 @@ export default function IntentTaskProgress({job, count, kind, error, pending, on
   const failed = job?.status === "failed" || Boolean(error);
   return <div className="iw-task-progress">
     <button className="iw-back" onClick={onBack}><ArrowLeft size={15}/>返回问题列表</button>
-    <header className="iw-header"><div><span className="iw-progress-eyebrow">AI 任务进度</span>
+    <header className="iw-header"><div>
       <h1>{failed ? "评估任务需要处理" : kind === "plan" ? "正在生成优化方案" : `正在评估 ${job?.questionIds.length ?? count} 条问题`}</h1>
       <p>根据当前知识库逐项评估，完成后自动打开结果。</p></div>
       <span className="iw-tag"><Clock3 size={14}/>已用时 {Math.floor(seconds / 60)} 分 {seconds % 60} 秒</span></header>
