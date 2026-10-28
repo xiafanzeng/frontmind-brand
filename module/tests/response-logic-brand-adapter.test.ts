@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { createBrandResponseLogicHost } from "../client/response-logic-brand-adapter";
+import { createBrandResponseLogicHost, __resetBrandRecordsStoreForTests } from "../client/response-logic-brand-adapter";
 import { RESPONSE_LOGIC_API_BASE } from "../client/response-logic-api-base";
 
 type CapturedCall = { input: string; init?: RequestInit };
@@ -254,6 +254,7 @@ describe("brand response-logic adapter REST wiring", () => {
   });
 
   it("shows an error state when the query fails (not a white screen)", async () => {
+    __resetBrandRecordsStoreForTests();
     const harness = createHarness();
     harness.setResponse(async () =>
       ({ ok: false, status: 503, json: async () => ({ error: { message: "服务不可用" } }) }) as unknown as Response);

@@ -72,6 +72,19 @@ const fetchRecords = async (): Promise<void> => {
   }
 };
 
+/** Test-only: reset the module-level records store between test cases. The
+ * singleton is intentional in production (see the comment above); tests that
+ * assert initial/error states need a clean slate. */
+export function __resetBrandRecordsStoreForTests(): void {
+  storeData = undefined;
+  storeError = undefined;
+  storeLoading = false;
+  storeVersion++;
+  storeRest = undefined;
+  storeListeners.forEach(fn => fn());
+  storeListeners.clear();
+}
+
 export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInput): IntentWorkspaceHost {
   const rest = input.captureRestOperation;
   storeRest = input.captureRestOperation;
