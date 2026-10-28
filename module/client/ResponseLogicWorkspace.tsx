@@ -579,6 +579,43 @@ function useResponseLogicGeneration(
   return generationStore.get(generationStoreKey(scope, questionId)) ?? null;
 }
 
+/**
+ * The in-memory generation store loses its observer whenever the workspace
+ * unmounts (navigation, refresh) or a start was issued from another surface,
+ * while the record's lastTaskId remains the authoritative task anchor. Map the
+ * authoritative record back onto a polling-ready generation state — the same
+ * shape the unknown-outcome recovery path in startGeneration produces — so a
+ * running or finished-but-unadopted task always regains an observer instead of
+ * leaving the page stuck on "generating" with no status requests.
+ */
+export function recoverResponseLogicGenerationFromRecord(input: {
+  scope: string;
+  questionId: string;
+  generation: ResponseLogicGenerationState | null;
+  record:
+    | (Pick<
+        ResponseLogicRecordDto,
+        "lastTaskId" | "conversationId" | "revision" | "appliedModelResult"
+      > & { questionId: string })
+    | null
+    | undefined;
+}): ResponseLogicGenerationState | null {
+  if (input.generation) return null;
+  const record = input.record;
+  if (record?.questionId !== input.questionId) return null;
+  if (!record.lastTaskId || !record.conversationId) return null;
+  if (record.appliedModelResult) return null;
+  return {
+    questionId: input.questionId,
+    scope: input.scope,
+    phase: "running",
+    startedAt: Date.now(),
+    taskId: record.lastTaskId,
+    conversationId: record.conversationId,
+    operationRevision: record.revision,
+  };
+}
+
 /* ---------------------------------------------------------------------------
  * Serial draft-stash queue (project + question scoped).
  *
@@ -1229,6 +1266,34 @@ function ResponseLogicQuestionEditor({
   persistenceRef.current = persistence;
   const generationRef = useRef(generation);
   generationRef.current = generation;
+
+  // Re-arm the polling state machine from the authoritative record when the
+  // in-memory generation state is absent but the record still carries a bound,
+  // unadopted task. Runs once per mount; the polling effect above then observes
+  // the task to completion (auto-adopt on completed, failed state on error).
+  const recoveryCheckedRef = useRef(false);
+  useEffect(() => {
+    if (recoveryCheckedRef.current) return;
+    if (generation) {
+      recoveryCheckedRef.current = true;
+      return;
+    }
+    const recovered = recoverResponseLogicGenerationFromRecord({
+      scope,
+      questionId,
+      generation,
+      record: persistedRecord ?? null,
+    });
+    if (!recovered) {
+      // Wait for the record load; once loaded with no recoverable task, settle.
+      if (persistedRecord) recoveryCheckedRef.current = true;
+      return;
+    }
+    recoveryCheckedRef.current = true;
+    setResponseLogicGeneration(scope, questionId, recovered);
+    // The record snapshot can only change through persistence refresh; the
+    // one-shot guard above makes repeated runs a no-op.
+  }, [generation, persistedRecord, scope, questionId]);
 
   const generating =
     (generation?.phase === "binding" ||
