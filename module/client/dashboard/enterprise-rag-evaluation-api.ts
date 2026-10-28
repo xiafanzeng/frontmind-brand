@@ -4,6 +4,7 @@ import type {
   EnterpriseRagEvaluationStartInput,
 } from "../../contracts/enterprise-rag-evaluation-run";
 import { captureWorkspaceRestOperation } from "../lib/workspace-rest-scope";
+import { parseEvaluationResult } from "./ai-website-preview/evaluation-skill-contract";
 
 const ENDPOINT = "/api/modules/brand/rag-evaluations";
 
@@ -34,7 +35,8 @@ function isReport(value: unknown): boolean {
   const knowledgeBase = record(report?.knowledgeBase);
   const evaluator = record(report?.evaluator);
   const judgments = record(report?.judgments);
-  const result = record(report?.result);
+  const result = parseEvaluationResult(report?.result);
+  const graded = judgments?.schemaVersion === 2;
   return Boolean(
     report &&
       typeof report.reportId === "string" &&
@@ -56,8 +58,15 @@ function isReport(value: unknown): boolean {
       Array.isArray(judgments.gates) &&
       judgments.gates.length === 7 &&
       Array.isArray(judgments.claims) &&
+      judgments.claims.length > 0 &&
       result &&
-      result.status === "completed" &&
+      result.skillId === evaluator.skillId && result.version === evaluator.skillVersion &&
+      (graded || result.answerVerdict === undefined) &&
+      (result.status === "completed" || (graded && result.status === "pending")) &&
+      (!graded || (evaluator.ruleVersion === "rag-eval-1.3" && result.answerVerdict !== undefined && record(judgments.task) && Array.isArray(judgments.findings) && judgments.findings.every((value: unknown) => {
+        const finding = record(value);
+        return finding && typeof finding.id === "string" && typeof finding.summary === "string" && typeof finding.impact === "string" && ["critical", "improvement", "undetermined"].includes(String(finding.severity)) && Array.isArray(finding.claimIds) && Array.isArray(finding.evidenceIds) && Array.isArray(finding.dimensionIds);
+      }))) &&
       (result.score === null || typeof result.score === "number") &&
       typeof result.coverage === "number" &&
       typeof result.summary === "string" &&

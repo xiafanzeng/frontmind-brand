@@ -1,5 +1,5 @@
 /** Pure, evidence-aware scoring rules. This module does not judge answer text. */
-export const RAG_RULE_VERSION = "rag-eval-1.2";
+export const RAG_RULE_VERSION = "rag-eval-1.3";
 
 export const RAG_DIMENSIONS = [
   { id: "intent", label: "需求满足度与相关性", weight: 20, question: "是否真正回答了用户想问的内容？" },
@@ -41,10 +41,23 @@ export interface GateJudgment {
 export interface EvaluationInput {
   dimensions: DimensionJudgment[];
   gates: GateJudgment[];
+  task?: { status: "completed" | "failed" | "undetermined"; rationale: string; evidenceIds: string[] };
+  findings?: RagFinding[];
+}
+
+export interface RagFinding {
+  id: string;
+  kind: "fact" | "condition" | "citation" | "task" | "privacy" | "safety" | "injection" | "evidence" | "expression";
+  severity: "critical" | "improvement" | "undetermined";
+  summary: string;
+  impact: string;
+  claimIds: string[];
+  evidenceIds: string[];
+  dimensionIds: DimensionId[];
 }
 
 export interface EvaluationResult {
-  /** Integer display score. Thresholds always use rawScore. */
+  /** Diagnostic score only; it never vetoes a completed task. */
   score: number | null;
   rawScore: number | null;
   /** Exact mathematical bounds, not a statistical confidence interval. */
@@ -117,12 +130,15 @@ export function scoreEvaluation(input: EvaluationInput): EvaluationResult {
       if (matches.length !== 1 || matches[0].status !== "failed" || !nonempty(matches[0].reason)) hasPendingGate = true;
     }
   }
+  if (input.task?.status === "failed" || input.findings?.some(item => item.severity === "critical")) hasFailedGate = true;
+  if (input.task?.status === "undetermined" || input.findings?.some(item => item.severity === "undetermined")) hasPendingGate = true;
   const gateStatus = hasFailedGate ? "failed" : hasPendingGate ? "pending" : "passed";
   const complete = dimensionComplete && !hasPendingGate;
-  const usable = complete && gateStatus === "passed" && rawScore !== null && rawScore >= 80;
+  const usable = complete && gateStatus === "passed";
+  const improvements = input.findings?.some(item => item.severity === "improvement") || dimensions.some(item => item.applicable && isRating(item.level) && item.level < 4);
   const verdict = gateStatus === "failed" ? "unusable"
     : !complete || rawScore === null ? "pending"
-      : rawScore >= 90 ? "excellent" : rawScore >= 80 ? "usable" : rawScore >= 70 ? "improve" : "unusable";
+      : improvements ? "improve" : "usable";
 
   return {
     score: rawScore === null ? null : Math.round(rawScore),
@@ -177,19 +193,16 @@ export function aggregateEvaluations(items: AggregateEvaluationItem[]): Aggregat
   const validBounds = (result: EvaluationResult) => Number.isFinite(result.lower) && Number.isFinite(result.upper) && result.lower >= 0 && result.upper <= 100 && result.lower <= result.upper;
   const completed = (result: EvaluationResult) => result.complete && result.gateStatus !== "pending" && result.rawScore !== null && Number.isFinite(result.rawScore) && result.rawScore >= 0 && result.rawScore <= 100 && validBounds(result);
   const completeCount = items.filter(({ result }) => completed(result)).length;
-  const usableCount = items.filter(({ result }) => completed(result) && result.gateStatus === "passed" && result.usable && result.rawScore! >= 80).length;
+  const usableCount = items.filter(({ result }) => completed(result) && result.gateStatus === "passed" && result.usable).length;
   const pendingCount = total - completeCount;
   const weightSum = [...groups.values()].reduce((sum, group) => sum + group.weight, 0);
   let weightedLower = 0;
   let weightedUpper = 0;
-  let allScenariosMeetMinimum = true;
   for (const group of groups.values()) {
     const meanLower = group.items.reduce((sum, { result }) => sum + (validBounds(result) ? result.lower : 0), 0) / group.items.length;
     const meanUpper = group.items.reduce((sum, { result }) => sum + (validBounds(result) ? result.upper : 100), 0) / group.items.length;
     weightedLower += group.weight * meanLower;
     weightedUpper += group.weight * meanUpper;
-    const scenarioRaw = group.items.reduce((sum, { result }) => sum + (result.rawScore ?? 0), 0) / group.items.length;
-    if (scenarioRaw < 80) allScenariosMeetMinimum = false;
   }
   const lower = bounded(weightedLower / weightSum);
   const upper = bounded(weightedUpper / weightSum);
@@ -199,7 +212,7 @@ export function aggregateEvaluations(items: AggregateEvaluationItem[]): Aggregat
     score: rawScore === null ? null : Math.round(rawScore), lower, upper,
     coverage: completeCount / total * 100,
     total, usableCount, failedGateCount, pendingCount, usableRate,
-    meetsQualityTarget: rawScore !== null && rawScore >= 85 && usableRate >= 90 && failedGateCount === 0 && allScenariosMeetMinimum,
+    meetsQualityTarget: pendingCount === 0 && failedGateCount === 0 && usableCount === total,
   };
 }
 
@@ -252,19 +265,22 @@ export interface ConversationOutcome {
 }
 
 export function resolveConversationOutcome(layer: ConversationLayer, gates: GateJudgment[]): ConversationOutcome {
-  const unmetPoints = layer.completionPoints.filter((point) => point.met !== true).map((point) => point.label);
+  const unmetPoints = layer.prerequisiteMissing ? [] : layer.completionPoints.filter((point) => point.met === false).map((point) => point.label);
+  const unknownPoints = layer.completionPoints.filter((point) => point.met === null).map((point) => point.label);
   const failedGates = gates.filter((gate) => gate.status === "failed");
-  if (layer.prerequisiteMissing) {
-    return { status: "unverified", blockingCount: 0, unmetPoints,
-      reason: "测试所需的上游前提不足（如正式知识资料缺失），暂不作通过或不通过判定；补充前提并确认后重新执行。" };
-  }
-  if (failedGates.length > 0 || unmetPoints.length > 0) {
+  if (failedGates.length > 0 || (!layer.prerequisiteMissing && unmetPoints.length > 0)) {
     const parts = [
       failedGates.length > 0 ? `${failedGates.length} 项关键回答风险已发现` : "",
       unmetPoints.length > 0 ? `必要完成点未全部满足：${unmetPoints.join("、")}` : "",
     ].filter(Boolean).join("；");
     return { status: "fail", blockingCount: failedGates.length + unmetPoints.length, unmetPoints,
       reason: `${parts}。单轮高分不能抵消已确认的回答级风险；此结论不决定网站能否进入发布确认。` };
+  }
+  if (layer.prerequisiteMissing || unknownPoints.length || !layer.completionPoints.length || RAG_GATES.some(definition => {
+    const matches = gates.filter(gate => gate.id === definition.id);
+    return matches.length !== 1 || matches[0].status !== "passed" || !nonempty(matches[0].reason);
+  }) || gates.some(gate => !RAG_GATES.some(definition => definition.id === gate.id))) {
+    return { status: "unverified", blockingCount: 0, unmetPoints: unknownPoints, reason: "任务前提、必要完成点或风险证据尚未确认；保留未知，补齐后复核。" };
   }
   return { status: "pass", blockingCount: 0, unmetPoints: [],
     reason: "全部必要完成点满足且关键风险检查通过，经人工确认后记为通过。" };

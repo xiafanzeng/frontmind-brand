@@ -16,6 +16,7 @@ import {
   ENTERPRISE_RAG_GATE_IDS,
   ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA,
   enterpriseRagJudgeWireSchema,
+  enterpriseRagAliasedJudgeWireSchema,
 } from "../contracts/enterprise-rag-evaluation-run";
 import { enterpriseQaDocumentCatalog } from "../server/enterprise-qa-answer";
 import {
@@ -372,6 +373,11 @@ function harness(documentCount = 2) {
     const answerEvidenceId = alias(`answer:${ANSWER_MESSAGE_ID}`);
     const sourceId = alias(document.documentId);
     return {
+      ...(input.schemaVersion === 2 ? {
+        schemaVersion: 2,
+        task: { status: "completed", rationale: "当前问题已完成。", evidenceIds: [answerEvidenceId, sourceId] },
+        findings: [],
+      } : {}),
       operationToken: input.operationToken,
       inputHash: input.inputHash,
       dimensions: ENTERPRISE_RAG_DIMENSION_IDS.map((id) => ({
@@ -390,6 +396,7 @@ function harness(documentCount = 2) {
         id: "claim-1",
         statement: "门诊挂号时间为 7:30，就诊时间为 8:00。",
         status: "supported",
+        ...(input.schemaVersion === 2 ? { kind: "fact", relevance: "core" } : {}),
         sourceIds: [sourceId],
         rationale: "冻结来源直接包含相同时间信息。",
       }],
@@ -420,6 +427,21 @@ function harness(documentCount = 2) {
       assistant_message: { content: JSON.stringify(value) },
     });
   }
+  function freezeLegacy() {
+    const operation = operationRows.find(row => row.id === REQUEST_ID);
+    const runtime = taskRows.find(row => row.operationId === REQUEST_ID).providerRuntime.enterpriseRagEvaluation;
+    operation.contractRevision = 1;
+    runtime.schemaVersion = 1;
+    runtime.input.schemaVersion = 1;
+    delete runtime.input.taskScope;
+    runtime.input.evaluator = { skillId: "enterprise-rag-evaluation", skillVersion: "1.0.0", ruleVersion: "rag-eval-1.2", judgeVersion: "1.0.0" };
+    const { operationToken: _token, inputHash: _hash, ...base } = runtime.input;
+    runtime.input.inputHash = intentHash(base);
+    operation.requestHash = runtime.input.inputHash;
+    runtime.skill = "Frozen legacy evaluator Skill v1.0.0";
+    runtime.skillHash = intentHash(runtime.skill);
+    if (runtime.wireContract) operation.schemaHash = intentHash({ wireSchema: enterpriseRagAliasedJudgeWireSchema(runtime.input, runtime.wireContract), wireContract: runtime.wireContract });
+  }
   function completeProvider() {
     pushProviderOutput();
   }
@@ -431,6 +453,7 @@ function harness(documentCount = 2) {
     pushProviderAssistant,
     pushProviderOutput,
     completeProvider,
+    freezeLegacy,
     operationRows,
     taskRows,
     persistedEvents,
@@ -474,7 +497,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
       createSchema.properties.claims.items.properties.sourceIds.items.enum,
     ).toEqual(["rag-SSS-000-000-222", "rag-SSS-000-000-333"]);
     expect(h.client.createTask.mock.calls[0]![0].prompt).toContain(
-      "claims[].sourceIds 是更窄的来源集合",
+      "claims[].sourceIds 只能逐字复制冻结来源白名单",
     );
     expect(h.client.createTask.mock.calls[0]![0].prompt).toContain(
       "rag-QQQ=问题、rag-AAA=回答、rag-SSS=来源、rag-EEE=其他证据",
@@ -684,7 +707,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(firstPending.status).toBe("result_pending");
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
     expect(h.client.sendMessage.mock.calls[0]![0].prompt).toContain(
-      "陈述依据未被回答引用",
+      "依据未展示为引用时须保留引用改进或风险项",
     );
     expect(h.client.sendMessage.mock.calls[0]![0].prompt).toContain(
       "保留与本次校验失败无关的合法 ID",
@@ -762,9 +785,40 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(h.persistedEvents).toHaveLength(0);
   });
 
+  it("旧别名任务继续使用冻结规则，且新请求不重复创建付费任务", async () => {
+    const h = harness(); await h.service.start(h.startInput); h.freezeLegacy();
+    const resumed = await h.service.start({ ...h.startInput, clientRequestId: "00000000-0000-4000-8000-000000000099" });
+    expect(resumed.operationId).toBe(REQUEST_ID); expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    h.completeProvider();
+    const completed = await h.service.observe(REQUEST_ID);
+    expect(completed.report?.evaluator.ruleVersion).toBe("rag-eval-1.2");
+    expect(completed.report?.result.version).toBe("1.0.0");
+    expect(completed.report?.result.answerVerdict).toBeUndefined();
+    const original = structuredClone(completed.report);
+    expect((await h.service.observe(REQUEST_ID)).report).toEqual(original);
+  });
+
+  it("已执行的模型评估可以保存待核验质量结论，不触发无意义修复重试", async () => {
+    const h = harness(); await h.service.start(h.startInput);
+    const output = h.acceptedOutput();
+    Object.assign(output, { schemaVersion: 2,
+      task: { status: "undetermined", rationale: "必要前提待确认。", evidenceIds: output.task!.evidenceIds },
+      findings: [{ id: "finding-1", kind: "task", severity: "undetermined", summary: "任务待确认", impact: "无法确定任务的必要前提。", claimIds: [], evidenceIds: output.task!.evidenceIds, dimensionIds: ["intent"] }],
+    });
+    output.dimensions[0].level = null as unknown as number;
+    output.gates.find(gate => gate.id === "availability")!.status = "pending";
+    h.pushProviderOutput(output);
+    const completed = await h.service.observe(REQUEST_ID);
+    expect(completed.status).toBe("completed");
+    expect(completed.report?.result).toMatchObject({ status: "pending", answerVerdict: "pending", score: null });
+    expect(h.client.sendMessage).not.toHaveBeenCalled();
+    expect((await h.service.observe(REQUEST_ID)).report).toEqual(completed.report);
+  });
+
   it("继续接受使用 legacy schemaHash 启动的在途评估", async () => {
     const h = harness();
     await h.service.start(h.startInput);
+    h.freezeLegacy();
     const operation = h.operationRows.find((row) => row.id === REQUEST_ID);
     const task = h.taskRows.find((row) => row.operationId === REQUEST_ID);
     delete task.providerRuntime.enterpriseRagEvaluation.wireContract;
@@ -798,6 +852,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
   it("继续接受使用旧 bound canonical schemaHash 启动的在途评估", async () => {
     const h = harness();
     await h.service.start(h.startInput);
+    h.freezeLegacy();
     const operation = h.operationRows.find((row) => row.id === REQUEST_ID);
     const task = h.taskRows.find((row) => row.operationId === REQUEST_ID);
     const frozenInput = task.providerRuntime.enterpriseRagEvaluation.input;

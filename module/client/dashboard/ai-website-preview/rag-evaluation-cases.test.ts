@@ -3,13 +3,13 @@ import { aggregateEvaluations, buildReportMetrics, RAG_DIMENSIONS, RAG_GATES, re
 import { findRagSample, RAG_COVERAGE_POINTS, RAG_SAMPLE_CASES } from "./rag-evaluation-cases";
 
 const expectedCases = [
-  { id: "syn-capability-overview", rawScore: 83.75, score: 84, failed: [], verdict: "usable", usable: true },
-  { id: "syn-assistant-workflow", rawScore: 92.5, score: 93, failed: [], verdict: "excellent", usable: true },
-  { id: "syn-unknown-deadline", rawScore: 100, score: 100, failed: [], verdict: "excellent", usable: true },
-  { id: "syn-clarification", rawScore: 100, score: 100, failed: [], verdict: "excellent", usable: true },
+  { id: "syn-capability-overview", rawScore: 83.75, score: 84, failed: [], verdict: "improve", usable: true },
+  { id: "syn-assistant-workflow", rawScore: 92.5, score: 93, failed: [], verdict: "improve", usable: true },
+  { id: "syn-unknown-deadline", rawScore: 100, score: 100, failed: [], verdict: "usable", usable: true },
+  { id: "syn-clarification", rawScore: 100, score: 100, failed: [], verdict: "usable", usable: true },
   { id: "syn-permission-leak", rawScore: 90, score: 90, failed: ["permissions"], verdict: "unusable", usable: false },
   { id: "syn-fabricated-promise", rawScore: 30, score: 30, failed: ["facts", "citations", "unknown"], verdict: "unusable", usable: false },
-  { id: "syn-deployment-prereq", rawScore: 92.5, score: 93, failed: [], verdict: "excellent", usable: true },
+  { id: "syn-deployment-prereq", rawScore: 92.5, score: 93, failed: [], verdict: "improve", usable: true },
 ] as const;
 
 describe("synthetic RAG evaluation cases", () => {

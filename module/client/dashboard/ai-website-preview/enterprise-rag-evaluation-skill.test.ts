@@ -1,6 +1,7 @@
+// Frozen v1.2 compatibility regression suite. New behavior is tested in rag-evaluation-graded.test.ts.
 import { describe, expect, it } from "vitest";
-import { enterpriseRagEvaluationSkill } from "./enterprise-rag-evaluation-skill";
-import { RAG_DIMENSIONS, RAG_GATES, type EvaluationInput, type Rating } from "./rag-evaluation";
+import { enterpriseRagEvaluationSkill } from "./enterprise-rag-evaluation-skill-legacy";
+import { RAG_DIMENSIONS, RAG_GATES, type EvaluationInput, type Rating } from "./rag-evaluation-legacy";
 
 function input(level: Rating = 4): EvaluationInput {
   return {
