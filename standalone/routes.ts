@@ -5,7 +5,7 @@ export type StandaloneBrandPage = BrandPage;
 export const standaloneBrandPages: Array<[StandaloneBrandPage, string]> = [
   ["reports", "品牌诊断报告"],
   ["knowledge", "智能知识库"],
-  ["keywords", "全域词库优化"],
+  ["keywords", "词条生成"],
   ["intent", "优化问题"],
   ["response-logic", "应答逻辑"],
   ["enterprise-qa", "企业 RAG"],
