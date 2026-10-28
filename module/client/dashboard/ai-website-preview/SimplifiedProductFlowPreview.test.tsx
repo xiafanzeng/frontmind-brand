@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnterpriseRagPreview } from "./EnterpriseRagPreview";
 import { SimplifiedWebsiteBuilderPreview } from "./SimplifiedWebsiteBuilderPreview";
+import { previewRagAnswer } from "./preview-copy";
 import {
   listEvaluationReports,
   listPublishDecisions,
@@ -17,6 +18,16 @@ afterEach(() => {
   window.localStorage.clear();
   vi.restoreAllMocks();
 });
+
+/** 在 AI 助手步骤的网站预览中完成一次真实问答试用。 */
+async function trialAssistantOnce(question = "FrontMind 可以帮企业做什么？") {
+  fireEvent.change(screen.getByLabelText("在网站助手中提问"), { target: { value: question } });
+  fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
+  await waitFor(() => {
+    expect(screen.getByText(previewRagAnswer)).toBeTruthy();
+    expect(screen.getByText("助手试用已完成")).toBeTruthy();
+  });
+}
 
 describe("simplified AI website preview", () => {
   it("keeps the website journey to four directly accessible steps", () => {
@@ -72,6 +83,8 @@ describe("simplified AI website preview", () => {
       const saved = JSON.parse(window.localStorage.getItem(draftStorageKey) ?? "{}");
       expect(saved.brand.siteName).toBe("远山产品中心");
       expect(saved.assistant.name).toBe("远山助手");
+      expect(saved.assistant.accent).toBe("#3e6b57");
+      expect(saved.assistant.followSiteAccent).toBe(false);
     });
 
     firstMount.unmount();
@@ -147,7 +160,7 @@ describe("simplified AI website preview", () => {
     ).toBe("step");
   });
 
-  it("only marks steps complete after the user confirms them", () => {
+  it("only marks steps complete after the user confirms them", async () => {
     render(<SimplifiedWebsiteBuilderPreview />);
 
     expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(0);
@@ -159,6 +172,7 @@ describe("simplified AI website preview", () => {
     fireEvent.click(screen.getByRole("button", { name: /选择模板$/ }));
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await trialAssistantOnce();
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
 
     const confirmButton = screen.getByRole("button", { name: "确认当前建设草稿" });
@@ -276,11 +290,12 @@ describe("simplified AI website preview", () => {
     ));
   });
 
-  it("invalidates a confirmed step when its configuration changes", () => {
+  it("invalidates a confirmed step when its configuration changes", async () => {
     render(<SimplifiedWebsiteBuilderPreview />);
 
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await trialAssistantOnce();
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
     fireEvent.click(screen.getByRole("button", { name: "确认当前建设草稿" }));
     expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(3);
@@ -302,6 +317,81 @@ describe("simplified AI website preview", () => {
 
     expect(onStepChange).toHaveBeenCalledWith("structure");
     expect(screen.getByRole("heading", { name: "确认网站结构与品牌" })).toBeTruthy();
+  });
+
+  it("requires a real assistant trial before the AI assistant step can complete", async () => {
+    render(<SimplifiedWebsiteBuilderPreview initialStep="assistant" />);
+    const stepList = screen.getByRole("list", { name: "网站建设流程" });
+
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    expect(screen.getByRole("status").textContent).toMatch(/完成助手试用/);
+    expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(0);
+
+    await trialAssistantOnce();
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
+
+    fireEvent.click(within(stepList).getByRole("button", { name: /AI 助手$/ }));
+    fireEvent.change(screen.getByLabelText("助手名称"), { target: { value: "远山助手" } });
+    expect(screen.getByText("助手试用未完成")).toBeTruthy();
+    fireEvent.click(within(stepList).getByRole("button", { name: /建设评估/ }));
+    expect(screen.getByRole("button", { name: "确认当前建设草稿" }).hasAttribute("disabled")).toBe(true);
+    expect(within(screen.getByLabelText("评估摘要")).getByText("0/4")).toBeTruthy();
+  });
+
+  it("answers from the shared RAG samples and refuses unsupported questions", async () => {
+    render(<SimplifiedWebsiteBuilderPreview initialStep="assistant" />);
+
+    fireEvent.change(screen.getByLabelText("在网站助手中提问"), { target: { value: "你们的公司地址在哪里？" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
+    await waitFor(() => expect(screen.getByText(/不能编造回答/)).toBeTruthy());
+    expect(screen.queryAllByRole("button", { name: /来源：/ })).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText("在网站助手中提问"), { target: { value: "FrontMind 可以帮企业做什么？" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
+    await waitFor(() => expect(screen.getByText(previewRagAnswer)).toBeTruthy());
+    expect(screen.getAllByRole("button", { name: /来源：合成资料/ }).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByLabelText(/展示回答来源/));
+    expect(screen.queryAllByRole("button", { name: /来源：合成资料/ })).toHaveLength(0);
+  });
+
+  it("keeps the assistant accent in sync with the site accent until customized", () => {
+    render(<SimplifiedWebsiteBuilderPreview initialStep="structure" />);
+    const stepList = screen.getByRole("list", { name: "网站建设流程" });
+
+    fireEvent.click(screen.getByRole("button", { name: "选择网站主题色 #a44f25" }));
+    fireEvent.click(within(stepList).getByRole("button", { name: /AI 助手$/ }));
+    expect(screen.getByRole("button", { name: "选择助手主题色 #a44f25" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "选择助手主题色 #315b8a" }));
+    expect(screen.getByRole("button", { name: "选择助手主题色 #315b8a" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(within(stepList).getByRole("button", { name: /确认结构$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "选择网站主题色 #3e6b57" }));
+    fireEvent.click(within(stepList).getByRole("button", { name: /AI 助手$/ }));
+    expect(screen.getByRole("button", { name: "选择助手主题色 #315b8a" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByLabelText(/跟随网站主题色/));
+    expect(screen.getByRole("button", { name: "选择助手主题色 #3e6b57" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("previews the layout of the selected template", () => {
+    render(<SimplifiedWebsiteBuilderPreview initialStep="structure" />);
+    const stepList = screen.getByRole("list", { name: "网站建设流程" });
+
+    expect(screen.getByText("企业知识帮助中心")).toBeTruthy();
+
+    fireEvent.click(within(stepList).getByRole("button", { name: /选择模板$/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /简洁文档站/ }));
+    fireEvent.click(within(stepList).getByRole("button", { name: /确认结构$/ }));
+    expect(screen.getByText("目录")).toBeTruthy();
+
+    fireEvent.click(within(stepList).getByRole("button", { name: /选择模板$/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /企业服务门户/ }));
+    fireEvent.click(within(stepList).getByRole("button", { name: /确认结构$/ }));
+    expect(screen.getByText("联系我们获取服务建议")).toBeTruthy();
+    expect(screen.queryByText("目录")).toBeNull();
   });
 
   it("uses one enterprise RAG page for source inspection, answer trial, and evaluation", () => {
