@@ -83,8 +83,11 @@ describe("优化任务轮询", () => {
     expect(scope.fetch.mock.calls[1][1].signal.aborted).toBe(true);
   });
   it("网关返回 HTML 时显示接口、状态及格式，避免裸露 JSON 解析异常", async () => {
-    scope.fetch.mockResolvedValue(new Response("<html>Bad gateway</html>", {status: 502, headers: {"content-type": "text/html"}}));
-    await expect(liveIntentWorkbenchApi.observe()).rejects.toThrow(/非 JSON 数据（HTTP 502，text\/html，\/api\/modules\/brand\/intent）/);
+    vi.useFakeTimers();
+    scope.fetch.mockImplementation(async () => new Response("<html>Bad gateway</html>", {status: 502, headers: {"content-type": "text/html"}}));
+    const result = expect(liveIntentWorkbenchApi.observe()).rejects.toThrow(/非 JSON 数据（HTTP 502，text\/html，\/api\/modules\/brand\/intent）/);
+    await vi.advanceTimersByTimeAsync(2000); await result;
+    expect(scope.fetch).toHaveBeenCalledTimes(3);
   });
   it("保留真实服务错误并附带状态，拒绝错误的成功数据结构", async () => {
     scope.fetch.mockResolvedValueOnce(new Response(JSON.stringify({error: {message: "请先配置模型账户"}}), {status: 409}));
@@ -95,5 +98,33 @@ describe("优化任务轮询", () => {
   it("浏览器请求异常保留名称与接口，便于定位 pattern 报错", async () => {
     scope.fetch.mockRejectedValueOnce(new DOMException("The string did not match the expected pattern.", "SyntaxError"));
     await expect(liveIntentWorkbenchApi.observe()).rejects.toThrow(/请求未完成.*\/api\/modules\/brand\/intent.*SyntaxError: The string/);
+  });
+  it("Load failed 自动重试读取两次，恢复后交付原工作区，不重发写入", async () => {
+    vi.useFakeTimers();
+    const result = workspace("succeeded");
+    scope.fetch.mockRejectedValueOnce(new TypeError("Load failed")).mockRejectedValueOnce(new TypeError("Load failed"))
+      .mockResolvedValueOnce(new Response(JSON.stringify(result)));
+    const reading = liveIntentWorkbenchApi.observe();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await reading).toEqual(result);
+    expect(scope.fetch).toHaveBeenCalledTimes(3);
+    scope.fetch.mockRejectedValueOnce(new TypeError("Load failed"));
+    await expect(liveIntentWorkbenchApi.command({kind: "evaluate"})).rejects.toThrow("Load failed");
+    expect(scope.fetch).toHaveBeenCalledTimes(4);
+  });
+  it("读取响应正文中断也可恢复；切换工作区时停止后续重试", async () => {
+    vi.useFakeTimers();
+    scope.fetch.mockResolvedValueOnce({text: () => Promise.reject(new TypeError("Load failed"))})
+      .mockResolvedValueOnce(new Response(JSON.stringify(workspace("succeeded"))));
+    const reading = liveIntentWorkbenchApi.observe();
+    await vi.advanceTimersByTimeAsync(500);
+    expect((await reading).state.jobs![0].status).toBe("succeeded");
+    scope.fetch.mockRejectedValueOnce(new TypeError("Load failed"));
+    const switched = liveIntentWorkbenchApi.observe();
+    const assertion = expect(switched).rejects.toThrow("工作区已切换");
+    await vi.advanceTimersByTimeAsync(0);
+    scope.assertActive.mockImplementation(() => {throw new Error("工作区已切换");});
+    await vi.advanceTimersByTimeAsync(500); await assertion;
+    expect(scope.fetch).toHaveBeenCalledTimes(3);
   });
 });
