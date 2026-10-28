@@ -2000,12 +2000,15 @@ router.post(["/start", "/turn"], async (request, res) => {
       attachment: { file_id: string; filename: string };
       fileId: string;
     }> = [];
+    console.log("[RL-Start] stage=client-create credentialProvider=%s", (taskCredential as {provider?:unknown})?.provider);
     const responseLogicClient = createCredentialAgentClient(taskCredential, {
       baseUrl: getUpstreamBaseUrl(req),
       accountUserId: workspaceUserId,
       intentId: taskIdempotencyKey,
     });
-    for (const attachmentPackage of generatedAttachmentPackages) {
+    console.log("[RL-Start] stage=upload-loop packages=%d", generatedAttachmentPackages.length);
+    for (const [packageIndex, attachmentPackage] of generatedAttachmentPackages.entries()) {
+      console.log("[RL-Start] stage=upload file=%s index=%d", attachmentPackage.filename, packageIndex);
       const uploaded = await responseLogicClient.uploadFile({
         filename: attachmentPackage.filename,
         bytes: attachmentPackage.bytes,
@@ -2013,6 +2016,7 @@ router.post(["/start", "/turn"], async (request, res) => {
         fileCreateRetryPolicy: "response_logic_pre_dispatch_only",
         observer: {
           onCandidateCreated: async ({ fileId }: {fileId:string}) => {
+            console.log("[RL-Start] stage=record-upstream-resource file=%s", fileId);
             await recordUpstreamResource({
               userId: workspaceUserId,
               apiCredentialId: taskCredential.id,
@@ -2022,6 +2026,7 @@ router.post(["/start", "/turn"], async (request, res) => {
           },
         },
       });
+      console.log("[RL-Start] stage=upload-done file=%s fileId=%s", attachmentPackage.filename, uploaded.fileId);
       generatedAttachments.push({
         attachment: {
           file_id: uploaded.fileId,
@@ -2088,6 +2093,7 @@ router.post(["/start", "/turn"], async (request, res) => {
       const providerExpiresAt = providerExpiresAtToDate(
         (uploaded as { detail?: { expiresAt?: unknown } }).detail?.expiresAt,
       );
+      console.log("[RL-Start] stage=provider-file-lease file=%s expiresAt=%s", asset.attachment.filename, providerExpiresAt?.toISOString() ?? "null");
       await responseLogicDb.insert(providerFileLeases).values({
         id: randomUUID(),
         localAssetId: asset.row.id,
@@ -2119,6 +2125,7 @@ router.post(["/start", "/turn"], async (request, res) => {
       agentProfile: toUpstreamAgentProfile(taskCredential.agentProfile),
       rateLimitScope: `managed-user:${workspaceUserId}`,
     });
+    console.log("[RL-Start] stage=create-task ok=%s taskId=%s", created.ok, created.ok ? created.task.id : "n/a");
     if (!created.ok) {
       throw created.upstreamError;
     }
@@ -2128,6 +2135,7 @@ router.post(["/start", "/turn"], async (request, res) => {
       // Persist task ownership before the versioned response-logic binding.
       // If the final CAS loses a race, the task remains attributable but can
       // never write into a reset/replaced record.
+      console.log("[RL-Start] stage=record-upstream-task");
       await recordUpstreamResource({
         userId: workspaceUserId,
         apiCredentialId: taskCredential.id,
@@ -2156,7 +2164,9 @@ router.post(["/start", "/turn"], async (request, res) => {
         preserveExistingSkillBinding: isContinuation,
         verifiedAttachments,
       });
+      console.log("[RL-Start] stage=record-task-start done rev=%s", startedRecord.revision);
     } catch (persistenceError) {
+      console.log("[RL-Start] stage=persist-error name=%s message=%s", (persistenceError as Error).name, (persistenceError as Error).message);
       // The Provider side effect is already an irreversible usage fact. Never
       // report this as a safe retry: a second /start could create another paid
       // task. The approved reset path deliberately starts a wholly new run.
