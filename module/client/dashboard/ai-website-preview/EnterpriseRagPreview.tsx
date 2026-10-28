@@ -76,6 +76,7 @@ type Drawer = "review" | "evidence" | "rules" | "improve" | "answer" | "history"
 type RecordEntry = { id: string; question: string; answer: string; need: string; reviewer: string; time: string; ruleVersion: string; knowledgeVersion: string; dimensions: DimensionJudgment[]; gates: GateJudgment[] };
 const HISTORY_KEY = "frontmind-rag-reviews-v1";
 const AUTOMATIC_REQUEST_KEY = "frontmind-rag-evaluation-request-v1";
+const AUTOMATIC_SUBMITTED_NOTICE = "自动评估已提交；离开页面后任务仍会继续，重新打开可恢复进度。";
 const KNOWLEDGE_VERSION = "KB-SYN-v1";
 const shortLabels = ["需求满足", "正确与有据", "信息完整", "引用与时效", "清晰可行动", "边界与安全"];
 const levels = ["不满足", "少量满足", "部分满足", "基本满足", "充分满足"];
@@ -492,7 +493,7 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
           ? "服务端自动评估已完成并保存为不可变报告。"
           : next.status === "failed"
             ? ""
-          : "自动评估已提交；离开页面后任务仍会继续，重新打开可恢复进度。",
+          : AUTOMATIC_SUBMITTED_NOTICE,
       );
       if (next.status === "failed") {
         setAutomaticError(
@@ -585,7 +586,7 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
       <header className="sfp-heading erag-heading"><div><h1>让回答真正满足用户需求</h1><p>从问题、回答和证据出发，发现缺口并确定下一步优化。</p></div><button className="sfp-button sfp-button--ghost" onClick={onOpenWebsite}>{websiteEntryLabel}</button></header>
       <div className="erag-flow" aria-label="企业 RAG 工作方式"><div><span><BookOpenCheck size={18} /></span><strong>企业知识库</strong></div><i /><div><span><Search size={18} /></span><strong>检索与回答</strong></div><i /><div><span><ClipboardCheck size={18} /></span><strong>回答质量评估</strong></div></div>
       <div className="rag-toolbar"><span className="rag-toolbar-label">单次问答</span><div><button onClick={() => setDrawer("rules")}>评分规则</button><button onClick={() => setDrawer("history")}>评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</button></div></div>
-      {(live?.notice || notice) && <div className="sfp-notice" role={live?.notice ? "alert" : "status"}>{live?.notice || notice}</div>}
+      {(live?.notice || notice) && <div className={!live?.notice && notice === AUTOMATIC_SUBMITTED_NOTICE ? "rag-muted" : "sfp-notice"} role={live?.notice ? "alert" : "status"}>{live?.notice || notice}</div>}
       {automaticError && <div className="sfp-notice" role="alert">{automaticError}</div>}
       {live?.refreshFailed && <div className="sfp-notice" role="alert">暂时无法刷新知识来源；页面继续显示上次已确认的{historicalKnowledge ? "本任务冻结快照" : "当前发布快照"}，不会用其他版本替代。<div className="rag-panel-actions"><button className="sfp-button sfp-button--ghost" onClick={live.onRetryKnowledge}>重新检查</button></div></div>}
       {live?.pendingDispatchQuestion && <div className="sfp-notice" role="alert">上次问题“{live.pendingDispatchQuestion}”已保存在当前会话，但尚未确认提交。<div className="rag-panel-actions"><button className="sfp-button sfp-button--primary" disabled={live.busy} onClick={() => void live.onRetryPending()}>重试上次问题</button></div></div>}
@@ -606,11 +607,9 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
         </div>
         <aside className="sfp-panel erag-evaluation-panel" role="region" aria-label="回答质量评估">
           <div className="erag-evaluation-panel__heading"><div><span className="erag-card-icon"><ClipboardCheck size={18} /></span><span><h2>回答质量评估</h2><small>{automaticReport ? "真实回答 · 服务端自动评估" : live ? "真实回答 · 待自动评估" : mode === "sample" ? "合成样例 · 预设评审" : "人工评审 · 本地计算"}</small></span></div><output data-testid="rag-evaluation-score" className={`erag-evaluation-score is-${tone}`} aria-label="六维诊断评分" aria-live="polite"><span><strong>{result.score ?? "—"}</strong><small>/100</small></span><em>{automaticReport ? "服务端不可变报告" : result.complete ? "六维加权分" : "待完成评审"}</em></output></div>
-          <section className="sfp-notice" data-testid="rag-current-rule" aria-label="当前评估规则">
-            <strong>当前规则 {RAG_RULE_VERSION}</strong>
-            <p>重大风险继续阻断，非关键问题可带改进项通过；六维分数仅作诊断。</p>
-            {automaticReport && automaticReport.evaluator.ruleVersion !== RAG_RULE_VERSION && <p data-testid="rag-legacy-rule-notice">正在显示按 {automaticReport.evaluator.ruleVersion} 生成的历史报告，原评分和结论保持不变。需要主动按新规则复评才能生成新结论；页面不会自动发起模型评估。</p>}
-          </section>
+          {automaticReport && automaticReport.evaluator.ruleVersion !== RAG_RULE_VERSION && <section className="sfp-notice" aria-label="历史评估规则">
+            <p data-testid="rag-legacy-rule-notice">正在显示按 {automaticReport.evaluator.ruleVersion} 生成的历史报告，原评分和结论保持不变。需要主动按新规则复评才能生成新结论；页面不会自动发起模型评估。</p>
+          </section>}
           {live && <section data-testid="rag-auto-evaluation-status" className="rag-automatic-evaluation" aria-label="服务端自动评估状态"><div><strong>{automaticRun ? automaticStatusLabels[automaticRun.status] : automaticLoading ? "正在读取已有评估" : "尚未运行自动评估"}</strong><small>{automaticRun?.status === "failed" ? automaticRun.error?.message ?? "自动评估失败，请重新发起评估。" : automaticReport ? automaticRun && automaticReportRun && automaticRun.operationId !== automaticReportRun.operationId ? `复评期间显示上一份不可变报告 ${automaticReport.reportId}` : `报告 ${automaticReport.reportId}` : "页面加载只读取已有记录，不会自动产生模型费用。"}</small></div><button data-testid="rag-auto-evaluate" className="sfp-button sfp-button--primary" disabled={!automaticCoordinate || automaticBusy || !answer.trim()} onClick={() => void startAutomaticEvaluation()}>{automaticBusy ? "自动评估中…" : automaticRun ? "重新自动评估" : "开始自动评估"}</button></section>}
           <section className={`rag-verdict is-${tone}`} aria-label="当前评估摘要"><strong>{displayVerdicts[result.verdict]}</strong><p>{automaticReport ? automaticReport.result.summary : result.gateStatus === "failed" ? "发现关键回答风险；高分不能把该回答判为可用，但不会取消网站发布选择。" : result.complete ? (mode === "sample" ? activeCase?.summary : "结论基于人工判定，只提供质量建议，不是发布授权。") : "完成维度与关键风险核验后，才能形成回答可用性结论。"}</p><div className="rag-status-row"><span><ShieldCheck size={14} />关键风险{result.gateStatus === "passed" ? "已核验" : result.gateStatus === "failed" ? "已发现" : "待核验"}</span><span>评审覆盖 {format(result.coverage)}%（检查完成程度）</span>{automaticReport && <span>服务器留痕 · {automaticReport.evaluator.model}</span>}{!result.complete && <span>可能分数 {Math.floor(result.lower)}–{Math.ceil(result.upper)}</span>}</div></section>
           <section className="rag-conversation" aria-label="完整对话判定">

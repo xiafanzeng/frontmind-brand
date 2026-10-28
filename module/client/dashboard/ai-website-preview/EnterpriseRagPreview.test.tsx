@@ -559,7 +559,8 @@ describe("enterprise RAG evidence-based review UI", () => {
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
       fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-      expect(screen.getByText(/自动评估已提交/)).toBeTruthy();
+      expect(screen.getByText(/自动评估已提交/).classList.contains("rag-muted")).toBe(true);
+      expect(screen.getByText(/自动评估已提交/).classList.contains("sfp-notice")).toBe(false);
 
       await act(async () => {
         vi.advanceTimersByTime(2_500);
@@ -1003,7 +1004,7 @@ describe("rag-eval-1.3 server conclusions", () => {
     expect(dialog.getByText("rag-eval-1.2")).toBeTruthy();
     expect(dialog.getByText(/历史结论仍按原冻结规则解释/)).toBeTruthy();
   });
-  it("announces the new rule without regrading an old 83-point failure or starting a paid task", async () => {
+  it("keeps the legacy warning without a current-rule banner or a paid task", async () => {
     const run = completedAutomaticRun(), report = run.report!;
     report.result.score = 83; report.result.recommendation = "not_recommended";
     report.result.summary = "旧规则引用门禁未通过。";
@@ -1012,7 +1013,7 @@ describe("rag-eval-1.3 server conclusions", () => {
     const start = vi.spyOn(liveEnterpriseRagEvaluationApi,"start").mockRejectedValue(new Error("Must not start a paid evaluation"));
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
     await waitFor(() => expect(screen.getByTestId("rag-legacy-rule-notice").textContent).toContain("rag-eval-1.2"));
-    expect(screen.getByTestId("rag-current-rule").textContent).toContain("rag-eval-1.3");
+    expect(screen.queryByTestId("rag-current-rule")).toBeNull();
     expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("83");
     expect(evaluation().getByText("不可用，优先修复")).toBeTruthy();
     expect(start).not.toHaveBeenCalled();
