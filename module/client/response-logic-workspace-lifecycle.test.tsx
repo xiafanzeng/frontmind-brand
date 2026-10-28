@@ -13,8 +13,7 @@ const h = vi.hoisted(() => {
     isLoading: true,
     records: undefined as undefined | Array<Record<string, unknown>>,
     restCalls: [] as string[],
-    router: async (_url: string, _init?: RequestInit): Promise<Response> =>
-      new Response("{}", { status: 404 }),
+    router: async (_url: string, _init?: RequestInit) => new Response("{}", { status: 404 }),
   };
   return control;
 });
@@ -197,13 +196,12 @@ describe("completed terminal path", () => {
 
   it("coalesces concurrent completed observations into a single adopt request", async () => {
     let adoptCalls = 0;
-    let releaseAdopt: (() => void) | null = null;
-    const release = (): void => releaseAdopt?.();
+    const releaseAdopt = {current: null as (() => void) | null};
     h.router = async (url: string) => {
       if (url.includes("/tasks/task-1/status")) return respondJson(completedEnvelope, 200);
       if (url.includes("/adopt-result")) {
         adoptCalls += 1;
-        await new Promise<void>((resolve) => { releaseAdopt = resolve; });
+        await new Promise<void>((resolve) => { releaseAdopt.current = resolve; });
         return respondJson({ status: "adopted", adopted: true, resultId: "res-1", record: adoptedRecord() });
       }
       return respondJson({}, 404);
@@ -223,7 +221,7 @@ describe("completed terminal path", () => {
     });
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(adoptCalls).toBe(1);
-    release();
+    releaseAdopt.current?.();
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(adoptCalls).toBe(1);
   });

@@ -17,8 +17,9 @@
 .rag-verdict p { margin:5px 0 9px; color:#53605c; }
 .rag-verdict.is-pending { border-color:#f0d9aa; background:#fffaf1; }
 .rag-verdict.is-pending > strong { color:#946413; }
-.rag-verdict.is-danger,.rag-eval-root .erag-evaluation-score.is-danger { border-color:#e9b8c2; background:#fff4f5; }
-.rag-verdict.is-danger > strong,.rag-eval-root .erag-evaluation-score.is-danger > span,.rag-danger-text { color:#a1324d; }
+.rag-verdict.is-danger { border-color:#e9b8c2; background:#fff4f5; }
+.rag-verdict.is-danger > strong,.rag-history-score.is-danger,.rag-danger-text { color:#a1324d; }
+.rag-history-score.is-danger { font-size:18px; font-weight:700; }
 .rag-automatic-evaluation { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border:1px solid #d9c9e5; border-radius:10px; background:#fbf8fd; }
 .rag-automatic-evaluation > div { min-width:0; display:flex; flex-direction:column; gap:4px; }
 .rag-automatic-evaluation strong { color:var(--sfp-ink); }
@@ -89,8 +90,9 @@
 .rag-case-status.is-fail { color:#a1324d; background:#fff4f5; border-color:#e9b8c2; }
 .rag-case-status.is-unverified { color:#5b6472; background:#f5f6f8; border-color:#d7dbe3; }
 .rag-conversation__task { margin:0 0 8px; font-size:var(--sfp-type-body); color:var(--sfp-ink); }
-.rag-conversation__reason { margin:8px 0 0; color:var(--sfp-muted); font-size:var(--sfp-type-caption); }
-.rag-conversation__meta { display:flex; flex-wrap:wrap; gap:6px 12px; margin-top:8px; font-size:var(--sfp-type-caption); color:var(--sfp-muted); }
+.rag-conversation__reason { margin:8px 0 0; color:var(--sfp-muted); font-size:var(--sfp-type-caption); line-height:1.6; }
+.rag-checklist + .rag-conversation__reason { margin-top:16px; }
+.rag-conversation__meta { display:flex; flex-wrap:wrap; gap:6px 12px; margin-top:12px; font-size:var(--sfp-type-caption); color:var(--sfp-muted); }
 .rag-checklist { list-style:none; margin:0; padding:0; display:grid; gap:6px; }
 .rag-checklist li { display:flex; align-items:center; gap:8px; font-size:var(--sfp-type-body); color:#3f4652; }
 .rag-checklist i { flex:0 0 auto; width:18px; height:18px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-style:normal; font-size:11px; font-weight:700; color:#fff; }

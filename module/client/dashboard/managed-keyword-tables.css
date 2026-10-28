@@ -475,7 +475,7 @@
 
 :where(.brand-keyword-workspace) .qt-source-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -546,3 +546,6 @@
 :where(.brand-keyword-workspace) .keyword-selection-cell input {width:16px;height:16px}
 :where(.brand-keyword-workspace) .keyword-selection-cell small {display:block;font-size:12px;font-weight:400;margin:6px 0;color:#716a80;white-space:nowrap}
 :where(.brand-keyword-workspace) .keyword-selection-cell button {white-space:nowrap}
+:where(.brand-keyword-workspace) .keyword-source-filter {display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:16px 0;font-size:13px}
+:where(.brand-keyword-workspace) .keyword-source-filter select {max-width:100%;padding:8px 12px;border:1px solid #d0d5dd;border-radius:8px;background:#fff}
+:where(.brand-keyword-workspace) .qt-api-flow input[type=checkbox] {width:16px;height:16px}

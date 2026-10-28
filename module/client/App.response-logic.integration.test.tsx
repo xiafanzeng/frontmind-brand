@@ -54,16 +54,18 @@ if (typeof Element !== "undefined") {
   Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {});
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   window.localStorage.clear();
   window.history.replaceState({}, "", "/");
   // Seed the question ledger through the same preview api the app will use
   // (createIntentPreviewApi persists to localStorage under the workspace id).
-  createIntentPreviewApi("brand-local-preview").command({
+  const api = createIntentPreviewApi("brand-local-preview");
+  const seeded = await api.command({
     kind: "intake",
     expectedRevision: 0,
     questions: [seedQuestion],
   });
+  await api.command({kind: "evaluate", expectedRevision: seeded.revision, questionIds: [seedQuestion.id]});
 });
 
 afterEach(cleanup);
@@ -73,7 +75,8 @@ describe("standalone response-logic navigation (integration)", () => {
     window.history.replaceState({}, "", "/?view=intent");
     render(<App preview />);
 
-    const enter = await screen.findByRole("button", { name: "进入应答逻辑" });
+    fireEvent.click(await screen.findByRole("button", {name: `查看评估：${seedQuestion.question}`}));
+    const enter = screen.getByRole("button", { name: "进入应答逻辑" });
     expect((enter as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(enter);
 
@@ -85,7 +88,7 @@ describe("standalone response-logic navigation (integration)", () => {
     // the sidebar); returning re-opens the question list.
     fireEvent.click(screen.getByRole("button", { name: "优化问题" }));
     await waitFor(() => expect(window.location.search).toBe("?view=intent"));
-    expect(await screen.findByRole("button", { name: "进入应答逻辑" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: `查看评估：${seedQuestion.question}` })).toBeTruthy();
   });
 
   it("guards a direct /?view=response-logic visit without question context", () => {
