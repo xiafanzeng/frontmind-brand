@@ -889,9 +889,9 @@ export function SimplifiedWebsiteBuilderPreview({
   const structureReady = enabledPages.length > 0;
   const brandReady = Boolean(siteName.trim() && siteGoal.trim() && (isLiveBuilder || brandMark.trim()));
   const assistantReady = Boolean(assistantName.trim() && welcome.trim());
-  // 真实 SiteOps 模式下完成由真实提交验证；本地示意模式要求先完成一次真实问答试用。
-  const assistantTrialRequired = !siteOps;
-  const assistantVerified = assistantReady && (!assistantTrialRequired || assistantTested);
+  // 两种模式都要求在助手预览中完成一次真实问答试用，步骤才算配置完成；
+  // SiteOps 真实提交仍按原有时序在试用通过后执行。
+  const assistantVerified = assistantReady && assistantTested;
   const templateComplete = templateReady && completedStepSet.has("template");
   const structureComplete = structureReady && completedStepSet.has("structure");
   const brandComplete = brandReady && completedStepSet.has("structure");
@@ -1221,7 +1221,7 @@ export function SimplifiedWebsiteBuilderPreview({
       setNotice("请补充助手名称和欢迎语。");
       return;
     }
-    if (activeStep === "assistant" && assistantTrialRequired && !assistantTested) {
+    if (activeStep === "assistant" && !assistantTested) {
       setNotice("请先在右侧“网站内效果”预览中提问一次并得到回答，完成助手试用后再继续。");
       return;
     }
@@ -1875,7 +1875,7 @@ export function SimplifiedWebsiteBuilderPreview({
                   <legend>网站主题色{siteOps && <small>生成偏好，以真实预览为准</small>}</legend>
                   <div className="sfp-color-options">
                     {accentOptions.map((color) => (
-                      <button key={color} type="button" disabled={Boolean(siteOps && !liveConfigurationEditable)} aria-label={`选择网站主题色 ${color}`} aria-pressed={siteAccent === color} style={{ background: color }} onClick={() => { if (siteAccent !== color) invalidateSteps("structure"); setSiteAccent(color); setBrandRecognized(false); }} />
+                      <button key={color} type="button" aria-label={`选择网站主题色 ${color}`} aria-pressed={siteAccent === color} style={{ background: color }} onClick={() => { if (siteAccent !== color) invalidateSteps("structure"); setSiteAccent(color); setBrandRecognized(false); }} />
                     ))}
                   </div>
                 </fieldset>
@@ -1940,13 +1940,12 @@ export function SimplifiedWebsiteBuilderPreview({
                   <legend>助手主题色{assistantFollowsSite ? "（跟随网站主题色）" : ""}{siteOps && <small>生成偏好，以真实预览为准</small>}</legend>
                   <div className="sfp-color-options">
                     {accentOptions.map((color) => (
-                      <button key={color} type="button" disabled={Boolean(siteOps && !liveConfigurationEditable)} aria-label={`选择助手主题色 ${color}`} aria-pressed={effectiveAssistantAccent === color} style={{ background: color }} onClick={() => { if (effectiveAssistantAccent === color) return; invalidateSteps("assistant"); setAssistantAccent(color); setAssistantFollowsSite(false); }} />
+                      <button key={color} type="button" aria-label={`选择助手主题色 ${color}`} aria-pressed={effectiveAssistantAccent === color} style={{ background: color }} onClick={() => { if (effectiveAssistantAccent === color) return; invalidateSteps("assistant"); setAssistantAccent(color); setAssistantFollowsSite(false); }} />
                     ))}
                   </div>
-                  <label className={`sfp-color-follow${siteOps && !liveConfigurationEditable ? " is-disabled" : ""}`}>
+                  <label className="sfp-color-follow">
                     <input
                       type="checkbox"
-                      disabled={Boolean(siteOps && !liveConfigurationEditable)}
                       checked={assistantFollowsSite}
                       onChange={(event) => {
                         const follow = event.currentTarget.checked;
@@ -1960,28 +1959,19 @@ export function SimplifiedWebsiteBuilderPreview({
                 </fieldset>
                 <label className="sfp-setting-row"><span><strong>展示回答来源</strong><small>{siteOps ? "真实网站的助手回答始终展示知识来源；此开关仅影响本地示意预览" : "让访客可以核对回答依据"}</small></span><input type="checkbox" checked={showSources} onChange={(event) => { invalidateSteps("assistant"); setShowSources(event.currentTarget.checked); }} /></label>
               </div>
-              {assistantTrialRequired && (
-                <div className={`sfp-assistant-trial ${assistantTested ? "is-done" : ""}`}>
-                  {assistantTested ? <Check size={17} /> : <CircleAlert size={17} />}
-                  <span>
-                    <strong>{assistantTested ? "助手试用已完成" : "助手试用未完成"}</strong>
-                    <small>{assistantTested ? "已在右侧预览中完成一次真实问答；修改名称或欢迎语后需重新试用。" : "请在右侧“网站内效果”预览中提问一次并得到回答，本步骤才会标记完成。"}</small>
-                  </span>
-                </div>
-              )}
+              <div className={`sfp-assistant-trial ${assistantTested ? "is-done" : ""}`}>
+                {assistantTested ? <Check size={17} /> : <CircleAlert size={17} />}
+                <span>
+                  <strong>{assistantTested ? "助手试用已完成" : "助手试用未完成"}</strong>
+                  <small>{assistantTested
+                    ? "已在右侧预览中完成一次真实问答；修改名称或欢迎语后需重新试用。"
+                    : "请在右侧“网站内效果”预览中提问一次并得到回答，本步骤才会标记完成。"}</small>
+                </span>
+              </div>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel">
-              {selectedTemplatePreviewUrl ? (
-                <>
-                  <div className="sfp-preview-heading"><span><strong>{selectedTemplateUsesPreviewFallback ? "安全视觉参考" : "真实模板预览"}</strong><small>{selectedTemplate.name} · {selectedTemplateUsesPreviewFallback ? "基于冻结预览图重建；并非原仓实际构建" : "已准入模板的实际构建"}；助手样式以生成结果为准</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-                  <TemplatePreviewFrame device={device} previewUrl={selectedTemplatePreviewUrl} referenceFallback={selectedTemplateUsesPreviewFallback} templateName={selectedTemplate.name} />
-                </>
-              ) : (
-                <>
-                  <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地助手示意（非真实预览）" : "网站内效果"}</strong><small>{siteOps ? "真实模板是否采用这些偏好，请以服务端预览为准" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-                  <MiniSitePreview assistantAccent={effectiveAssistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} onExchange={() => setAssistantTested(true)} pages={previewPages} showAssistant showSources={showSources} siteAccent={siteAccent} siteDomain={previewDomain} siteLanguage={siteLanguage} siteName={siteName} templateId={effectiveSelectedTemplateId} welcome={welcome} />
-                </>
-              )}
+              <div className="sfp-preview-heading"><span><strong>{siteOps ? "本地助手示意（非真实预览）" : "网站内效果"}</strong><small>{siteOps ? "真实模板是否采用这些偏好，请以服务端预览为准；这里可实际试用问答" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+              <MiniSitePreview assistantAccent={effectiveAssistantAccent} assistantName={assistantName} brandMark={brandMark} device={device} onExchange={() => setAssistantTested(true)} pages={previewPages} showAssistant showSources={showSources} siteAccent={siteAccent} siteDomain={previewDomain} siteLanguage={siteLanguage} siteName={siteName} templateId={effectiveSelectedTemplateId} welcome={welcome} />
             </section>
           </div>
         )}
