@@ -108,7 +108,7 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
     try { sessionStorage.setItem(storageKey, JSON.stringify({ session: session, transcript: transcript.slice(-40) })); } catch (error) { /* storage full or unavailable */ }
   }
 
-  var state = { open: false, ready: false, unavailable: false, busy: false };
+  var state = { open: false, ready: false, unavailable: false, configInFlight: false, busy: false };
   var launcher = document.createElement("button");
   launcher.type = "button";
   launcher.className = "fm-assistant-launcher";
@@ -145,6 +145,9 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
       void ask();
     });
     input.addEventListener("keydown", function (event) {
+      // 中文输入法组合期（选字回车 / keyCode 229）不得触发提交，否则会打断
+      // 候选确认或把未上屏的拼音当问题发出。
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         void ask();
@@ -194,16 +197,19 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
     panel.setAttribute("aria-hidden", open ? "false" : "true");
     launcher.setAttribute("aria-expanded", open ? "true" : "false");
     if (open) {
-      if (!state.ready && !state.unavailable) void loadConfig();
+      // A previous failure is never terminal: every fresh open retries.
+      if (!state.ready && !state.configInFlight) void loadConfig();
       input.focus();
     }
   }
 
   function loadConfig() {
-    fetch(apiBase + "/config", { headers: { accept: "application/json" } })
+    state.configInFlight = true;
+    return fetch(apiBase + "/config", { headers: { accept: "application/json" } })
       .then(function (response) { if (!response.ok) throw new Error("unavailable"); return response.json(); })
       .then(function (body) {
         state.ready = true;
+        state.unavailable = false;
         if (body.assistant && typeof body.assistant.name === "string") {
           title.textContent = body.assistant.name;
           launcher.setAttribute("aria-label", "打开" + body.assistant.name);
@@ -216,13 +222,25 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
       })
       .catch(function () {
         state.unavailable = true;
-        transcript.push({ kind: "note", text: "AI 助手暂时不可用，请稍后再试。" });
+        transcript.push({ kind: "note", text: "AI 助手暂时不可用，请刷新页面或稍后再试。" });
         appendBubble(transcript[transcript.length - 1]);
-      });
+      })
+      .then(function () { state.configInFlight = false; });
   }
 
   function ask() {
-    if (state.busy || state.unavailable) return;
+    if (state.busy) return;
+    // Never swallow a send silently: an unavailable assistant gets one
+    // reconnect attempt, and the visitor always sees what happened.
+    if (state.unavailable) {
+      if (state.configInFlight) return;
+      var question0 = (input.value || "").trim();
+      appendBubble({ kind: "note", text: "正在重新连接 AI 助手…" });
+      void loadConfig().then(function () {
+        if (state.ready && !state.unavailable && question0) ask();
+      });
+      return;
+    }
     var question = (input.value || "").trim().slice(0, MAX_QUESTION);
     if (!question) return;
     input.value = "";
