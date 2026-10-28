@@ -15,7 +15,8 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 const h = vi.hoisted(() => {
   const control = {
     restCalls: [] as string[],
-    router: async () => new Response("{}", { status: 404 }),
+    router: async (_url: string, _init?: RequestInit): Promise<Response> =>
+      new Response("{}", { status: 404 }),
   };
   return control;
 });
@@ -89,7 +90,7 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
         question={{ id: "q-real", question: "团队文档平台哪家好", category: "行业" } as never}
         onBack={() => undefined}
         visual={{
-          Button: (props: never) => <button {...props} />,
+          Button: (props: Record<string, unknown>) => <button {...props} />,
           BusinessExecutionActivity: () => null,
           FilePreview: () => null,
           ImagePreview: () => null,
@@ -107,7 +108,7 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
             question={{ id: "q-real", question: "团队文档平台哪家好", category: "行业" } as never}
             onBack={() => undefined}
             visual={{
-              Button: (props: never) => <button {...props} />,
+              Button: (props: Record<string, unknown>) => <button {...props} />,
               BusinessExecutionActivity: () => null,
               FilePreview: () => null,
               ImagePreview: () => null,
@@ -153,7 +154,7 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
       question: { id: "q-real", question: "团队文档平台哪家好", category: "行业" } as never,
       onBack: () => undefined,
       visual: {
-        Button: (props: never) => <button {...props} />,
+        Button: (props: Record<string, unknown>) => <button {...props} />,
         BusinessExecutionActivity: () => null,
         FilePreview: () => null,
         ImagePreview: () => null,
