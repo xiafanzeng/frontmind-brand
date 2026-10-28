@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {describe, expect, it, vi} from "vitest";
-import {mysqlTable, varchar, MySqlDialect} from "drizzle-orm/mysql-core";
+import {mysqlTable, varchar, json, MySqlDialect} from "drizzle-orm/mysql-core";
 import {createIntentWorkbenchService} from "../server/intent-workbench-service";
 import {registerIntentSkillPorts} from "../server/intent-skill-runtime";
 import {emptyIntentState} from "../contracts/intent-workbench";
@@ -12,9 +12,9 @@ vi.mock("../server/knowledge-node-workspace-service.js", () => ({getKnowledgeNod
 function harness() {
   const operations = mysqlTable("operations_test", {id: varchar("id", {length: 191})});
   const tasks = mysqlTable("tasks_test", {id: varchar("id", {length: 191}), operationId: varchar("operationId", {length: 191})});
-  const events = mysqlTable("events_test", {id: varchar("id", {length: 191})});
+  const events = mysqlTable("events_test", {id: varchar("id", {length: 191}), taskId: varchar("taskId", {length: 191}), normalizedPayload: json("normalizedPayload")});
   let ledger: {revision: number; state: ReturnType<typeof emptyIntentState>} | undefined;
-  const storedTasks: any[] = []; const storedOperations: any[] = [];
+  const storedTasks: any[] = []; const storedOperations: any[] = []; const storedEvents: any[] = [];
   const nodes = [{leafId: "node", title: "选材", branchTitle: "产品", status: "confirmed", content: "材料选择依据适用条件。", contentVersion: 1}];
   const dialect = new MySqlDialect();
   const db: any = {
@@ -36,9 +36,11 @@ function harness() {
     insert(table: any) {return {async values(value: any) {
       if (table === tasks) storedTasks.push(structuredClone(value));
       if (table === operations) storedOperations.push(structuredClone(value));
+      if (table === events) storedEvents.push(structuredClone(value));
     }};},
-    select() {return {from: () => ({where: (predicate: any) => ({limit: async () =>
-      storedTasks.filter(task => task.id === dialect.sqlToQuery(predicate).params[0])})})};},
+    select() {return {from: (table: any) => ({where: (predicate: any) => ({limit: async () =>
+      (table === events ? storedEvents.filter(event => event.taskId === dialect.sqlToQuery(predicate).params[0]) :
+        storedTasks.filter(task => task.id === dialect.sqlToQuery(predicate).params[0] && task.operationId === dialect.sqlToQuery(predicate).params[1]))})})};},
     update(table: any) {return {set: (value: any) => ({where: async (predicate: any) => {
       const id = dialect.sqlToQuery(predicate).params[0];
       Object.assign((table === tasks ? storedTasks : storedOperations).find(row => row.id === id), value);
@@ -87,9 +89,57 @@ function harness() {
     id: "event", timestamp: Date.now(), type: "structured_output_result", structured_output_result: {success: true, value},
   }]);
   return {service, client, intake, request, nodes, output, send, storedTasks, storedOperations, latestState,
-    ledger: () => ledger!};
+    core, storedEvents, ledger: () => ledger!};
 }
 describe("优化模型持久化任务", () => {
+  it("完成结果固化，修改方案和失败重评均不覆盖历史，刷新无需调用模型", async () => {
+    const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
+    const completed = await h.service.poll();
+    const snapshot = structuredClone(completed.state.jobs![0].result!);
+    expect(snapshot.questions[0].question).toBe("材料如何选择？");
+    expect(snapshot.plans).toHaveLength(1);
+    await h.service.command({kind: "edit", expectedRevision: completed.revision, questionId: "q",
+      actions: [{id: completed.state.plans[0].actions[0].id, selected: true, after: "修改后的问题？"}]});
+    const current = await h.service.observe();
+    expect(current.state.jobs![0].result).toEqual(snapshot);
+    h.client.createTask.mockRejectedValueOnce(Object.assign(new Error("rejected"), {status: 400, retryable: false, outcomeUnknown: false}));
+    const failed = await h.service.command({...h.request, expectedRevision: current.revision,
+      clientRequestId: "00000000-0000-4000-8000-000000000002"});
+    expect(failed.state.jobs![1].status).toBe("failed");
+    expect(failed.state.evaluations).toEqual(completed.state.evaluations);
+    expect(failed.state.plans[0].actions[0].after).toBe("修改后的问题？");
+    expect(failed.state.jobs![0].result).toEqual(snapshot);
+    h.client.listAllMessages.mockClear();
+    const reopened = createIntentWorkbenchService(h.core, {frontmindUser: {id: 42, role: "user"}} as unknown as Request);
+    expect((await reopened.observe()).state.jobs![0].result).toEqual(snapshot);
+    expect(h.client.listAllMessages).not.toHaveBeenCalled();
+  });
+  it("历史成功任务从已验收的本地事件恢复，凭据失效也不派发模型", async () => {
+    const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
+    const completed = await h.service.poll();
+    delete h.ledger().state.jobs![0].result;
+    h.ledger().state.evaluations = []; h.ledger().state.plans = [];
+    h.client.listAllMessages.mockClear();
+    const credentialRead = vi.spyOn((await import("../server/intent-skill-runtime")).intentSkillPorts(), "getDecryptedCredentialForAccountById");
+    credentialRead.mockRejectedValue(new Error("credential retired"));
+    const reopened = await h.service.observe();
+    expect(reopened.state.jobs![0].result!.evaluations[0].value).toBe(100);
+    expect(reopened.state.jobs![0].result!.plans).toEqual(completed.state.plans);
+    expect(credentialRead).not.toHaveBeenCalled();
+    expect(h.client.listAllMessages).not.toHaveBeenCalled();
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    const revision = reopened.revision;
+    expect((await h.service.observe()).revision).toBe(revision);
+    credentialRead.mockRestore();
+  });
+  it("恢复历史拒绝伪造原文和错误任务关联，不影响现有清单", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request); h.send(); await h.service.poll();
+    delete h.ledger().state.jobs![0].result;
+    h.storedEvents[0].normalizedPayload.value.evaluations[0].points[0].evidence = "伪造";
+    expect((await h.service.observe()).state.jobs![0].result).toBeUndefined();
+    h.storedTasks[0].operationId = "another-workspace";
+    expect((await h.service.observe()).state.jobs![0].result).toBeUndefined();
+  });
   it("大量事件连续读取时稳定保留最近24条，不回跳旧事件", async () => {
     const h = harness(); await h.intake(); await h.service.command(h.request);
     const timestamp = Date.now();
