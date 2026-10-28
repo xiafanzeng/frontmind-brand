@@ -34,7 +34,7 @@ it("推荐问题请求仍在核心词页时显示正确的等待阶段", async (
   render(<QuestionTemplateApiFlow/>);
   fireEvent.change(screen.getByLabelText("企业名称"), {target: {value: "东莞台心医院"}});
   await act(async () => {fireEvent.click(screen.getByRole("button", {name: "推荐核心词"}));});
-  fireEvent.click(screen.getByRole("button", {name: "选择词条"}));
+  fireEvent.click(screen.getByRole("checkbox", {name: "选择核心词：综合医院"}));
   fireEvent.click(screen.getByRole("button", {name: /生成推荐问题/}));
   expect(screen.getByRole("status").textContent).toContain("正在生成推荐问题");
   expect(scope.fetch).toHaveBeenCalledTimes(2);
@@ -49,19 +49,20 @@ it("只保存所选问题，保留分类，失败可重试并刷新正式词库"
  render(<QuestionTemplateApiFlow onSaved={onSaved}/>);
  fireEvent.change(screen.getByLabelText("企业名称"),{target:{value:"东莞台心医院"}});
  await act(async()=>{fireEvent.click(screen.getByRole("button",{name:"推荐核心词"}));});
- fireEvent.click(screen.getByRole("button",{name:"选择词条"}));
+ fireEvent.click(screen.getByRole("checkbox",{name:"选择核心词：综合医院"}));
  await act(async()=>{fireEvent.click(screen.getByRole("button",{name:/生成推荐问题/}));});
- fireEvent.click(screen.getAllByRole("button",{name:"选择词条"})[0]);
- await act(async()=>{fireEvent.click(screen.getByRole("button",{name:/保存到全域词库/}));});
+ fireEvent.click(screen.getByRole("checkbox",{name:"选择问题：如何选择综合医院？"}));
+ await act(async()=>{fireEvent.click(screen.getByRole("button",{name:/保存词条/}));});
  expect(screen.getByRole("alert").textContent).toBe("保存失败");
- expect(screen.getByRole("button",{name:"已选择 ✓"})).toBeTruthy();
+ expect(screen.getByRole("checkbox",{name:"选择问题：如何选择综合医院？"})).toHaveProperty("checked",true);
  expect(onSaved).not.toHaveBeenCalled();
- await act(async()=>{fireEvent.click(screen.getByRole("button",{name:/保存到全域词库/}));});
+ await act(async()=>{fireEvent.click(screen.getByRole("button",{name:/保存词条/}));});
  expect(onSaved).toHaveBeenCalledTimes(1);
  expect(screen.getByRole("status").textContent).toContain("新增 1 条");
  expect(JSON.parse(scope.fetch.mock.calls[3][1].body)).toEqual({brand:"东莞台心医院",questions:[{question:"如何选择综合医院？",coreWord:"综合医院",category:"category",mainCategory:"industry",heat:null}]});
+ fireEvent.click(screen.getByRole("tab",{name:"1. 核心词"}));
  fireEvent.change(screen.getByLabelText("企业名称"),{target:{value:"其他医院"}});
- expect(screen.queryByRole("button",{name:/保存到全域词库/})).toBeNull();
+ expect(screen.queryByRole("button",{name:/保存词条/})).toBeNull();
 });
 
 it("新推荐问题直接保存并交接到优化清单，不使用历史选择",async()=>{
@@ -73,12 +74,32 @@ it("新推荐问题直接保存并交接到优化清单，不使用历史选择"
  render(<QuestionTemplateApiFlow onSaved={onSaved} onOptimize={onOptimize}/>);
  fireEvent.change(screen.getByLabelText("企业名称"),{target:{value:"东莞台心医院"}});
  await act(async()=>{fireEvent.click(screen.getByRole("button",{name:"推荐核心词"}));});
- fireEvent.click(screen.getByRole("button",{name:"选择词条"}));
+ fireEvent.click(screen.getByRole("checkbox",{name:"选择核心词：综合医院"}));
  await act(async()=>{fireEvent.click(screen.getByRole("button",{name:/生成推荐问题/}));});
  expect(screen.getByRole("button",{name:"加入优化清单（0）"})).toHaveProperty("disabled",true);
- fireEvent.click(screen.getAllByRole("button",{name:"选择词条"})[0]);
+ fireEvent.click(screen.getByRole("checkbox",{name:"选择问题：新推荐问题？"}));
  await act(async()=>{fireEvent.click(screen.getByRole("button",{name:"加入优化清单（1）"}));});
  expect(onOptimize).toHaveBeenCalledWith(selections);
  expect(onSaved).toHaveBeenCalledTimes(1);
  expect(JSON.parse(scope.fetch.mock.calls[2][1].body).questions.map((item:any)=>item.question)).toEqual(["新推荐问题？"]);
+});
+
+it("更多中的仅保存不交接优化，全选勾选只提交本次推荐",async()=>{
+ const onOptimize=vi.fn(),onSaved=vi.fn().mockResolvedValue(undefined);
+ scope.fetch.mockResolvedValueOnce(new Response(JSON.stringify({data:[{word:"综合医院",category:"category"}]})))
+  .mockResolvedValueOnce(new Response(JSON.stringify({data:[{question:"问题一"},{question:"问题二"}]})))
+  .mockResolvedValueOnce(new Response(JSON.stringify({success:true,added:2,duplicates:0})));
+ render(<QuestionTemplateApiFlow onSaved={onSaved} onOptimize={onOptimize}/>);
+ fireEvent.change(screen.getByLabelText("企业名称"),{target:{value:"东莞台心医院"}});
+ await act(async()=>{fireEvent.click(screen.getByRole("button",{name:"推荐核心词"}));});
+ fireEvent.click(screen.getByRole("checkbox",{name:"选择核心词：综合医院"}));
+ await act(async()=>{fireEvent.click(screen.getByRole("button",{name:/生成推荐问题/}));});
+ expect(screen.getByText("更多").closest("details")).toHaveProperty("open",false);
+ fireEvent.click(screen.getByRole("checkbox",{name:"全选本次推荐"}));
+ fireEvent.click(screen.getByText("更多"));
+ expect(screen.getByText("更多").closest("details")).toHaveProperty("open",true);
+ await act(async()=>{fireEvent.click(screen.getByRole("button",{name:"仅保存词条"}));});
+ expect(onOptimize).not.toHaveBeenCalled();
+ expect(onSaved).toHaveBeenCalledTimes(1);
+ expect(JSON.parse(scope.fetch.mock.calls[2][1].body).questions.map((item:any)=>item.question)).toEqual(["问题一","问题二"]);
 });

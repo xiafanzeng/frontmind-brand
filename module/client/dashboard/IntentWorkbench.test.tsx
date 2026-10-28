@@ -94,19 +94,19 @@ describe("优化工作台任务入口", () => {
       }]}]};
     const {api} = pendingApi(saved);
     const first = render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    fireEvent.click(await screen.findByRole("button", {name: "已完成任务（1）"}));
+    fireEvent.click(await screen.findByRole("button", {name: "历史记录（1）"}));
     fireEvent.click(screen.getByRole("button", {name: "查看任务结果"}));
     expect(screen.getByRole("heading", {name: question.question})).toBeTruthy();
     expect(screen.getByText("已保存优化方案")).toBeTruthy();
     expect(screen.queryByRole("button", {name: "查看任务结果"})).toBeNull();
     expect(screen.getByRole("heading", {name: "已保存任务结果"})).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", {name: "返回已完成任务"}));
+    fireEvent.click(screen.getByRole("button", {name: "返回历史记录"}));
     expect(screen.queryByRole("heading", {name: question.question})).toBeNull();
     fireEvent.click(screen.getByRole("button", {name: "查看任务结果"}));
     expect(screen.queryByRole("button", {name: "确认并执行已选动作"})).toBeNull();
     first.unmount();
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    fireEvent.click(await screen.findByRole("button", {name: "已完成任务（1）"}));
+    fireEvent.click(await screen.findByRole("button", {name: "历史记录（1）"}));
     fireEvent.click(screen.getByRole("button", {name: "查看任务结果"}));
     expect(screen.getByText("回答要点支撑矩阵")).toBeTruthy();
     expect(api.command).not.toHaveBeenCalled();
@@ -117,11 +117,8 @@ describe("优化工作台任务入口", () => {
     saved.state.plans = [{questionId: "q1", actions: [{id: "a", kind: "todo", title: "部署资料",
       nodeId: null, before: "", after: "保留的方案内容", source: "缺口", selected: true}]}];
     const {api, finish} = pendingApi(saved);
-    const onSectionChange = vi.fn();
-    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api} onSectionChange={onSectionChange}/>);
-    fireEvent.click(await screen.findByRole("button", {name: "查看评估"}));
-    fireEvent.click(screen.getByRole("button", {name: "前往优化问题"}));
-    expect(onSectionChange).toHaveBeenCalledWith("list");
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: `查看评估：${question.question}`}));
     fireEvent.click(screen.getByRole("button", {name: "查看优化方案"}));
     expect(screen.getByRole("textbox", {name: "部署资料修改后"})).toHaveProperty("value", "保留的方案内容");
     expect(api.command).not.toHaveBeenCalled();
@@ -129,15 +126,17 @@ describe("优化工作台任务入口", () => {
     await waitFor(() => expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "plan", questionIds: ["q1"]})));
     await act(async () => finish(saved));
   });
-  it("评估详情的方案入口仅返回优化问题，没有方案时也不提交评估或方案任务", async () => {
-    const {api} = pendingApi(workspace("succeeded"));
+  it("点击评分只看已有结果，明确点击生成方案后仅提交方案任务", async () => {
+    const {api, finish} = pendingApi(workspace("succeeded"));
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    fireEvent.click(await screen.findByRole("button", {name: "查看评估"}));
-    expect(screen.queryByRole("button", {name: "生成优化方案"})).toBeNull();
-    fireEvent.click(screen.getByRole("button", {name: "前往优化问题"}));
-    expect(screen.getByRole("heading", {name: "优化问题"})).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", {name: `查看评估：${question.question}`}));
+    expect(screen.getByText("回答要点支撑矩阵")).toBeTruthy();
     expect(api.command).not.toHaveBeenCalled();
     expect(api.waitForJob).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "生成优化方案"}));
+    await waitFor(() => expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "plan", questionIds: ["q1"]})));
+    expect(api.command).toHaveBeenCalledTimes(1);
+    await act(async () => finish(workspace("succeeded")));
   });
   it("优化问题中查看历史已有方案，直接复用原任务，不启动新的评估", async () => {
     const saved = workspace("succeeded", "plan");
@@ -148,9 +147,7 @@ describe("优化工作台任务入口", () => {
       }]}]};
     const {api} = pendingApi(saved);
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    fireEvent.click(await screen.findByRole("button", {name: "查看评估"}));
-    fireEvent.click(screen.getByRole("button", {name: "前往优化问题"}));
-    fireEvent.click(screen.getByRole("button", {name: "查看优化方案"}));
+    fireEvent.click(await screen.findByRole("button", {name: "查看优化方案"}));
     expect(screen.getByRole("heading", {name: "已保存任务结果"})).toBeTruthy();
     expect(screen.getByText("历史部署方案")).toBeTruthy();
     expect(api.command).not.toHaveBeenCalled();
@@ -170,7 +167,7 @@ describe("优化工作台任务入口", () => {
     expect(screen.getByRole("heading", {name: "正在评估 1 条问题"})).toBeTruthy();
     await act(async () => finish(workspace("succeeded")));
     await screen.findByText("回答要点支撑矩阵");
-    expect(screen.getByRole("button", {name: "前往优化问题"})).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: "生成优化方案"})).toHaveProperty("disabled", false);
     expect(api.command).not.toHaveBeenCalled();
   });
   it("批量评估提交一次后立即显示等待页，完成后有下一步入口", async () => {
@@ -184,7 +181,7 @@ describe("优化工作台任务入口", () => {
     expect(api.command).toHaveBeenCalledTimes(1);
     expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "evaluate", questionIds: ["q1"]}));
     await act(async () => finish(workspace("succeeded")));
-    await screen.findByRole("button", {name: "前往优化问题"});
+    await screen.findByRole("button", {name: "生成优化方案"});
   });
   it("刷新后恢复方案生成并在完成时打开已保存的方案", async () => {
     const {api, finish} = pendingApi(workspace("running", "plan"));
@@ -206,7 +203,7 @@ describe("优化工作台任务入口", () => {
     initial.state.evaluations.push({...initial.state.evaluations[0], questionId: "q2"});
     const {api, finish} = pendingApi(initial);
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    fireEvent.click((await screen.findAllByRole("button", {name: "查看评估"}))[0]);
+    fireEvent.click(await screen.findByRole("button", {name: `查看评估：${question.question}`}));
     await screen.findByText("回答要点支撑矩阵");
     expect(api.command).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", {name: "下一条"}));
@@ -272,7 +269,7 @@ describe("优化工作台任务入口", () => {
     fireEvent.click(screen.getByRole("button", {name: "批量评估并优化（2）"}));
     await screen.findByRole("heading", {name: "批量评估结果"});
     expect(screen.getByText("70 / 100")).toBeTruthy();
-    expect(screen.getByRole("button", {name: "前往优化问题"})).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: "生成优化方案"})).toHaveProperty("disabled", false);
     expect(api.command).not.toHaveBeenCalled();
   });
   it("交接弹窗内可恢复失败读取，重试保留所选新问题", async () => {
@@ -309,5 +306,46 @@ describe("优化工作台任务入口", () => {
     expect(screen.getByRole("heading", {name: "企业软件有哪些部署条件？"})).toBeTruthy();
     expect(api.command).not.toHaveBeenCalled();
     expect(api.observe).toHaveBeenCalledTimes(2);
+  });
+  it("列表隐藏无能力入口，评分只读，详情仍可进入应答逻辑", async () => {
+    const saved = workspace("succeeded"), onOpenAnswer = vi.fn();
+    saved.state.plans = [{questionId: "q1", actions: [{id: "a", kind: "todo", title: "部署资料",
+      nodeId: null, before: "", after: "原方案", source: "缺口", selected: true}]}];
+    const {api} = pendingApi(saved);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api} catalogIntegration={{onOpenAnswer}}/>);
+    await screen.findByRole("button", {name: "查看优化方案"});
+    for (const name of ["新增问题", "修改问题", "删除问题", "进入应答逻辑", "返回词条生成与保存", "继续审核已保存方案"]) {
+      expect(screen.queryByRole("button", {name})).toBeNull();
+    }
+    expect(screen.queryByText("从企业信息和参考材料生成问题")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: `查看知识支撑：${question.question}`}));
+    fireEvent.click(screen.getByRole("button", {name: "进入应答逻辑"}));
+    expect(onOpenAnswer).toHaveBeenCalledWith(question);
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it("第二行生成方案只针对该问题，不沿用上一次查看的评分范围", async () => {
+    const saved = workspace("succeeded");
+    saved.state.questions.push({...question, id: "q2", question: "第二个问题"});
+    saved.state.evaluations.push({...saved.state.evaluations[0], questionId: "q2"});
+    const {api, finish} = pendingApi(saved);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: `查看评估：${question.question}`}));
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    fireEvent.click(screen.getAllByRole("button", {name: "生成优化方案"})[1]);
+    await waitFor(() => expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "plan", questionIds: ["q2"]})));
+    expect(api.command).toHaveBeenCalledTimes(1);
+    await act(async () => finish(saved));
+  });
+  it("执行记录只在统一历史入口展示，打开原回执不执行或重评", async () => {
+    const saved = workspace("succeeded");
+    saved.state.receipts = [{id: "receipt-1", status: "completed", createdAt: "2026-10-28T00:00:00Z",
+      changes: [], before: [], after: saved.state.evaluations}];
+    const {api} = pendingApi(saved);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "历史记录（1）"}));
+    fireEvent.click(screen.getByRole("button", {name: "查看执行记录"}));
+    expect(screen.getByRole("heading", {name: "优化执行完成"})).toBeTruthy();
+    expect(api.command).not.toHaveBeenCalled();
+    expect(api.execute).not.toHaveBeenCalled();
   });
 });

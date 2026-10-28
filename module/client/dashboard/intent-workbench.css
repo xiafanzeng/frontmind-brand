@@ -155,14 +155,21 @@
 .iw-catalog-header{align-items:center;margin-bottom:20px}
 .iw-catalog-header .iw-search{width:220px;max-width:220px}
 .iw-catalog-header select{min-width:125px}
-.iw-workbench .iw-catalog-table table{min-width:1080px}
+.iw-workbench .iw-catalog-table table{min-width:880px}
 .iw-catalog-table th:first-child,.iw-catalog-table td:first-child{width:44px;padding-right:0}
 .iw-catalog-table td:nth-child(2){width:34%;line-height:1.8}
 .iw-catalog-table td:nth-child(3),.iw-catalog-table td:nth-child(4){white-space:nowrap}
-.iw-catalog-actions{display:flex;gap:8px;white-space:nowrap}
+.iw-catalog-actions{display:flex;align-items:flex-start;gap:8px;white-space:nowrap}
 .iw-catalog-actions button{font-size:13px;min-height:38px;padding:8px 10px}
 .iw-catalog-actions .iw-assess-entry{color:#7545a0;background:#faf7fc;border-color:#d9c7e5}
 .iw-catalog-actions button:disabled{opacity:1;color:#98a2b3;background:#fff;border-color:#e7ebef}
+.iw-workbench .iw-catalog-table th:last-child,.iw-workbench .iw-catalog-table td:last-child{position:sticky;right:0;background:#fff;z-index:1;min-width:140px;box-shadow:-1px 0 #eaecf0}
+.iw-workbench button.iw-score-link{padding:2px 0;min-height:28px;border:0;border-radius:3px;background:transparent;text-decoration:underline;text-underline-offset:4px}
+.iw-workbench .iw-more-actions,.brand-keyword-workspace .iw-more-actions{font-size:13px;min-width:64px}
+.iw-workbench .iw-more-actions>summary,.brand-keyword-workspace .iw-more-actions>summary{padding:8px 12px;border:1px solid #d0d5dd;border-radius:8px;cursor:pointer;list-style:none}
+.iw-workbench .iw-more-actions>summary:focus-visible,.brand-keyword-workspace .iw-more-actions>summary:focus-visible{outline:2px solid #7545a0;outline-offset:3px}
+.iw-workbench .iw-more-actions>div,.brand-keyword-workspace .iw-more-actions>div{display:flex;flex-direction:column;gap:6px;padding-top:8px}
+.iw-workbench .iw-more-actions:not([open])>div,.brand-keyword-workspace .iw-more-actions:not([open])>div{display:none}
 .iw-catalog-category{color:#9a7028;background:#fbf4e5;border-radius:4px;padding:3px 6px;font-size:12px}
 .iw-catalog-category[data-category=competitor_comparison]{color:#496f9d;background:#edf3fa}
 .iw-catalog-category[data-category=product_scenario]{color:#2f7e7a;background:#eaf6f4}
