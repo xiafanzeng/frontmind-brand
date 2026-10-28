@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { intentSkillPorts } from "./intent-skill-runtime.js";
 import { resolveBrandIntentQuestion, toConfiguredIntentQuestion, type BrandQuestionResolverPorts } from "./brand-question-resolver.js";
 import { createResponseLogicService } from "./response-logic-service.js";
+import { getLatestKnowledgeSnapshot as getLatestKnowledgeSnapshotFromModuleService } from "./knowledge-snapshot-service.js";
 import type { ResponseLogicApiPorts, ConfiguredIntentQuestion } from "./response-logic-core-ports.js";
 import { mysqlTable, varchar, int, text, json, mysqlEnum, timestamp, uniqueIndex, index } from "drizzle-orm/mysql-core";
 import type { ResponseLogicDraft, ConfirmedResponseLogic, ResponseLogicAppliedModelResult, ResponseLogicPublicationMutation } from "../contracts/response-logic.js";
@@ -262,7 +263,12 @@ export function assembleResponseLogicCore(input: {
     responseLogicService,
 
     // ── Knowledge & Credentials ──
-    getLatestKnowledgeSnapshot: (userId: number) => bkp.getLatestAuthenticatedKnowledgeSnapshot(userId),
+    // Bind the module's own (userId)-arity snapshot lookup. The bkp variant
+    // (getLatestAuthenticatedKnowledgeSnapshot) takes { userId, notBefore };
+    // calling it with a bare userId leaves notBefore undefined and drizzle's
+    // gte(snapshot.createdAt, undefined) crashes in mapToDriverValue before
+    // any [RL-Start] stage instrumentation runs.
+    getLatestKnowledgeSnapshot: (userId: number) => getLatestKnowledgeSnapshotFromModuleService(userId),
     credentialForRequest: (request: unknown) => {
       const req = request as Request & { frontmindCredential?: { id: string; userId: number; version: number; credentialRef: string; fingerprint: string; status: string; agentProfile: string; provider: string; upstreamModel: string; upstreamEffort: string | null } };
       return req.frontmindCredential as never;
