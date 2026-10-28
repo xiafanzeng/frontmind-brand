@@ -475,7 +475,7 @@
 
 :where(.brand-keyword-workspace) .qt-source-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -503,9 +503,7 @@
   font-weight: 400;
 }
 :where(.brand-keyword-workspace) .qt-flow-actions {
-  position: sticky;
-  top: 0;
-  z-index: 3;
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -538,3 +536,13 @@
   :where(.brand-keyword-workspace) .qt-flow-action-buttons,
   :where(.brand-keyword-workspace) .qt-flow-action-buttons button {width: 100%;}
 }
+
+:where(.brand-keyword-workspace) .keyword-source-note {color:var(--dashboard-muted,#716a80);font-size:13px;line-height:1.7;margin:0 0 16px}
+:where(.brand-keyword-workspace) .keyword-batch-actions {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:14px;margin:0 0 16px;border:1px solid var(--line,#e8e1ee);border-radius:12px;background:#fff}
+:where(.brand-keyword-workspace) .keyword-batch-actions>div {display:flex;flex-wrap:wrap;gap:8px}
+:where(.brand-keyword-workspace) .keyword-selection-cell {position:sticky;left:0;min-width:140px;background:#fff;z-index:1}
+:where(.brand-keyword-workspace) th.keyword-selection-cell {z-index:2;background:#f3edf8}
+:where(.brand-keyword-workspace) .keyword-selection-cell label {display:flex;align-items:center;gap:8px;white-space:nowrap;font-weight:500}
+:where(.brand-keyword-workspace) .keyword-selection-cell input {width:16px;height:16px}
+:where(.brand-keyword-workspace) .keyword-selection-cell small {display:block;font-size:12px;font-weight:400;margin:6px 0;color:#716a80;white-space:nowrap}
+:where(.brand-keyword-workspace) .keyword-selection-cell button {white-space:nowrap}

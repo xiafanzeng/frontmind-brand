@@ -27,16 +27,16 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
   return <>
     <details className="iw-intent-generation"><summary aria-disabled={!integration?.generationPanel} onClick={event => {if (!integration?.generationPanel) event.preventDefault();}}>从企业信息和参考材料生成问题</summary>{integration?.generationPanel && <div>{integration.generationPanel}</div>}</details>
     <header className="iw-header iw-catalog-header">
-      <div><h1>优化问题</h1><p>承接全域词库选词，统一完成问题价值与知识支撑评估。</p></div>
+      <div><h1>优化问题</h1><p>查看已保存评估，或评估新加入的推荐问题与历史词条。</p></div>
       <div className="iw-header-tools">
-        <button onClick={onUniverse}>返回全域词库</button>
+        <button onClick={onUniverse}>返回词条生成与保存</button>
         <label className="iw-search"><Search size={17}/><input aria-label="搜索优化问题" placeholder="搜索问题" value={search} onChange={event => onSearch(event.target.value)}/></label>
         <select aria-label="问题分类" value={category} onChange={event => onCategory(event.target.value)}><option value="all">全部类别</option>{categories.map(value => <option key={value} value={value}>{keywordCategoryLabel(value) || value}</option>)}</select>
         <select aria-label="问题状态" value={status} onChange={event => onStatus(event.target.value)}><option value="all">全部状态</option><option value="unevaluated">待评估</option><option value="supported">充分支撑</option><option value="partial">部分支撑</option><option value="missing">未支撑</option><option value="published">已有正式应答</option><option value="pending">待制作应答</option><option value="unknown">暂未同步</option></select>
         <button className="iw-primary" disabled={!integration?.onAddQuestion} onClick={integration?.onAddQuestion}>新增问题</button>
       </div>
     </header>
-    {received.length > 0 && <div className="iw-handoff-banner" role="status"><div><strong>已从品牌全域词库接收 {received.length} 条问题</strong><p>{activeJob?.kind === "evaluate" && received.some(id => activeJob.questionIds.includes(id)) ? "问题价值正在评估；完成后可查看知识支撑并批量生成方案。" : received.every(id => evaluations.some(item => item.questionId === id)) ? "问题评估已完成，可查看知识支撑并生成优化方案。" : "问题已加入清单，可继续评估问题价值与知识支撑。"}</p></div><span className="iw-tag">全域词库 → 问题优化</span></div>}
+    {received.length > 0 && <div className="iw-handoff-banner" role="status"><div><strong>已接收所选 {received.length} 条问题</strong><p>{activeJob?.kind === "evaluate" && received.some(id => activeJob.questionIds.includes(id)) ? "问题价值正在评估；完成后可查看知识支撑并批量生成方案。" : received.every(id => evaluations.some(item => item.questionId === id)) ? "问题评估已完成，可复用已有结果并生成优化方案。" : "问题已加入清单，可继续评估问题价值与知识支撑。"}</p></div><span className="iw-tag">所选词条 → 问题优化</span></div>}
     <section className="iw-panel iw-table-wrap iw-catalog-table"><table>
       <thead><tr><th><input type="checkbox" aria-label="选择当前页问题" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => onSelectPage(event.target.checked)}/></th><th>候选问题</th><th>问题价值</th><th>知识支撑</th><th>主要缺口</th><th>优化状态</th><th>操作</th></tr></thead>
       <tbody>{visible.map(question => {
@@ -58,7 +58,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
           <button disabled={!integration?.onDeleteQuestion} onClick={() => integration?.onDeleteQuestion?.(question)}>删除问题</button>
         </div></td>
       </tr>;})}</tbody>
-    </table>{!visible.length && <div className="iw-empty">{questions.length ? "没有匹配问题，请调整筛选条件。" : "从品牌全域词库选择问题，加入优化清单。"}</div>}</section>
+    </table>{!visible.length && <div className="iw-empty">{questions.length ? "没有匹配问题，请调整筛选条件。" : "从推荐问题或已保存词库中选择词条，加入优化清单。"}</div>}</section>
     <div className="iw-pagination"><span>共 {total} 项</span><button disabled={page === 0} onClick={() => onPage(page - 1)}>上一页</button><span>{page + 1} / {pageCount}</span><button disabled={page + 1 >= pageCount} onClick={() => onPage(page + 1)}>下一页</button></div>
     {selected.length > 0 && <div className="iw-selection-bar"><span>已选择 <strong>{selected.length}</strong> 条问题</span><div><button onClick={onClear}>清空选择</button><button className="iw-primary" disabled={pending} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div></div>}
   </>;
