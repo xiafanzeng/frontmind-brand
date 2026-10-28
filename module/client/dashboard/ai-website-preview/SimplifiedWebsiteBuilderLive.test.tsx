@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SiteOpsObservationV1 } from "../../../contracts/siteops-contract";
@@ -22,7 +23,7 @@ import {
 import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
 
 function observation(
-  interactionState: "select_snapshot" | "collecting_brief",
+  interactionState: "select_snapshot" | "collecting_brief" | "visual_searching",
 ): SiteOpsObservationV1 {
   return {
     schemaVersion: 1,
@@ -463,6 +464,12 @@ describe("redesigned live website builder setup", () => {
       target: { value: "您好，我会依据企业知识为您解答。" },
     });
     expect(screen.getByText("真实网站的助手回答始终展示知识来源；此开关仅影响本地示意预览")).toBeTruthy();
+    // 助手步骤必须先完成一次真实问答试用，才能保存配置并开始生成。
+    fireEvent.change(screen.getByLabelText("在网站助手中提问"), {
+      target: { value: "如何配置网站 AI 助手？" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
+    await waitFor(() => expect(screen.getByText("助手试用已完成")).toBeTruthy());
     fireEvent.click(screen.getByTestId("website-build-start"));
 
     await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
@@ -512,6 +519,12 @@ describe("redesigned live website builder setup", () => {
     expect(welcome.disabled).toBe(false);
     fireEvent.change(assistantName, { target: { value: "远山改版助手" } });
     fireEvent.change(welcome, { target: { value: "您好，这里是改版后的真实帮助中心。" } });
+    // 修改名称与欢迎语后需要重新完成一次问答试用。
+    fireEvent.change(screen.getByLabelText("在网站助手中提问"), {
+      target: { value: "FrontMind 可以帮企业做什么？" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
+    await waitFor(() => expect(screen.getByText("助手试用已完成")).toBeTruthy());
     fireEvent.click(screen.getByTestId("website-revision-submit"));
 
     await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
@@ -521,6 +534,63 @@ describe("redesigned live website builder setup", () => {
     expect(revision?.text).toContain("AI 助手名称 远山改版助手");
     expect(revision?.text).toContain("AI 助手欢迎语 您好，这里是改版后的真实帮助中心。");
     expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("blocks the live assistant step from completing until a real trial happens", async () => {
+    const onAction = vi.fn(async () => undefined);
+    const onSubmitRevision = vi.fn(async () => undefined);
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="assistant"
+        siteOps={{
+          observation: liveBuildObservation("awaiting_visual_selection"),
+          onAction,
+          onSubmitRevision,
+        }}
+        storageScope="live:7:workspace-a"
+      />,
+    );
+
+    expect(screen.getByText("助手试用未完成")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("website-build-start"));
+    expect(screen.getByText(/完成助手试用后再继续/)).toBeTruthy();
+    expect(onSubmitRevision).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("在网站助手中提问"), {
+      target: { value: "能保证两周内上线吗？" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
+    await waitFor(() => expect(screen.getByText("助手试用已完成")).toBeTruthy());
+    expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(0);
+  });
+
+  it("keeps the color pickers and the follow toggle usable in every live state", () => {
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="assistant"
+        siteOps={{ observation: observation("visual_searching") }}
+        storageScope="live:7:workspace-a"
+      />,
+    );
+
+    expect(
+      (screen.getByRole("button", { name: "选择助手主题色 #a44f25" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect((screen.getByLabelText(/跟随网站主题色/) as HTMLInputElement).disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: /确认结构$/ }));
+    expect(
+      (screen.getByRole("button", { name: "选择网站主题色 #3e6b57" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    // 默认跟随：改网站主题色后，助手色同步变化。
+    fireEvent.click(screen.getByRole("button", { name: "选择网站主题色 #3e6b57" }));
+    fireEvent.click(
+      within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /AI 助手$/ }),
+    );
+    expect(
+      screen.getByRole("button", { name: "选择助手主题色 #3e6b57" }).getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 
   it("uses the server-selected template after submission and locks local reselection", () => {
