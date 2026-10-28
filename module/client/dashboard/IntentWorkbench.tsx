@@ -259,7 +259,23 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const currentChanges = receipt?.changes.filter(change => change.action.kind === "node" && change.action.nodeId === node?.id && (change.status === "succeeded" || change.status === "reverted")) ?? [];
   const history = [...(workspace?.state.jobs ?? [])].filter(job => job.status === "succeeded" && job.result).reverse();
   const archived = history.find(job => job.id === historyId)?.result;
-  const hasSavedPlans = scope.length > 0 && scope.every(id => workspace?.state.plans.some(item => item.questionId === id));
+  const savedPlanIds = [...new Set([
+    ...(workspace?.state.plans ?? []).map(item => item.questionId),
+    ...history.flatMap(job => job.result!.plans.map(item => item.questionId)),
+  ])];
+  function openSavedPlan(id: string) {
+    const saved = workspace?.state.plans.find(item => item.questionId === id);
+    if (saved) {
+      setScope([id]); setDrafts([structuredClone(saved)]); setDraftDirty(false); setView("plan");
+    } else {
+      const job = history.find(item => item.result!.plans.some(plan => plan.questionId === id));
+      if (job) {setHistoryId(job.id); setView("history-detail");}
+    }
+  }
+  function openOptimizationList() {
+    setReceived(scope); setSelected(scope); setSearch(""); setCategory("all"); setStatus("all"); setPage(0);
+    openSection("list");
+  }
   function openSection(section: "universe" | "list") {setView(section); emittedSection.current = section; onSectionChange?.(section);}
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending}>
     {view === "plan" && <div className="iw-toolbar"><span>当前方案已保存；重新生成会创建新的模型任务。</span><button disabled={pending || draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>}
@@ -304,6 +320,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     {view !== "universe" && !workspace && !error && <div role="status" className="iw-empty">正在读取优化工作台…</div>}
     {view === "list" && workspace && <>
       <IntentQuestionCatalog questions={questions} visible={visible} evaluations={evaluations} activeJob={activeJob} received={received} integration={catalogIntegration}
+        savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan}
         search={search} category={category} status={status} selected={selected} pending={pending}
         page={currentPage} pageCount={pageCount} total={filtered.length}
         onSearch={value => {setSearch(value); setPage(0);}} onCategory={value => {setCategory(value); setPage(0);}} onStatus={value => {setStatus(value); setPage(0);}}
@@ -325,7 +342,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         ["未充分支撑要点", `${evaluated.reduce((sum, item) => sum + item.points.filter(point => point.status !== "supported").length, 0)} 项`],
       ].map(([label, value]) => <section className="iw-panel" key={label}><span>{label}</span><strong>{value}</strong></section>)}</div></>}
       {scope.length === 1 ? <Evaluation item={activeEvaluation}/> : <section className="iw-panel iw-batch-list">{evaluated.map(item => <div key={item.questionId}><div className="iw-batch-row"><b>{questions.find(question => question.id === item.questionId)?.question}</b><span>问题价值 <Score value={item.value}/></span><span>知识支撑 <Score value={item.support}/></span><button aria-expanded={expanded.includes(item.questionId)} onClick={() => setExpanded(items => items.includes(item.questionId) ? items.filter(id => id !== item.questionId) : [...items, item.questionId])}><ChevronDown size={15}/>{expanded.includes(item.questionId) ? "收起细则" : "展开细则"}</button></div>{expanded.includes(item.questionId) && <div className="iw-batch-detail"><Evaluation item={item}/></div>}</div>)}</section>}
-      <div className="iw-sticky"><p>方案可逐项审核，知识正文不会自动采纳。</p><div><button disabled={pending} onClick={() => void evaluate(scope, true)}>重新评估</button><button className="iw-primary" disabled={pending || evaluated.length !== scope.length} onClick={() => void plan()}>{hasSavedPlans ? "查看已保存方案" : scope.length > 1 ? `批量生成优化方案（${scope.length}）` : "生成优化方案"} <ArrowRight size={16}/></button></div></div>
+      <div className="iw-sticky"><p>在优化问题中查看已有方案，查看不会重新评估。</p><div><button disabled={pending} onClick={() => void evaluate(scope, true)}>重新评估</button><button className="iw-primary" disabled={pending} onClick={openOptimizationList}>前往优化问题 <ArrowRight size={16}/></button></div></div>
     </>}
     {view === "plan" && <><button className="iw-back" onClick={() => setView("evaluation")}><ArrowLeft size={15}/>返回评估详情</button><header className="iw-header"><div><h1>确认优化方案</h1><p>选择需要执行的动作，查看并编辑具体内容变更。</p></div><span className="iw-tag">{scope.length} 个问题</span></header><Steps step={1}/>{drafts.map(draft => <section className="iw-plan-section" key={draft.questionId}><h2>{questions.find(item => item.id === draft.questionId)?.question}</h2><PlanEditor plan={draft} question={questions.find(item => item.id === draft.questionId)?.question ?? ""} onChange={changeDraft}/><p className="iw-method">AI 根据当前知识证据生成方案。请审核修改内容；执行后通过真实模型重新评估。</p></section>)}<div className="iw-sticky"><span>已选择 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected).length, 0)}</strong> 项 · 执行后重新评估实际支撑</span><div><button disabled={pending} onClick={() => void saveDrafts()}>{draftDirty ? "保存方案草稿" : "方案已保存"}</button><button className="iw-primary" disabled={pending || !drafts.some(draft => draft.actions.some(action => action.selected))} onClick={() => void execute()}>确认并执行已选动作</button></div></div></>}
     {view === "result" && receipt && !receipt.after.length && !pending && <div className="iw-panel" role="status">{receipt.reEvaluationError ?? "本次变更已保存，模型重评结果尚未生成。可重新读取任务状态。"}</div>}
