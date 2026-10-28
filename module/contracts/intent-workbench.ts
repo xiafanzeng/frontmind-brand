@@ -54,6 +54,12 @@ export type IntentSkillJob = {
   receiptId?: string; error?: string; lease?: {owner: string; expiresAt: number};
   createClaimedAt?: number;
   terminalObservedAt?: number;
+  result?: {
+    completedAt: string;
+    questions: IntentQuestion[];
+    evaluations: IntentEvaluation[];
+    plans: IntentPlan[];
+  };
   progress?: {
     stage: "preparing" | "submitted" | "analyzing" | "validating" | "repairing" | "completed" | "failed";
     updatedAt: string;
