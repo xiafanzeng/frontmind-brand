@@ -13,7 +13,7 @@ import IntentQuestionCatalog, {type IntentCatalogIntegration} from "./IntentQues
 import IntentTaskProgress from "./IntentTaskProgress";
 import {findCatalogQuestion} from "./intent-catalog-link";
 
-type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge" | "progress" | "history";
+type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge" | "progress" | "history" | "history-detail";
 type Selection = Parameters<NonNullable<ManagedKeywordTablesProps["onUseQuestion"]>>[0];
 const labels = {supported: "已支撑", partial: "部分支撑", missing: "未支撑"};
 function Score({value}: {value: number}) {return <span className={`iw-score ${value >= 80 ? "good" : value >= 50 ? "warn" : "bad"}`}><b>{value}</b><i><em style={{width: `${value}%`}}/></i></span>;}
@@ -131,11 +131,11 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
             (!completed.inputHash || item.inputHash === completed.inputHash));
           if (saved.length === completed.questionIds.length) {
             setDrafts(structuredClone(saved)); setDraftDirty(false); setView("plan");
-          } else if (completed.result) {setHistoryId(completed.id); setView("history");}
+          } else if (completed.result) {setHistoryId(completed.id); setView("history-detail");}
           else setView("evaluation");
         } else if (completed.result && completed.questionIds.some(id =>
           !data.state.evaluations.some(item => item.questionId === id && item.provenance?.operationId === completed.id))) {
-          setHistoryId(completed.id); setView("history");
+          setHistoryId(completed.id); setView("history-detail");
         } else setView("evaluation");
         return data;
       }
@@ -263,14 +263,18 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   function openSection(section: "universe" | "list") {setView(section); emittedSection.current = section; onSectionChange?.(section);}
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending}>
     {view === "plan" && <div className="iw-toolbar"><span>当前方案已保存；重新生成会创建新的模型任务。</span><button disabled={pending || draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>}
-    {workspace && view !== "history" && view !== "progress" && <div className="iw-toolbar"><span>已完成任务自动保存，随时查看评分与方案</span><button disabled={pending} onClick={() => {setHistoryId(undefined); setView("history");}}>已完成任务（{history.length}）</button></div>}
+    {workspace && view !== "history" && view !== "history-detail" && view !== "progress" && <div className="iw-toolbar"><span>已完成任务自动保存，随时查看评分与方案</span><button disabled={pending} onClick={() => {setHistoryId(undefined); setView("history");}}>已完成任务（{history.length}）</button></div>}
     {view === "history" && workspace && <>
       <button className="iw-back" onClick={() => openSection("list")}><ArrowLeft size={15}/>返回问题列表</button>
       <header className="iw-header"><div><h1>已完成任务</h1><p>保留任务完成时的问题、评分、证据和优化方案。查看记录不会重新评估或调用模型。</p></div></header>
       <section className="iw-panel iw-todo-list">{history.length ? history.map(job => <div key={job.id}>
         <span>{new Date(job.result!.completedAt).toLocaleString("zh-CN")} · {job.kind === "plan" ? "评估与优化方案" : "问题评估"} · {job.result!.questions.length} 条问题</span>
-        <button aria-pressed={historyId === job.id} onClick={() => setHistoryId(job.id)}>查看任务结果</button>
+        <button onClick={() => {setHistoryId(job.id); setView("history-detail");}}>查看任务结果</button>
       </div>) : <p>暂无已完成任务记录。</p>}</section>
+    </>}
+    {view === "history-detail" && workspace && <>
+      <button className="iw-back" onClick={() => {setHistoryId(undefined); setView("history");}}><ArrowLeft size={15}/>返回已完成任务</button>
+      <header className="iw-header"><div><h1>已保存任务结果</h1><p>保留任务完成时的问题、评分、证据和优化方案。查看记录不会重新评估或调用模型。</p></div></header>
       {archived && <section aria-label="已保存任务详情"><p className="iw-method">完成于 {new Date(archived.completedAt).toLocaleString("zh-CN")} · 以下为当时保存的结果</p>
         {archived.evaluations.map(item => <section key={item.questionId} className="iw-plan-section">
           <h2>{archived.questions.find(question => question.id === item.questionId)?.question}</h2><Evaluation item={item}/>
@@ -281,6 +285,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
           </section>)}
         </section>)}
       </section>}
+      {!archived && <section className="iw-panel" role="status">未找到该任务的已保存结果，请返回已完成任务重新选择。</section>}
     </>}
     {error && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true)}>重新读取</button></div>}
     {view === "progress" && <IntentTaskProgress job={workspace?.state.jobs?.find(item => item.id === progressJobId)}
