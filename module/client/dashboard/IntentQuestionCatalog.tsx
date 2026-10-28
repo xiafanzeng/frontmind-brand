@@ -13,12 +13,13 @@ export type IntentCatalogIntegration = {
   onDeleteQuestion?: (question: IntentQuestion) => void;
 };
 export const answerStatusLabel = (status?: string) => status === "published" ? "已有正式应答" : status === "pending" ? "待制作应答" : "暂未同步";
-export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, category, status, selected, pending, page, pageCount, total,
-  onSearch, onCategory, onStatus, onToggle, onSelectPage, onClear, onEvaluate, onPage, onUniverse}: {
+export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, category, status, selected, pending, page, pageCount, total, savedPlanIds,
+  onSearch, onCategory, onStatus, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onPage, onUniverse}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
   evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; received: string[];
   search: string; category: string; status: string; selected: string[]; pending: boolean;
   page: number; pageCount: number; total: number;
+  savedPlanIds: string[]; onViewPlan: (id: string) => void;
   onSearch: (value: string) => void; onCategory: (value: string) => void; onStatus: (value: string) => void;
   onToggle: (id: string) => void; onSelectPage: (checked: boolean) => void; onClear: () => void;
   onEvaluate: (ids: string[]) => void; onPage: (page: number) => void; onUniverse: () => void;
@@ -53,6 +54,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
         <td><span className={`iw-tag ${evaluating ? "partial" : gaps?.length ? "partial" : evaluation ? "supported" : ""}`}>{evaluating ? "评估中" : !evaluation ? "待评估" : gaps?.length ? "待优化" : "要点已支撑"}</span></td>
         <td><div className="iw-catalog-actions">
           <button className="iw-assess-entry" disabled={pending} onClick={() => onEvaluate([question.id])}>{evaluation ? "查看评估" : "评估问题"}</button>
+          {savedPlanIds.includes(question.id) && <button disabled={pending} onClick={() => onViewPlan(question.id)}>查看优化方案</button>}
           <button disabled={!integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
           <button disabled={!integration?.onEditQuestion} onClick={() => integration?.onEditQuestion?.(question)}>修改问题</button>
           <button disabled={!integration?.onDeleteQuestion} onClick={() => integration?.onDeleteQuestion?.(question)}>删除问题</button>
