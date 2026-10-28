@@ -5,7 +5,7 @@ import {Toaster} from 'sonner';
 import {BRAND_MODULE_LABEL,BRAND_MODULE_SIDEBAR_LABEL} from '../module/client/module-label';
 import ModuleWorkspace,{type ModuleContext} from '../module/client/ModuleWorkspace';
 import {EnterpriseRagPreview} from '../module/client/dashboard/ai-website-preview/EnterpriseRagPreview';
-import {SimplifiedWebsiteBuilderPreview,type BuildStep} from '../module/client/dashboard/ai-website-preview/SimplifiedWebsiteBuilderPreview';
+import {SimplifiedWebsiteBuilderPreview,normalizeWebsiteBuildStep,type BuildStep} from '../module/client/dashboard/ai-website-preview/SimplifiedWebsiteBuilderPreview';
 import {configureBrandApiHooks} from '../module/client/api-hooks';
 import {KnowledgeBaseUploadProvider} from '../module/client/lib/knowledge-base-upload-manager';
 import {brandHost} from '../module/client/host';
@@ -17,8 +17,7 @@ import {createIntentPreviewApi} from './intent-preview';
 import {resolveStandaloneBrandPage,standaloneBrandPages as pages} from './routes';
 import './standalone.css';
 import './preview.css';
-const websiteSteps:BuildStep[]=['template','structure','assistant','evaluation'];
-const websiteReturnLabels:Record<BuildStep,string>={template:'模板选择',structure:'结构确认',assistant:'AI 助手',evaluation:'整体评估'};
+const websiteReturnLabels:Record<BuildStep,string>={template:'选择模板',design:'网站设计',evaluation:'建设评估'};
 const brandModule={id:'brand',label:BRAND_MODULE_LABEL,color:'#16794f'};
 const intentModule={id:'intent',label:'意图优化',color:'#7545a0'};
 const extensionsModule={id:'extensions',label:'AI专用官网',color:'#5e6174'};
@@ -33,11 +32,12 @@ function Runtime({context,preview}:{context:ModuleContext;preview:boolean}){
  const requestedRaw=params.get('view')??(path==='/'?'reports':path.slice(1));
  const requested=resolveStandaloneBrandPage(requestedRaw);
  const requestedWebsiteStep=params.get('step');const requestedReturnStep=params.get('returnStep');
- const websiteStep=websiteSteps.includes(requestedWebsiteStep as BuildStep)?(requestedWebsiteStep as BuildStep):'template';
- const returnStep=websiteSteps.includes(requestedReturnStep as BuildStep)?(requestedReturnStep as BuildStep):null;
+ const websiteStep=normalizeWebsiteBuildStep(requestedWebsiteStep)??'template';
+ const returnStep=normalizeWebsiteBuildStep(requestedReturnStep);
  const page=requested??'knowledge';
  useEffect(()=>{if(!requested)navigate('/',{replace:true});else if(requestedRaw!==requested){params.set('view',requested);navigate(`/?${params.toString()}`,{replace:true});}},[navigate,requested,requestedRaw,search]);
- useEffect(()=>{if(page==='website'&&requestedWebsiteStep&&!websiteSteps.includes(requestedWebsiteStep as BuildStep))navigate('/?view=website',{replace:true});},[navigate,page,requestedWebsiteStep]);
+ useEffect(()=>{if(page!=='website'||!requestedWebsiteStep)return;const normalized=normalizeWebsiteBuildStep(requestedWebsiteStep);if(!normalized){navigate('/?view=website',{replace:true});return;}if(normalized!==requestedWebsiteStep)navigate(normalized==='template'?'/?view=website':`/?view=website&step=${normalized}`,{replace:true});},[navigate,page,requestedWebsiteStep]);
+ useEffect(()=>{if(!requestedReturnStep)return;const next=new URLSearchParams(search);const normalized=normalizeWebsiteBuildStep(requestedReturnStep);if(!normalized)next.delete('returnStep');else if(normalized!==requestedReturnStep)next.set('returnStep',normalized);else return;navigate(`/?${next.toString()}`,{replace:true});},[navigate,requestedReturnStep,search]);
  useEffect(()=>{document.querySelector<HTMLElement>('.agent-workbench-shell__main-content')?.scrollTo({top:0,left:0});},[page]);
  const dashboard=runtime.dashboard.useQuery(undefined,{enabled:page==='keywords'||page==='intent',refetchOnWindowFocus:true});const knowledge=runtime.api.workspace.knowledge.useQuery(undefined,{enabled:page==='keywords'||page==='intent',refetchOnWindowFocus:true});
  const brandPages=pages.filter(([id])=>id==='reports'||id==='knowledge');
@@ -46,7 +46,7 @@ function Runtime({context,preview}:{context:ModuleContext;preview:boolean}){
  const selectedModule=page==='keywords'||page==='intent'||page==='response-logic'?intentModule:page==='knowledge'||page==='reports'?brandModule:extensionsModule;
  const selectedPages=selectedModule.id==='intent'?intentPages:selectedModule.id==='brand'?brandPages:extensionPages;
  return <ModuleShell module={selectedModule} navigationModules={[{...brandModule,label:BRAND_MODULE_SIDEBAR_LABEL,views:brandPages.map(([id,label])=>({id,label}))},{...intentModule,views:intentPages.map(([id,label])=>({id,label}))},...(preview?[progressModule,contentModule,publishModule]:[]),{...extensionsModule,views:extensionPages.map(([id,label])=>({id,label}))}]} views={selectedPages.map(([id,label])=>({id,label}))} activeView={page} onSelectView={id=>brandHost().requestWorkspaceNavigation(()=>navigate(`/?view=${id}`))} preview={preview} showViewTabs={page!=='knowledge'}><div className={`brand-page brand-page--${page}`}>
- <ModuleWorkspace context={context} page={page} preview={preview} intentApi={intentApi} onIntentSectionChange={section=>navigate(`/?view=${section==='universe'?'keywords':'intent'}`)} onEnterResponseLogic={()=>navigate('/?view=response-logic')} onResponseLogicBack={()=>navigate('/?view=intent')} keywordData={{tables:dashboard.data?.payload?.keywordTables??[],revision:dashboard.data?.revision??null,loading:dashboard.isLoading,error:dashboard.error,knowledgePublished:Boolean(knowledge.data?.snapshot)}} previewKnowledge={{progress:previewKnowledgeProgress,snapshot:previewKnowledgeSnapshot}} previewQa={preview?<EnterpriseRagPreview storageScopeKey="preview" onOpenWebsite={()=>navigate(returnStep&&returnStep!=='template'?`/?view=website&step=${returnStep}`:'/?view=website')} onOpenWebsiteAssistant={()=>navigate('/?view=website&step=assistant')} websiteEntryLabel={returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}/>:undefined} previewSiteOps={preview?<SimplifiedWebsiteBuilderPreview storageScope="preview" initialStep={websiteStep} onOpenRag={()=>navigate(`/?view=enterprise-qa&returnStep=${websiteStep}`)} onStepChange={step=>navigate(step==='template'?'/?view=website':`/?view=website&step=${step}`,{replace:true})}/>:undefined} enterpriseRagNavigation={{onOpenWebsite:()=>navigate(returnStep&&returnStep!=='template'?`/?view=website&step=${returnStep}`:'/?view=website'),onOpenWebsiteAssistant:()=>navigate('/?view=website&step=assistant'),websiteEntryLabel:returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}} websiteBuilderNavigation={{initialStep:websiteStep,onOpenRag:()=>navigate(`/?view=enterprise-qa&returnStep=${websiteStep}`),onStepChange:step=>navigate(step==='template'?'/?view=website':`/?view=website&step=${step}`,{replace:true})}}/>
+ <ModuleWorkspace context={context} page={page} preview={preview} intentApi={intentApi} onIntentSectionChange={section=>navigate(`/?view=${section==='universe'?'keywords':'intent'}`)} onEnterResponseLogic={()=>navigate('/?view=response-logic')} onResponseLogicBack={()=>navigate('/?view=intent')} keywordData={{tables:dashboard.data?.payload?.keywordTables??[],revision:dashboard.data?.revision??null,loading:dashboard.isLoading,error:dashboard.error,knowledgePublished:Boolean(knowledge.data?.snapshot)}} previewKnowledge={{progress:previewKnowledgeProgress,snapshot:previewKnowledgeSnapshot}} previewQa={preview?<EnterpriseRagPreview storageScopeKey="preview" onOpenWebsite={()=>navigate(returnStep&&returnStep!=='template'?`/?view=website&step=${returnStep}`:'/?view=website')} onOpenWebsiteAssistant={()=>navigate('/?view=website&step=design')} websiteEntryLabel={returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}/>:undefined} previewSiteOps={preview?<SimplifiedWebsiteBuilderPreview storageScope="preview" initialStep={websiteStep} onOpenRag={()=>navigate(`/?view=enterprise-qa&returnStep=${websiteStep}`)} onStepChange={step=>navigate(step==='template'?'/?view=website':`/?view=website&step=${step}`,{replace:true})}/>:undefined} enterpriseRagNavigation={{onOpenWebsite:()=>navigate(returnStep&&returnStep!=='template'?`/?view=website&step=${returnStep}`:'/?view=website'),onOpenWebsiteAssistant:()=>navigate('/?view=website&step=design'),websiteEntryLabel:returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}} websiteBuilderNavigation={{initialStep:websiteStep,onOpenRag:()=>navigate(`/?view=enterprise-qa&returnStep=${websiteStep}`),onStepChange:step=>navigate(step==='template'?'/?view=website':`/?view=website&step=${step}`,{replace:true})}}/>
  </div><Toaster richColors/></ModuleShell>;
 }
 export default function App({preview=false}:{preview?:boolean}){
