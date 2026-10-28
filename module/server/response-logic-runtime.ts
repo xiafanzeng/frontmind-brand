@@ -6,6 +6,12 @@ import { intentSkillPorts } from "./intent-skill-runtime.js";
 import { resolveBrandIntentQuestion, toConfiguredIntentQuestion, type BrandQuestionResolverPorts } from "./brand-question-resolver.js";
 import { createResponseLogicService } from "./response-logic-service.js";
 import { getLatestKnowledgeSnapshot as getLatestKnowledgeSnapshotFromModuleService } from "./knowledge-snapshot-service.js";
+import { projectGeneralExecution as projectGeneralExecutionFromModule } from "./general-execution-projection.js";
+import {
+  generalExecutionActivity as generalExecutionActivityFromContracts,
+  orderExecutionTimeline as orderExecutionTimelineFromContracts,
+  projectBusinessExecution as projectBusinessExecutionFromContracts,
+} from "@frontmind/module-contracts/execution";
 import type { ResponseLogicApiPorts, ConfiguredIntentQuestion } from "./response-logic-core-ports.js";
 import { mysqlTable, varchar, int, text, json, mysqlEnum, timestamp, uniqueIndex, index } from "drizzle-orm/mysql-core";
 import type { ResponseLogicDraft, ConfirmedResponseLogic, ResponseLogicAppliedModelResult, ResponseLogicPublicationMutation } from "../contracts/response-logic.js";
@@ -333,11 +339,17 @@ export function assembleResponseLogicCore(input: {
     readStoredPresalesFile: bkp.readStoredPresalesFile,
     manusV2EventOperationToken: bkp.manusV2EventOperationToken,
 
-    // ── Execution / security ports (Brand doesn't have these yet — honest stubs) ──
-    projectGeneralExecution: () => { throw new Error("EXECUTION_PROJECTION_NOT_AVAILABLE_IN_BRAND"); },
-    generalExecutionActivity: (() => ({})) as never,
-    orderExecutionTimeline: ((events: unknown[]) => events) as never,
-    projectBusinessExecution: () => { throw new Error("EXECUTION_PROJECTION_NOT_AVAILABLE_IN_BRAND"); },
+    // ── Execution ports: real projections. The task-status endpoint calls
+    // projectGeneralExecution for every poll; the previous honest stubs threw
+    // EXECUTION_PROJECTION_NOT_AVAILABLE_IN_BRAND and made /tasks/:id/status
+    // return 500 for every running task. Helpers come from the same
+    // @frontmind/module-contracts/execution module Core's shared helper file
+    // re-exports; projectGeneralExecution is a verbatim copy of the Core
+    // pure function (see ./general-execution-projection.ts).
+    projectGeneralExecution: projectGeneralExecutionFromModule,
+    generalExecutionActivity: generalExecutionActivityFromContracts,
+    orderExecutionTimeline: orderExecutionTimelineFromContracts,
+    projectBusinessExecution: projectBusinessExecutionFromContracts,
     localAssets: bkp.localAssets as never,
     providerFileLeases: providerFileLeases as never,
     fileResourceContentExpiry: fileResourceContentExpiry as never,
