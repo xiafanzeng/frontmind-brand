@@ -98,6 +98,11 @@ describe("优化工作台任务入口", () => {
     fireEvent.click(screen.getByRole("button", {name: "查看任务结果"}));
     expect(screen.getByRole("heading", {name: question.question})).toBeTruthy();
     expect(screen.getByText("已保存优化方案")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "查看任务结果"})).toBeNull();
+    expect(screen.getByRole("heading", {name: "已保存任务结果"})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "返回已完成任务"}));
+    expect(screen.queryByRole("heading", {name: question.question})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "查看任务结果"}));
     expect(screen.queryByRole("button", {name: "确认并执行已选动作"})).toBeNull();
     first.unmount();
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
