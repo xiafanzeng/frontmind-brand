@@ -58,6 +58,7 @@ export interface EvaluationRisk {
  * but must make and persist a publication decision separately.
  */
 export interface EvaluationResult {
+  answerVerdict?: "usable" | "usable_with_improvements" | "unusable" | "pending";
   skillId: string;
   version: string;
   status: EvaluationStatus;
@@ -216,6 +217,7 @@ function parseUniqueRecords<Item>(
 /** Parse untrusted or persisted evaluator output into a detached value. */
 export function parseEvaluationResult(value: unknown): EvaluationResult | null {
   if (!isRecord(value)) return null;
+  if (value.answerVerdict !== undefined && !isOneOf(value.answerVerdict, ["usable", "usable_with_improvements", "unusable", "pending"] as const)) return null;
   if ([...forbiddenPublicationFields].some((field) => field in value)) {
     return null;
   }
@@ -246,7 +248,12 @@ export function parseEvaluationResult(value: unknown): EvaluationResult | null {
   const recommendationIsConsistent = value.recommendation !== "recommended" ||
     risks.every(({ severity }) => severity !== "high" && severity !== "critical");
   if (!stateIsConsistent || !recommendationIsConsistent) return null;
+  if (value.answerVerdict === "usable" && (value.status !== "completed" || value.recommendation !== "recommended" || risks.length > 0)) return null;
+  if (value.answerVerdict === "usable_with_improvements" && (value.status !== "completed" || value.recommendation !== "publish_with_risk" || risks.some(risk => risk.severity === "critical" || risk.severity === "high"))) return null;
+  if (value.answerVerdict === "pending" && (value.status === "completed" || value.recommendation === "recommended")) return null;
+  if (value.answerVerdict === "unusable" && value.recommendation !== "not_recommended") return null;
   return {
+    ...(value.answerVerdict === undefined ? {} : { answerVerdict: value.answerVerdict as EvaluationResult["answerVerdict"] }),
     skillId: value.skillId,
     version: value.version,
     status: value.status,

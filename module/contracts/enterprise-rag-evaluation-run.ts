@@ -2,8 +2,8 @@ import { z } from "zod";
 
 export const ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE =
   "brand_rag_answer_evaluation";
-export const ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION = 1;
-export const ENTERPRISE_RAG_JUDGE_VERSION = "1.0.0";
+export const ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION = 2;
+export const ENTERPRISE_RAG_JUDGE_VERSION = "2.0.0";
 
 export const ENTERPRISE_RAG_DIMENSION_IDS = [
   "intent",
@@ -45,7 +45,9 @@ export type EnterpriseRagEvaluationSource = {
 };
 
 export type EnterpriseRagEvaluationFrozenInput = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
+  /** New single-answer judgments must not claim full-conversation acceptance. */
+  taskScope?: "single_turn";
   operationToken: string;
   inputHash: string;
   sourceQaTaskId: string;
@@ -68,7 +70,7 @@ export type EnterpriseRagEvaluationFrozenInput = {
     skillId: "enterprise-rag-evaluation";
     skillVersion: string;
     ruleVersion: string;
-    judgeVersion: typeof ENTERPRISE_RAG_JUDGE_VERSION;
+    judgeVersion: "1.0.0" | "2.0.0";
   };
 };
 
@@ -126,6 +128,44 @@ const judgeOutputSchema = z
   })
   .strict();
 
+const gradedJudgeOutputSchema = judgeOutputSchema.extend({
+  schemaVersion: z.literal(2),
+  dimensions: z.array(judgeOutputSchema.shape.dimensions.element.extend({
+    level: z.number().int().min(0).max(4).nullable(),
+  })).length(ENTERPRISE_RAG_DIMENSION_IDS.length),
+  gates: z.array(judgeOutputSchema.shape.gates.element.extend({
+    status: z.enum(["passed", "failed", "pending"]),
+  })).length(ENTERPRISE_RAG_GATE_IDS.length),
+  claims: z.array(judgeOutputSchema.shape.claims.element.extend({
+    kind: z.enum(["fact", "advice", "uncertainty"]),
+    relevance: z.enum(["core", "supporting"]),
+    status: z.enum(["supported", "partial", "unsupported", "contradicted", "unverifiable", "not_applicable"]),
+  })).min(1).max(30),
+  task: z.object({
+    status: z.enum(["completed", "failed", "undetermined"]),
+    rationale: explanation,
+    evidenceIds,
+  }).strict(),
+  findings: z.array(z.object({
+    id: z.string().regex(/^finding-([1-9]|[12][0-9]|30)$/u),
+    kind: z.enum(["fact", "condition", "citation", "task", "privacy", "safety", "injection", "evidence", "expression"]),
+    severity: z.enum(["critical", "improvement", "undetermined"]),
+    summary: explanation,
+    impact: explanation,
+    claimIds: z.array(identifier).max(30),
+    evidenceIds,
+    dimensionIds: z.array(z.enum(ENTERPRISE_RAG_DIMENSION_IDS)).min(1).max(6),
+  }).strict()).max(30),
+}).strict();
+
+export type EnterpriseRagGradedJudgeOutput = z.infer<typeof gradedJudgeOutputSchema>;
+export function isGradedRagJudgment(value: EnterpriseRagJudgeOutput): value is EnterpriseRagGradedJudgeOutput {
+  return "schemaVersion" in value && value.schemaVersion === 2;
+}
+function parseJudgeOutput(value: unknown, input: EnterpriseRagEvaluationFrozenInput): EnterpriseRagJudgeOutput {
+  return input.schemaVersion === 2 ? gradedJudgeOutputSchema.parse(value) : judgeOutputSchema.parse(value);
+}
+
 export const ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA = z.toJSONSchema(
   judgeOutputSchema,
   { target: "draft-7" },
@@ -144,7 +184,7 @@ export const ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA = z.toJSONSchema(
 export function enterpriseRagJudgeWireSchema(
   input: EnterpriseRagEvaluationFrozenInput,
 ) {
-  const schema = structuredClone(ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA) as Record<
+  const schema = structuredClone(input.schemaVersion === 2 ? z.toJSONSchema(gradedJudgeOutputSchema, { target: "draft-7" }) : ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA) as Record<
     string,
     any
   >;
@@ -160,6 +200,12 @@ export function enterpriseRagJudgeWireSchema(
   for (const key of ["dimensions", "gates"] as const) {
     properties[key].items.properties.evidenceIds.items.enum =
       judgmentEvidenceIds;
+  }
+  if (input.schemaVersion === 2) {
+    properties.task.properties.evidenceIds.items.enum = judgmentEvidenceIds;
+    const findings = properties.findings.items.properties;
+    findings.evidenceIds.items.enum = judgmentEvidenceIds;
+    findings.claimIds.items.enum = claimIds;
   }
 
   const claims = properties.claims.items.properties as Record<string, any>;
@@ -180,7 +226,7 @@ export function enterpriseRagJudgeWireSchema(
   return schema;
 }
 
-export type EnterpriseRagJudgeOutput = z.infer<typeof judgeOutputSchema>;
+export type EnterpriseRagJudgeOutput = z.infer<typeof judgeOutputSchema> | EnterpriseRagGradedJudgeOutput;
 
 export type EnterpriseRagEvidenceAliasBinding = {
   alias: string;
@@ -464,7 +510,7 @@ export function decodeEnterpriseRagAliasedJudgeOutput(
   input: EnterpriseRagEvaluationFrozenInput,
   contract: EnterpriseRagEvidenceAliasContract,
 ): EnterpriseRagJudgeOutput {
-  const parsed = judgeOutputSchema.parse(value);
+  const parsed = parseJudgeOutput(value, input);
   const frozen = validateEnterpriseRagEvidenceAliasContract(input, contract);
   const canonicalByAlias = new Map(
     frozen.bindings.map(({ alias, canonicalId }) => [alias, canonicalId]),
@@ -494,7 +540,7 @@ export function decodeEnterpriseRagAliasedJudgeOutput(
     }
     return canonicalByAlias.get(id)!;
   };
-  const decoded: EnterpriseRagJudgeOutput = {
+  const decoded = {
     ...parsed,
     dimensions: parsed.dimensions.map((item, itemIndex) => ({
       ...item,
@@ -534,6 +580,14 @@ export function decodeEnterpriseRagAliasedJudgeOutput(
       ),
     })),
   };
+  if (isGradedRagJudgment(parsed)) {
+    Object.assign(decoded, {
+      task: { ...parsed.task, evidenceIds: parsed.task.evidenceIds.map((id, index) => ENTERPRISE_RAG_CLAIM_IDS.includes(id) ? id : decode(id, evidenceAliases, `task.evidenceIds[${index}]`, "任务引用了未授权证据别名")) },
+      findings: parsed.findings.map((finding, index) => ({ ...finding,
+        evidenceIds: finding.evidenceIds.map((id, evidenceIndex) => ENTERPRISE_RAG_CLAIM_IDS.includes(id) ? id : decode(id, evidenceAliases, `findings[${index}].evidenceIds[${evidenceIndex}]`, "问题引用了未授权证据别名")),
+      })),
+    });
+  }
   if (invalidAliases.length) {
     const groups = new Map<string, {
       label: string;
@@ -562,22 +616,90 @@ export function decodeEnterpriseRagAliasedJudgeOutput(
       repairable ? "repairable_identifier" : "unauthorized_identifier",
     );
   }
-  return decoded;
+  return decoded as EnterpriseRagJudgeOutput;
 }
 
 /** Validate the model's semantic coordinates before the existing deterministic
  * enterprise-rag-evaluation Skill is allowed to calculate a score. */
+function validateGradedJudgments(
+  value: EnterpriseRagGradedJudgeOutput,
+  allowedEvidence: Set<string>,
+  sources: Map<string, EnterpriseRagEvaluationSource>,
+) {
+  const fail = (message: string): never => { throw new EnterpriseRagEvaluationValidationError(message); };
+  const unique = (ids: string[], label: string) => {
+    if (new Set(ids).size !== ids.length) fail(`${label}重复`);
+  };
+  const checkEvidence = (ids: string[]) => {
+    unique(ids, "证据 ID");
+    if (ids.some(id => !allowedEvidence.has(id))) fail("分级评估引用了未授权证据");
+  };
+  const gateByKind = { fact: "facts", condition: "facts", citation: "citations", task: "availability", privacy: "permissions", safety: "safety", injection: "injection", evidence: "unknown", expression: "availability" } as const;
+  const claims = new Map(value.claims.map(claim => [claim.id, claim]));
+  unique(value.findings.map(finding => finding.id), "问题 ID");
+  checkEvidence(value.task.evidenceIds);
+  for (const finding of value.findings) {
+    checkEvidence(finding.evidenceIds);
+    unique(finding.claimIds, "问题陈述 ID"); unique(finding.dimensionIds, "问题维度 ID");
+    if (finding.claimIds.some(id => !claims.has(id))) fail("问题关联了不存在的陈述");
+    if (finding.severity === "critical" && ["evidence", "expression"].includes(finding.kind)) fail("证据未知或表达问题不能直接升级为重大风险");
+    if (finding.severity !== "undetermined" && finding.dimensionIds.some(id => value.dimensions.find(dimension => dimension.id === id)?.level === 4)) fail("已确认问题与对应维度满分矛盾");
+    if (finding.severity === "critical" && ["fact", "citation"].includes(finding.kind) && !finding.claimIds.length) fail("重大事实或引用风险必须定位回答原句");
+    if (finding.severity === "critical" && finding.kind === "fact" && !finding.claimIds.some(id => {
+      const claim = claims.get(id);
+      return claim?.kind === "fact" && claim.relevance === "core" && ["partial", "unsupported", "contradicted"].includes(claim.status);
+    })) fail("重大事实风险必须对应核心事实缺口，不能把已充分支持的事实或核实建议升级为事实错误");
+  }
+  for (const dimension of value.dimensions) {
+    const findings = value.findings.filter(finding => finding.dimensionIds.includes(dimension.id));
+    if (dimension.level === null && !findings.some(finding => finding.severity === "undetermined")) fail("未判定维度缺少待补证项");
+    if (dimension.level !== null && dimension.level < 4 && !findings.length) fail("扣分项缺少对应问题或改进理由");
+  }
+  for (const gate of value.gates) {
+    const findings = value.findings.filter(finding => gateByKind[finding.kind] === gate.id);
+    const critical = findings.some(finding => finding.severity === "critical");
+    const unknown = findings.some(finding => finding.severity === "undetermined");
+    const expected = critical ? "failed" : unknown ? "pending" : "passed";
+    if (gate.status !== expected) fail("风险状态与问题严重程度不一致");
+  }
+  const taskFindings = value.findings.filter(finding => finding.kind === "task");
+  if (value.task.status === "failed" && !taskFindings.some(finding => finding.severity === "critical")) fail("核心任务失败必须记录重大问题");
+  if (value.task.status === "undetermined" && !taskFindings.some(finding => finding.severity === "undetermined")) fail("核心任务未知必须保留待核验");
+  if (value.task.status === "completed" && taskFindings.some(finding => finding.severity !== "improvement")) fail("任务完成状态与问题记录矛盾");
+  for (const claim of value.claims) {
+    const findings = value.findings.filter(finding => finding.claimIds.includes(claim.id));
+    unique(claim.sourceIds, "陈述来源 ID");
+    if (claim.kind === "fact" && claim.status === "not_applicable") fail("事实陈述不能免除依据核验");
+    if (claim.kind !== "fact" && claim.status !== "not_applicable") fail("建议与未知说明中的事实必须拆分核验");
+    if (claim.status === "not_applicable" && claim.sourceIds.length) fail("非事实说明不应伪装成已核验事实");
+    if (claim.status === "partial" && !claim.sourceIds.length) fail("部分支持必须定位实际支持的正文，不能用部分支持掩盖无依据事实");
+    if (claim.status === "contradicted" && (!claim.sourceIds.length || claim.sourceIds.some(id => !sources.get(id)?.content))) fail("事实矛盾必须有可读取的反证");
+    if (["partial", "unsupported", "contradicted", "unverifiable"].includes(claim.status) && !findings.length) fail("证据问题必须记录影响及严重程度");
+    if (claim.status === "unverifiable" && !findings.some(finding => finding.severity === "undetermined")) fail("无法核验的陈述不能当作已确认正确或错误");
+    if (claim.status === "unsupported" && ![...sources.values()].some(source => source.content)) fail("没有可读取的来源正文，不能确认事实无支持；应保留无法核验");
+    if (claim.kind === "fact" && claim.relevance === "core" && ["unsupported", "contradicted"].includes(claim.status) && !findings.some(finding => finding.severity === "critical" && ["fact", "condition"].includes(finding.kind))) fail("无依据或矛盾的核心事实不能降级为轻微问题");
+    if (claim.status === "partial" && claim.sourceIds.some(id => !sources.get(id)?.content) && !findings.some(finding => finding.severity === "undetermined")) fail("来源正文缺失必须保留未知");
+    if (claim.kind === "fact" && claim.sourceIds.some(id => sources.get(id)?.citedByAnswer !== true) && !findings.some(finding => finding.kind === "citation")) fail("依据未展示为引用时须保留引用改进或风险项");
+  }
+}
+
 export function validateEnterpriseRagJudgeOutput(
   value: unknown,
   input: EnterpriseRagEvaluationFrozenInput,
   options: EnterpriseRagJudgeValidationOptions = {},
 ): EnterpriseRagJudgeOutput {
+  const expected = input.schemaVersion === 2
+    ? { skillVersion: "2.0.0", judgeVersion: "2.0.0", ruleVersion: "rag-eval-1.3" }
+    : { skillVersion: "1.0.0", judgeVersion: "1.0.0", ruleVersion: "rag-eval-1.2" };
+  if (![1, 2].includes(input.schemaVersion) || Object.entries(expected).some(([key, version]) => input.evaluator[key as keyof typeof expected] !== version)) {
+    throw new EnterpriseRagEvaluationValidationError("不支持或混用了冻结评估版本，不能套用当前规则");
+  }
   if (Buffer.byteLength(JSON.stringify(value) ?? "", "utf8") > 512 * 1024) {
     throw new EnterpriseRagEvaluationValidationError(
       "评估模型结果超过大小限制",
     );
   }
-  const parsed = judgeOutputSchema.parse(value);
+  const parsed = parseJudgeOutput(value, input);
   if (
     parsed.operationToken !== input.operationToken ||
     parsed.inputHash !== input.inputHash
@@ -678,6 +800,10 @@ export function validateEnterpriseRagJudgeOutput(
       );
     }
   }
+  if (isGradedRagJudgment(parsed)) {
+    validateGradedJudgments(parsed, allowedJudgmentEvidence, allowedSources);
+    return parsed;
+  }
   const dimensions = new Map(parsed.dimensions.map((item) => [item.id, item]));
   const gates = new Map(parsed.gates.map((item) => [item.id, item]));
   const hasUnsupportedClaim = parsed.claims.some(
@@ -721,6 +847,7 @@ export function validateEnterpriseRagJudgeOutput(
 }
 
 export type EnterpriseRagEvaluationResultPayload = {
+  answerVerdict?: "usable" | "usable_with_improvements" | "unusable" | "pending";
   skillId: string;
   version: string;
   status: "not_run" | "pending" | "completed" | "failed";

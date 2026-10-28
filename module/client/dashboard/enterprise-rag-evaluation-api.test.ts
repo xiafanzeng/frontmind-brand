@@ -88,3 +88,20 @@ describe("enterprise RAG evaluation API", () => {
     ).rejects.toThrow(/数据结构不正确/);
   });
 });
+
+it("reads a completed v2 operation whose quality conclusion is pending", async () => {
+  const ids = ["intent","correctness","completeness","citations","clarity","boundaries"];
+  const report = {
+    reportId:"report-2",sourceQaTaskId:"task-1",sourceTurnId:"turn-1",questionMessageId:"q",answerMessageId:"a",completedAt:"2026-10-27T01:00:00Z",
+    knowledgeBase:{snapshotId:"kb",contentHash:"a".repeat(64)},
+    evaluator:{skillId:"enterprise-rag-evaluation",skillVersion:"2.0.0",ruleVersion:"rag-eval-1.3",model:"fixture"},
+    judgments:{schemaVersion:2,dimensions:ids.map(id=>({id})),gates:["facts","citations","permissions","safety","unknown","injection","availability"].map(id=>({id})),claims:[{id:"claim-1",statement:"暂无法确认。",kind:"uncertainty",relevance:"core",status:"not_applicable",sourceIds:[],rationale:"合成未知说明。"}],task:{status:"undetermined"},findings:[]},
+    result:{skillId:"enterprise-rag-evaluation",version:"2.0.0",status:"pending",answerVerdict:"pending",score:null,coverage:80,recommendation:"publish_with_risk",summary:"必要前提待确认。",relatedReportIds:[],risks:[],
+      dimensions:ids.map((id,index)=>({id,label:id,status:index===0?"pending":"passed",score:index===0?null:10,maxScore:20,summary:"合成输入。",evidenceIds:["a"]}))},
+  };
+  mocks.fetch.mockResolvedValueOnce(json({...run("completed"),report}));
+  expect((await liveEnterpriseRagEvaluationApi.observe("operation-1")).report?.result.answerVerdict).toBe("pending");
+  const malformed = structuredClone(report); delete (malformed.judgments as {findings?:unknown}).findings;
+  mocks.fetch.mockResolvedValueOnce(json({...run("completed"),report:malformed}));
+  await expect(liveEnterpriseRagEvaluationApi.observe("operation-1")).rejects.toThrow(/数据结构不正确/);
+});

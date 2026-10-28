@@ -1,8 +1,9 @@
+// Frozen v1.2 compatibility regression suite. New behavior is tested in rag-evaluation-graded.test.ts.
 import { describe, expect, it } from "vitest";
 import {
   aggregateEvaluations, buildReportMetrics, RAG_DIMENSIONS, RAG_GATES, RAG_RULE_VERSION, resolveConversationOutcome, scoreEvaluation,
   type EvaluationInput, type EvaluationResult, type Rating,
-} from "./rag-evaluation";
+} from "./rag-evaluation-legacy";
 
 function input(levels: Array<Rating | null> = [4, 4, 3, 4, 3, 4]): EvaluationInput {
   return {
@@ -179,7 +180,7 @@ describe("RAG scenario-weighted aggregation", () => {
 
 describe("conversation-layer outcome and report metrics", () => {
   const passedGates = RAG_GATES.map(({ id }) => ({ id, status: "passed" as const, reason: "ok" }));
-  const layer = (overrides: Partial<import("./rag-evaluation").ConversationLayer> = {}) => ({
+  const layer = (overrides: Partial<import("./rag-evaluation-legacy").ConversationLayer> = {}) => ({
     task: "完成任务", runsRequired: 1 as const,
     completionPoints: [{ id: "p1", label: "必要点", met: true }],
     ...overrides,

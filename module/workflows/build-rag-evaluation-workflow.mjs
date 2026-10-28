@@ -6,7 +6,7 @@ const workflowRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export const ENTERPRISE_RAG_EVALUATION_WORKFLOW = Object.freeze({
   name: "evaluate-enterprise-rag",
-  version: "1.0.0",
+  version: "2.0.0",
   entrypoint: "SKILL.md",
 });
 
