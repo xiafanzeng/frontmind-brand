@@ -406,9 +406,12 @@ describe("simplified AI website preview", () => {
 
     const evaluation = screen.getByRole("region", { name: "回答质量评估" });
     expect(within(evaluation).getByRole("heading", { name: "回答质量评估" })).toBeTruthy();
-    expect(within(evaluation).getByLabelText("六维诊断评分").textContent).toContain("84");
+    const score = within(evaluation).getByLabelText(/六维诊断评分/);
+    expect(score.textContent).toBe("84/100");
+    expect(score.classList.contains("is-pending")).toBe(true);
     expect(within(evaluation).getByText("合成样例 · 预设评审")).toBeTruthy();
-    expect(within(evaluation).getByText("可用·待改进")).toBeTruthy();
+    expect(within(evaluation).getByText("可用 · 待改进")).toBeTruthy();
+    expect(within(evaluation).queryByText("六维加权分")).toBeNull();
     expect(within(evaluation).getByText("用户真正想确认")).toBeTruthy();
     expect(within(evaluation).getByText("优先优化")).toBeTruthy();
     const improvedAnswerButton = within(evaluation).getByRole("button", { name: "查看优化方案" });
@@ -424,8 +427,8 @@ describe("simplified AI website preview", () => {
     expect(screen.getByText("我想咨询新的具体业务问题")).toBeTruthy();
     expect(screen.getByText(/此问题不在示例库/)).toBeTruthy();
     expect(within(evaluation).getByText("待核验")).toBeTruthy();
-    expect(within(evaluation).getByText("待完成评审")).toBeTruthy();
-    expect(within(evaluation).getByLabelText("六维诊断评分").textContent).toContain("—");
+    expect(within(evaluation).queryByText("待完成评审")).toBeNull();
+    expect(within(evaluation).getByLabelText(/六维诊断评分/).textContent).toBe("—/100");
     expect(within(evaluation).getByText("可能分数 0–100")).toBeTruthy();
     expect(screen.queryByText("实时预览")).toBeNull();
 
