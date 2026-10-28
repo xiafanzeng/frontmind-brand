@@ -781,6 +781,31 @@
   font-size: var(--sfp-type-sm);
 }
 
+.sfp-inline-error {
+  align-items: center;
+  background: #fff5f3;
+  border: 1px solid #e9c6bf;
+  border-radius: 9px;
+  color: #8a382c;
+  display: flex;
+  font-size: var(--sfp-type-sm);
+  gap: 10px;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 9px 11px;
+}
+
+.sfp-inline-error button {
+  background: #fff;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 5px 9px;
+}
+
 .sfp-page-list {
   border: 1px solid var(--sfp-line);
   border-radius: 10px;

@@ -561,15 +561,11 @@ function jsonLdMarkup(value) {
 
 /** Inline boot config for the host-owned floating assistant. Same script-safety
  * escaping rules as JSON-LD: never interpolate customer values unescaped. */
-function assistantConfigScript(value) {
-  return "window.__FRONTMIND_ASSISTANT__=" + jsonLdMarkup(value) + ";";
-}
-
 function SiteAssistantTags({ site }) {
   if (!site.assistant || !site.assistant.apiBase) return null;
   return [
     h("link", { key: "assistant-css", rel: "stylesheet", href: "/assistant.css" }),
-    h("script", { key: "assistant-config", dangerouslySetInnerHTML: { __html: assistantConfigScript(site.assistant) } }),
+    h("script", { key: "assistant-config", src: "/assistant-config.js", defer: true }),
     h("script", { key: "assistant-js", src: "/assistant.js", defer: true })
   ];
 }

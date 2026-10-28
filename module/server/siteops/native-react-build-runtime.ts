@@ -40,10 +40,18 @@ import {
 } from "./native-react-source.js";
 import { previewNavigationBridgeSource } from "./preview-routing.js";
 import {
+  TRUSTED_SITE_ASSISTANT_HEAD_MARKUP,
   TRUSTED_SITE_ASSISTANT_WIDGET_CSS,
   TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE,
   siteAssistantApiOrigin,
+  trustedSiteAssistantConfigSource,
 } from "./site-assistant-widget.js";
+import {
+  projectSiteDesignRuntime,
+  siteAssistantBootConfig,
+  siteDesignAccentCss,
+  type SiteDesignRuntimeProjection,
+} from "./site-design-runtime.js";
 
 const FIXED_ZIP_DATE = new Date("2000-01-01T00:00:00.000Z");
 const MAX_BUILD_LOG_BYTES = 256 * 1024;
@@ -1355,20 +1363,21 @@ function normalizeRoutePages(input: {
   mode: "preview" | "production";
   canonicalOrigin: string | null;
   assistantApiOrigin: string;
+  design: SiteDesignRuntimeProjection;
 }) {
   const fileMap = new Map(input.files.map((file) => [file.path, file.bytes]));
   const documentCsp = nativeDocumentCsp(input.assistantApiOrigin);
   // Host-owned assistant assets; provider content never flows into these.
-  const assistantConfig = `window.__FRONTMIND_ASSISTANT__=${JSON.stringify(
-    { apiBase: input.assistantApiOrigin },
-  ).replaceAll("<", "\\u003c")};\n`;
+  const assistantConfig = trustedSiteAssistantConfigSource(
+    siteAssistantBootConfig(input.assistantApiOrigin, input.design),
+  );
   const assistantHeadMarkup =
-    '<link rel="stylesheet" href="/assistant.css">' +
-    '<script src="/assistant-config.js" defer></script>' +
-    '<script src="/assistant.js" defer></script>';
+    '<link rel="stylesheet" href="/site-design.css">' +
+    TRUSTED_SITE_ASSISTANT_HEAD_MARKUP;
   fileMap.set("assistant.js", Buffer.from(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE, "utf8"));
   fileMap.set("assistant-config.js", Buffer.from(assistantConfig, "utf8"));
   fileMap.set("assistant.css", Buffer.from(`${TRUSTED_SITE_ASSISTANT_WIDGET_CSS}\n`, "utf8"));
+  fileMap.set("site-design.css", Buffer.from(siteDesignAccentCss(input.design), "utf8"));
   const root = fileMap.get("index.html");
   if (!root) throw new NativeReactBuildError("NATIVE_BUILD_ROUTE_MISSING");
   const rootHtml = root.toString("utf8");
@@ -2476,6 +2485,7 @@ export async function materializeNativeReactSource(
   }
   const build = parsedBuild.data;
   const brief = parsedBrief.data;
+  const runtimeDesign = projectSiteDesignRuntime(brief);
   const frozenContentPlan = parseFrozenContentPlan({
     contentPlan: input.contentPlan,
     contentPlanSha256: input.contentPlanSha256,
@@ -2622,6 +2632,7 @@ export async function materializeNativeReactSource(
       mode: input.mode,
       canonicalOrigin,
       assistantApiOrigin,
+      design: runtimeDesign,
     });
     const checks = assertStaticHardSafety({
       files,

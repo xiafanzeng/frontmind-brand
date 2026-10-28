@@ -8,10 +8,14 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SiteOpsObservationV1 } from "../../../contracts/siteops-contract";
+import type {
+  SiteDesignRecommendationInput,
+  SiteDesignRecommendationOutput,
+} from "../../../contracts/site-design-preferences";
 import type { SiteOpsConversationPanelProps } from "../siteops/SiteOpsConversationPanel";
 import { siteOpsRevisionAttempt } from "../siteops/ConnectedSiteOpsConversationPanel";
 import {
-  buildLiveSiteOpsConfigurationMessage,
+  buildLiveSiteOpsRevisionMessage,
   SimplifiedWebsiteBuilderPreview,
   WEBSITE_DRAFT_STORAGE_KEY,
 } from "./SimplifiedWebsiteBuilderPreview";
@@ -21,6 +25,17 @@ import {
   saveEvaluationReport,
 } from "./evaluation-report-store";
 import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
+
+const KNOWLEDGE_COORDINATE = {
+  id: "22222222-2222-4222-8222-222222222222",
+  version: 3,
+  archiveHash: "a".repeat(64),
+} as const;
+
+const TEMPLATE_COORDINATE = {
+  id: "frontmind-help-center",
+  version: "frontmind-curated-20261025-v6",
+} as const;
 
 function observation(
   interactionState: "select_snapshot" | "collecting_brief" | "visual_searching",
@@ -59,6 +74,7 @@ function observation(
         sourceProfile: "dashboard-core-v1",
         createdAt: "2026-10-23T00:00:00.000Z",
         active: true,
+        coordinate: KNOWLEDGE_COORDINATE,
       },
     ],
     messages: [],
@@ -119,6 +135,7 @@ function liveBuildObservation(
     executionAdmitted: true,
     executionAdmissionMode: "provider_source" as const,
     executionUnavailableReason: null,
+    templateCoordinate: TEMPLATE_COORDINATE,
   };
   return {
     ...base,
@@ -245,6 +262,79 @@ function fullCatalogObservation(): SiteOpsObservationV1 {
   };
 }
 
+function recommendableObservation(): SiteOpsObservationV1 {
+  const base = liveBuildObservation("awaiting_visual_selection");
+  const routes = [
+    ["home", "/", "首页"],
+    ["products", "/products", "产品与服务"],
+    ["contact", "/contact", "联系我们"],
+    ["about", "/about", "关于我们"],
+  ] as const;
+  return {
+    ...base,
+    brief: {
+      ...base.brief!,
+      routes: routes.map(([id, slug, title]) => ({
+        id,
+        slug,
+        title,
+        sourceDocumentIds: [`source_${id}`],
+      })),
+    },
+  };
+}
+
+function designRecommendation(
+  request: SiteDesignRecommendationInput,
+): SiteDesignRecommendationOutput {
+  const candidates = [
+    ["home", "/", "首页", "homepage_entry"],
+    ["products", "/products", "产品与服务", "core_business_coverage"],
+    ["contact", "/contact", "联系我们", "verified_contact_conversion"],
+    ["about", "/about", "关于我们", "secondary_knowledge_coverage"],
+  ] as const;
+  const featuredRouteIds = ["home", "products", "contact"];
+  return {
+    schemaVersion: 1,
+    requestContext: request.requestContext,
+    knowledgeSnapshot: request.knowledgeSnapshot,
+    template: request.template,
+    siteName: {
+      value: "远山企业官网",
+      status: "trusted",
+      sourceType: "company_name",
+      sourceDocumentIds: ["source_company"],
+    },
+    siteGoal: {
+      value: "让客户快速了解产品、服务与联系渠道",
+      status: "recommended",
+      sourceDocumentIds: ["source_products", "source_contact"],
+    },
+    candidates: candidates.map(([id, slug, title, reason], index) => ({
+      id,
+      slug,
+      title,
+      sourceDocumentIds: [`source_${id}`],
+      evidenceDocumentCount: 1,
+      importanceRank: index + 1,
+      featured: featuredRouteIds.includes(id),
+      recommendationReason: reason,
+    })),
+    featuredRouteIds,
+    previewBlocks: candidates.map(([id, , title]) => ({
+      id: `block_${id}`,
+      routeId: id,
+      kind: id === "contact" ? "contact" : "summary",
+      title: `${title}真实内容`,
+      body: `${title}的知识投影`,
+      items: [],
+      sourceDocumentIds: [`source_${id}`],
+    })),
+    unresolved: [],
+    recommendationHash: "b".repeat(64),
+  };
+}
+
 beforeEach(() => window.localStorage.clear());
 afterEach(cleanup);
 
@@ -265,22 +355,13 @@ describe("redesigned live website builder setup", () => {
     expect(retry.clientRequestId).not.toBe(first.clientRequestId);
   });
 
-  it("keeps every supported generation preference within the server brief limit", () => {
-    const message = buildLiveSiteOpsConfigurationMessage({
-      siteName: "站".repeat(80),
-      siteLanguage: "zh-CN",
-      siteGoal: "目".repeat(260),
-      siteAccent: "#315b8a",
-      assistantName: "助".repeat(80),
-      welcome: "欢".repeat(240),
-      assistantAccent: "#6f35a5",
-    });
-    const goal = message.split("建站目标: ")[1] ?? "";
+  it("keeps structured settings out of the legacy revision message", () => {
+    const message = buildLiveSiteOpsRevisionMessage();
 
-    expect(goal.length).toBeLessThanOrEqual(500);
-    expect(goal).toContain("AI 助手名称");
-    expect(goal).toContain("AI 助手欢迎语");
-    expect(goal).toContain("AI 助手主题色 #6f35a5");
+    expect(message).toBe("请按已保存的网站设计配置生成新版本。");
+    expect(message).not.toContain("站点语言");
+    expect(message).not.toContain("网站主题色");
+    expect(message).not.toContain("AI 助手");
   });
 
   it("advances from the current published snapshot through the real action", async () => {
@@ -425,18 +506,304 @@ describe("redesigned live website builder setup", () => {
     expect(screen.getByTitle("真实帮助中心模板 安全视觉参考预览")).toBeTruthy();
   });
 
+  it("requests source-backed recommendations and allows replacing at most three featured routes", async () => {
+    const current = recommendableObservation();
+    const onRequestDesignRecommendation = vi.fn();
+    const baseProps: SiteOpsConversationPanelProps = {
+      observation: current,
+      onAction: vi.fn(),
+      onRequestDesignRecommendation,
+    };
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={baseProps}
+        storageScope="live:7:recommendation"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
+    );
+    const request = onRequestDesignRecommendation.mock.calls[0]?.[0] as
+      | SiteDesignRecommendationInput
+      | undefined;
+    expect(request).toMatchObject({
+      knowledgeSnapshot: KNOWLEDGE_COORDINATE,
+      template: TEMPLATE_COORDINATE,
+      requestContext: {
+        baseDesignRevision: 0,
+        baseDraftHash: "0".repeat(64),
+      },
+    });
+    expect(request).toBeTruthy();
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={{
+          ...baseProps,
+          designRecommendation: {
+            request: request!,
+            data: designRecommendation(request!),
+            loading: false,
+            error: null,
+          },
+        }}
+        storageScope="live:7:recommendation"
+      />,
+    );
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
+        .toBe("远山企业官网"),
+    );
+    expect(screen.getByText("共 4 个栏目，3 个启用；最多选择 3 个主栏目。完整列表和真实来源均来自冻结知识版本。")).toBeTruthy();
+    expect(screen.getAllByText("首页真实内容").length).toBeGreaterThan(0);
+    expect(
+      ["首页", "产品与服务", "联系我们", "关于我们"].filter(
+        (name) =>
+          (screen.getByLabelText(`在网站中显示${name}`) as HTMLInputElement)
+            .checked,
+      ),
+    ).toEqual(["首页", "产品与服务", "联系我们"]);
+
+    fireEvent.click(screen.getByLabelText("在网站中显示关于我们"));
+    expect(screen.getByText("主栏目最多选择 3 个；请先取消一个已选栏目再替换。")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("在网站中显示联系我们"));
+    fireEvent.click(screen.getByLabelText("在网站中显示关于我们"));
+    expect(
+      (screen.getByLabelText("在网站中显示关于我们") as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect(
+      (screen.getByLabelText("在网站中显示联系我们") as HTMLInputElement)
+        .checked,
+    ).toBe(false);
+  });
+
+  it("does not treat a frozen build design snapshot as the editable project OCC state", async () => {
+    const current = recommendableObservation();
+    const frozenBuild = liveBuildObservation("approved").builds[0]!;
+    const frozenOnly: SiteOpsObservationV1 = {
+      ...current,
+      builds: [{
+        ...frozenBuild,
+        designPreferences: {
+          schemaVersion: 1,
+          siteName: "历史构建名称",
+          siteGoal: "历史构建目标",
+          featuredRouteIds: ["home"],
+          siteAccent: "#315b8a",
+          assistant: {
+            name: "历史助手",
+            welcome: "这是冻结构建中的历史欢迎语。",
+            accentMode: "follow_site",
+            customAccent: "#315b8a",
+          },
+          knowledgeSnapshot: KNOWLEDGE_COORDINATE,
+          template: TEMPLATE_COORDINATE,
+          designRevision: 9,
+          draftHash: "d".repeat(64),
+        },
+      }],
+    };
+    const onRequestDesignRecommendation = vi.fn();
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={{
+          observation: frozenOnly,
+          onAction: vi.fn(),
+          onRequestDesignRecommendation,
+        }}
+        storageScope="live:7:frozen-build-occ"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
+    );
+    expect(onRequestDesignRecommendation.mock.calls[0]?.[0]).toMatchObject({
+      requestContext: {
+        baseDesignRevision: 0,
+        baseDraftHash: "0".repeat(64),
+      },
+    });
+  });
+
+  it("does not let a late recommendation overwrite manual edits", async () => {
+    const current = recommendableObservation();
+    const onRequestDesignRecommendation = vi.fn();
+    const baseProps: SiteOpsConversationPanelProps = {
+      observation: current,
+      onAction: vi.fn(),
+      onRequestDesignRecommendation,
+    };
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={baseProps}
+        storageScope="live:7:dirty-recommendation"
+      />,
+    );
+    await waitFor(() =>
+      expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
+    );
+    const request = onRequestDesignRecommendation.mock.calls[0]![0] as
+      SiteDesignRecommendationInput;
+    fireEvent.change(screen.getByLabelText("网站名称"), {
+      target: { value: "用户手填网站名称" },
+    });
+
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={{
+          ...baseProps,
+          designRecommendation: {
+            request,
+            data: designRecommendation(request),
+            loading: false,
+            error: null,
+          },
+        }}
+        storageScope="live:7:dirty-recommendation"
+      />,
+    );
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
+        .toBe("用户手填网站名称"),
+    );
+    expect(screen.queryByText("首页真实内容")).toBeNull();
+  });
+
+  it("rejects a recommendation whose knowledge coordinate is no longer current", async () => {
+    const current = recommendableObservation();
+    const onRequestDesignRecommendation = vi.fn();
+    const baseProps: SiteOpsConversationPanelProps = {
+      observation: current,
+      onAction: vi.fn(),
+      onRequestDesignRecommendation,
+    };
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={baseProps}
+        storageScope="live:7:coordinate-stale-recommendation"
+      />,
+    );
+    await waitFor(() =>
+      expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
+    );
+    const staleRequest = onRequestDesignRecommendation.mock.calls[0]![0] as
+      SiteDesignRecommendationInput;
+    const movedObservation: SiteOpsObservationV1 = {
+      ...current,
+      knowledgeSnapshots: current.knowledgeSnapshots.map((snapshot) => ({
+        ...snapshot,
+        coordinate: {
+          ...snapshot.coordinate,
+          version: snapshot.coordinate.version + 1,
+          archiveHash: "c".repeat(64),
+        },
+      })),
+    };
+
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={{
+          ...baseProps,
+          observation: movedObservation,
+          designRecommendation: {
+            request: staleRequest,
+            data: designRecommendation(staleRequest),
+            loading: false,
+            error: null,
+          },
+        }}
+        storageScope="live:7:coordinate-stale-recommendation"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(2),
+    );
+    expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
+      .toBe("测试企业");
+    expect(screen.queryByText("首页真实内容")).toBeNull();
+  });
+
+  it("keeps manual fields usable when recommendation fails", async () => {
+    const current = recommendableObservation();
+    const onRequestDesignRecommendation = vi.fn();
+    const onRetryDesignRecommendation = vi.fn(async () => undefined);
+    const baseProps: SiteOpsConversationPanelProps = {
+      observation: current,
+      onAction: vi.fn(),
+      onRequestDesignRecommendation,
+      onRetryDesignRecommendation,
+    };
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={baseProps}
+        storageScope="live:7:failed-recommendation"
+      />,
+    );
+    await waitFor(() =>
+      expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
+    );
+    const request = onRequestDesignRecommendation.mock.calls[0]![0] as
+      SiteDesignRecommendationInput;
+    fireEvent.change(screen.getByLabelText("站点简介 / 建站目标"), {
+      target: { value: "用户手填建站目标" },
+    });
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="structure"
+        siteOps={{
+          ...baseProps,
+          designRecommendation: {
+            request,
+            data: null,
+            loading: false,
+            error: "推荐服务暂时不可用",
+          },
+        }}
+        storageScope="live:7:failed-recommendation"
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "手动填写的内容不会丢失",
+    );
+    expect(
+      (screen.getByLabelText("站点简介 / 建站目标") as HTMLTextAreaElement)
+        .value,
+    ).toBe("用户手填建站目标");
+    fireEvent.click(screen.getByRole("button", { name: "重试推荐" }));
+    expect(onRetryDesignRecommendation).toHaveBeenCalledTimes(1);
+  });
+
   it("saves the real brief configuration before selecting the admitted template", async () => {
     const events: string[] = [];
+    const waiting = liveBuildObservation("awaiting_visual_selection");
     const onAction = vi.fn(async () => { events.push("select"); });
-    const onSubmitRevision = vi.fn(async (
-      _input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSubmitRevision"]>>[0],
-    ) => { events.push("submit"); });
+    const onSaveDesignPreferences = vi.fn(async () => {
+      events.push("save");
+      return {
+        ...waiting,
+        project: { ...waiting.project, revision: waiting.project.revision + 1 },
+      };
+    });
     render(
       <SimplifiedWebsiteBuilderPreview
         siteOps={{
-          observation: liveBuildObservation("awaiting_visual_selection"),
+          observation: waiting,
           onAction,
-          onSubmitRevision,
+          onSaveDesignPreferences,
         }}
         storageScope="live:7:workspace-a"
       />,
@@ -453,8 +820,10 @@ describe("redesigned live website builder setup", () => {
     fireEvent.change(screen.getByLabelText("站点简介 / 建站目标"), {
       target: { value: "帮助客户自助解决产品问题" },
     });
+    fireEvent.click(screen.getByLabelText("在网站中显示帮助中心"));
     fireEvent.click(screen.getByRole("button", { name: "选择网站主题色 #315b8a" }));
     expect(screen.getByText("仅本地示意，不进入真实生成协议")).toBeTruthy();
+    expect(screen.queryByLabelText("站点语言")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
 
     fireEvent.change(screen.getByLabelText("助手名称"), {
@@ -465,6 +834,10 @@ describe("redesigned live website builder setup", () => {
     });
     expect(screen.getByText("真实网站的助手回答始终展示知识来源；此开关仅影响本地示意预览")).toBeTruthy();
     // 助手步骤必须先完成一次真实问答试用，才能保存配置并开始生成。
+    fireEvent.click(screen.getByTestId("website-build-start"));
+    expect(screen.getByText(/完成助手试用后再继续/)).toBeTruthy();
+    expect(onSaveDesignPreferences).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("在网站助手中提问"), {
       target: { value: "如何配置网站 AI 助手？" },
     });
@@ -472,33 +845,58 @@ describe("redesigned live website builder setup", () => {
     await waitFor(() => expect(screen.getByText("助手试用已完成")).toBeTruthy());
     fireEvent.click(screen.getByTestId("website-build-start"));
 
-    await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
-    const revision = onSubmitRevision.mock.calls[0]?.[0];
-    expect(revision?.files).toEqual([]);
-    expect(revision?.text).toContain("网站名称: 远山客户帮助中心");
-    expect(revision?.text).toContain("站点语言: zh-CN");
-    expect(revision?.text).toContain("建站目标: 帮助客户自助解决产品问题");
-    expect(revision?.text).toContain("网站主题色 #315b8a");
-    expect(revision?.text).toContain("AI 助手名称 远山智能助手");
-    expect(revision?.text).toContain("AI 助手欢迎语 您好，我会依据企业知识为您解答。");
+    await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
+    const saved = onSaveDesignPreferences.mock.calls[0]?.[0];
+    expect(saved).toMatchObject({
+      conversationId: "siteops:1",
+      expectedProjectRevision: 5,
+      expectedDesignRevision: 0,
+      draft: {
+        schemaVersion: 1,
+        siteName: "远山客户帮助中心",
+        siteGoal: "帮助客户自助解决产品问题",
+        featuredRouteIds: ["help"],
+        siteAccent: "#315b8a",
+        assistant: {
+          name: "远山智能助手",
+          welcome: "您好，我会依据企业知识为您解答。",
+          accentMode: "follow_site",
+        },
+        knowledgeSnapshot: KNOWLEDGE_COORDINATE,
+        template: TEMPLATE_COORDINATE,
+      },
+    });
+    expect(saved?.draft).not.toHaveProperty("siteLanguage");
+    expect(saved?.draft).not.toHaveProperty("officialUrl");
+    expect(saved?.draft).not.toHaveProperty("brandMark");
     await waitFor(() => expect(onAction).toHaveBeenCalledWith({
         action: "select_visual",
         input: { sampleId: "33333333-3333-4333-8333-333333333333" },
       }));
-    expect(events).toEqual(["submit", "select"]);
+    expect(events).toEqual(["save", "select"]);
   });
 
   it("submits an existing real build revision without selecting or publishing again", async () => {
+    const approved = liveBuildObservation("approved");
+    const events: string[] = [];
     const onAction = vi.fn(async () => undefined);
+    const onSaveDesignPreferences = vi.fn(async () => {
+      events.push("save");
+      return {
+        ...approved,
+        project: { ...approved.project, revision: approved.project.revision + 1 },
+      };
+    });
     const onSubmitRevision = vi.fn(async (
       _input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSubmitRevision"]>>[0],
-    ) => undefined);
+    ) => { events.push("revision"); });
     render(
       <SimplifiedWebsiteBuilderPreview
         initialStep="structure"
         siteOps={{
-          observation: liveBuildObservation("approved"),
+          observation: approved,
           onAction,
+          onSaveDesignPreferences,
           onSubmitRevision,
         }}
         storageScope="live:7:workspace-a"
@@ -511,6 +909,7 @@ describe("redesigned live website builder setup", () => {
     expect(siteGoal.disabled).toBe(false);
     fireEvent.change(siteName, { target: { value: "远山帮助中心改版" } });
     fireEvent.change(siteGoal, { target: { value: "让客户更快完成真实自助排障" } });
+    fireEvent.click(screen.getByLabelText("在网站中显示帮助中心"));
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
 
     const assistantName = screen.getByTestId("website-assistant-name") as HTMLInputElement;
@@ -527,18 +926,30 @@ describe("redesigned live website builder setup", () => {
     await waitFor(() => expect(screen.getByText("助手试用已完成")).toBeTruthy());
     fireEvent.click(screen.getByTestId("website-revision-submit"));
 
+    await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
+    const saved = onSaveDesignPreferences.mock.calls[0]?.[0];
+    expect(saved?.draft).toMatchObject({
+      siteName: "远山帮助中心改版",
+      siteGoal: "让客户更快完成真实自助排障",
+      featuredRouteIds: ["help"],
+      assistant: {
+        name: "远山改版助手",
+        welcome: "您好，这里是改版后的真实帮助中心。",
+      },
+    });
     const revision = onSubmitRevision.mock.calls[0]?.[0];
-    expect(revision?.text).toContain("网站名称: 远山帮助中心改版");
-    expect(revision?.text).toContain("建站目标: 让客户更快完成真实自助排障");
-    expect(revision?.text).toContain("AI 助手名称 远山改版助手");
-    expect(revision?.text).toContain("AI 助手欢迎语 您好，这里是改版后的真实帮助中心。");
+    expect(revision?.text).toBe(buildLiveSiteOpsRevisionMessage());
+    expect(revision?.text).not.toContain("远山");
+    expect(events).toEqual(["save", "revision"]);
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("blocks the live assistant step from completing until a real trial happens", async () => {
+  it("blocks direct assistant navigation when no real featured route exists", async () => {
     const onAction = vi.fn(async () => undefined);
     const onSubmitRevision = vi.fn(async () => undefined);
+    const onSaveDesignPreferences = vi.fn(async () =>
+      liveBuildObservation("awaiting_visual_selection"));
     render(
       <SimplifiedWebsiteBuilderPreview
         initialStep="assistant"
@@ -546,14 +957,15 @@ describe("redesigned live website builder setup", () => {
           observation: liveBuildObservation("awaiting_visual_selection"),
           onAction,
           onSubmitRevision,
+          onSaveDesignPreferences,
         }}
         storageScope="live:7:workspace-a"
       />,
     );
 
     expect(screen.getByText("助手试用未完成")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("website-build-start"));
-    expect(screen.getByText(/完成助手试用后再继续/)).toBeTruthy();
+    expect((screen.getByTestId("website-build-start") as HTMLButtonElement).disabled)
+      .toBe(true);
     expect(onSubmitRevision).not.toHaveBeenCalled();
     expect(onAction).not.toHaveBeenCalled();
 
@@ -562,6 +974,10 @@ describe("redesigned live website builder setup", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
     await waitFor(() => expect(screen.getByText("助手试用已完成")).toBeTruthy());
+    expect((screen.getByTestId("website-build-start") as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(onSaveDesignPreferences).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
     expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(0);
   });
 

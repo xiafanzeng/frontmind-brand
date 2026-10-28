@@ -19,6 +19,12 @@ import {
 } from "lucide-react";
 import type { SiteOpsConversationPanelProps } from "../siteops/SiteOpsConversationPanel";
 import {
+  siteDesignPreferencesDraftSchema,
+  siteDesignRecommendationMatchesRequest,
+  type SiteDesignPreferencesDraft,
+  type SiteDesignRecommendationInput,
+} from "../../../contracts/site-design-preferences";
+import {
   previewAssistantSuggestions,
   previewAssistantUnknownAnswer,
   previewKnowledgeCollectionCount,
@@ -401,36 +407,45 @@ export function saveWebsiteDraft(draft: WebsiteDraftV1, storageScope?: string) {
   }
 }
 
-function configurationLine(value: string, max: number) {
-  return value.replace(/\s+/gu, " ").trim().slice(0, max);
+export const EMPTY_SITE_DESIGN_DRAFT_HASH = "0".repeat(64);
+
+/**
+ * The revision message only starts a new revision. Website/assistant settings
+ * are persisted through SiteDesignPreferences and must never be encoded into
+ * conversionGoal or another legacy free-text field.
+ */
+export function buildLiveSiteOpsRevisionMessage() {
+  return "请按已保存的网站设计配置生成新版本。";
 }
 
-export function buildLiveSiteOpsConfigurationMessage(input: {
-  siteName: string;
-  siteLanguage: SiteLanguage;
-  siteGoal: string;
-  siteAccent: string;
-  assistantName: string;
-  welcome: string;
-  assistantAccent: string;
+export function canApplySiteDesignRecommendation(input: {
+  request: SiteDesignRecommendationInput;
+  response: unknown;
+  designRevision: number;
+  draftHash: string;
+  editSequenceAtRequest: number;
+  currentEditSequence: number;
 }) {
-  const generationGoal = [
-    // Keep every preference inside SiteBrief.conversionGoal's 500-character
-    // protocol limit; never truncate the tail fields after joining.
-    configurationLine(input.siteGoal, 200),
-    `网站主题色 ${input.siteAccent}`,
-    `AI 助手名称 ${configurationLine(input.assistantName, 60)}`,
-    `AI 助手欢迎语 ${configurationLine(input.welcome, 140)}`,
-    `AI 助手主题色 ${input.assistantAccent}`,
-  ].join("；");
-  return [
-    `网站名称: ${configurationLine(input.siteName, 80)}`,
-    `站点语言: ${input.siteLanguage}`,
-    `建站目标: ${generationGoal}`,
-  ].join("\n");
+  return input.editSequenceAtRequest === input.currentEditSequence &&
+    siteDesignRecommendationMatchesRequest(
+      input.request,
+      input.response,
+      {
+        designRevision: input.designRevision,
+        draftHash: input.draftHash,
+      },
+    );
 }
 
 type PreviewPage = { name: string; detail: string };
+type WebsitePageDraft = {
+  id: string;
+  name: string;
+  detail: string;
+  enabled: boolean;
+  importanceRank?: number;
+  recommendationReason?: string;
+};
 type WidgetMessage = {
   id: number;
   from: "visitor" | "assistant";
@@ -696,7 +711,7 @@ export function SimplifiedWebsiteBuilderPreview({
   const [isConfirmed, setIsConfirmed] = useState(draftSeed.confirmed);
   const [completedStepIds, setCompletedStepIds] = useState<BuildStep[]>(draftSeed.completedStepIds);
   const [selectedTemplateId, setSelectedTemplateId] = useState(draftSeed.selectedTemplateId);
-  const [pages, setPages] = useState(() => {
+  const [pages, setPages] = useState<WebsitePageDraft[]>(() => {
     const disabledPageIds = new Set(draftSeed.disabledPageIds);
     return initialPages.map((page) => ({ ...page, enabled: !disabledPageIds.has(page.id) }));
   });
@@ -731,6 +746,16 @@ export function SimplifiedWebsiteBuilderPreview({
     useState<LiveReleaseCoordinates | null>(null);
   const didMountDraftRef = useRef(false);
   const appliedLiveBriefKeyRef = useRef<string | null>(null);
+  const designEditSequenceRef = useRef(0);
+  const manuallyEditedRecommendationFieldsRef = useRef(
+    new Set<"siteName" | "siteGoal" | "featuredRoutes">(),
+  );
+  const recommendationRequestRef = useRef<{
+    requestId: string;
+    editSequence: number;
+  } | null>(null);
+  const handledRecommendationRequestIdsRef = useRef(new Set<string>());
+  const lastRecommendationCoordinateRef = useRef<string | null>(null);
   const closeReleaseConfirmation = () => {
     setReleaseReport(null);
     setLiveReleaseCoordinates(null);
@@ -812,6 +837,31 @@ export function SimplifiedWebsiteBuilderPreview({
   const selectedTemplateUsesPreviewFallback =
     selectedTemplate.executionAdmissionMode === "preview_reference_fallback";
   const latestBuild = liveObservation?.builds[0] ?? null;
+  // Only the editable project brief participates in OCC and recommendation
+  // suppression. A build-level copy is a frozen historical snapshot and must
+  // never advance the current project's design revision/hash.
+  const currentProjectDesignPreferences =
+    liveObservation?.brief?.designPreferences ?? null;
+  const frozenBuildDesignPreferences = latestBuild?.designPreferences ?? null;
+  const currentDesignRevision =
+    currentProjectDesignPreferences?.designRevision ?? 0;
+  const currentDesignDraftHash =
+    currentProjectDesignPreferences?.draftHash ?? EMPTY_SITE_DESIGN_DRAFT_HASH;
+  const activeKnowledgeSnapshotCoordinate =
+    liveObservation?.knowledgeSnapshots.find(
+      (snapshot) =>
+        snapshot.id === liveObservation.project.currentKnowledgeSnapshotId &&
+        snapshot.active,
+    )?.coordinate ?? null;
+  const selectedLiveCandidate = liveCandidates.find(
+    (candidate) => candidate.id === effectiveSelectedTemplateId,
+  ) ?? null;
+  const selectedTemplateCoordinate =
+    selectedLiveCandidate?.templateCoordinate
+    ?? currentProjectDesignPreferences?.template
+    ?? frozenBuildDesignPreferences?.template
+    ?? null;
+  const designRecommendation = siteOps?.designRecommendation ?? null;
   const liveWebsiteJudgments = useMemo(
     () => liveObservation
       ? buildWebsiteEvaluationJudgmentsFromSiteOps(liveObservation)
@@ -951,15 +1001,35 @@ export function SimplifiedWebsiteBuilderPreview({
     const briefKey = JSON.stringify(brief);
     if (appliedLiveBriefKeyRef.current === briefKey) return;
     appliedLiveBriefKeyRef.current = briefKey;
+    const designPreferences = brief.designPreferences ?? null;
+    const featuredRouteIds = new Set(
+      designPreferences?.featuredRouteIds ?? [],
+    );
     setPages(brief.routes.map((route) => ({
       id: route.id,
       name: route.title,
       detail: `${route.sourceDocumentIds.length} 个知识来源`,
-      enabled: true,
+      // Do not guess importance on the client. Until the read-only
+      // recommendation arrives, users may explicitly choose up to three.
+      enabled: designPreferences
+        ? featuredRouteIds.has(route.id)
+        : false,
     })));
-    setSiteName(brief.companyName);
-    setSiteGoal(brief.conversionGoal.split("；网站主题色 ")[0]?.trim() || brief.conversionGoal);
+    setSiteName(designPreferences?.siteName ?? brief.companyName);
+    setSiteGoal(designPreferences?.siteGoal ?? brief.conversionGoal);
     setSiteLanguage(brief.primaryLanguage.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US");
+    if (designPreferences) {
+      setSiteAccent(designPreferences.siteAccent);
+      setAssistantName(designPreferences.assistant.name);
+      setWelcome(designPreferences.assistant.welcome);
+      setAssistantFollowsSite(
+        designPreferences.assistant.accentMode === "follow_site",
+      );
+      setAssistantAccent(
+        designPreferences.assistant.customAccent
+        ?? designPreferences.siteAccent,
+      );
+    }
     const mark = brief.companyName
       .split(/\s+/u)
       .map((part) => part[0])
@@ -985,6 +1055,149 @@ export function SimplifiedWebsiteBuilderPreview({
     if (!nextTemplateId || selectedTemplateId === nextTemplateId) return;
     setSelectedTemplateId(nextTemplateId);
   }, [liveCandidates, selectedTemplateId, serverSelectedCandidateId, siteOps, templateSelectionOpen]);
+
+  useEffect(() => {
+    if (
+      !siteOps?.onRequestDesignRecommendation ||
+      !templateSelectionOpen ||
+      currentProjectDesignPreferences ||
+      !activeKnowledgeSnapshotCoordinate ||
+      !selectedLiveCandidate?.templateCoordinate
+    ) {
+      return;
+    }
+    const coordinateKey = JSON.stringify({
+      knowledgeSnapshot: activeKnowledgeSnapshotCoordinate,
+      template: selectedLiveCandidate.templateCoordinate,
+      baseDesignRevision: currentDesignRevision,
+      baseDraftHash: currentDesignDraftHash,
+    });
+    if (lastRecommendationCoordinateRef.current === coordinateKey) return;
+
+    const request: SiteDesignRecommendationInput = {
+      schemaVersion: 1,
+      requestContext: {
+        requestId: `site-design-${crypto.randomUUID()}`,
+        baseDesignRevision: currentDesignRevision,
+        baseDraftHash: currentDesignDraftHash,
+      },
+      knowledgeSnapshot: activeKnowledgeSnapshotCoordinate,
+      template: selectedLiveCandidate.templateCoordinate,
+    };
+    lastRecommendationCoordinateRef.current = coordinateKey;
+    recommendationRequestRef.current = {
+      requestId: request.requestContext.requestId,
+      editSequence: designEditSequenceRef.current,
+    };
+    siteOps.onRequestDesignRecommendation(request);
+  }, [
+    activeKnowledgeSnapshotCoordinate,
+    currentDesignDraftHash,
+    currentDesignRevision,
+    currentProjectDesignPreferences,
+    selectedLiveCandidate?.templateCoordinate,
+    siteOps,
+    templateSelectionOpen,
+  ]);
+
+  useEffect(() => {
+    const request = designRecommendation?.request;
+    const response = designRecommendation?.data;
+    if (
+      !request ||
+      !response ||
+      response.requestContext.requestId !== request.requestContext.requestId ||
+      handledRecommendationRequestIdsRef.current.has(
+        request.requestContext.requestId,
+      )
+    ) {
+      return;
+    }
+    const attempt = recommendationRequestRef.current;
+    handledRecommendationRequestIdsRef.current.add(
+      request.requestContext.requestId,
+    );
+    const currentCoordinatesMatch = Boolean(
+      templateSelectionOpen
+      && activeKnowledgeSnapshotCoordinate
+      && selectedLiveCandidate?.templateCoordinate
+      && JSON.stringify(request.knowledgeSnapshot) ===
+        JSON.stringify(activeKnowledgeSnapshotCoordinate)
+      && JSON.stringify(request.template) ===
+        JSON.stringify(selectedLiveCandidate.templateCoordinate),
+    );
+    if (
+      !attempt ||
+      attempt.requestId !== request.requestContext.requestId ||
+      !currentCoordinatesMatch ||
+      !canApplySiteDesignRecommendation({
+        request,
+        response,
+        designRevision: currentDesignRevision,
+        draftHash: currentDesignDraftHash,
+        editSequenceAtRequest: attempt.editSequence,
+        currentEditSequence: designEditSequenceRef.current,
+      })
+    ) {
+      return;
+    }
+    const availableRouteIds = new Set(
+      liveObservation?.brief?.routes.map((route) => route.id) ?? [],
+    );
+    if (
+      response.candidates.some(
+        (candidate) => !availableRouteIds.has(candidate.id),
+      )
+    ) {
+      return;
+    }
+
+    const previewBlocksByRoute = new Map(
+      response.previewBlocks.map((block) => [block.routeId, block]),
+    );
+    const featuredRouteIds = new Set(response.featuredRouteIds);
+    if (!manuallyEditedRecommendationFieldsRef.current.has("featuredRoutes")) {
+      setPages(response.candidates.map((candidate) => {
+        const block = previewBlocksByRoute.get(candidate.id);
+        return {
+          id: candidate.id,
+          name: candidate.title,
+          detail: block?.title
+            ?? `${candidate.evidenceDocumentCount} 个知识来源`,
+          enabled: featuredRouteIds.has(candidate.id),
+          importanceRank: candidate.importanceRank,
+          recommendationReason: candidate.recommendationReason,
+        };
+      }));
+    }
+    // A successful "needs confirmation" response is authoritative about the
+    // absence of trusted evidence. Keep it empty instead of retaining a
+    // server-brief fallback that could look like an AI-backed recommendation.
+    if (!manuallyEditedRecommendationFieldsRef.current.has("siteName")) {
+      setSiteName(response.siteName.value ?? "");
+    }
+    if (!manuallyEditedRecommendationFieldsRef.current.has("siteGoal")) {
+      setSiteGoal(response.siteGoal.value ?? "");
+    }
+    setCompletedStepIds((current) =>
+      current.filter((step) => step !== "structure" && step !== "assistant"),
+    );
+    setIsConfirmed(false);
+    setNotice(
+      response.featuredRouteIds.length > 0
+        ? `已按当前发布知识推荐 ${response.featuredRouteIds.length} 个主栏目；可在完整列表中替换。`
+        : "知识不足以自动选出主栏目，请从真实页面列表中手动选择。",
+    );
+  }, [
+    activeKnowledgeSnapshotCoordinate,
+    currentDesignDraftHash,
+    currentDesignRevision,
+    designRecommendation?.data,
+    designRecommendation?.request,
+    liveObservation?.brief?.routes,
+    selectedLiveCandidate?.templateCoordinate,
+    templateSelectionOpen,
+  ]);
 
   useEffect(() => setActiveStep(initialStep), [initialStep]);
 
@@ -1067,6 +1280,7 @@ export function SimplifiedWebsiteBuilderPreview({
   };
 
   const invalidateSteps = (...stepIds: BuildStep[]) => {
+    designEditSequenceRef.current += 1;
     const invalidated = new Set(stepIds);
     setCompletedStepIds((current) => current.filter((step) => !invalidated.has(step)));
     setIsConfirmed(false);
@@ -1101,14 +1315,19 @@ export function SimplifiedWebsiteBuilderPreview({
       ? "FM"
       : displayName.split(/\s+/).map((part) => part[0]).join("").slice(0, 3).toUpperCase();
 
+    manuallyEditedRecommendationFieldsRef.current.add("siteName");
     invalidateSteps("structure");
     setOfficialUrl(parsed.toString());
     setSiteName(`${displayName} 帮助中心`);
     setBrandMark(mark || "AI");
-    setSiteLanguage(hostname.endsWith(".cn") ? "zh-CN" : siteLanguage);
+    if (!siteOps) {
+      setSiteLanguage(hostname.endsWith(".cn") ? "zh-CN" : siteLanguage);
+    }
     if (isFrontMind) setSiteAccent("#6f35a5");
     setBrandRecognized(true);
-    setNotice("已根据官网 URL 生成一组品牌建议；请核对网站名称、标识、语言和主题色。" );
+    setNotice(siteOps
+      ? "已根据官网 URL 生成一组品牌建议；请核对网站名称、标识和主题色。"
+      : "已根据官网 URL 生成一组品牌建议；请核对网站名称、标识、语言和主题色。" );
   };
 
   const goTo = (step: BuildStep) => {
@@ -1121,15 +1340,70 @@ export function SimplifiedWebsiteBuilderPreview({
     if (stepIndex > 0) goTo(steps[stepIndex - 1].id);
   };
 
+  const createLiveDesignPreferencesDraft = () => {
+    if (!structureReady) {
+      throw new Error("请至少选择一个真实主栏目后再保存网站设计。");
+    }
+    if (!activeKnowledgeSnapshotCoordinate) {
+      throw new Error("当前发布知识缺少稳定坐标，请刷新后重试。");
+    }
+    const templateCoordinate = templateSelectionOpen
+      ? selectedLiveCandidate?.templateCoordinate ?? null
+      : selectedTemplateCoordinate;
+    if (!templateCoordinate) {
+      throw new Error("所选模板缺少稳定坐标，请重新选择模板。");
+    }
+    const draft = siteDesignPreferencesDraftSchema.safeParse({
+      schemaVersion: 1,
+      siteName: siteName.trim(),
+      siteGoal: siteGoal.trim(),
+      featuredRouteIds: pages
+        .filter((page) => page.enabled)
+        .map((page) => page.id),
+      siteAccent,
+      assistant: {
+        name: assistantName.trim(),
+        welcome: welcome.trim(),
+        accentMode: assistantFollowsSite ? "follow_site" : "custom",
+        customAccent: assistantAccent,
+      },
+      knowledgeSnapshot: activeKnowledgeSnapshotCoordinate,
+      template: templateCoordinate,
+    });
+    if (!draft.success) {
+      throw new Error(
+        draft.error.issues[0]?.message
+          ? `网站设计配置无效：${draft.error.issues[0].message}`
+          : "网站设计配置无效，请检查后重试。",
+      );
+    }
+    return draft.data satisfies SiteDesignPreferencesDraft;
+  };
+
+  const saveLiveDesignPreferences = async () => {
+    if (!siteOps?.onSaveDesignPreferences || !liveObservation) {
+      throw new Error("真实建站服务当前不能保存网站设计，请刷新后重试。");
+    }
+    return await siteOps.onSaveDesignPreferences({
+      conversationId: liveObservation.project.conversationId,
+      expectedProjectRevision: liveObservation.project.revision,
+      expectedDesignRevision: currentDesignRevision,
+      draft: createLiveDesignPreferencesDraft(),
+    });
+  };
+
   const submitLiveConfigurationAndBuild = async () => {
     if (
-      !siteOps?.onSubmitRevision
+      !siteOps?.onSaveDesignPreferences
       || !siteOps.onAction
       || !liveObservation
       || liveObservation.interactionState !== "awaiting_visual_selection"
       || liveInteractionPending
+      || !structureReady
     ) {
-      setNotice("真实建站服务当前不能保存配置并开始生成，请刷新状态后重试。");
+      setNotice(!structureReady
+        ? "请至少选择一个真实主栏目后再开始生成。"
+        : "真实建站服务当前不能保存配置并开始生成，请刷新状态后重试。");
       return false;
     }
     const selectedCandidate = liveCandidates.find(
@@ -1142,19 +1416,7 @@ export function SimplifiedWebsiteBuilderPreview({
     setLiveAction("configure_and_build");
     setLiveError(null);
     try {
-      await siteOps.onSubmitRevision({
-        text: buildLiveSiteOpsConfigurationMessage({
-          siteName,
-          siteLanguage,
-          siteGoal,
-          siteAccent,
-          assistantName,
-          welcome,
-          assistantAccent: effectiveAssistantAccent,
-        }),
-        files: [],
-        onProgress: () => undefined,
-      });
+      await saveLiveDesignPreferences();
       await siteOps.onAction({
         action: "select_visual",
         input: { sampleId: selectedCandidate.id },
@@ -1171,27 +1433,24 @@ export function SimplifiedWebsiteBuilderPreview({
 
   const submitLiveRevision = async () => {
     if (
-      !siteOps?.onSubmitRevision
+      !siteOps?.onSaveDesignPreferences
+      || !siteOps.onSubmitRevision
       || !liveObservation
       || !liveRevisionEditable
       || liveInteractionPending
+      || !structureReady
     ) {
-      setNotice("当前真实构建不能提交修改，请等待构建完成或刷新状态后重试。");
+      setNotice(!structureReady
+        ? "请至少选择一个真实主栏目后再提交修改。"
+        : "当前真实构建不能提交修改，请等待构建完成或刷新状态后重试。");
       return false;
     }
     setLiveAction("submit_revision");
     setLiveError(null);
     try {
+      await saveLiveDesignPreferences();
       await siteOps.onSubmitRevision({
-        text: buildLiveSiteOpsConfigurationMessage({
-          siteName,
-          siteLanguage,
-          siteGoal,
-          siteAccent,
-          assistantName,
-          welcome,
-          assistantAccent: effectiveAssistantAccent,
-        }),
+        text: buildLiveSiteOpsRevisionMessage(),
         files: [],
         onProgress: () => undefined,
       });
@@ -1219,6 +1478,10 @@ export function SimplifiedWebsiteBuilderPreview({
     }
     if (activeStep === "assistant" && !assistantReady) {
       setNotice("请补充助手名称和欢迎语。");
+      return;
+    }
+    if (activeStep === "assistant" && siteOps && !structureReady) {
+      setNotice("请至少选择一个真实主栏目后再保存网站设计。可返回页面与栏目列表进行选择。");
       return;
     }
     if (activeStep === "assistant" && !assistantTested) {
@@ -1830,7 +2093,7 @@ export function SimplifiedWebsiteBuilderPreview({
           <div className="sfp-workspace-grid">
             <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--structure">
               <div className="sfp-section-heading sfp-section-heading--compact">
-                <div><h2>确认网站结构与品牌</h2><p>{siteOps ? "网站名称、语言和站点简介会保存到真实 SiteOps brief；主题色作为生成偏好提交，是否采用以真实预览为准。" : "系统已按知识库生成栏目；补充少量品牌信息即可完成网站骨架。"}</p></div>
+                <div><h2>确认网站结构与品牌</h2><p>{siteOps ? "网站名称、建站目标、主栏目与网站/助手配色会保存为结构化网站设计；站点语言由服务端确定。" : "系统已按知识库生成栏目；补充少量品牌信息即可完成网站骨架。"}</p></div>
               </div>
               <form className="sfp-brand-import" onSubmit={recognizeBrand}>
                 <Globe2 size={19} />
@@ -1854,23 +2117,25 @@ export function SimplifiedWebsiteBuilderPreview({
               <div className="sfp-brand-fields">
                 <label className="sfp-brand-name">
                   <span>网站名称{siteOps && <small>真实 brief 字段</small>}</span>
-                  <input aria-label="网站名称" data-testid="website-site-name" maxLength={80} value={siteName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("structure"); setSiteName(event.currentTarget.value); setBrandRecognized(false); }} />
+                  <input aria-label="网站名称" data-testid="website-site-name" maxLength={80} value={siteName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteName"); invalidateSteps("structure"); setSiteName(event.currentTarget.value); setBrandRecognized(false); }} />
                 </label>
                 <label className="sfp-brand-name">
                   <span>站点简介 / 建站目标{siteOps && <small>真实 brief 字段</small>}</span>
-                  <textarea aria-label="站点简介 / 建站目标" data-testid="website-site-goal" maxLength={200} value={siteGoal} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("structure"); setSiteGoal(event.currentTarget.value); }} />
+                  <textarea aria-label="站点简介 / 建站目标" data-testid="website-site-goal" maxLength={200} value={siteGoal} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteGoal"); invalidateSteps("structure"); setSiteGoal(event.currentTarget.value); }} />
                 </label>
                 <label>
                   <span>Logo / 品牌标识{siteOps && <small>仅本地示意，不进入真实生成协议</small>}</span>
                   <input aria-label="Logo / 品牌标识" maxLength={3} value={brandMark} onChange={(event) => { invalidateSteps("structure"); setBrandMark(event.currentTarget.value.toUpperCase()); setBrandRecognized(false); }} />
                 </label>
-                <label>
-                  <span>站点语言{siteOps && <small>真实 brief 字段</small>}</span>
-                  <select aria-label="站点语言" value={siteLanguage} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("structure"); setSiteLanguage(event.currentTarget.value as SiteLanguage); setBrandRecognized(false); }}>
-                    <option value="zh-CN">中文（简体）</option>
-                    <option value="en-US">English</option>
-                  </select>
-                </label>
+                {!siteOps && (
+                  <label>
+                    <span>站点语言</span>
+                    <select aria-label="站点语言" value={siteLanguage} onChange={(event) => { invalidateSteps("structure"); setSiteLanguage(event.currentTarget.value as SiteLanguage); setBrandRecognized(false); }}>
+                      <option value="zh-CN">中文（简体）</option>
+                      <option value="en-US">English</option>
+                    </select>
+                  </label>
+                )}
                 <fieldset className="sfp-brand-color">
                   <legend>网站主题色{siteOps && <small>生成偏好，以真实预览为准</small>}</legend>
                   <div className="sfp-color-options">
@@ -1881,6 +2146,15 @@ export function SimplifiedWebsiteBuilderPreview({
                 </fieldset>
               </div>
               <div className="sfp-source-strip"><FileText size={17} /><span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 示例知识范围"}</strong><small>{siteOps ? `${liveObservation?.brief?.routes.length ?? 0} 个真实页面路由 · 项目版本 ${liveObservation?.project.revision ?? "—"}` : `${previewKnowledgeCollectionCount} 个知识集合已映射为 5 个网站栏目`}</small></span><b>{siteOps ? "真实绑定" : "已关联"}</b></div>
+              {siteOps && designRecommendation?.loading && (
+                <p className="sfp-helper" role="status">正在按当前发布知识生成网站名称、建站目标和主栏目推荐…</p>
+              )}
+              {siteOps && designRecommendation?.error && (
+                <div className="sfp-inline-error" role="alert">
+                  <span>自动推荐暂时不可用；手动填写的内容不会丢失。</span>
+                  <button type="button" onClick={() => siteOps.onRetryDesignRecommendation?.()}>重试推荐</button>
+                </div>
+              )}
               <div className="sfp-page-list">
                 {pages.map((page, index) => (
                   <div key={page.id} className={!page.enabled ? "is-muted" : ""}>
@@ -1891,20 +2165,29 @@ export function SimplifiedWebsiteBuilderPreview({
                         type="checkbox"
                         checked={page.enabled}
                         aria-label={`在网站中显示${page.name}`}
-                        disabled={Boolean(siteOps)}
+                        disabled={Boolean(siteOps && !liveConfigurationEditable)}
                         onChange={(event) => {
                           const enabled = event.currentTarget.checked;
+                          if (
+                            siteOps &&
+                            enabled &&
+                            pages.filter((item) => item.enabled).length >= 3
+                          ) {
+                            setNotice("主栏目最多选择 3 个；请先取消一个已选栏目再替换。");
+                            return;
+                          }
+                          manuallyEditedRecommendationFieldsRef.current.add("featuredRoutes");
                           invalidateSteps("structure");
                           setPages((current) => current.map((item) => item.id === page.id ? { ...item, enabled } : item));
                         }}
                       />
                       <i />
                     </label>
-                    <em>0{index + 1}</em>
+                    <em>{page.importanceRank ? `#${page.importanceRank}` : `0${index + 1}`}</em>
                   </div>
                 ))}
               </div>
-              <p className="sfp-helper">{siteOps ? "真实路由来自冻结知识版本；需要改版时可在真实预览生成后提交修改要求。" : "仅控制栏目显示，不修改知识库。"}</p>
+              <p className="sfp-helper">{siteOps ? `共 ${pages.length} 个栏目，${enabledPages.length} 个启用；最多选择 3 个主栏目。完整列表和真实来源均来自冻结知识版本。` : "仅控制栏目显示，不修改知识库。"}</p>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel">
               {selectedTemplatePreviewUrl ? (
@@ -2129,8 +2412,8 @@ export function SimplifiedWebsiteBuilderPreview({
             disabled={Boolean(siteOps && (
               liveInteractionPending
               || (activeStep === "template" && !templateReady)
-              || (activeStep === "assistant" && templateSelectionOpen && (!assistantReady || !brandReady))
-              || (activeStep === "assistant" && liveRevisionEditable && (!assistantReady || !brandReady))
+              || (activeStep === "assistant" && templateSelectionOpen && (!assistantReady || !brandReady || !structureReady))
+              || (activeStep === "assistant" && liveRevisionEditable && (!assistantReady || !brandReady || !structureReady))
             ))}
             onClick={goNext}
           >
