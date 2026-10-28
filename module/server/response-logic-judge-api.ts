@@ -304,7 +304,68 @@ export function parseStructuredEnvelopePayload(
       return { ok: false, code: invalidJsonCode, message: invalidJsonMessage };
     }
   }
-  return { ok: false, code: "JUDGE_STRUCTURED_OUTPUT_MISSING", message: "Judge 任务未返回结构化输出" };
+  return fallbackAssistantEnvelopePayload(
+    events,
+    invalidJsonCode,
+    invalidJsonMessage,
+  );
+}
+
+/**
+ * Runner-side evidence (2026-10-28): the deployed runner completes both
+ * generation and judge/optimizer tasks WITHOUT ever emitting a
+ * structured_output_result event — the model follows the turn-input contract
+ * and writes the {"payload": "<JSON>"} envelope into the final
+ * assistant_message, usually prefixed by a short prose explanation. The
+ * generation chain already falls back to assistant_message (markdown
+ * sections); do the same here: extract the outermost JSON object from the
+ * newest assistant_message, unwrap its payload string, and let the caller's
+ * strict Zod contract decide validity. Anything that is not a well-formed
+ * payload envelope stays JUDGE_STRUCTURED_OUTPUT_MISSING.
+ */
+function fallbackAssistantEnvelopePayload(
+  events: ReadonlyArray<ManusV2MessageEvent>,
+  invalidJsonCode: string,
+  invalidJsonMessage: string,
+): { ok: true; parsed: unknown } | { ok: false; code: string; message: string } {
+  const newestFirst = [...events].sort(
+    (a, b) => b.timestamp - a.timestamp || b.id.localeCompare(a.id),
+  );
+  const assistant = newestFirst.find((event) => event.type === "assistant_message");
+  const assistantMessage =
+    assistant?.assistant_message &&
+    typeof assistant.assistant_message === "object" &&
+    !Array.isArray(assistant.assistant_message)
+      ? (assistant.assistant_message as Record<string, unknown>)
+      : null;
+  const content =
+    typeof assistantMessage?.content === "string" ? assistantMessage.content : null;
+  if (!content) {
+    return { ok: false, code: "JUDGE_STRUCTURED_OUTPUT_MISSING", message: "Judge 任务未返回结构化输出" };
+  }
+  const first = content.indexOf("{");
+  const last = content.lastIndexOf("}");
+  if (first < 0 || last <= first) {
+    return { ok: false, code: "JUDGE_STRUCTURED_OUTPUT_MISSING", message: "Judge 任务未返回结构化输出" };
+  }
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(content.slice(first, last + 1));
+  } catch {
+    return { ok: false, code: "JUDGE_STRUCTURED_OUTPUT_MISSING", message: "Judge 任务未返回结构化输出" };
+  }
+  const payload =
+    envelope && typeof envelope === "object" && !Array.isArray(envelope)
+      ? (envelope as { payload?: unknown }).payload
+      : undefined;
+  if (typeof payload !== "string") {
+    return { ok: false, code: "JUDGE_STRUCTURED_OUTPUT_MISSING", message: "Judge 任务未返回结构化输出" };
+  }
+  try {
+    return { ok: true, parsed: JSON.parse(payload) };
+  } catch {
+    return { ok: false, code: invalidJsonCode, message: invalidJsonMessage };
+  }
 }
 
 export function parseJudgePayload(
