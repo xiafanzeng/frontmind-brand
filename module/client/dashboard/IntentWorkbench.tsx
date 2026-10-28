@@ -120,6 +120,25 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       if (latest?.status === "failed" && (latest.id !== priorJob?.id || priorJob?.status !== "failed"))
         throw new Error(latest.error ?? "模型生成失败，请重新评估");
       const job = data.state.jobs?.find(item => !["succeeded", "failed"].includes(item.status));
+      const completed = restoreJob && view === "progress" ? data.state.jobs?.find(item =>
+        item.id === progressJobId && item.status === "succeeded") : undefined;
+      if (completed) {
+        setScope(completed.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]);
+        if (completed.receiptId && data.state.receipts.some(item => item.id === completed.receiptId)) {
+          setReceiptId(completed.receiptId); setView("result");
+        } else if (completed.kind === "plan") {
+          const saved = data.state.plans.filter(item => completed.questionIds.includes(item.questionId) &&
+            (!completed.inputHash || item.inputHash === completed.inputHash));
+          if (saved.length === completed.questionIds.length) {
+            setDrafts(structuredClone(saved)); setDraftDirty(false); setView("plan");
+          } else if (completed.result) {setHistoryId(completed.id); setView("history");}
+          else setView("evaluation");
+        } else if (completed.result && completed.questionIds.some(id =>
+          !data.state.evaluations.some(item => item.questionId === id && item.provenance?.operationId === completed.id))) {
+          setHistoryId(completed.id); setView("history");
+        } else setView("evaluation");
+        return data;
+      }
       if (next) setView(next);
       if (job && restoreJob) {
         setScope(job.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]);
@@ -133,6 +152,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         setWorkspace(data);
         const finished = data.state.jobs?.find(item => item.id === job?.id);
         if (finished?.status === "failed") throw new Error(finished.error ?? "模型任务未完成");
+        if (job?.receiptId) setReceiptId(job.receiptId);
         if (next || job || modelKind) setView(job?.receiptId ? "result" : restoreJob && job ? "evaluation" : destination);
         if (job && restoreJob && job.kind === "plan") {
           setDrafts(structuredClone(data.state.plans.filter(item => job.questionIds.includes(item.questionId))));
@@ -265,6 +285,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     {error && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true)}>重新读取</button></div>}
     {view === "progress" && <IntentTaskProgress job={workspace?.state.jobs?.find(item => item.id === progressJobId)}
       kind={progressKind} count={scope.length} error={error} pending={pending} onBack={() => setView("list")}
+      onViewResult={() => void run(() => api.observe(), undefined, true)}
       onReload={() => void run(() => api.observe(), undefined, true)}/>}
     {pending && view !== "result" && view !== "progress" && <div className="iw-panel" role="status">
       {activeJob?.repair ? "正在自动修复模型结果并重新校验，请稍候…" : activeJob ? `正在${activeJob.kind === "plan" ? "生成优化方案" : "评估问题"} · ${activeJob.questionIds.length} 条问题，AI 生成可能需要几分钟…` : "正在读取优化工作台…"}

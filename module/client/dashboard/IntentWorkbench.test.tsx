@@ -44,6 +44,47 @@ function pendingApi(initial: IntentWorkspace) {
   return {api, finish};
 }
 describe("优化工作台任务入口", () => {
+  it.each(["evaluate", "plan", "receipt"])("中断后重新读取已完成的%s任务，直接打开对应结果", async kind => {
+    const initial = workspace("running", kind === "plan" ? "plan" : "evaluate");
+    const completed = workspace("succeeded", kind === "plan" ? "plan" : "evaluate");
+    if (kind === "plan") completed.state.plans = [{questionId: "q1", actions: [{
+      id: "a", kind: "todo", title: "补充资料", nodeId: null, before: "", after: "已保存建议", source: "缺口", selected: true,
+    }]}];
+    if (kind === "receipt") {
+      initial.state.jobs![0].receiptId = "receipt-1";
+      completed.state.jobs![0].receiptId = "receipt-1";
+      completed.state.receipts = [{id: "receipt-1", status: "completed", createdAt: "2026-10-28T00:00:00Z",
+        changes: [], before: [], after: completed.state.evaluations},
+      {id: "different-receipt", status: "reverted", createdAt: "2026-10-28T00:01:00Z", changes: [], before: [], after: []}];
+    }
+    const api: IntentWorkbenchApi = {observe: vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(completed),
+      command: vi.fn(), execute: vi.fn(), rollback: vi.fn(), waitForJob: vi.fn().mockRejectedValue(new TypeError("Load failed"))};
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "重新读取任务状态"}));
+    await screen.findByRole("heading", {name: kind === "plan" ? "确认优化方案" : kind === "receipt" ? "优化执行完成" : question.question});
+    expect(screen.queryByRole("progressbar", {name: "评估阶段进度"})).toBeNull();
+    expect(api.command).not.toHaveBeenCalled();
+    expect(api.execute).not.toHaveBeenCalled();
+  });
+  it("流式状态已完成但读取结果中断时，保留查看结果按钮，点击后打开保存评分", async () => {
+    const initial = workspace("running");
+    const completed = workspace("succeeded");
+    const api: IntentWorkbenchApi = {observe: vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(completed),
+      command: vi.fn(), execute: vi.fn(), rollback: vi.fn(),
+      waitForJob: vi.fn(async (_id: string, update: (value: IntentWorkspace) => void) => {
+        update({...initial, state: {...initial.state, jobs: completed.state.jobs}});
+        throw new TypeError("Load failed");
+      })};
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    const button = await screen.findByRole("button", {name: "查看评估结果"});
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
+    expect(screen.getByRole("heading", {name: "评估已完成"})).toBeTruthy();
+    expect(screen.getByText("结果已校验并保存")).toBeTruthy();
+    fireEvent.click(button);
+    await screen.findByText("回答要点支撑矩阵");
+    expect(screen.queryByRole("progressbar", {name: "评估阶段进度"})).toBeNull();
+    expect(api.command).not.toHaveBeenCalled();
+  });
   it("重新打开工作台后直接查看历史问题、评分和方案，不调用模型或执行动作", async () => {
     const saved = workspace("succeeded", "plan");
     saved.state.questions[0] = {...question, question: "已更新的问题"};
