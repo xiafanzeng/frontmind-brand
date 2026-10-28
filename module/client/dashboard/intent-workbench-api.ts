@@ -7,7 +7,11 @@ export interface IntentWorkbenchApi {
   rollback(input: unknown): Promise<IntentWorkspace>;
   waitForJob?(jobId: string, onUpdate: (value: IntentWorkspace) => void): Promise<IntentWorkspace>;
 }
-async function request(path: string, input?: unknown, operation = captureWorkspaceRestOperation()) {
+class IntentRequestError extends Error {
+  constructor(message: string, readonly retryable = false) {super(message);}
+}
+const temporaryStatus = (status: number) => [502, 503, 504].includes(status);
+async function requestOnce(path: string, input: unknown, operation: ReturnType<typeof captureWorkspaceRestOperation>) {
   operation.assertActive();
   const endpoint = `/api/modules/brand/intent${path}`;
   const response = await operation.fetch(endpoint, {
@@ -17,27 +21,43 @@ async function request(path: string, input?: unknown, operation = captureWorkspa
   }).catch(cause => {
     operation.assertActive();
     const detail = cause instanceof Error || cause instanceof DOMException ? `${cause.name}: ${cause.message}` : "网络异常";
-    throw new Error(`优化工作台请求未完成（${endpoint}，${detail}），请重新读取。`);
+    throw new IntentRequestError(`优化工作台请求未完成（${endpoint}，${detail}）。连接中断或服务暂时无响应，请重新读取；已提交任务会继续保留。`,
+      cause instanceof TypeError || (cause instanceof Error && ["TimeoutError", "AbortError"].includes(cause.name)));
   });
   let value: any;
   try {
     value = JSON.parse(await response.text());
   } catch (cause) {
     operation.assertActive();
-    if (!(cause instanceof SyntaxError)) throw cause;
+    if (!(cause instanceof SyntaxError)) {
+      throw new IntentRequestError(`优化工作台响应读取中断（${endpoint}），请重新读取；已提交任务会继续保留。`, cause instanceof TypeError);
+    }
     const format = response.headers.get("content-type")?.split(";")[0] ?? "未知格式";
-    throw new Error(`优化工作台接口返回非 JSON 数据（HTTP ${response.status}，${format}，${endpoint}）。请重新读取；若持续出现，请检查登录状态及服务网关。`);
+    throw new IntentRequestError(`优化工作台接口返回非 JSON 数据（HTTP ${response.status}，${format}，${endpoint}）。请重新读取；若持续出现，请检查登录状态及服务网关。`, temporaryStatus(response.status));
   }
   operation.assertActive();
   if (!response.ok) {
     const message = typeof value?.error === "string" ? value.error : value?.error?.message ?? value?.message;
-    throw new Error(`${message ?? "优化工作台请求失败"}（HTTP ${response.status}，${endpoint}）`);
+    throw new IntentRequestError(`${message ?? "优化工作台请求失败"}（HTTP ${response.status}，${endpoint}）`, temporaryStatus(response.status));
   }
   if (!value || !Number.isInteger(value.revision) || value.state?.version !== 1 ||
       !["questions", "evaluations", "plans", "todos", "receipts"].every(key => Array.isArray(value.state[key])) ||
       !Array.isArray(value.nodes))
     throw new Error(`优化工作台接口数据结构不正确（${endpoint}），请检查服务版本后重新读取。`);
   return value as IntentWorkspace;
+}
+async function request(path: string, input?: unknown, operation = captureWorkspaceRestOperation()) {
+  for (let attempt = 0; ; attempt++) {
+    try {return await requestOnce(path, input, operation);}
+    catch (cause) {
+      operation.assertActive();
+      // Retry reads in the same workspace only. An unanswered POST may already
+      // have committed; its recovery must first observe the durable ledger.
+      if (input !== undefined || !(cause instanceof IntentRequestError) || !cause.retryable || attempt >= 2) throw cause;
+      await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 500 : 1500));
+      operation.assertActive();
+    }
+  }
 }
 export const liveIntentWorkbenchApi: IntentWorkbenchApi = {
   observe: () => request(""),

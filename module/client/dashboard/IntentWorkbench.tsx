@@ -11,6 +11,7 @@ import {useWorkspaceDraftGuard, projectWorkspaceUrl, requestWorkspaceNavigation}
 import {navigate} from "wouter/use-browser-location";
 import IntentQuestionCatalog, {type IntentCatalogIntegration} from "./IntentQuestionCatalog";
 import IntentTaskProgress from "./IntentTaskProgress";
+import {findCatalogQuestion} from "./intent-catalog-link";
 
 type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge" | "progress";
 type Selection = Parameters<NonNullable<ManagedKeywordTablesProps["onUseQuestion"]>>[0];
@@ -68,6 +69,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const mounted = useRef(true);
   const generation = useRef(0);
   const running = useRef(false);
+  const emittedSection = useRef<"universe" | "list" | undefined>(undefined);
   const executeId = useRef<string | undefined>(undefined);
   const container = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -77,7 +79,10 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     void run(() => api.observe(), undefined, true);
     return () => {mounted.current = false; generation.current++;};
   }, [api]);
-  useEffect(() => {if (!running.current) setView(initialView);}, [initialView]);
+  useEffect(() => {
+    if (emittedSection.current === initialView) {emittedSection.current = undefined; return;}
+    if (!running.current) setView(initialView);
+  }, [initialView]);
   useEffect(() => {
     const element = container.current;
     if (!element) return;
@@ -159,7 +164,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   async function evaluate(ids: string[], force = false) {
     if (pending || running.current || !ids.length) return;
     setScope(ids); setIndex(0); setExpanded([]);
-    setSingleQueue(ids.length === 1 ? filtered.map(item => item.id) : []);
+    setSingleQueue(ids.length === 1 ? [...new Set([ids[0], ...filtered.filter(item =>
+      evaluations.some(evaluation => evaluation.questionId === item.id)).map(item => item.id)])] : []);
     const missing = force ? ids : ids.filter(id => !evaluations.some(item => item.questionId === id));
     if (!missing.length) {setView("evaluation"); return;}
     await run(() => command({kind: "evaluate", questionIds: missing}), "evaluation", false, "evaluate");
@@ -168,8 +174,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     const next = singleQueue[singleQueue.indexOf(scope[0]) + 1];
     if (!next) return;
     setScope([next]); setIndex(0);
-    if (!evaluations.some(item => item.questionId === next))
-      await run(() => command({kind: "evaluate", questionIds: [next]}), "evaluation", false, "evaluate");
+    // Next browses saved evaluations. Creating another model task is explicit.
   }
   async function confirmIntake() {
     if (!intake?.length || pending || !workspace) return;
@@ -177,15 +182,23 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       id: `${item.tableId}:${item.rowIndex}`, question: item.question, category: item.category,
       subdivision: "", tableId: item.tableId, rowIndex: item.rowIndex, sourceRevision: item.dashboardRevision ?? null,
     }));
-    const data = await run(() => command({kind: "intake", questions: incoming}), "list");
+    // A lost response may have saved the previous intake. Read first, link to
+    // existing questions/results, and submit only genuinely missing entries.
+    const data = await run(async () => {
+      const current = await api.observe();
+      const missing = incoming.filter(item => !findCatalogQuestion(item, current.state.questions));
+      return missing.length ? api.command({kind: "intake", expectedRevision: current.revision, questions: missing}) : current;
+    }, "list");
     if (!data) return;
-    const ids = data.state.questions.filter(question => incoming.some(item => question.id === item.id || question.question === item.question)).map(item => item.id);
+    const ids = [...new Set(incoming.map(item => findCatalogQuestion(item, data.state.questions)?.id).filter((id): id is string => Boolean(id)))];
+    if (incoming.some(item => !findCatalogQuestion(item, data.state.questions))) {setError("所选词条未能完整关联，请重新读取后确认。"); return;}
     setReceived(ids); setSelected(ids); setScope(ids); setIndex(0); setExpanded([]); setSingleQueue([]);
     setSearch(""); setCategory("all"); setStatus("all"); setPage(0); setIntake(null);
-    onSectionChange?.("list");
+    emittedSection.current = "list"; onSectionChange?.("list");
     const missing = ids.filter(id => !data.state.evaluations.some(item => item.questionId === id));
     if (missing.length) await run(() => api.command({kind: "evaluate", expectedRevision: data.revision,
       clientRequestId: crypto.randomUUID(), questionIds: missing}), "evaluation", false, "evaluate");
+    else setView("evaluation");
   }
   async function plan() {
     const data = await run(() => command({kind: "plan", questionIds: scope}), "plan", false, "plan");
@@ -217,7 +230,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const activeEvaluation = evaluated[index] ?? evaluated[0];
   const node = workspace?.nodes.find(item => item.id === nodeId) ?? workspace?.nodes[0];
   const currentChanges = receipt?.changes.filter(change => change.action.kind === "node" && change.action.nodeId === node?.id && (change.status === "succeeded" || change.status === "reverted")) ?? [];
-  function openSection(section: "universe" | "list") {setView(section); onSectionChange?.(section);}
+  function openSection(section: "universe" | "list") {setView(section); emittedSection.current = section; onSectionChange?.(section);}
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending}>
     {error && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true)}>重新读取</button></div>}
     {view === "progress" && <IntentTaskProgress job={workspace?.state.jobs?.find(item => item.id === progressJobId)}
@@ -230,7 +243,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       }}>查看当前任务</button></>}
     </div>}
     {!pending && !error && view !== "progress" && workspace?.state.jobs?.at(-1)?.status === "failed" && <div className="iw-error" role="alert">{workspace.state.jobs.at(-1)?.error}</div>}
-    {view === "universe" && <><header className="iw-header iw-universe-header"><div><h1>词条生成与优化</h1><p>推荐核心词 → 生成问题 → 选择新词条 → 加入优化清单</p></div><button onClick={() => openSection("list")}>查看优化清单 <span className="iw-tag">{questions.length}</span><ArrowRight size={15}/></button></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => setIntake([selection])} onUseQuestions={items => setIntake(items)}/></>}
+    {view === "universe" && <><header className="iw-header iw-universe-header"><div><h1>词条生成与优化</h1><p>推荐核心词 → 生成问题 → 选择新词条 → 加入优化清单</p></div><button onClick={() => openSection("list")}>查看优化清单 <span className="iw-tag">{questions.length}</span><ArrowRight size={15}/></button></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => setIntake([selection])} onUseQuestions={items => setIntake(items)}
+      optimizationState={workspace?.state} onViewEvaluation={id => void evaluate([id])}/></>}
     {view !== "universe" && !workspace && !error && <div role="status" className="iw-empty">正在读取优化工作台…</div>}
     {view === "list" && workspace && <>
       <IntentQuestionCatalog questions={questions} visible={visible} evaluations={evaluations} activeJob={activeJob} received={received} integration={catalogIntegration}
@@ -247,6 +261,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     {view === "evaluation" && !pending && !activeEvaluation && <div className="iw-panel"><p>当前任务尚无有效评估结果，请返回列表查看任务提示。</p><button onClick={() => setView("list")}>返回问题列表</button></div>}
     {view === "evaluation" && !pending && activeEvaluation && <>
       <button className="iw-back" onClick={() => setView("list")}><ArrowLeft size={15}/>返回问题列表</button><header className="iw-header"><div><h1>{scope.length > 1 ? "批量评估结果" : questions.find(item => item.id === activeEvaluation.questionId)?.question}</h1><p>查看问题价值、必要回答要点与可引用的知识依据。</p></div>{scope.length === 1 && <div><span className="iw-tag">{Math.max(1, singleQueue.indexOf(scope[0]) + 1)} / {Math.max(1, singleQueue.length)}</span> <button disabled={pending || !singleQueue[singleQueue.indexOf(scope[0]) + 1]} onClick={() => void nextEvaluation()}>下一条 <ArrowRight size={15}/></button></div>}</header><Steps step={0}/>
+      <p className="iw-method">正在查看已保存的评估结果；“重新评估”会基于当前知识库创建新任务。</p>
       {scope.length > 1 && <><p className="iw-method">每个问题独立评估、独立生成建议，最后统一确认和执行。</p><div className="iw-batch-summary">{[
         ["已评估问题", `${evaluated.length} / ${scope.length} 条`],
         ["存在知识缺口", `${evaluated.filter(item => item.points.some(point => point.status !== "supported")).length} 条`],
@@ -261,7 +276,9 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     {view === "result" && <><Steps step={2}/>{pending ? <section className="iw-panel iw-executing" role="status"><div className="iw-spinner"/><h2>正在执行优化</h2><p>正在保存已选动作并重新评估，请等待服务器确认。</p><progress/></section> : receipt ? <><section className="iw-panel"><header className="iw-result-hero"><span><Check size={27}/></span><h1>{receipt.status === "reverted" ? "本次优化已撤销" : receipt.status === "partial" ? "优化部分完成" : receipt.status === "running" ? "执行仍待确认" : "优化执行完成"}</h1><p>{receipt.changes.filter(change => change.status === "succeeded").length} 项成功 · {receipt.changes.filter(change => change.status === "failed").length} 项未完成 · 资料待办不计作知识补齐</p></header><div className="iw-results">{receipt.after.map(after => {const before = receipt.before.find(item => item.questionId === after.questionId); return <div key={after.questionId}><b>{questions.find(item => item.id === after.questionId)?.question}</b><div className="iw-comparison"><p>问题价值 <strong>{before?.value ?? "—"} → {after.value}</strong></p><p>知识支撑 <strong>{before?.support ?? "—"} → {after.support}</strong></p><p>未充分支撑 <strong>{before?.points.filter(point => point.status !== "supported").length ?? "—"} → {after.points.filter(point => point.status !== "supported").length}</strong></p></div></div>;})}{receipt.changes.map(change => <div className="iw-result-row" key={change.action.id}><div><b>{change.action.title}</b><p>{change.error ?? change.action.source}</p></div><span className={`iw-tag ${change.status === "succeeded" ? "supported" : "partial"}`}>{({pending: "待确认", succeeded: "成功", failed: "未完成", reverted: "已撤销"})[change.status]}</span></div>)}</div><footer className="iw-result-footer"><button onClick={exportReport}>导出评估报告</button><button onClick={() => openKnowledge()}>查看知识库变更</button><button disabled={receipt.status === "reverted" || receipt.status === "running"} onClick={() => setUndoOpen(true)}><Undo2 size={15}/>撤销本次优化</button><button className="iw-primary" onClick={() => setView("list")}>返回问题列表</button></footer></section></> : <div className="iw-empty">暂无执行记录</div>}</>}
     {view === "knowledge" && workspace && <><button className="iw-back" onClick={() => setView(receipt ? "result" : "list")}><ArrowLeft size={15}/>返回优化工作台</button><header className="iw-header"><div><h1>知识库变更</h1><p>定位实际节点，对比执行前后内容与资料缺口。</p></div><button onClick={exportReport}>导出变更记录</button></header><div className="iw-knowledge"><article className="iw-panel"><h3>{node?.title ?? "暂无知识节点"}<small>{node?.branch}</small></h3>{node && (currentChanges.length > 0 ? <KnowledgeChangeComparison key={`${receipt?.id}:${node.id}`} changes={currentChanges} current={node.content} createdAt={receipt?.createdAt}/> : <div className="iw-article"><p className="iw-change-caption">该节点在本次执行中没有已写入的变更记录，以下为当前正文。</p><MarkdownRenderer content={node.content}/></div>)}<p className="iw-method">{node?.verified ? "当前节点已确认" : "当前节点需再核验；不会计为充分支撑"}</p></article><aside className="iw-panel iw-tree"><h3>知识结构 <small>{workspace.nodes.length} 个节点</small></h3><label><Search size={16}/><input aria-label="搜索知识节点" placeholder="搜索节点标题或内容" value={nodeSearch} onChange={event => setNodeSearch(event.target.value)}/></label>{workspace.nodes.filter(item => `${item.title}${item.content}`.includes(nodeSearch)).map(item => <button className={node?.id === item.id ? "active" : ""} key={item.id} onClick={() => setNodeId(item.id)}><FileText size={16}/><span><b>{item.title}</b><small>{item.branch}</small></span><em>{item.verified ? "已确认" : "需核验"}</em></button>)}</aside></div></>}
     {view === "knowledge" && <div className="iw-sticky"><p>继续编辑、确认节点、上传资料和下载知识库，请进入原有知识库工作区。</p><button className="iw-primary" onClick={() => requestWorkspaceNavigation(() => navigate(projectWorkspaceUrl("/?view=knowledge")))}>打开智能知识库</button></div>}
-    <Dialog open={intake !== null} onOpenChange={open => {if (!open) setIntake(null);}}><DialogContent className="iw-modal"><DialogHeader><DialogTitle>加入优化清单</DialogTitle><DialogDescription>确认后进入问题列表并评估问题价值与知识支撑，再审核优化方案。</DialogDescription></DialogHeader><div className="iw-intake-list">{intake?.map(item => <div key={`${item.tableId}:${item.rowIndex}`}><span><b>{item.question}</b><small>{item.category}</small></span><button aria-label={`移除${item.question}`} onClick={() => setIntake(items => items?.filter(entry => entry !== item) ?? null)}>移除</button></div>)}</div><DialogFooter><button onClick={() => setIntake(null)}>取消</button><button className="iw-primary" disabled={pending || !intake?.length || !workspace} onClick={() => void confirmIntake()}>确认选择并交给问题优化（{intake?.length ?? 0}）</button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={intake !== null} onOpenChange={open => {if (!open) setIntake(null);}}><DialogContent className="iw-modal"><DialogHeader><DialogTitle>加入优化清单</DialogTitle><DialogDescription>已有评估会直接打开保存的结果；尚未评估的问题才会提交模型任务。</DialogDescription></DialogHeader>
+      {(error || !workspace) && <div className="iw-intake-recovery" role="status"><p>{error || "正在读取优化清单，所选词条已保留。"}</p><button disabled={pending} onClick={() => void run(() => api.observe())}>{pending ? "正在重新读取…" : "重试读取优化清单"}</button></div>}
+      <div className="iw-intake-list">{intake?.map(item => <div key={`${item.tableId}:${item.rowIndex}`}><span><b>{item.question}</b><small>{item.category}</small></span><button disabled={pending} aria-label={`移除${item.question}`} onClick={() => setIntake(items => items?.filter(entry => entry !== item) ?? null)}>移除</button></div>)}</div><DialogFooter><button onClick={() => setIntake(null)}>取消</button><button className="iw-primary" disabled={pending || !intake?.length || !workspace} onClick={() => void confirmIntake()}>确认选择并交给问题优化（{intake?.length ?? 0}）</button></DialogFooter></DialogContent></Dialog>
     <Dialog open={undoOpen} onOpenChange={setUndoOpen}><DialogContent className="iw-modal"><DialogHeader><DialogTitle>撤销本次优化？</DialogTitle><DialogDescription>恢复本次修改的问题和节点，删除对应资料待办。已有后续修改时将保留内容并提示冲突。</DialogDescription></DialogHeader><DialogFooter><button onClick={() => setUndoOpen(false)}>取消</button><button className="iw-primary" disabled={pending} onClick={() => {setUndoOpen(false); void run(() => api.rollback({receiptId: receipt!.id, expectedRevision: revision}));}}>确认撤销</button></DialogFooter></DialogContent></Dialog>
   </div>;
 }

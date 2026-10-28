@@ -22,6 +22,8 @@ import {
 } from "@frontmind/module-ui/keyword-categories";
 import { trpc } from "../api-hooks";
 import QuestionTemplateApiFlow from "./QuestionTemplateApiFlow";
+import type {IntentState} from "../../contracts/intent-workbench";
+import {findCatalogQuestion} from "./intent-catalog-link";
 
 export type ManagedKeywordTable = {
   id: string;
@@ -64,10 +66,12 @@ export type ManagedKeywordTablesProps = {
   knowledgePublished?: boolean;
   /** A host-owned import dialog can preserve the highlighted source row. */
   selectedKeyword?: { tableId: string; rowIndex: number } | null;
+  optimizationState?: IntentState;
+  onViewEvaluation?: (questionId: string) => void;
 };
 
 const KEYWORD_SOURCE_DESCRIPTION =
-  "全域词库汇总已保存的问题。上方可推荐并保存新问题，下方可筛选已有问题并导入优化工作台。";
+  "已保存的推荐问题与历史词库按来源分开展示，可加入优化清单或查看已有评估。";
 
 function normalizedColumnName(value: unknown) {
   return String(value ?? "")
@@ -199,10 +203,17 @@ export default function ManagedKeywordTables({
   dashboardRevision,
   knowledgePublished,
   selectedKeyword,
+  optimizationState,
+  onViewEvaluation,
 }: ManagedKeywordTablesProps) {
   const { isWorkbench } = useBusinessWorkspace();
   const utils = trpc.useUtils();
-  const [sourceView,setSourceView]=useState<"recommended"|"saved">(generationEnabled?"recommended":"saved");
+  const [sourceView,setSourceView]=useState<"recommended"|"saved"|"history">(generationEnabled?"recommended":"saved");
+  const recommendedTables = useMemo(() => tables.filter(table => table.id === "question-template-api:v1"), [tables]);
+  const historyTables = useMemo(() => tables.filter(table => table.id !== "question-template-api:v1"), [tables]);
+  const sourceTables = generationEnabled ? sourceView === "history" ? historyTables : recommendedTables : tables;
+  const recommendedCount = recommendedTables.reduce((total, table) => total + table.rows.length, 0);
+  const historyCount = historyTables.reduce((total, table) => total + table.rows.length, 0);
   // The confirmation modal is pure ephemeral UI state: it must stay closed on
   // first entry, refresh, navigation and project switches, and open only from
   // an explicit 选择词条 click. Filters below remain persisted flow state.
@@ -234,13 +245,17 @@ export default function ManagedKeywordTables({
     readFlowString,
   );
   const keyword = searchTerm.trim().toLowerCase();
+  function openSource(source: "recommended" | "saved" | "history") {
+    setSourceView(source); setTableFilter("all"); setCategoryFilter("all");
+    setSubdivisionFilter("all"); setSearchTerm(""); setPages({});
+  }
   useEffect(
     () => setPages({}),
     [searchTerm, tableFilter, categoryFilter, subdivisionFilter],
   );
   const hasKeywordCategories = useMemo(
     () =>
-      tables.some((table) => {
+      sourceTables.some((table) => {
         const categoryColumnIndex = keywordCategoryColumnIndex(table.columns);
         return (
           categoryColumnIndex >= 0 &&
@@ -249,13 +264,13 @@ export default function ManagedKeywordTables({
           )
         );
       }),
-    [tables],
+    [sourceTables],
   );
   const subdivisionOptions = useMemo(
     () =>
       [
         ...new Set(
-          tables.flatMap((table) => {
+          sourceTables.flatMap((table) => {
             const subdivisionIndex = questionSubdivisionColumnIndex(
               table.columns,
             );
@@ -267,13 +282,13 @@ export default function ManagedKeywordTables({
           }),
         ),
       ].sort((left, right) => left.localeCompare(right, "zh-CN")),
-    [tables],
+    [sourceTables],
   );
   const visibleTables = useMemo(() => {
     const selectedTables =
       tableFilter === "all"
-        ? tables
-        : tables.filter((table) => table.id === tableFilter);
+        ? sourceTables
+        : sourceTables.filter((table) => table.id === tableFilter);
     return selectedTables
       .map((table) => {
         const categoryColumnIndex = keywordCategoryColumnIndex(table.columns);
@@ -321,7 +336,7 @@ export default function ManagedKeywordTables({
             subdivisionFilter === "all") ||
           table.rows.length > 0,
       );
-  }, [categoryFilter, keyword, subdivisionFilter, tableFilter, tables]);
+  }, [categoryFilter, keyword, subdivisionFilter, tableFilter, sourceTables]);
   const totalRows = useMemo(
     () => tables.reduce((total, table) => total + table.rows.length, 0),
     [tables],
@@ -356,14 +371,15 @@ export default function ManagedKeywordTables({
       )}
       {generationEnabled && (
         <nav className="qt-source-tabs" aria-label="词条来源">
-          <button type="button" aria-pressed={sourceView==="recommended"} onClick={()=>setSourceView("recommended")}>推荐新词条<span>生成后直接加入优化</span></button>
-          <button type="button" aria-pressed={sourceView==="saved"} onClick={()=>setSourceView("saved")}>已保存词库 <b>{totalRows}</b><span>查看历史与已保存问题</span></button>
+          <button type="button" aria-pressed={sourceView==="recommended"} onClick={()=>openSource("recommended")}>推荐新词条<span>生成后直接加入优化</span></button>
+          <button type="button" aria-pressed={sourceView==="saved"} onClick={()=>openSource("saved")}>已保存推荐 <b>{recommendedCount}</b><span>经勾选保存的 API 推荐问题</span></button>
+          <button type="button" aria-pressed={sourceView==="history"} onClick={()=>openSource("history")}>历史词库 <b>{historyCount}</b><span>以前保存的词库，非本次推荐</span></button>
         </nav>
       )}
       {generationEnabled && (
         <div hidden={sourceView!=="recommended"}><QuestionTemplateApiFlow onSaved={() => utils.workspace.dashboard.invalidate()} onOptimize={onUseQuestions ?? (onUseQuestion ? items => {if(items[0])onUseQuestion(items[0]);} : undefined)} /></div>
       )}
-      {(!generationEnabled || sourceView==="saved") && (tables.length === 0 ? (
+      {(!generationEnabled || sourceView!=="recommended") && (sourceTables.length === 0 ? (
         loading ? (
           <KeywordEmptyPanel
             title="正在载入品牌全域词库"
@@ -379,9 +395,17 @@ export default function ManagedKeywordTables({
             title="品牌全域词库正在准备中"
             description="内容发布后会自动显示在这里。"
           />
-        ) : null
+        ) : <KeywordEmptyPanel title={sourceView === "history" ? "暂无历史词库" : "尚未保存推荐问题"} description="先生成推荐问题并勾选保存，即可在这里查看。"/>
       ) : (
         <>
+          {generationEnabled && <p className="keyword-source-note">{sourceView === "history" ? "这里保留以前的词库记录，不属于本次核心词推荐；仍可选择问题继续优化。" : "这里只显示通过核心词推荐流程勾选保存的问题，可能包含多次保存。已评估的问题可直接查看结果。"}</p>}
+          {onUseQuestions && batchItems.length > 0 && (
+            <div className="keyword-batch-actions" role="status">
+              <span>已选择 <strong>{batchItems.length}</strong> 条问题</span>
+              <div><button type="button" onClick={() => setBatchSelection({})}>清空选择</button>
+              <button type="button" className="iw-primary" onClick={() => onUseQuestions(batchItems)}>批量加入优化清单（{batchItems.length}）</button></div>
+            </div>
+          )}
           <div className="saas-toolbar keyword-toolbar-saas">
             <div className="saas-search">
               <Search size={16} />
@@ -402,7 +426,7 @@ export default function ManagedKeywordTables({
                 </button>
               )}
             </div>
-            {(tables.length > 1 ||
+            {(sourceTables.length > 1 ||
               hasKeywordCategories ||
               subdivisionOptions.length > 0) && (
               <div className="filter-group">
@@ -446,7 +470,7 @@ export default function ManagedKeywordTables({
                     </select>
                   </div>
                 )}
-                {tables.length > 1 && (
+                {sourceTables.length > 1 && (
                   <div className="filter-item">
                     <label htmlFor="managed-keyword-table">词表</label>
                     <select
@@ -455,7 +479,7 @@ export default function ManagedKeywordTables({
                       onChange={(event) => setTableFilter(event.target.value)}
                     >
                       <option value="all">全部词表</option>
-                      {tables.map((table) => (
+                      {sourceTables.map((table) => (
                         <option key={table.id} value={table.id}>
                           {safeText(table.title)}
                         </option>
@@ -468,7 +492,7 @@ export default function ManagedKeywordTables({
           </div>
           <div className="keyword-stats-bar">
             <span>
-              共 <strong>{formatNumber(totalRows)}</strong> 条词库记录
+              当前来源共 <strong>{formatNumber(sourceTables.reduce((total, table) => total + table.rows.length, 0))}</strong> 条词库记录
             </span>
             <span>
               当前显示 <strong>{formatNumber(visibleRows)}</strong> 条
@@ -484,12 +508,13 @@ export default function ManagedKeywordTables({
               );
               const pageCount = Math.max(1, Math.ceil(table.rows.length / 20));
               const page = Math.min(pages[table.id] ?? 0, pageCount - 1);
-              const rows = isWorkbench
+              const paginate = isWorkbench || Boolean(onUseQuestions);
+              const rows = paginate
                 ? table.rows.slice(page * 20, (page + 1) * 20)
                 : table.rows;
               return (
                 <KeywordPanel
-                  title={tables.length === 1 ? "全域词库" : table.title}
+                  title={generationEnabled && sourceView === "history" ? `历史词库 · ${table.title}` : table.title}
                   key={table.id}
                   actions={
                     <span className="entity-count">
@@ -501,6 +526,7 @@ export default function ManagedKeywordTables({
                     <table className="keyword-table">
                       <thead>
                         <tr>
+                          {onUseQuestions && <th className="keyword-selection-cell">选择 / 评估</th>}
                           {table.displayColumns.map(
                             ({ column, columnIndex }) => (
                               <th key={`${column}-${columnIndex}`}>
@@ -510,9 +536,7 @@ export default function ManagedKeywordTables({
                               </th>
                             ),
                           )}
-                          {onUseQuestion && (
-                            <th>{onUseQuestions ? "选择词条" : "问题优化"}</th>
-                          )}
+                          {onUseQuestion && !onUseQuestions && <th>问题优化</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -526,12 +550,31 @@ export default function ManagedKeywordTables({
                           const quotaAccess = category
                             ? quotaAvailability?.[category]
                             : undefined;
+                          const linked = optimizationState ? findCatalogQuestion({question, tableId: table.id, rowIndex}, optimizationState.questions) : undefined;
+                          const evaluation = linked ? optimizationState?.evaluations.find(item => item.questionId === linked.id) : undefined;
                           return (
                             <tr
                               key={`${table.id}-${rowIndex}`}
                               className={onUseQuestions && batchSelection[`${table.id}:${rowIndex}`] ? "keyword-row-selected" : undefined}
                               aria-selected={isWorkbench ? selectedKeyword?.tableId === table.id && selectedKeyword.rowIndex === rowIndex : undefined}
                             >
+                              {onUseQuestions && <td className="keyword-selection-cell">
+                                <label><input type="checkbox" aria-label={`选择${question}`}
+                                  checked={Boolean(batchSelection[`${table.id}:${rowIndex}`])}
+                                  disabled={(isWorkbench && dashboardRevision == null) || !question || !category || quotaAccess?.available === false}
+                                  onChange={() => {
+                                    if (!category) return;
+                                    const key = `${table.id}:${rowIndex}`;
+                                    setBatchSelection(current => {
+                                      const next = {...current};
+                                      if (next[key]) delete next[key];
+                                      else next[key] = {question, category, tableId: table.id, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})};
+                                      return next;
+                                    });
+                                  }}/>{batchSelection[`${table.id}:${rowIndex}`] ? "已选择" : "选择词条"}</label>
+                                {evaluation && linked && onViewEvaluation ? <><small>价值 {evaluation.value} · 支撑 {evaluation.support}</small><button type="button" onClick={() => onViewEvaluation(linked.id)}>查看已有评估</button></> :
+                                  <small>{!optimizationState ? "优化状态尚未读取" : linked ? "已在优化清单 · 待评估" : "尚未加入优化"}</small>}
+                              </td>}
                               {table.displayColumns.map(
                                 ({ column, columnIndex }) => {
                                   const normalizedColumn =
@@ -581,7 +624,7 @@ export default function ManagedKeywordTables({
                                   );
                                 },
                               )}
-                              {onUseQuestion && (
+                              {onUseQuestion && !onUseQuestions && (
                                 <td>
                                   <button
                                     type="button"
@@ -625,7 +668,7 @@ export default function ManagedKeywordTables({
                       </tbody>
                     </table>
                   </div>
-                  {isWorkbench && pageCount > 1 && (
+                  {paginate && pageCount > 1 && (
                     <nav
                       className="business-flow-pagination"
                       aria-label={`${table.title}分页`}
@@ -669,13 +712,6 @@ export default function ManagedKeywordTables({
               />
             )}
           </div>
-          {onUseQuestions && batchItems.length > 0 && (
-            <div className="iw-sticky">
-              <span>已选择 <strong>{batchItems.length}</strong> 条问题 · 支持跨筛选连续选择</span>
-              <div><button type="button" onClick={() => setBatchSelection({})}>清空选择</button>
-              <button type="button" className="iw-primary" onClick={() => onUseQuestions(batchItems)}>批量加入优化清单（{batchItems.length}）</button></div>
-            </div>
-          )}
         </>
       ))}
     </section>
