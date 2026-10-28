@@ -3278,3 +3278,300 @@
 .sfp-final-preview .sfp-template-preview-frame {
   flex: 1;
 }
+
+/* ---- 网站助手真实预览：建议提问、检索中状态 ---- */
+
+.sfp-widget-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sfp-widget-suggestions button {
+  align-self: flex-start;
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--sfp-widget-accent, var(--sfp-site-accent)) 38%, #fff);
+  border-radius: 999px;
+  color: var(--sfp-widget-accent, var(--sfp-site-accent));
+  font-size: var(--sfp-type-sm);
+  max-width: 92%;
+  padding: 5px 11px;
+  text-align: left;
+}
+
+.sfp-widget-suggestions button:hover {
+  background: color-mix(in srgb, var(--sfp-widget-accent, var(--sfp-site-accent)) 9%, #fff);
+}
+
+.sfp-widget-typing {
+  color: #8b8e9a;
+  font-style: italic;
+}
+
+/* ---- AI 助手步骤：主题色跟随、试用状态 ---- */
+
+.sfp-color-follow {
+  align-items: center;
+  border-top: 1px dashed var(--sfp-line);
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  margin-top: 12px;
+  padding-top: 11px;
+}
+
+.sfp-color-follow.is-disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.sfp-color-follow > span {
+  display: flex;
+  flex-direction: column;
+}
+
+.sfp-color-follow strong {
+  font-size: var(--sfp-type-body);
+  font-weight: var(--sfp-weight-bold);
+}
+
+.sfp-color-follow small {
+  color: var(--sfp-muted);
+  font-size: var(--sfp-type-sm);
+  font-weight: var(--sfp-weight-regular);
+}
+
+.sfp-assistant-trial {
+  align-items: flex-start;
+  border: 1px solid var(--sfp-line);
+  border-radius: 10px;
+  color: #8a5b13;
+  display: flex;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 10px 12px;
+}
+
+.sfp-assistant-trial > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.sfp-assistant-trial > span {
+  display: flex;
+  flex-direction: column;
+}
+
+.sfp-assistant-trial strong {
+  font-size: var(--sfp-type-body);
+  font-weight: var(--sfp-weight-bold);
+}
+
+.sfp-assistant-trial small {
+  color: var(--sfp-muted);
+  font-size: var(--sfp-type-sm);
+  font-weight: var(--sfp-weight-regular);
+}
+
+.sfp-assistant-trial.is-done {
+  border-color: #bfdcc6;
+  color: #24653d;
+}
+
+/* ---- 站点预览：栏目卡片补充文章数、模板差异化版式 ---- */
+
+.sfp-site-category-grid article > div,
+.sfp-site-service-grid article > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sfp-site-category-grid article small,
+.sfp-site-service-grid article small,
+.sfp-site-docs-layout aside small {
+  color: #9a9d92;
+  font-size: var(--sfp-type-caption);
+  font-weight: var(--sfp-weight-regular);
+}
+
+.sfp-site-docs-topbar {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.sfp-site-docs-layout {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 148px minmax(0, 1fr);
+}
+
+.sfp-site-docs-layout aside {
+  border-right: 1px solid #e9e6df;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sfp-site-docs-layout aside > strong {
+  color: var(--sfp-site-accent);
+  font-size: var(--sfp-type-sm);
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.sfp-site-docs-layout aside > span {
+  border-radius: 6px;
+  color: #6e716f;
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  font-size: var(--sfp-type-sm);
+  padding: 6px 9px;
+}
+
+.sfp-site-docs-layout aside > span.is-active {
+  background: color-mix(in srgb, var(--sfp-site-accent) 10%, white);
+  color: var(--sfp-site-accent);
+  font-weight: var(--sfp-weight-bold);
+}
+
+.sfp-site-docs-article {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.sfp-site-docs-article .sfp-site-docs-lead {
+  color: #5f6360;
+  font-size: var(--sfp-type-body);
+  margin: 0;
+}
+
+.sfp-site-docs-article > i {
+  background: #e7e5de;
+  border-radius: 3px;
+  height: 9px;
+}
+
+.sfp-site-docs-article > i.is-short {
+  width: 46%;
+}
+
+.sfp-site-docs-callout {
+  background: color-mix(in srgb, var(--sfp-site-accent) 8%, white);
+  border-left: 3px solid var(--sfp-site-accent);
+  border-radius: 4px;
+  color: var(--sfp-site-accent);
+  font-size: var(--sfp-type-sm);
+  font-style: normal;
+  padding: 9px 12px;
+}
+
+.sfp-site-hero {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--sfp-site-accent) 16%, white), color-mix(in srgb, var(--sfp-site-accent) 5%, white));
+  border: 1px solid color-mix(in srgb, var(--sfp-site-accent) 22%, white);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+  max-width: 640px;
+  padding: 26px 24px;
+}
+
+.sfp-site-hero-actions {
+  display: flex;
+  gap: 9px;
+  margin-top: 4px;
+}
+
+.sfp-site-hero-actions span {
+  background: var(--sfp-site-accent);
+  border-radius: 999px;
+  color: #fff;
+  font-size: var(--sfp-type-sm);
+  font-weight: var(--sfp-weight-bold);
+  padding: 7px 15px;
+}
+
+.sfp-site-hero-actions span:last-child {
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--sfp-site-accent) 40%, white);
+  color: var(--sfp-site-accent);
+}
+
+.sfp-site-service-grid {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-width: 640px;
+}
+
+.sfp-site-service-grid article {
+  align-items: flex-start;
+  background: rgba(255,255,255,0.78);
+  border: 1px solid #e6e2da;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 13px;
+}
+
+.sfp-site-service-grid article > span {
+  color: var(--sfp-site-accent);
+  font-size: var(--sfp-type-sm);
+  font-weight: var(--sfp-weight-bold);
+}
+
+.sfp-site-service-grid article strong {
+  font-size: var(--sfp-type-body);
+  font-weight: var(--sfp-weight-medium);
+}
+
+.sfp-site-contact-strip {
+  align-items: center;
+  background: color-mix(in srgb, var(--sfp-site-accent) 9%, white);
+  border-radius: 9px;
+  color: #565a56;
+  display: flex;
+  font-size: var(--sfp-type-sm);
+  justify-content: space-between;
+  margin-top: 16px;
+  max-width: 640px;
+  padding: 11px 14px;
+}
+
+.sfp-site-contact-strip em {
+  color: var(--sfp-site-accent);
+  font-style: normal;
+  font-weight: var(--sfp-weight-bold);
+}
+
+.sfp-site-stage--mobile .sfp-site-docs-layout {
+  grid-template-columns: 1fr;
+}
+
+.sfp-site-stage--mobile .sfp-site-docs-layout aside {
+  border-right: 0;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sfp-site-stage--mobile .sfp-site-docs-layout aside > span {
+  padding: 4px 8px;
+}
+
+.sfp-site-stage--mobile .sfp-site-service-grid {
+  grid-template-columns: 1fr;
+}
+
+.sfp-site-stage--mobile .sfp-site-hero {
+  padding: 18px 16px;
+}
