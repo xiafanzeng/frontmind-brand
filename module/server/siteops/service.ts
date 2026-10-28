@@ -37,6 +37,7 @@ export interface SiteOpsServiceCore {
  getDb:()=>Promise<MySql2Database<any>|null>;
  ownedFileContentResolver:any;
  getServicePortal:Port;
+ getServicePortalReadOnly:Port;
  getTwentyFirstCredentialStatus:Port;
  AliyunProviderError:new (...args:any[])=>Error & {code:string};
  bindAliyunCustomerAccountFromOAuth:Port;
@@ -88,6 +89,7 @@ let credentialProfileProjection:SiteOpsServiceCore['credentialProfileProjection'
 let getDb:SiteOpsServiceCore['getDb'];
 let ownedFileContentResolver:SiteOpsServiceCore['ownedFileContentResolver'];
 let getServicePortal:SiteOpsServiceCore['getServicePortal'];
+let getServicePortalReadOnly:SiteOpsServiceCore['getServicePortalReadOnly'];
 let getTwentyFirstCredentialStatus:SiteOpsServiceCore['getTwentyFirstCredentialStatus'];
 let AliyunProviderError:SiteOpsServiceCore['AliyunProviderError'];
 let bindAliyunCustomerAccountFromOAuth:SiteOpsServiceCore['bindAliyunCustomerAccountFromOAuth'];
@@ -103,7 +105,7 @@ let SiteOpsQuotaError:SiteOpsServiceCore['SiteOpsQuotaError'];
 let persistSiteOpsArtifact:SiteOpsServiceCore['persistSiteOpsArtifact'];
 export function configureSiteOpsServiceCore(core:SiteOpsServiceCore){
  ({knowledgeBaseSnapshots,siteBuildInputAssets,siteBuilds,siteDeployments,siteDnsRecords,siteOperations,siteProjects,siteProviderConnections,socialPackages,visualCandidatePoolPages,visualCandidatePools,websiteStyleSampleBatches,websiteStyleSamples}=core.tables);
- ({readSiteOpsCredentialReadiness,lockSiteOpsIdentity,readActiveSiteOpsProviderCredential,readActiveSiteOpsAiCredential,readPinnedSiteOpsProviderCredential,assertSiteOpsActor,lockCustomerProjectBusinessWrite,enterpriseWorkspaceUserId,getEnterpriseProjectScope,enterpriseAccountOwnerPredicate,enterpriseSiteProfileTable,enterpriseSiteProfileOwnerPredicate,enterpriseOwnerPredicate,enterpriseProjectUrl,runWithSiteOpsOAuthProjectScope,AuthServiceError,credentialProfileProjection,getDb,ownedFileContentResolver,getServicePortal,getTwentyFirstCredentialStatus,AliyunProviderError,bindAliyunCustomerAccountFromOAuth,disconnectAliyunCustomerConnection,getAliyunCustomerConnectionStatus,listAliyunCustomerDomains,createAliyunOAuthAuthorization,inspectEsaRuntimeConfiguration,assertSiteOpsServiceEntitlement,reserveSiteOpsQuota,siteOpsQuotaPeriodIds,SiteOpsQuotaError,persistSiteOpsArtifact,messages,conversations,conversationTurns,localAssets}=core);
+ ({readSiteOpsCredentialReadiness,lockSiteOpsIdentity,readActiveSiteOpsProviderCredential,readActiveSiteOpsAiCredential,readPinnedSiteOpsProviderCredential,assertSiteOpsActor,lockCustomerProjectBusinessWrite,enterpriseWorkspaceUserId,getEnterpriseProjectScope,enterpriseAccountOwnerPredicate,enterpriseSiteProfileTable,enterpriseSiteProfileOwnerPredicate,enterpriseOwnerPredicate,enterpriseProjectUrl,runWithSiteOpsOAuthProjectScope,AuthServiceError,credentialProfileProjection,getDb,ownedFileContentResolver,getServicePortal,getServicePortalReadOnly,getTwentyFirstCredentialStatus,AliyunProviderError,bindAliyunCustomerAccountFromOAuth,disconnectAliyunCustomerConnection,getAliyunCustomerConnectionStatus,listAliyunCustomerDomains,createAliyunOAuthAuthorization,inspectEsaRuntimeConfiguration,assertSiteOpsServiceEntitlement,reserveSiteOpsQuota,siteOpsQuotaPeriodIds,SiteOpsQuotaError,persistSiteOpsArtifact,messages,conversations,conversationTurns,localAssets}=core);
 }
 
 
@@ -142,7 +144,9 @@ import {
   SITEOPS_VISUAL_CANDIDATE_MAX_PAGES,
   SITEOPS_VISUAL_CANDIDATE_MAX_TOTAL,
   SITEOPS_VISUAL_CANDIDATE_PAGE_SIZE,
+  applySiteDesignPreferencesToBrief,
   parseSiteOpsPersistedWorkflowCoordinates,
+  readSiteDesignPreferencesFromBrief,
   siteBriefSchema,
   siteOpsActInputSchema,
   siteOpsAliyunConnectionInputSchema,
@@ -156,6 +160,16 @@ import {
   type SiteOpsActInput,
   type SiteBrief,
 } from "../../contracts/siteops.js";
+import {
+  canonicalSiteDesignDraftJson,
+  siteDesignKnowledgeSnapshotCoordinateSchema,
+  siteDesignPreferencesSaveInputSchema,
+  siteDesignPreferencesV1Schema,
+  siteDesignRecommendationInputSchema,
+  type SiteDesignPreferencesDraft,
+  type SiteDesignKnowledgeSnapshotCoordinate,
+  type SiteDesignTemplateCoordinate,
+} from "../../contracts/site-design-preferences.js";
 import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "../../contracts/siteops-branding.js";
 import { createVisualEvidenceV1 } from "../../contracts/siteops-workflow.js";
 import {
@@ -227,6 +241,10 @@ import {
   imageMimeByExtension,
   isSupportedImageBytes,
 } from "../knowledge-archive-image-validation.js";
+import {
+  createSiteDesignRecommendation,
+  type SiteDesignRecommendationSourceDocument,
+} from "./site-design-recommendation.js";
 
 
 export type SiteOpsServiceErrorCode =
@@ -436,6 +454,19 @@ async function ensureOwnedSiteProfile(executor: any, userId: number) {
 async function requireSiteOpsEntitlement(userId: number) {
   try {
     return assertSiteOpsServiceEntitlement(await getServicePortal(userId));
+  } catch (error) {
+    if (error instanceof SiteOpsQuotaError) {
+      throw siteOpsServiceErrorFromQuota(error);
+    }
+    throw error;
+  }
+}
+
+async function requireSiteOpsReadOnlyEntitlement(userId: number) {
+  try {
+    return assertSiteOpsServiceEntitlement(
+      await getServicePortalReadOnly(userId),
+    );
   } catch (error) {
     if (error instanceof SiteOpsQuotaError) {
       throw siteOpsServiceErrorFromQuota(error);
@@ -901,6 +932,13 @@ function publicVisualMetadata(value: unknown) {
     providerTitle:
       typeof metadata.title === "string" ? metadata.title.trim() : "",
     visualFamily: visualFamily.success ? visualFamily.data : null,
+    templateCoordinate:
+      staticTemplateMetadata?.success === true
+        ? {
+            id: staticTemplateMetadata.data.catalogCandidateId,
+            version: staticTemplateMetadata.data.catalogVersion,
+          }
+        : null,
     executionAdmitted: !staticTemplate || executionAdmissionBound,
     executionAdmissionMode,
     executionUnavailableReason:
@@ -1042,6 +1080,40 @@ export const staticTemplateSelectionMetadataSchema = z
       });
     }
   });
+
+export function requireSiteDesignTemplateCoordinateMatchesSelection(
+  template: SiteDesignTemplateCoordinate,
+  selectionMetadata: unknown,
+) {
+  const selected = staticTemplateSelectionMetadataSchema.safeParse(
+    selectionMetadata,
+  );
+  if (
+    !selected.success ||
+    selected.data.catalogCandidateId !== template.id ||
+    selected.data.catalogVersion !== template.version
+  ) {
+    throw new SiteOpsServiceError(
+      "REVISION_CONFLICT",
+      "网站设计所选模板与当前视觉方向不一致，请刷新后重新选择。",
+      409,
+    );
+  }
+  return selected.data;
+}
+
+export function requireSiteDesignTemplateMatchesSelection(
+  brief: unknown,
+  selectionMetadata: unknown,
+) {
+  const preferences = readSiteDesignPreferencesFromBrief(brief);
+  return preferences
+    ? requireSiteDesignTemplateCoordinateMatchesSelection(
+        preferences.template,
+        selectionMetadata,
+      )
+    : null;
+}
 
 export function isNativeVisualSelectionMetadata(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -2307,6 +2379,175 @@ function siteOpsKnowledgeSnapshotAvailable(
   return siteOpsKnowledgeSnapshotSelectableForProject({ snapshot });
 }
 
+type SiteDesignRecommendationSnapshotCandidate =
+  SiteOpsKnowledgeSnapshotCandidate &
+    Pick<
+      typeof knowledgeBaseSnapshots.$inferSelect,
+      "id" | "version" | "createdAt"
+    >;
+
+/**
+ * Resolves the single current published snapshot before any recommendation is
+ * projected. The full immutable coordinate must match so a stale response can
+ * never be mistaken for a recommendation for newer knowledge.
+ */
+export function requireCurrentSiteDesignRecommendationSnapshot<
+  Snapshot extends SiteDesignRecommendationSnapshotCandidate,
+>(
+  snapshots: readonly Snapshot[],
+  coordinate: SiteDesignKnowledgeSnapshotCoordinate,
+) {
+  const current = [...snapshots]
+    .filter((snapshot) => siteOpsKnowledgeSnapshotAvailable(snapshot))
+    .sort(
+      (left, right) =>
+        right.version - left.version ||
+        right.createdAt.getTime() - left.createdAt.getTime() ||
+        right.id.localeCompare(left.id),
+    )[0];
+  if (!current) {
+    throw new SiteOpsServiceError(
+      "NOT_FOUND",
+      "当前账号还没有可用于网站设计的已发布知识库",
+      404,
+    );
+  }
+  if (
+    current.id !== coordinate.id ||
+    current.version !== coordinate.version ||
+    current.archiveHash !== coordinate.archiveHash
+  ) {
+    throw new SiteOpsServiceError(
+      "REVISION_CONFLICT",
+      "当前知识库已更新，请刷新后重新获取网站设计建议。",
+      409,
+    );
+  }
+  return current;
+}
+
+export function requireSiteDesignRecommendationTemplate<
+  Entry extends {
+    candidateId: string;
+    executionAdmission: { status: "admitted" | "unavailable" };
+  },
+>(
+  catalog: {
+    catalogVersion: string;
+    entries: readonly Entry[];
+  } | null,
+  coordinate: SiteDesignTemplateCoordinate,
+) {
+  if (!catalog) {
+    throw new SiteOpsServiceError(
+      "STATE_CONFLICT",
+      "当前网站模板目录尚未就绪，请稍后重试。",
+      409,
+    );
+  }
+  if (catalog.catalogVersion !== coordinate.version) {
+    throw new SiteOpsServiceError(
+      "REVISION_CONFLICT",
+      "当前网站模板版本已更新，请刷新后重新获取网站设计建议。",
+      409,
+    );
+  }
+  const template = catalog.entries.find(
+    (entry) => entry.candidateId === coordinate.id,
+  );
+  if (!template) {
+    throw new SiteOpsServiceError(
+      "INVALID_INPUT",
+      "所选网站模板不属于当前模板版本。",
+      400,
+    );
+  }
+  if (template.executionAdmission.status !== "admitted") {
+    throw new SiteOpsServiceError(
+      "STATE_CONFLICT",
+      "所选网站模板当前不可用于生成，请重新选择。",
+      409,
+    );
+  }
+  return template;
+}
+
+/**
+ * Replaces storage identifiers and archive paths with snapshot-bound opaque
+ * coordinates before recommendation data can cross the public API boundary.
+ * The same immutable snapshot always produces the same coordinates.
+ */
+export function projectSiteDesignRecommendationSources(input: {
+  brief: SiteBrief;
+  knowledgeSnapshot: SiteDesignKnowledgeSnapshotCoordinate;
+  documents: readonly SiteDesignRecommendationSourceDocument[];
+}) {
+  const coordinateByStorageId = new Map<string, string>();
+  const projectedDocuments: SiteDesignRecommendationSourceDocument[] = [];
+  const orderedDocuments = [...input.documents].sort((left, right) => {
+    const leftKey = `${left.id}\u0000${left.title}\u0000${left.content}`;
+    const rightKey = `${right.id}\u0000${right.title}\u0000${right.content}`;
+    return leftKey === rightKey ? 0 : leftKey < rightKey ? -1 : 1;
+  });
+  for (const document of orderedDocuments) {
+    const storageId = document.id.trim();
+    if (!storageId || coordinateByStorageId.has(storageId)) continue;
+    const coordinate = `source_${hashSiteOpsRequest({
+      scope: "site_design_recommendation_source_v1",
+      knowledgeSnapshot: input.knowledgeSnapshot,
+      storageId,
+    }).slice(0, 48)}`;
+    coordinateByStorageId.set(storageId, coordinate);
+    projectedDocuments.push({ ...document, id: coordinate });
+  }
+
+  const projectIds = (ids: readonly string[]) =>
+    [...new Set(ids.flatMap((id) => {
+      const coordinate = coordinateByStorageId.get(id);
+      return coordinate ? [coordinate] : [];
+    }))].sort();
+  const coreSourceCoordinates = new Set(
+    projectIds(
+      input.brief.contentInventory.entries
+        .filter((entry) => entry.kind === "product" || entry.kind === "service")
+        .flatMap((entry) => entry.sourceDocumentIds),
+    ),
+  );
+  const projectedBrief = siteBriefSchema.parse({
+    ...input.brief,
+    contacts: input.brief.contacts.map((contact) => ({
+      ...contact,
+      sourceDocumentIds: projectIds(contact.sourceDocumentIds),
+    })),
+    contentInventory: {
+      ...input.brief.contentInventory,
+      entries: input.brief.contentInventory.entries
+        .map((entry) => ({
+          ...entry,
+          sourceDocumentIds: projectIds(entry.sourceDocumentIds),
+        }))
+        .filter((entry) => entry.sourceDocumentIds.length > 0),
+    },
+    routes: input.brief.routes.map((route) => ({
+      ...route,
+      sourceDocumentIds:
+        route.id === "offerings"
+          ? projectIds(route.sourceDocumentIds).filter((id) =>
+              coreSourceCoordinates.has(id),
+            )
+          : projectIds(route.sourceDocumentIds),
+    })),
+    verifiedFacts: input.brief.verifiedFacts
+      .map((fact) => ({
+        ...fact,
+        sourceDocumentIds: projectIds(fact.sourceDocumentIds),
+      }))
+      .filter((fact) => fact.sourceDocumentIds.length > 0),
+  });
+
+  return { brief: projectedBrief, documents: projectedDocuments };
+}
+
 export async function runSiteOpsObservationQueries(
   tasks: ReadonlyArray<() => Promise<unknown>>,
   concurrency = 4,
@@ -2318,6 +2559,30 @@ export async function runSiteOpsObservationQueries(
     results.push(...(await Promise.all(wave.map((task) => task()))));
   }
   return results;
+}
+
+export function projectSiteOpsBuildKnowledgeSnapshotCoordinates(input: {
+  buildSnapshotIds: ReadonlyArray<string | null>;
+  ownedSnapshotRows: ReadonlyArray<{
+    id: string;
+    version: number;
+    archiveHash: string | null;
+  }>;
+}) {
+  const visibleSnapshotIds = new Set(
+    input.buildSnapshotIds.filter((id): id is string => id !== null),
+  );
+  const coordinates = new Map<string, SiteDesignKnowledgeSnapshotCoordinate>();
+  for (const row of input.ownedSnapshotRows) {
+    if (!visibleSnapshotIds.has(row.id)) continue;
+    const parsed = siteDesignKnowledgeSnapshotCoordinateSchema.safeParse({
+      id: row.id,
+      version: row.version,
+      archiveHash: row.archiveHash,
+    });
+    if (parsed.success) coordinates.set(row.id, parsed.data);
+  }
+  return coordinates;
 }
 
 export function siteOpsObservationFlightKey(input: {
@@ -2627,6 +2892,39 @@ async function projectObservationOnce(
   const visibleBuildIds = buildRows.map(
     (row: typeof siteBuilds.$inferSelect) => row.id,
   );
+  const visibleBuildSnapshotIds: string[] = [
+    ...new Set<string>(
+      buildRows
+        .map(
+          (row: typeof siteBuilds.$inferSelect) => row.knowledgeSnapshotId,
+        )
+        .filter((id: string | null): id is string => id !== null),
+    ),
+  ];
+  // This query is intentionally separate from the active/selectable list.
+  // It is read-only, owner-scoped, and returns only immutable coordinates for
+  // snapshots referenced by builds already visible in this reset cycle.
+  const buildSnapshotRows = visibleBuildSnapshotIds.length > 0
+    ? await executor
+        .select({
+          id: knowledgeBaseSnapshots.id,
+          version: knowledgeBaseSnapshots.version,
+          archiveHash: knowledgeBaseSnapshots.archiveHash,
+        })
+        .from(knowledgeBaseSnapshots)
+        .where(
+          and(
+            enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.userId),
+            inArray(knowledgeBaseSnapshots.id, visibleBuildSnapshotIds),
+          ),
+        )
+        .limit(visibleBuildSnapshotIds.length)
+    : [];
+  const buildSnapshotCoordinates =
+    projectSiteOpsBuildKnowledgeSnapshotCoordinates({
+      buildSnapshotIds: visibleBuildSnapshotIds,
+      ownedSnapshotRows: buildSnapshotRows,
+    });
   const buildInputRows =
     visibleBuildIds.length > 0
       ? await executor
@@ -3005,6 +3303,11 @@ async function projectObservationOnce(
         sourceProfile: null,
         createdAt: row.createdAt.toISOString(),
         active: row.id === input.project.currentKnowledgeSnapshotId,
+        coordinate: {
+          id: row.id,
+          version: row.version,
+          archiveHash: row.archiveHash,
+        },
       }),
     ),
     messages: messagesProjected,
@@ -3051,6 +3354,10 @@ async function projectObservationOnce(
         id: row.id,
         parentBuildId: row.parentBuildId,
         ordinal: row.ordinal,
+        knowledgeSnapshotId: row.knowledgeSnapshotId,
+        knowledgeSnapshot: row.knowledgeSnapshotId
+          ? buildSnapshotCoordinates.get(row.knowledgeSnapshotId) ?? null
+          : null,
         status: row.status,
         previewUrl: row.distLocalAssetId
           ? enterpriseProjectUrl(`/api/site-ops/builds/${row.id}/preview/`)
@@ -3058,6 +3365,11 @@ async function projectObservationOnce(
         sourceUrl: row.sourceLocalAssetId
           ? enterpriseProjectUrl(`/api/site-ops/builds/${row.id}/source`)
           : null,
+        designPreferences: readSiteDesignPreferencesFromBrief(row.brief),
+        brief: (() => {
+          const parsed = siteBriefSchema.safeParse(row.brief);
+          return parsed.success ? parsed.data : null;
+        })(),
         contentPlan: {
           status:
             row.contentPlanLocalAssetId && row.contentPlanSha256
@@ -3135,6 +3447,225 @@ async function projectObservation(
   return runSiteOpsObservationSingleFlight(key, () =>
     projectObservationOnce(executor, input),
   );
+}
+
+/**
+ * Read-only website-design recommendation. This path deliberately does not
+ * create a SiteOps project, advance a project state, update a brief, reserve
+ * quota, or dispatch a provider task.
+ */
+export async function recommendSiteDesign(
+  actor: AuthenticatedUser,
+  value: unknown,
+) {
+  assertEnabled();
+  assertCustomer(actor);
+  const ownerUserId = enterpriseWorkspaceUserId(actor.id);
+  await requireSiteOpsReadOnlyEntitlement(ownerUserId);
+  const input = siteDesignRecommendationInputSchema.parse(value);
+  requireSiteDesignRecommendationTemplate(
+    await loadStaticTemplateCatalogForServiceReadiness(),
+    input.template,
+  );
+  const db = await requireDb();
+  const rows = await db
+    .select()
+    .from(knowledgeBaseSnapshots)
+    .where(
+      and(
+        enterpriseOwnerPredicate(knowledgeBaseSnapshots, ownerUserId),
+        eq(knowledgeBaseSnapshots.status, "active"),
+      ),
+    )
+    .orderBy(
+      desc(knowledgeBaseSnapshots.version),
+      desc(knowledgeBaseSnapshots.createdAt),
+      desc(knowledgeBaseSnapshots.id),
+    )
+    .limit(200);
+  const snapshot = requireCurrentSiteDesignRecommendationSnapshot(
+    rows,
+    input.knowledgeSnapshot,
+  );
+  const publicDocuments = snapshot.documents.filter(
+    (document: (typeof snapshot.documents)[number]) =>
+      document.customerVisible !== false &&
+      document.kind !== "evidence" &&
+      document.evidenceStatus !== "inferred",
+  );
+
+  const sources = projectSiteDesignRecommendationSources({
+    brief: siteBriefFromSnapshot(snapshot),
+    knowledgeSnapshot: input.knowledgeSnapshot,
+    documents: publicDocuments.map(
+      (document: (typeof publicDocuments)[number]) => ({
+        id: String(document.id || document.path).slice(0, 191),
+        title: document.title,
+        content: document.content,
+      }),
+    ),
+  });
+  return createSiteDesignRecommendation({
+    brief: sources.brief,
+    requestContext: input.requestContext,
+    knowledgeSnapshot: input.knowledgeSnapshot,
+    template: input.template,
+    documents: sources.documents,
+  });
+}
+
+export function finalizeSiteDesignPreferencesDraft(
+  draft: SiteDesignPreferencesDraft,
+  designRevision: number,
+) {
+  const payload = {
+    ...draft,
+    designRevision: z.number().int().positive().parse(designRevision),
+  };
+  return siteDesignPreferencesV1Schema.parse({
+    ...payload,
+    draftHash: createHash("sha256")
+      .update(canonicalSiteDesignDraftJson(payload), "utf8")
+      .digest("hex"),
+  });
+}
+
+export function siteBriefForRevision(
+  parentBrief: unknown,
+  currentProjectBrief: unknown,
+) {
+  const frozenParent = siteBriefSchema.parse(parentBrief);
+  const currentPreferences = readSiteDesignPreferencesFromBrief(
+    currentProjectBrief,
+  );
+  return currentPreferences
+    ? applySiteDesignPreferencesToBrief(frozenParent, currentPreferences)
+    : frozenParent;
+}
+
+/** Persists only the structured design draft; it never starts or advances a build. */
+export async function saveSiteDesignPreferences(
+  actor: AuthenticatedUser,
+  value: unknown,
+) {
+  assertEnabled();
+  assertCustomer(actor);
+  const ownerUserId = enterpriseWorkspaceUserId(actor.id);
+  await requireSiteOpsEntitlement(ownerUserId);
+  const input = siteDesignPreferencesSaveInputSchema.parse(value);
+  requireSiteDesignRecommendationTemplate(
+    await loadStaticTemplateCatalogForServiceReadiness(),
+    input.draft.template,
+  );
+  const db = await requireDb();
+  await db.transaction(async (tx: any) => {
+    await lockCustomerProjectBusinessWrite(tx, ownerUserId, actor);
+    const project = await loadOwnedProject(
+      tx,
+      ownerUserId,
+      input.conversationId,
+      true,
+    );
+    if (!project) {
+      throw new SiteOpsServiceError("NOT_FOUND", "AI 建站会话不存在。", 404);
+    }
+    if (project.revision !== input.expectedProjectRevision) {
+      throw new SiteOpsServiceError(
+        "REVISION_CONFLICT",
+        "建站项目已更新，请刷新后重试。",
+        409,
+      );
+    }
+    const brief = siteBriefSchema.safeParse(project.brief);
+    if (!brief.success) {
+      throw new SiteOpsServiceError(
+        "STATE_CONFLICT",
+        "请先选择已发布知识快照，再保存网站设计。",
+        409,
+      );
+    }
+    const currentPreferences = readSiteDesignPreferencesFromBrief(brief.data);
+    if (
+      (currentPreferences?.designRevision ?? 0) !==
+      input.expectedDesignRevision
+    ) {
+      throw new SiteOpsServiceError(
+        "REVISION_CONFLICT",
+        "网站设计草稿已更新，请刷新后重试。",
+        409,
+      );
+    }
+    if (project.currentBuildId) {
+      const currentSelectionRows = await tx
+        .select({ sourceMetadata: websiteStyleSamples.sourceMetadata })
+        .from(siteBuilds)
+        .innerJoin(
+          websiteStyleSamples,
+          eq(siteBuilds.styleSampleId, websiteStyleSamples.id),
+        )
+        .where(
+          and(
+            eq(siteBuilds.id, project.currentBuildId),
+            eq(siteBuilds.projectId, project.id),
+            eq(siteBuilds.userId, ownerUserId),
+          ),
+        )
+        .limit(1);
+      requireSiteDesignTemplateCoordinateMatchesSelection(
+        input.draft.template,
+        currentSelectionRows[0]?.sourceMetadata,
+      );
+    }
+    if (project.currentKnowledgeSnapshotId !== input.draft.knowledgeSnapshot.id) {
+      throw new SiteOpsServiceError(
+        "REVISION_CONFLICT",
+        "当前知识库已更新，请重新获取网站设计建议。",
+        409,
+      );
+    }
+    const snapshotRows = await tx
+      .select()
+      .from(knowledgeBaseSnapshots)
+      .where(
+        and(
+          enterpriseOwnerPredicate(knowledgeBaseSnapshots, ownerUserId),
+          eq(knowledgeBaseSnapshots.status, "active"),
+        ),
+      )
+      .orderBy(
+        desc(knowledgeBaseSnapshots.version),
+        desc(knowledgeBaseSnapshots.createdAt),
+        desc(knowledgeBaseSnapshots.id),
+      )
+      .limit(200);
+    requireCurrentSiteDesignRecommendationSnapshot(
+      snapshotRows,
+      input.draft.knowledgeSnapshot,
+    );
+
+    const preferences = finalizeSiteDesignPreferencesDraft(
+      input.draft,
+      input.expectedDesignRevision + 1,
+    );
+    const nextBrief = applySiteDesignPreferencesToBrief(
+      brief.data,
+      preferences,
+    );
+    await tx
+      .update(siteProjects)
+      .set({
+        brief: nextBrief,
+        revision: project.revision + 1,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(siteProjects.id, project.id),
+          eq(siteProjects.revision, project.revision),
+        ),
+      );
+  });
+  return observeSiteOps(actor, { conversationId: input.conversationId });
 }
 
 export async function openSiteOps(actor: AuthenticatedUser) {
@@ -5288,6 +5819,10 @@ async function selectVisualSample(
       409,
     );
   }
+  requireSiteDesignTemplateMatchesSelection(
+    input.project.brief,
+    selected.sample.sourceMetadata,
+  );
   const selectedMetadata = selected.sample.sourceMetadata as unknown as Record<
     string,
     unknown
@@ -5787,6 +6322,10 @@ async function handleRevision(
     .from(siteBuilds)
     .where(eq(siteBuilds.projectId, input.project.id));
   const buildId = randomUUID();
+  requireSiteDesignTemplateMatchesSelection(
+    input.project.brief,
+    styleSample.sourceMetadata,
+  );
   await tx.insert(siteBuilds).values({
     id: buildId,
     projectId: parent.projectId,
@@ -5805,7 +6344,7 @@ async function handleRevision(
     twentyFirstCredentialVersion: parent.twentyFirstCredentialVersion,
     styleSampleId: parent.styleSampleId,
     styleRevision: parent.styleRevision,
-    brief: parent.brief,
+    brief: siteBriefForRevision(parent.brief, input.project.brief),
     selectionHash: parent.selectionHash,
     status: "preparing",
   });

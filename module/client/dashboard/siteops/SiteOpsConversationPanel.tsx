@@ -18,6 +18,11 @@ import type {
   SiteOpsActInput,
   SiteOpsVisualFailureCategory,
 } from "../../../contracts/siteops";
+import type {
+  SiteDesignPreferencesSaveInput,
+  SiteDesignRecommendationInput,
+  SiteDesignRecommendationOutput,
+} from "../../../contracts/site-design-preferences";
 import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "../../../contracts/siteops-branding";
 import {
   AlertDialog,
@@ -76,6 +81,13 @@ export type SiteOpsSelectVisualState = {
   ack: SiteOpsSelectVisualAck | null;
 };
 
+export type SiteOpsDesignRecommendationState = {
+  request: SiteDesignRecommendationInput;
+  data: SiteDesignRecommendationOutput | null;
+  loading: boolean;
+  error: string | null;
+};
+
 export function siteOpsSelectVisualFailureMessage(label: string) {
   return `建站任务未能创建，所选模板尚未生效。无需重新载入模板，请重试选择 ${label}。`;
 }
@@ -88,7 +100,15 @@ export type SiteOpsConversationPanelProps = {
   notice?: string | null;
   interactionPending?: boolean;
   selectVisual?: SiteOpsSelectVisualState | null;
+  designRecommendation?: SiteOpsDesignRecommendationState | null;
   onRefresh?: () => Promise<void> | void;
+  onRequestDesignRecommendation?: (
+    input: SiteDesignRecommendationInput,
+  ) => void;
+  onRetryDesignRecommendation?: () => Promise<void> | void;
+  onSaveDesignPreferences?: (
+    input: SiteDesignPreferencesSaveInput,
+  ) => Promise<SiteOpsObservationV1>;
   onAction?: (input: SiteOpsActionContext) => Promise<void> | void;
   onRetrySelectVisual?: () => Promise<void> | void;
   onSubmitRevision?: (input: {

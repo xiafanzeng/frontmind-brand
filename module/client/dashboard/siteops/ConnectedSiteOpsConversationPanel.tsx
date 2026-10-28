@@ -1,6 +1,10 @@
 import type { SiteOpsObservationV1 } from "../../../contracts/siteops-contract";
 import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "../../../contracts/siteops-branding";
 import type { SiteOpsActInput } from "../../../contracts/siteops";
+import type {
+  SiteDesignPreferencesSaveInput,
+  SiteDesignRecommendationInput,
+} from "../../../contracts/site-design-preferences";
 import {
   useCallback,
   useEffect,
@@ -41,6 +45,24 @@ const SITEOPS_PROGRESSIVE_POLL_INTERVALS = [
   { untilMs: 30 * 60_000, intervalMs: 20_000 },
   { untilMs: Number.POSITIVE_INFINITY, intervalMs: 30_000 },
 ] as const;
+
+const IDLE_SITE_DESIGN_RECOMMENDATION_REQUEST: SiteDesignRecommendationInput = {
+  schemaVersion: 1,
+  requestContext: {
+    requestId: "site-design-idle",
+    baseDesignRevision: 0,
+    baseDraftHash: "0".repeat(64),
+  },
+  knowledgeSnapshot: {
+    id: "00000000-0000-4000-8000-000000000000",
+    version: 1,
+    archiveHash: "0".repeat(64),
+  },
+  template: {
+    id: "site-design-idle",
+    version: "site-design-idle",
+  },
+};
 
 export const SITEOPS_SELECT_VISUAL_OBSERVE_SCHEDULE_MS = [
   1_000, 2_000, 5_000,
@@ -421,6 +443,8 @@ export default function ConnectedSiteOpsConversationPanel({
     useState<SiteOpsSelectVisualState | null>(null);
   const [submissionNotice, setSubmissionNotice] = useState<string | null>(null);
   const [revisionSubmitting, setRevisionSubmitting] = useState(false);
+  const [designRecommendationRequest, setDesignRecommendationRequest] =
+    useState<SiteDesignRecommendationInput | null>(null);
   const [pageActive, setPageActive] = useState(() =>
     Boolean(
       (typeof document === "undefined" || !document.hidden) &&
@@ -510,6 +534,18 @@ export default function ConnectedSiteOpsConversationPanel({
       refetchIntervalInBackground: false,
     },
   );
+  const designRecommendationQuery =
+    trpc.workspace.siteOps.recommendDesign.useQuery(
+      designRecommendationRequest ?? IDLE_SITE_DESIGN_RECOMMENDATION_REQUEST,
+      {
+        enabled: designRecommendationRequest !== null,
+        retry: false,
+        refetchOnMount: false,
+        refetchOnWindowFocus: false,
+      },
+    );
+  const saveDesignPreferencesMutation =
+    trpc.workspace.siteOps.saveDesignPreferences.useMutation();
   const actMutation = trpc.workspace.siteOps.actFast.useMutation();
   const sendMessageMutation = trpc.workspace.siteOps.sendMessage.useMutation();
   const aliyunBeginMutation =
@@ -763,6 +799,27 @@ export default function ConnectedSiteOpsConversationPanel({
     await submitSelectVisual(scope, current);
   }
 
+  const requestDesignRecommendation = useCallback(
+    (input: SiteDesignRecommendationInput) => {
+      setDesignRecommendationRequest((current) =>
+        current && JSON.stringify(current) === JSON.stringify(input)
+          ? current
+          : input,
+      );
+    },
+    [],
+  );
+
+  async function saveDesignPreferences(
+    input: SiteDesignPreferencesSaveInput,
+  ) {
+    saveDesignPreferencesMutation.reset();
+    const updatedObservation =
+      await saveDesignPreferencesMutation.mutateAsync(input);
+    acceptObservation(updatedObservation);
+    return updatedObservation;
+  }
+
   async function submitRevision(input: {
     text: string;
     files: File[];
@@ -900,8 +957,24 @@ export default function ConnectedSiteOpsConversationPanel({
       Boolean(pendingActionAck.current) ||
       selectVisualInFlight(selectVisual) ||
       revisionSubmitting ||
+      saveDesignPreferencesMutation.isPending ||
       sendMessageMutation.isPending,
     selectVisual,
+    designRecommendation: designRecommendationRequest
+      ? {
+          request: designRecommendationRequest,
+          data: designRecommendationQuery.data ?? null,
+          loading:
+            designRecommendationQuery.isLoading ||
+            designRecommendationQuery.isFetching,
+          error: designRecommendationQuery.error?.message ?? null,
+        }
+      : null,
+    onRequestDesignRecommendation: requestDesignRecommendation,
+    onRetryDesignRecommendation: async () => {
+      await designRecommendationQuery.refetch();
+    },
+    onSaveDesignPreferences: saveDesignPreferences,
     onRefresh: async () => {
       if (observation) {
         const refreshed = await observeQuery.refetch();
