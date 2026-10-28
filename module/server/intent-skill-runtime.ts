@@ -128,16 +128,22 @@ export async function reserveIntentSkill(tx: any, job: IntentSkillJob, input: In
     providerRuntime: {input},
   });
 }
-export async function intentSkillClient(job: IntentSkillJob, accountUserId: number, db: any) {
+/** Read a pinned local input without resolving credentials or contacting the provider. */
+export async function readIntentSkillInput(job: IntentSkillJob, db: any) {
   const core = intentSkillPorts();
-  const credential = await core.getDecryptedCredentialForAccountById(accountUserId, job.credentialId);
-  if (!credential || credential.version !== job.credentialVersion) throw new IntentSkillRuntimeError("原任务模型凭据已不可用，请检查账户 API 配置");
   const task = (await db.select().from(core.agentTasks).where(and(eq(core.agentTasks.id, job.taskId), eq(core.agentTasks.operationId, job.id))).limit(1))[0];
   if (!task?.providerRuntime?.input) throw new IntentSkillRuntimeError("任务快照已不存在");
   const input = task.providerRuntime.input as IntentSkillInput;
   const {operationToken: _token, inputHash: _hash, ...frozen} = input;
   if (input.inputHash !== job.inputHash || intentHash(frozen) !== job.inputHash || intentHash(input.skill) !== job.skillHash)
     throw new IntentSkillRuntimeError("任务知识或 Skill 快照校验失败");
+  return {task, input};
+}
+export async function intentSkillClient(job: IntentSkillJob, accountUserId: number, db: any) {
+  const core = intentSkillPorts();
+  const credential = await core.getDecryptedCredentialForAccountById(accountUserId, job.credentialId);
+  if (!credential || credential.version !== job.credentialVersion) throw new IntentSkillRuntimeError("原任务模型凭据已不可用，请检查账户 API 配置");
+  const {task, input} = await readIntentSkillInput(job, db);
   return {core, task, input,
     repairClient: (intentId: string) => core.createCredentialAgentClient(credential,
       {accountUserId, operationId: job.id, localTaskId: job.taskId, intentId}),

@@ -1,5 +1,5 @@
 import {createHash, randomUUID} from "node:crypto";
-import {sql, eq} from "drizzle-orm";
+import {sql, eq, and} from "drizzle-orm";
 import {z} from "zod";
 import type {Request} from "express";
 import type {ModuleHttpCore} from "./http-api.js";
@@ -9,7 +9,7 @@ import {
   emptyIntentState,
   type IntentState, type IntentNode, type IntentWorkspace, type IntentSkillJob,
 } from "../contracts/intent-workbench.js";
-import {intentHash, prepareIntentSkill, reserveIntentSkill, intentSkillClient, uploadIntentSkill,
+import {intentHash, prepareIntentSkill, reserveIntentSkill, intentSkillClient, readIntentSkillInput, uploadIntentSkill,
   validateIntentSkillResult, INTENT_WIRE_SCHEMA, intentSkillPorts, IntentSkillRuntimeError, type IntentSkillInput} from "./intent-skill-runtime.js";
 
 export class IntentWorkbenchError extends Error {
@@ -82,7 +82,39 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   }
   async function observe(): Promise<IntentWorkspace> {
     const db = await database();
-    const [ledger, data] = await Promise.all([readLedger(db), knowledge()]);
+    let [ledger, data] = await Promise.all([readLedger(db), knowledge()]);
+    // Ledger-scoped job IDs are the authority for reading local historical tasks.
+    // Only previously accepted structured output is eligible; never call a model.
+    const snapshots = new Map<string, NonNullable<IntentSkillJob["result"]>>();
+    for (const job of ledger.state.jobs ?? []) {
+      if (job.status !== "succeeded" || job.result) continue;
+      try {
+        const {input} = await readIntentSkillInput(job, db);
+        const model = intentSkillPorts();
+        const events = await db.select().from(model.agentEvents).where(and(
+          eq(model.agentEvents.taskId, job.taskId),
+          sql`JSON_UNQUOTE(JSON_EXTRACT(${model.agentEvents.normalizedPayload}, '$.kind')) = 'intent_skill_result'`,
+        )).limit(1);
+        const accepted = events.find((event: any) => event.normalizedPayload?.kind === "intent_skill_result");
+        if (!accepted) continue;
+        const result = validateIntentSkillResult(accepted.normalizedPayload.value, input, job);
+        const completedAt = job.progress?.updatedAt ?? job.createdAt;
+        result.evaluations.forEach(item => {item.evaluatedAt = completedAt;});
+        snapshots.set(job.id, {completedAt, questions: structuredClone(input.selectedQuestions), ...result});
+      } catch (error) {
+        // A missing/corrupt legacy snapshot must not make the whole workspace unreadable.
+        if (!(error instanceof IntentSkillRuntimeError) && !(error instanceof z.ZodError)) throw error;
+      }
+    }
+    if (snapshots.size) {
+      await locked(undefined, async (_tx, current) => {
+        for (const job of current.state.jobs ?? []) {
+          if (job.status === "succeeded" && !job.result && snapshots.has(job.id))
+            job.result = snapshots.get(job.id);
+        }
+      });
+      ledger = await readLedger(db);
+    }
     return {...ledger, nodes: data.nodes, preview: false};
   }
   const activeJob = (job: IntentSkillJob) => !["succeeded", "failed"].includes(job.status);
@@ -127,10 +159,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       await reserveIntentSkill(tx, reserved, input, prepared.credential, context.accountUserId, context.enterpriseProjectId);
       ledger.state.jobs ??= [];
       ledger.state.jobs.push(reserved);
-      ledger.state.evaluations = ledger.state.evaluations.filter(item => !reserved.questionIds.includes(item.questionId));
-      ledger.state.plans = ledger.state.plans.filter(item => !reserved.questionIds.includes(item.questionId));
-      // Keep task history bounded; never remove an active task.
-      ledger.state.jobs = ledger.state.jobs.slice(-100);
+      // Completed records are durable. Bound unsuccessful attempts only.
+      const recentAttempts = new Set(ledger.state.jobs.filter(job => job.status !== "succeeded").slice(-100).map(job => job.id));
+      ledger.state.jobs = ledger.state.jobs.filter(job => job.status === "succeeded" || activeJob(job) || recentAttempts.has(job.id));
     });
     await advance(reserved);
     return observe();
@@ -256,6 +287,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
             if (receipt && receipt.status !== "reverted") receipt.after = result.evaluations;
           }
           current.status = "succeeded"; delete current.error;
+          current.result = structuredClone({completedAt: new Date().toISOString(),
+            questions: input.selectedQuestions, evaluations: result.evaluations, plans: result.plans});
           await tx.insert(model.agentEvents).values({id: randomUUID(), taskId: job!.taskId, providerEventId: resultEvent.id,
             eventType: "structured_output_result", providerTimestampMs: resultEvent.timestamp,
             normalizedPayload: {kind: "intent_skill_result", value: accepted.value}});

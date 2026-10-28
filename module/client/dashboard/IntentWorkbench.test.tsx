@@ -44,6 +44,42 @@ function pendingApi(initial: IntentWorkspace) {
   return {api, finish};
 }
 describe("优化工作台任务入口", () => {
+  it("重新打开工作台后直接查看历史问题、评分和方案，不调用模型或执行动作", async () => {
+    const saved = workspace("succeeded", "plan");
+    saved.state.questions[0] = {...question, question: "已更新的问题"};
+    saved.state.jobs![0].result = {completedAt: "2026-10-28T00:00:00Z", questions: [question],
+      evaluations: saved.state.evaluations, plans: [{questionId: "q1", actions: [{
+        id: "a", kind: "todo", title: "补充部署资料", nodeId: null, before: "", after: "补充证据", source: "资料缺口", selected: true,
+      }]}]};
+    const {api} = pendingApi(saved);
+    const first = render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "已完成任务（1）"}));
+    fireEvent.click(screen.getByRole("button", {name: "查看任务结果"}));
+    expect(screen.getByRole("heading", {name: question.question})).toBeTruthy();
+    expect(screen.getByText("已保存优化方案")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "确认并执行已选动作"})).toBeNull();
+    first.unmount();
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "已完成任务（1）"}));
+    fireEvent.click(screen.getByRole("button", {name: "查看任务结果"}));
+    expect(screen.getByText("回答要点支撑矩阵")).toBeTruthy();
+    expect(api.command).not.toHaveBeenCalled();
+    expect(api.execute).not.toHaveBeenCalled();
+  });
+  it("查看已保存方案直接复用，只有重新生成方案才提交任务", async () => {
+    const saved = workspace("succeeded");
+    saved.state.plans = [{questionId: "q1", actions: [{id: "a", kind: "todo", title: "部署资料",
+      nodeId: null, before: "", after: "保留的方案内容", source: "缺口", selected: true}]}];
+    const {api, finish} = pendingApi(saved);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "查看评估"}));
+    fireEvent.click(screen.getByRole("button", {name: "查看已保存方案"}));
+    expect(screen.getByRole("textbox", {name: "部署资料修改后"})).toHaveProperty("value", "保留的方案内容");
+    expect(api.command).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "重新生成方案"}));
+    await waitFor(() => expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "plan", questionIds: ["q1"]})));
+    await act(async () => finish(saved));
+  });
   it("刷新后恢复正在运行的评估，展示进度并进入完成详情，不重复派发", async () => {
     const {api, finish} = pendingApi(workspace("running"));
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
