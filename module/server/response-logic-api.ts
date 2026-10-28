@@ -3,6 +3,7 @@ import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import { Router } from "express";
 import path from "node:path";
 import { buildDirectorySkillArchive } from "./directory-skill-archive.js";
+import { toDateOrNow, providerExpiresAtToDate } from "./response-logic-date-utils.js";
 import { z } from "zod";
 import {
   RESPONSE_LOGIC_MODEL_SECTIONS,
@@ -620,15 +621,18 @@ function buildVerifiedResponseLogicAttachments(
       >
     | Date = new Date(),
 ): ResponseLogicAttachment[] {
-  const fallbackUploadedAt =
-    lifecycleByFileId instanceof Date ? lifecycleByFileId : new Date();
+  // MySQL2 may return timestamp columns as strings; the shared toDateOrNow
+  // from response-logic-date-utils.ts handles all input types safely.
+  const fallbackUploadedAt = toDateOrNow(
+    lifecycleByFileId instanceof Date ? lifecycleByFileId : null,
+  );
   return attachments.map((attachment) => {
     const lifecycle =
       lifecycleByFileId instanceof Date
         ? undefined
         : lifecycleByFileId.get(attachment.file_id);
-    const lifecycleUploadedAt = lifecycle?.uploadedAt
-      ? new Date(lifecycle.uploadedAt)
+    const lifecycleUploadedAt = lifecycle?.uploadedAt != null
+      ? toDateOrNow(lifecycle.uploadedAt)
       : fallbackUploadedAt;
     const expiresAt = lifecycle
       ? fileResourceContentExpiry(lifecycle)
@@ -2081,6 +2085,9 @@ router.post(["/start", "/turn"], async (request, res) => {
         contentType: asset.row.mimeType,
         fileCreateRetryPolicy: "response_logic_pre_dispatch_only",
       });
+      const providerExpiresAt = providerExpiresAtToDate(
+        (uploaded as { detail?: { expiresAt?: unknown } }).detail?.expiresAt,
+      );
       await responseLogicDb.insert(providerFileLeases).values({
         id: randomUUID(),
         localAssetId: asset.row.id,
@@ -2090,7 +2097,7 @@ router.post(["/start", "/turn"], async (request, res) => {
         providerRequestId: uploaded.requestId,
         uploadState: "uploaded",
         uploadedBytes: byteCount,
-        expiresAt: new Date(uploaded.detail.expiresAt * 1_000),
+        expiresAt: providerExpiresAt,
       });
       customerProviderAttachments.push({
         file_id: uploaded.fileId,

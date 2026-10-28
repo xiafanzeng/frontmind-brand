@@ -359,9 +359,26 @@ export function assembleResponseLogicCore(input: {
         .replace(/(?:sk-|pk-|xty-)[A-Za-z0-9]{16,}/g, "[REDACTED]")
         .replace(/[A-Za-z0-9+/]{40,}={0,2}/g, (m) => m.length > 40 ? "[REDACTED]" : m);
     }) as never,
-    safeErrorForLog: ((error: unknown) => {
-      if (error instanceof Error) return { name: error.name, message: error.message, code: (error as { code?: string }).code };
-      return { message: String(error).slice(0, 500) };
+    safeErrorForLog: ((error: unknown, options?: { secrets?: Iterable<unknown> }) => {
+      if (!(error instanceof Error)) return { message: String(error).slice(0, 500) };
+      // Redact known secret shapes from the stack, then keep enough frames to
+      // pinpoint the throwing line. The Core original preserves the full
+      // sanitized stack; this mirror keeps the top 10 lines which cover the
+      // entire response-logic call depth.
+      const secrets = Array.from(options?.secrets ?? []).map(String);
+      let stack = error.stack ?? "";
+      for (const secret of secrets) {
+        if (secret.length > 3) stack = stack.split(secret).join("[REDACTED]");
+      }
+      stack = stack
+        .replace(/Bearer\s+[A-Za-z0-9+/=]{20,}/gi, "Bearer [REDACTED]")
+        .replace(/(?:sk-|pk-|xty-)[A-Za-z0-9]{16,}/g, "[REDACTED]");
+      return {
+        name: error.name,
+        message: error.message,
+        code: (error as { code?: string }).code,
+        ...(stack ? { stack: stack.split("\n").slice(0, 10).join("\n") } : {}),
+      };
     }) as never,
 
     // ── Database ──
