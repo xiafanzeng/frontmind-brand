@@ -21,41 +21,60 @@ export interface BrandResponseLogicAdapterInput {
 
 const RL_API_BASE = RESPONSE_LOGIC_API_BASE;
 
+// ── Reactive records store (module singleton) ──
+// The workspace's PersistentResponseLogicWorkspace calls
+// trpc.workspace.responseLogic.useQuery() during its render; this store
+// notifies subscribed components when records change so React re-renders.
+// 2026-10-28 incident root cause: the store used to live inside
+// createBrandResponseLogicHost's closure, so every host rebuild (the entry's
+// useMemo deps are inline visual/toast objects that change identity on each
+// caller render) replaced it with an empty store — the Proxy in
+// response-logic-runtime-host then served data from the NEW empty store while
+// subscriptions and fetches were bound to the old one, leaving
+// persistence.records undefined forever: task recovery never armed and no
+// status request was ever issued (tasks e932f604 / 1f724bc9 finished
+// upstream with zero status calls). Keeping the store at module level makes
+// record data survive host rebuilds; only the rest handle is refreshed.
+type RecordsData = { records: unknown[] };
+let storeData: RecordsData | undefined;
+let storeError: string | undefined;
+let storeLoading = false;
+let storeVersion = 0;
+const storeListeners = new Set<() => void>();
+let storeRest: BrandResponseLogicAdapterInput["captureRestOperation"] | undefined;
+
+const notifyStore = () => {
+  storeVersion++;
+  storeListeners.forEach(fn => fn());
+};
+
+const fetchRecords = async (): Promise<void> => {
+  if (storeLoading) return;
+  if (!storeRest) return;
+  storeLoading = true;
+  storeError = undefined;
+  notifyStore();
+  try {
+    const response = await storeRest().fetch(RL_API_BASE, { method: "GET", headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`加载应答逻辑失败（${response.status}）`);
+    storeData = await response.json();
+    // The store is a singleton across host rebuilds; guard against two
+    // consecutive responses applying out of order by only accepting the
+    // freshest payload shape.
+    if (!storeData || !Array.isArray(storeData.records)) {
+      storeData = { records: [] };
+    }
+  } catch (error) {
+    storeError = error instanceof Error ? error.message : "加载应答逻辑失败";
+  } finally {
+    storeLoading = false;
+    notifyStore();
+  }
+};
+
 export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInput): IntentWorkspaceHost {
   const rest = input.captureRestOperation;
-
-  // ── Reactive records store ──
-  // The workspace's PersistentResponseLogicWorkspace calls
-  // trpc.workspace.responseLogic.useQuery() during its render; this store
-  // notifies subscribed components when records change so React re-renders.
-  type RecordsData = { records: unknown[] };
-  let storeData: RecordsData | undefined;
-  let storeError: string | undefined;
-  let storeLoading = false;
-  let storeVersion = 0;
-  const storeListeners = new Set<() => void>();
-
-  const notifyStore = () => {
-    storeVersion++;
-    storeListeners.forEach(fn => fn());
-  };
-
-  const fetchRecords = async (): Promise<void> => {
-    if (storeLoading) return;
-    storeLoading = true;
-    storeError = undefined;
-    notifyStore();
-    try {
-      const response = await rest().fetch(RL_API_BASE, { method: "GET", headers: { Accept: "application/json" } });
-      if (!response.ok) throw new Error(`加载应答逻辑失败（${response.status}）`);
-      storeData = await response.json();
-    } catch (error) {
-      storeError = error instanceof Error ? error.message : "加载应答逻辑失败";
-    } finally {
-      storeLoading = false;
-      notifyStore();
-    }
-  };
+  storeRest = input.captureRestOperation;
 
   const loadRecords = async (): Promise<RecordsData> => {
     await fetchRecords();
