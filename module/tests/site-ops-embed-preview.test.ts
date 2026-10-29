@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildSiteOpsEmbedPreviewToken,
+  sandboxedPreviewContentSecurityPolicy,
   siteOpsPreviewBridgeScript,
   siteOpsPreviewBridgeToken,
   SITEOPS_EMBED_PREVIEW_TOKEN_TTL_MS,
@@ -92,6 +93,24 @@ describe("site ops embed preview tokens", () => {
       now: 2_000,
       sign: (payload) => signWithSecret(`${payload}!`),
     })).toBe("invalid");
+  });
+
+  it("keeps the top-level preview unframeable and only widens for the embed", () => {
+    const nonce = "nonce-1234567890abcdef";
+    const deny = sandboxedPreviewContentSecurityPolicy(nonce);
+    expect(deny).toContain("frame-ancestors 'none'");
+    expect(deny).toContain(`script-src 'nonce-${nonce}'`);
+    expect(deny).toContain("sandbox allow-scripts");
+    const embed = sandboxedPreviewContentSecurityPolicy(nonce, {
+      frameAncestors: "'self'",
+    });
+    expect(embed).toContain("frame-ancestors 'self'");
+    // Only the frame-ancestors directive differs; the sandbox stays identical.
+    expect(embed.replace("frame-ancestors 'self'", "frame-ancestors 'none'"))
+      .toBe(deny);
+    expect(() => sandboxedPreviewContentSecurityPolicy(nonce, {
+      frameAncestors: "https://evil.example",
+    })).toThrow("SITEOPS_PREVIEW_FRAME_ANCESTORS_INVALID");
   });
 
   it("uses a short-lived default TTL", () => {
