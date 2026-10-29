@@ -11,12 +11,15 @@ import {
 } from "../contracts/intent-workbench.js";
 import {intentHash, prepareIntentSkill, reserveIntentSkill, intentSkillClient, readIntentSkillInput, uploadIntentSkill,
   validateIntentSkillResult, INTENT_WIRE_SCHEMA, intentSkillPorts, IntentSkillRuntimeError, type IntentSkillInput} from "./intent-skill-runtime.js";
+import {updateIntentQuestionSchema, deleteIntentQuestionSchema, mutateIntentQuestion, IntentQuestionMutationError} from "../contracts/intent-question-mutations.js";
 
 export class IntentWorkbenchError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {super(message);}
 }
 const id = z.string().min(1).max(191);
 const commandSchema = z.discriminatedUnion("kind", [
+  updateIntentQuestionSchema,
+  deleteIntentQuestionSchema,
   z.object({kind: z.literal("intake"), expectedRevision: z.number().int().nonnegative(), questions: z.array(z.object({
     id, question: z.string().trim().min(2).max(500), category: z.string().max(80), subdivision: z.string().max(80),
     tableId: id, rowIndex: z.number().int().nonnegative(), sourceRevision: z.number().int().nonnegative().nullable(),
@@ -427,6 +430,12 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
           if (!state.questions.some(item => item.id === question.id || item.question === question.question)) state.questions.push(question);
         }
         if (state.questions.length > 500) throw new IntentWorkbenchError("LIST_LIMIT", "优化清单最多保留 500 条问题");
+      } else if (input.kind === "update-question" || input.kind === "delete-question") {
+        try {mutateIntentQuestion(state, input);}
+        catch (cause) {
+          if (cause instanceof IntentQuestionMutationError) throw new IntentWorkbenchError(cause.code, cause.message);
+          throw cause;
+        }
       } else if (input.kind === "edit") {
         const plan = state.plans.find(item => item.questionId === input.questionId);
         if (!plan) throw new IntentWorkbenchError("PLAN_MISSING", "请先生成方案");
