@@ -8,13 +8,10 @@ import {
   Globe2,
   LayoutTemplate,
   Loader2,
-  MessageCircle,
   Monitor,
   PanelTop,
   RefreshCw,
-  Send,
   Smartphone,
-  Sparkles,
   X,
 } from "lucide-react";
 import type { SiteOpsConversationPanelProps } from "../siteops/SiteOpsConversationPanel";
@@ -25,16 +22,19 @@ import {
   siteDesignTemplateCoordinateSchema,
   type SiteDesignKnowledgeSnapshotCoordinate,
   type SiteDesignPreferencesDraft,
+  type SiteDesignPreviewBlock,
   type SiteDesignRecommendationInput,
   type SiteDesignTemplateCoordinate,
 } from "../../../contracts/site-design-preferences";
 import {
-  previewAssistantSuggestions,
-  previewAssistantUnknownAnswer,
   previewKnowledgeCollectionCount,
   previewKnowledgeFragmentCount,
 } from "./preview-copy";
-import { findRagSample } from "./rag-evaluation-cases";
+import {
+  PreviewAssistantWidget,
+  type AssistantExchangeBinding,
+} from "./preview-assistant-widget";
+import { SiteDesignDraftPreview } from "./site-design-draft-preview";
 import { usePreviewDialog } from "./qa-widget/usePreviewDialog";
 import {
   findLatestEvaluationReport,
@@ -506,6 +506,8 @@ export function saveWebsiteDraft(draft: WebsiteDraftV2, storageScope?: string) {
 
 export const EMPTY_SITE_DESIGN_DRAFT_HASH = "0".repeat(64);
 
+const EMPTY_DRAFT_PREVIEW_BLOCKS = new Map<string, SiteDesignPreviewBlock>();
+
 /**
  * The revision message only starts a new revision. Website/assistant settings
  * are persisted through SiteDesignPreferences and must never be encoded into
@@ -587,30 +589,6 @@ function resolveStateAction<T>(current: T, next: SetStateAction<T>) {
     : next;
 }
 
-type WidgetMessage = {
-  id: number;
-  from: "visitor" | "assistant";
-  text: string;
-  sources: string[];
-};
-
-type AssistantExchangeBinding = {
-  designEditSequence: number;
-  assistantName: string;
-  welcome: string;
-};
-
-function resolveAssistantReply(question: string): { text: string; sources: string[] } {
-  const match = findRagSample(question);
-  if (match) {
-    return {
-      text: match.answer,
-      sources: match.sources.slice(0, 2).map((source) => source.title),
-    };
-  }
-  return { text: previewAssistantUnknownAnswer, sources: [] };
-}
-
 function MiniSitePreview({
   assistantAccent,
   assistantName,
@@ -648,17 +626,6 @@ function MiniSitePreview({
   templateId: string;
   welcome: string;
 }) {
-  const [widgetOpen, setWidgetOpen] = useState(showAssistant);
-  const [messages, setMessages] = useState<WidgetMessage[]>([]);
-  const [question, setQuestion] = useState("");
-  const [pending, setPending] = useState(false);
-  const messageIdRef = useRef(1);
-  const pendingTimerRef = useRef<number | null>(null);
-
-  useEffect(() => () => {
-    if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
-  }, []);
-
   const siteCopy = siteLanguage === "en-US"
     ? {
         eyebrow: "ENTERPRISE KNOWLEDGE CENTER",
@@ -680,32 +647,6 @@ function MiniSitePreview({
         services: "查看服务",
         contactNote: "联系我们获取服务建议",
       };
-
-  const ask = (raw: string) => {
-    const value = raw.trim();
-    if (!value || pending) return;
-    const reply = resolveAssistantReply(value);
-    const submittedBinding = exchangeBinding;
-    setMessages((current) => [...current, { id: messageIdRef.current++, from: "visitor", text: value, sources: [] }]);
-    setQuestion("");
-    setWidgetOpen(true);
-    setPending(true);
-    if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
-    pendingTimerRef.current = window.setTimeout(() => {
-      pendingTimerRef.current = null;
-      setPending(false);
-      setMessages((current) => [
-        ...current,
-        { id: messageIdRef.current++, from: "assistant", text: reply.text, sources: reply.sources },
-      ]);
-      onExchange?.(value, reply.sources.length > 0, submittedBinding);
-    }, 500);
-  };
-
-  const submitQuestion = (event: FormEvent) => {
-    event.preventDefault();
-    ask(question);
-  };
 
   const renderMain = () => {
     if (templateId === "docs") {
@@ -797,55 +738,14 @@ function MiniSitePreview({
           {renderMain()}
         </main>
 
-        <button
-          className="sfp-floating-trigger"
-          type="button"
-          aria-label={widgetOpen ? "收起 AI 助手" : "打开 AI 助手"}
-          aria-expanded={widgetOpen}
-          onClick={() => setWidgetOpen((current) => !current)}
-        >
-          {widgetOpen ? <X size={19} /> : <MessageCircle size={20} />}
-        </button>
-
-        {widgetOpen && (
-          <section className="sfp-widget" aria-label="网站 AI 助手预览">
-            <header>
-              <span><Sparkles size={17} /></span>
-              <div><strong>{assistantName || "企业助手"}</strong></div>
-              <i />
-            </header>
-            <div className="sfp-widget-body">
-              <p className="sfp-widget-bubble">{welcome || "您好，有什么可以帮您？"}</p>
-              {messages.map((message) => message.from === "visitor" ? (
-                <p key={message.id} className="sfp-widget-bubble sfp-widget-bubble--visitor">{message.text}</p>
-              ) : (
-                <p key={message.id} className="sfp-widget-bubble">
-                  {message.text}
-                  {showSources && message.sources.map((source) => (
-                    <button key={source} type="button">来源：{source}</button>
-                  ))}
-                </p>
-              ))}
-              {pending && <p className="sfp-widget-bubble sfp-widget-typing">正在检索示例知识…</p>}
-              {messages.length === 0 && !pending && (
-                <div className="sfp-widget-suggestions">
-                  {previewAssistantSuggestions.map((suggestion) => (
-                    <button key={suggestion} type="button" onClick={() => ask(suggestion)}>{suggestion}</button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <form onSubmit={submitQuestion}>
-              <input
-                aria-label="在网站助手中提问"
-                placeholder="继续提问…"
-                value={question}
-                onChange={(event) => setQuestion(event.currentTarget.value)}
-              />
-              <button type="submit" aria-label="发送问题"><Send size={16} /></button>
-            </form>
-          </section>
-        )}
+        <PreviewAssistantWidget
+          assistantName={assistantName}
+          exchangeBinding={exchangeBinding}
+          initiallyOpen={showAssistant}
+          onExchange={onExchange}
+          showSources={showSources}
+          welcome={welcome}
+        />
       </div>
     </div>
   );
@@ -976,6 +876,9 @@ export function SimplifiedWebsiteBuilderPreview({
     requestId: string;
     editSequence: number;
     userInitiated: boolean;
+    /** False when saved server preferences own the form; the response then
+     * feeds only the real-data draft preview. */
+    applyToForm: boolean;
   } | null>(null);
   const handledRecommendationRequestIdsRef = useRef(new Set<string>());
   const lastRecommendationCoordinateRef = useRef<string | null>(null);
@@ -1196,6 +1099,48 @@ export function SimplifiedWebsiteBuilderPreview({
     () => enabledPages.map((page) => ({ name: page.name, detail: page.detail })),
     [enabledPages],
   );
+  // Real-data draft preview source: blocks projected by the read-only
+  // recommendation API from the current published knowledge snapshot. The
+  // draft preview never falls back to fixture pages.
+  const draftPreviewData = useMemo(() => {
+    const request = designRecommendation?.request ?? null;
+    const response = designRecommendation?.data ?? null;
+    if (
+      !request ||
+      !response ||
+      response.requestContext.requestId !== request.requestContext.requestId
+    ) {
+      return null;
+    }
+    const routeIds = new Set(
+      liveObservation?.brief?.routes.map((route) => route.id) ?? [],
+    );
+    const blocksByRoute = new Map<string, SiteDesignPreviewBlock>();
+    for (const block of response.previewBlocks) {
+      if (routeIds.has(block.routeId)) blocksByRoute.set(block.routeId, block);
+    }
+    return { blocksByRoute, knowledgeVersion: response.knowledgeSnapshot.version };
+  }, [designRecommendation?.data, designRecommendation?.request, liveObservation?.brief?.routes]);
+  const draftPreviewPages = useMemo(
+    () => enabledPages.map((page) => ({ id: page.id, name: page.name })),
+    [enabledPages],
+  );
+  const handleAssistantExchange = (
+    _question: string,
+    answered: boolean,
+    submittedBinding: AssistantExchangeBinding,
+  ) => {
+    const currentBinding = currentAssistantTrialBindingRef.current;
+    if (
+      !answered
+      || submittedBinding.designEditSequence !== currentBinding.designEditSequence
+      || submittedBinding.assistantName !== currentBinding.assistantName
+      || submittedBinding.welcome !== currentBinding.welcome
+    ) {
+      return;
+    }
+    setAssistantTested(true);
+  };
   const previewDomain = latestGlobalDeployment?.publicUrl
     ? (() => {
         try {
@@ -1360,7 +1305,10 @@ export function SimplifiedWebsiteBuilderPreview({
     setSelectedTemplateId(nextTemplateId);
   }, [liveCandidates, selectedTemplateId, serverPreferredCandidateId, serverSelectedCandidateId, siteOps, templateSelectionOpen]);
 
-  const requestFreshDesignRecommendation = (userInitiated: boolean) => {
+  const requestFreshDesignRecommendation = (
+    userInitiated: boolean,
+    applyToForm: boolean,
+  ) => {
     if (!siteOps?.onRequestDesignRecommendation || !currentRecommendationCoordinate) {
       return;
     }
@@ -1384,6 +1332,7 @@ export function SimplifiedWebsiteBuilderPreview({
       requestId: request.requestContext.requestId,
       editSequence: designEditSequenceRef.current,
       userInitiated,
+      applyToForm,
     };
     siteOps.onRequestDesignRecommendation(request);
   };
@@ -1392,7 +1341,6 @@ export function SimplifiedWebsiteBuilderPreview({
     if (
       !siteOps?.onRequestDesignRecommendation ||
       !templateSelectionOpen ||
-      currentProjectDesignPreferences ||
       !currentRecommendationCoordinate
     ) {
       return;
@@ -1408,7 +1356,9 @@ export function SimplifiedWebsiteBuilderPreview({
     // only marks it stale; the user decides whether to fetch fresh suggestions.
     if (appliedRecommendation !== null) return;
 
-    requestFreshDesignRecommendation(false);
+    // Saved server preferences own the form values; the request then serves
+    // the real-data draft preview only.
+    requestFreshDesignRecommendation(false, !currentProjectDesignPreferences);
     // requestFreshDesignRecommendation closes over the same inputs as this
     // effect's dependencies.
   }, [
@@ -1449,6 +1399,7 @@ export function SimplifiedWebsiteBuilderPreview({
     if (
       !attempt ||
       attempt.requestId !== request.requestContext.requestId ||
+      !attempt.applyToForm ||
       !currentCoordinatesMatch ||
       !canApplySiteDesignRecommendation({
         request,
@@ -1639,7 +1590,7 @@ export function SimplifiedWebsiteBuilderPreview({
       void siteOps?.onRetryDesignRecommendation?.();
       return;
     }
-    requestFreshDesignRecommendation(true);
+    requestFreshDesignRecommendation(true, !currentProjectDesignPreferences);
   };
 
   const restoreRecommendedField = (field: RecommendationField) => {
@@ -2530,12 +2481,12 @@ export function SimplifiedWebsiteBuilderPreview({
               {siteOps && liveConfigurationEditable && !designRecommendation?.loading && recommendationStale && (
                 <div className="sfp-recommend-stale" role="status" data-testid="website-recommendation-stale">
                   <span>当前知识或模板版本已更新，新建议可用；已修改的字段不会被覆盖。</span>
-                  <button type="button" onClick={() => requestFreshDesignRecommendation(true)}>刷新推荐</button>
+                  <button type="button" onClick={() => requestFreshDesignRecommendation(true, !currentProjectDesignPreferences)}>刷新推荐</button>
                 </div>
               )}
               {siteOps && liveConfigurationEditable && !designRecommendation?.loading && !recommendationStale && appliedRecommendation && (
                 <div className="sfp-recommend-refresh" data-testid="website-recommendation-refresh">
-                  <button type="button" onClick={() => requestFreshDesignRecommendation(true)}>刷新推荐</button>
+                  <button type="button" onClick={() => requestFreshDesignRecommendation(true, !currentProjectDesignPreferences)}>刷新推荐</button>
                   <small>重新获取建议；手动修改过的字段保持不变。</small>
                 </div>
               )}
@@ -2634,35 +2585,46 @@ export function SimplifiedWebsiteBuilderPreview({
               </div>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel" aria-label="网站与助手统一预览" data-testid="website-design-preview">
-              <div className="sfp-preview-heading"><span><strong>知识驱动统一预览</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? " · 内容来自当前知识投影，最终样式以真实构建预览为准" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-              <MiniSitePreview
-                assistantAccent={effectiveAssistantAccent}
-                assistantName={assistantName}
-                brandMark={brandMark}
-                device={device}
-                exchangeBinding={assistantTrialBinding}
-                onExchange={(_question, answered, submittedBinding) => {
-                  const currentBinding = currentAssistantTrialBindingRef.current;
-                  if (
-                    !answered
-                    || submittedBinding.designEditSequence !== currentBinding.designEditSequence
-                    || submittedBinding.assistantName !== currentBinding.assistantName
-                    || submittedBinding.welcome !== currentBinding.welcome
-                  ) {
-                    return;
-                  }
-                  setAssistantTested(true);
-                }}
-                pages={previewPages}
-                showAssistant
-                showSources={showSources}
-                siteAccent={siteAccent}
-                siteDomain={previewDomain}
-                siteLanguage={siteLanguage}
-                siteName={siteName}
-                templateId={effectiveSelectedTemplateId}
-                welcome={welcome}
-              />
+              <div className="sfp-preview-heading"><span><strong>{isLiveBuilder ? "真实数据草稿" : "知识驱动统一预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? " · 内容来自当前知识投影，构建完成后以真实构建预览为准" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+              {isLiveBuilder ? (
+                <SiteDesignDraftPreview
+                  assistantAccent={effectiveAssistantAccent}
+                  assistantName={assistantName}
+                  blocksByRoute={draftPreviewData?.blocksByRoute ?? EMPTY_DRAFT_PREVIEW_BLOCKS}
+                  brandMark={brandMark}
+                  device={device}
+                  error={designRecommendation?.error ?? null}
+                  exchangeBinding={assistantTrialBinding}
+                  knowledgeVersion={draftPreviewData?.knowledgeVersion ?? null}
+                  loading={Boolean(designRecommendation?.loading)}
+                  onExchange={handleAssistantExchange}
+                  pages={draftPreviewPages}
+                  siteAccent={siteAccent}
+                  siteDomain={previewDomain}
+                  siteName={siteName}
+                  stale={recommendationStale}
+                  templateName={selectedTemplate.name}
+                  welcome={welcome}
+                />
+              ) : (
+                <MiniSitePreview
+                  assistantAccent={effectiveAssistantAccent}
+                  assistantName={assistantName}
+                  brandMark={brandMark}
+                  device={device}
+                  exchangeBinding={assistantTrialBinding}
+                  onExchange={handleAssistantExchange}
+                  pages={previewPages}
+                  showAssistant
+                  showSources={showSources}
+                  siteAccent={siteAccent}
+                  siteDomain={previewDomain}
+                  siteLanguage={siteLanguage}
+                  siteName={siteName}
+                  templateId={effectiveSelectedTemplateId}
+                  welcome={welcome}
+                />
+              )}
             </section>
           </div>
         )}
