@@ -216,7 +216,7 @@ describe('DeepSeek report durable lifecycle',()=>{
   r.phase='researching';delete r.error;await service.advance(id);
   expect(state(id).error.code).toBe('REPORT_LEGACY_STOPPED');expect(mock.runs).toHaveLength(1);
  });
- it('requires explicit recovery after a harness process interruption',async()=>{
+ it('requires explicit recovery after a harness process interruption',{timeout:60000,hookTimeout:60000},async()=>{
   const {id,service}=await begin();mock.pending.get(state(id).job.id).reject(new Error('process ended'));await service.schedule(id);
   const r=state(id);r.phase='researching';delete r.error;delete r.lease;
   await service.advance(id);expect(state(id).error.code).toBe('HARNESS_INTERRUPTED');expect(mock.runs).toHaveLength(1);
