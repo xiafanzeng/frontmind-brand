@@ -23,8 +23,10 @@ import {
   siteDesignRecommendationMatchesRequest,
   siteDesignRouteIdSchema,
   siteDesignTemplateCoordinateSchema,
+  type SiteDesignKnowledgeSnapshotCoordinate,
   type SiteDesignPreferencesDraft,
   type SiteDesignRecommendationInput,
+  type SiteDesignTemplateCoordinate,
 } from "../../../contracts/site-design-preferences";
 import {
   previewAssistantSuggestions,
@@ -274,6 +276,14 @@ type WebsiteDraftV1 = {
   };
 };
 
+export type RecommendationField = "siteName" | "siteGoal" | "featuredRoutes";
+
+const RECOMMENDATION_FIELDS: readonly RecommendationField[] = [
+  "siteName",
+  "siteGoal",
+  "featuredRoutes",
+];
+
 export type WebsiteDesignDraft = {
   siteName: string;
   siteGoal: string;
@@ -286,6 +296,12 @@ export type WebsiteDesignDraft = {
     followSiteAccent: boolean;
     tested: boolean;
   };
+  /**
+   * Design fields the user has edited away from a recommendation. Persisted so
+   * a re-entered page keeps saved user values instead of letting a fresh
+   * recommendation overwrite them.
+   */
+  recommendationEditedFields?: RecommendationField[];
 };
 
 export type WebsiteDraftV2 = {
@@ -346,6 +362,20 @@ function persistedRouteIds(value: unknown) {
     if (!parsed.success || result.includes(parsed.data)) continue;
     result.push(parsed.data);
     if (result.length === 3) break;
+  }
+  return result;
+}
+
+function persistedRecommendationEditedFields(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const result: RecommendationField[] = [];
+  for (const candidate of value) {
+    if (
+      RECOMMENDATION_FIELDS.includes(candidate as RecommendationField)
+      && !result.includes(candidate as RecommendationField)
+    ) {
+      result.push(candidate as RecommendationField);
+    }
   }
   return result;
 }
@@ -420,6 +450,14 @@ export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV2 {
     }
     const confirmed = parsed.confirmed === true
       && ["template", "design"].every((step) => completedStepIds.includes(step as BuildStep));
+    // Legacy V1 name and goal were confirmed by the user in the retired
+    // structure step, so migrated drafts count them as user-edited: a new
+    // recommendation must not silently replace them. Legacy page picks use the
+    // built-in route ids that never match live opaque routes, so routes stay
+    // recommendable.
+    const recommendationEditedFields = legacy
+      ? ["siteName", "siteGoal"] as RecommendationField[]
+      : persistedRecommendationEditedFields(design.recommendationEditedFields);
 
     return {
       version: 2,
@@ -440,6 +478,7 @@ export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV2 {
           followSiteAccent: assistantFollowsSite,
           tested: assistantTested,
         },
+        recommendationEditedFields,
       },
     };
   } catch {
@@ -478,9 +517,17 @@ export function canApplySiteDesignRecommendation(input: {
   draftHash: string;
   editSequenceAtRequest: number;
   currentEditSequence: number;
+  /**
+   * A user-initiated refresh applies per recommendation field only: fields the
+   * user edited keep their values while unedited fields adopt the refreshed
+   * suggestion. The automatic entry request stays strict and is dropped as a
+   * whole as soon as any design edit happened after it was issued.
+   */
+  allowEditsSinceRequest?: boolean;
 }) {
-  return input.editSequenceAtRequest === input.currentEditSequence &&
-    siteDesignRecommendationMatchesRequest(
+  return (input.allowEditsSinceRequest
+    || input.editSequenceAtRequest === input.currentEditSequence)
+    && siteDesignRecommendationMatchesRequest(
       input.request,
       input.response,
       {
@@ -489,6 +536,24 @@ export function canApplySiteDesignRecommendation(input: {
       },
     );
 }
+
+function siteDesignRecommendationCoordinateKey(input: {
+  knowledgeSnapshot: SiteDesignKnowledgeSnapshotCoordinate;
+  template: SiteDesignTemplateCoordinate;
+}) {
+  return JSON.stringify({
+    knowledgeSnapshot: input.knowledgeSnapshot,
+    template: input.template,
+  });
+}
+
+type AppliedSiteDesignRecommendation = {
+  coordinateKey: string;
+  siteName: string | null;
+  siteGoal: string | null;
+  featuredRouteIds: string[];
+  pageProjection: WebsitePageDraft[];
+};
 
 type PreviewPage = { name: string; detail: string };
 type WebsitePageDraft = {
@@ -897,15 +962,20 @@ export function SimplifiedWebsiteBuilderPreview({
     welcome,
   };
   currentAssistantTrialBindingRef.current = assistantTrialBinding;
-  const manuallyEditedRecommendationFieldsRef = useRef(
-    new Set<"siteName" | "siteGoal" | "featuredRoutes">(),
+  // Seeded from the persisted draft so returning users keep their saved edits
+  // instead of letting a fresh recommendation overwrite them.
+  const manuallyEditedRecommendationFieldsRef = useRef<Set<RecommendationField>>(
+    new Set(draftSeed.design.recommendationEditedFields ?? []),
   );
   const recommendationRequestRef = useRef<{
     requestId: string;
     editSequence: number;
+    userInitiated: boolean;
   } | null>(null);
   const handledRecommendationRequestIdsRef = useRef(new Set<string>());
   const lastRecommendationCoordinateRef = useRef<string | null>(null);
+  const [appliedRecommendation, setAppliedRecommendation] =
+    useState<AppliedSiteDesignRecommendation | null>(null);
   const closeReleaseConfirmation = () => {
     setReleaseReport(null);
     setLiveReleaseCoordinates(null);
@@ -1030,6 +1100,22 @@ export function SimplifiedWebsiteBuilderPreview({
     ?? frozenBuildDesignPreferences?.template
     ?? null;
   const designRecommendation = siteOps?.designRecommendation ?? null;
+  const currentRecommendationCoordinate =
+    activeKnowledgeSnapshotCoordinate && selectedLiveCandidate?.templateCoordinate
+      ? {
+          knowledgeSnapshot: activeKnowledgeSnapshotCoordinate,
+          template: selectedLiveCandidate.templateCoordinate,
+        }
+      : null;
+  // A published knowledge snapshot or template change after a recommendation
+  // was applied makes that suggestion stale: keep the current values and let
+  // the user decide whether to fetch fresh ones.
+  const recommendationStale = Boolean(
+    appliedRecommendation
+      && currentRecommendationCoordinate
+      && siteDesignRecommendationCoordinateKey(currentRecommendationCoordinate)
+        !== appliedRecommendation.coordinateKey,
+  );
   const liveWebsiteJudgments = useMemo(
     () => liveObservation
       ? buildWebsiteEvaluationJudgmentsFromSiteOps(liveObservation)
@@ -1072,6 +1158,18 @@ export function SimplifiedWebsiteBuilderPreview({
     : null;
   const liveInteractionPending = Boolean(siteOps?.interactionPending || liveAction);
   const enabledPages = useMemo(() => pages.filter((page) => page.enabled), [pages]);
+  const recommendationFieldEdited = {
+    siteName: manuallyEditedRecommendationFieldsRef.current.has("siteName"),
+    siteGoal: manuallyEditedRecommendationFieldsRef.current.has("siteGoal"),
+    featuredRoutes: manuallyEditedRecommendationFieldsRef.current.has("featuredRoutes"),
+  } as const;
+  const canRestoreRecommendedField = (field: RecommendationField) => {
+    if (!appliedRecommendation) return false;
+    if (field === "siteName") return appliedRecommendation.siteName !== null;
+    if (field === "siteGoal") return appliedRecommendation.siteGoal !== null;
+    return appliedRecommendation.featuredRouteIds.length > 0
+      && appliedRecommendation.pageProjection.length > 0;
+  };
   const completedStepSet = useMemo(() => new Set(completedStepIds), [completedStepIds]);
   const stepIndex = steps.findIndex((step) => step.id === activeStep);
   const effectiveAssistantAccent = assistantFollowsSite ? siteAccent : assistantAccent;
@@ -1211,8 +1309,16 @@ export function SimplifiedWebsiteBuilderPreview({
             ? featuredRouteIds.has(route.id)
             : localFeaturedRouteIds.has(route.id),
         })),
-        siteName: designPreferences?.siteName ?? brief.companyName,
-        siteGoal: designPreferences?.siteGoal ?? brief.conversionGoal,
+        // A saved user edit outranks both the brief fallback and a later
+        // recommendation; unedited fields still hydrate from the real brief.
+        siteName: designPreferences?.siteName
+          ?? (manuallyEditedRecommendationFieldsRef.current.has("siteName")
+            ? current.siteName
+            : brief.companyName),
+        siteGoal: designPreferences?.siteGoal
+          ?? (manuallyEditedRecommendationFieldsRef.current.has("siteGoal")
+            ? current.siteGoal
+            : brief.conversionGoal),
         siteAccent: designPreferences?.siteAccent ?? current.siteAccent,
         assistantName: nextAssistantName,
         welcome: nextWelcome,
@@ -1249,24 +1355,10 @@ export function SimplifiedWebsiteBuilderPreview({
     setSelectedTemplateId(nextTemplateId);
   }, [liveCandidates, selectedTemplateId, serverPreferredCandidateId, serverSelectedCandidateId, siteOps, templateSelectionOpen]);
 
-  useEffect(() => {
-    if (
-      !siteOps?.onRequestDesignRecommendation ||
-      !templateSelectionOpen ||
-      currentProjectDesignPreferences ||
-      !activeKnowledgeSnapshotCoordinate ||
-      !selectedLiveCandidate?.templateCoordinate
-    ) {
+  const requestFreshDesignRecommendation = (userInitiated: boolean) => {
+    if (!siteOps?.onRequestDesignRecommendation || !currentRecommendationCoordinate) {
       return;
     }
-    const coordinateKey = JSON.stringify({
-      knowledgeSnapshot: activeKnowledgeSnapshotCoordinate,
-      template: selectedLiveCandidate.templateCoordinate,
-      baseDesignRevision: currentDesignRevision,
-      baseDraftHash: currentDesignDraftHash,
-    });
-    if (lastRecommendationCoordinateRef.current === coordinateKey) return;
-
     const request: SiteDesignRecommendationInput = {
       schemaVersion: 1,
       requestContext: {
@@ -1274,21 +1366,52 @@ export function SimplifiedWebsiteBuilderPreview({
         baseDesignRevision: currentDesignRevision,
         baseDraftHash: currentDesignDraftHash,
       },
-      knowledgeSnapshot: activeKnowledgeSnapshotCoordinate,
-      template: selectedLiveCandidate.templateCoordinate,
+      knowledgeSnapshot: currentRecommendationCoordinate.knowledgeSnapshot,
+      template: currentRecommendationCoordinate.template,
     };
-    lastRecommendationCoordinateRef.current = coordinateKey;
+    lastRecommendationCoordinateRef.current = JSON.stringify({
+      knowledgeSnapshot: request.knowledgeSnapshot,
+      template: request.template,
+      baseDesignRevision: request.requestContext.baseDesignRevision,
+      baseDraftHash: request.requestContext.baseDraftHash,
+    });
     recommendationRequestRef.current = {
       requestId: request.requestContext.requestId,
       editSequence: designEditSequenceRef.current,
+      userInitiated,
     };
     siteOps.onRequestDesignRecommendation(request);
+  };
+
+  useEffect(() => {
+    if (
+      !siteOps?.onRequestDesignRecommendation ||
+      !templateSelectionOpen ||
+      currentProjectDesignPreferences ||
+      !currentRecommendationCoordinate
+    ) {
+      return;
+    }
+    const coordinateKey = JSON.stringify({
+      knowledgeSnapshot: currentRecommendationCoordinate.knowledgeSnapshot,
+      template: currentRecommendationCoordinate.template,
+      baseDesignRevision: currentDesignRevision,
+      baseDraftHash: currentDesignDraftHash,
+    });
+    if (lastRecommendationCoordinateRef.current === coordinateKey) return;
+    // After a recommendation has been applied, a knowledge or template change
+    // only marks it stale; the user decides whether to fetch fresh suggestions.
+    if (appliedRecommendation !== null) return;
+
+    requestFreshDesignRecommendation(false);
+    // requestFreshDesignRecommendation closes over the same inputs as this
+    // effect's dependencies.
   }, [
-    activeKnowledgeSnapshotCoordinate,
+    appliedRecommendation,
     currentDesignDraftHash,
     currentDesignRevision,
     currentProjectDesignPreferences,
-    selectedLiveCandidate?.templateCoordinate,
+    currentRecommendationCoordinate,
     siteOps,
     templateSelectionOpen,
   ]);
@@ -1311,13 +1434,12 @@ export function SimplifiedWebsiteBuilderPreview({
       request.requestContext.requestId,
     );
     const currentCoordinatesMatch = Boolean(
-      templateSelectionOpen
-      && activeKnowledgeSnapshotCoordinate
-      && selectedLiveCandidate?.templateCoordinate
+      liveConfigurationEditable
+      && currentRecommendationCoordinate
       && JSON.stringify(request.knowledgeSnapshot) ===
-        JSON.stringify(activeKnowledgeSnapshotCoordinate)
+        JSON.stringify(currentRecommendationCoordinate.knowledgeSnapshot)
       && JSON.stringify(request.template) ===
-        JSON.stringify(selectedLiveCandidate.templateCoordinate),
+        JSON.stringify(currentRecommendationCoordinate.template),
     );
     if (
       !attempt ||
@@ -1330,6 +1452,7 @@ export function SimplifiedWebsiteBuilderPreview({
         draftHash: currentDesignDraftHash,
         editSequenceAtRequest: attempt.editSequence,
         currentEditSequence: designEditSequenceRef.current,
+        allowEditsSinceRequest: attempt.userInitiated,
       })
     ) {
       return;
@@ -1345,52 +1468,67 @@ export function SimplifiedWebsiteBuilderPreview({
       return;
     }
 
+    const editedFields = manuallyEditedRecommendationFieldsRef.current;
     const previewBlocksByRoute = new Map(
       response.previewBlocks.map((block) => [block.routeId, block]),
     );
     const featuredRouteIds = new Set(response.featuredRouteIds);
+    const pageProjection = response.candidates.map((candidate) => {
+      const block = previewBlocksByRoute.get(candidate.id);
+      return {
+        id: candidate.id,
+        name: candidate.title,
+        detail: block?.title
+          ?? `${candidate.evidenceDocumentCount} 个知识来源`,
+        enabled: featuredRouteIds.has(candidate.id),
+        importanceRank: candidate.importanceRank,
+        recommendationReason: candidate.recommendationReason,
+      };
+    });
     setDesignDraft((current) => ({
       ...current,
-      pages: manuallyEditedRecommendationFieldsRef.current.has("featuredRoutes")
+      pages: editedFields.has("featuredRoutes")
         ? current.pages
-        : response.candidates.map((candidate) => {
-            const block = previewBlocksByRoute.get(candidate.id);
-            return {
-              id: candidate.id,
-              name: candidate.title,
-              detail: block?.title
-                ?? `${candidate.evidenceDocumentCount} 个知识来源`,
-              enabled: featuredRouteIds.has(candidate.id),
-              importanceRank: candidate.importanceRank,
-              recommendationReason: candidate.recommendationReason,
-            };
-          }),
+        : pageProjection,
       // A successful "needs confirmation" response is authoritative about
       // missing evidence. Empty values remain empty instead of retaining a
       // server-brief fallback that could look like a recommendation.
-      siteName: manuallyEditedRecommendationFieldsRef.current.has("siteName")
+      siteName: editedFields.has("siteName")
         ? current.siteName
         : response.siteName.value ?? "",
-      siteGoal: manuallyEditedRecommendationFieldsRef.current.has("siteGoal")
+      siteGoal: editedFields.has("siteGoal")
         ? current.siteGoal
         : response.siteGoal.value ?? "",
     }));
+    setAppliedRecommendation({
+      coordinateKey: siteDesignRecommendationCoordinateKey({
+        knowledgeSnapshot: request.knowledgeSnapshot,
+        template: request.template,
+      }),
+      siteName: response.siteName.value,
+      siteGoal: response.siteGoal.value,
+      featuredRouteIds: response.featuredRouteIds,
+      pageProjection,
+    });
     setCompletedStepIds((current) => current.filter((step) => step !== "design"));
     setIsConfirmed(false);
-    setNotice(
-      response.featuredRouteIds.length > 0
-        ? `已按当前发布知识推荐 ${response.featuredRouteIds.length} 个主栏目；可在完整列表中替换。`
-        : "知识不足以自动选出主栏目，请从真实页面列表中手动选择。",
-    );
+    if (attempt.userInitiated) {
+      setNotice("已刷新推荐；手动修改过的字段保持不变。");
+    } else {
+      setNotice(
+        response.featuredRouteIds.length > 0
+          ? `已按当前发布知识推荐 ${response.featuredRouteIds.length} 个主栏目；可在完整列表中替换。`
+          : "知识不足以自动选出主栏目，请从真实页面列表中手动选择。",
+      );
+    }
   }, [
-    activeKnowledgeSnapshotCoordinate,
     currentDesignDraftHash,
     currentDesignRevision,
+    currentRecommendationCoordinate,
     designRecommendation?.data,
     designRecommendation?.request,
+    liveConfigurationEditable,
     liveObservation?.brief?.routes,
-    selectedLiveCandidate?.templateCoordinate,
-    templateSelectionOpen,
   ]);
 
   useEffect(() => setActiveStep(normalizedInitialStep), [normalizedInitialStep]);
@@ -1416,6 +1554,9 @@ export function SimplifiedWebsiteBuilderPreview({
           followSiteAccent: assistantFollowsSite,
           tested: assistantTested,
         },
+        recommendationEditedFields: [
+          ...manuallyEditedRecommendationFieldsRef.current,
+        ],
       },
     }, storageScope);
     setStorageAvailable(saved);
@@ -1474,6 +1615,65 @@ export function SimplifiedWebsiteBuilderPreview({
     const invalidated = new Set(stepIds);
     setCompletedStepIds((current) => current.filter((step) => !invalidated.has(step)));
     setIsConfirmed(false);
+  };
+
+  // A plain refetch only helps while the failed request still targets the
+  // current knowledge snapshot and template; otherwise issue a fresh request
+  // so the server never sees a stale coordinate (409).
+  const retryDesignRecommendation = () => {
+    const failedRequest = designRecommendation?.request ?? null;
+    const failedStillCurrent = Boolean(
+      failedRequest
+        && currentRecommendationCoordinate
+        && JSON.stringify(failedRequest.knowledgeSnapshot)
+          === JSON.stringify(currentRecommendationCoordinate.knowledgeSnapshot)
+        && JSON.stringify(failedRequest.template)
+          === JSON.stringify(currentRecommendationCoordinate.template),
+    );
+    if (failedStillCurrent) {
+      void siteOps?.onRetryDesignRecommendation?.();
+      return;
+    }
+    requestFreshDesignRecommendation(true);
+  };
+
+  const restoreRecommendedField = (field: RecommendationField) => {
+    const recommendation = appliedRecommendation;
+    if (!recommendation) return;
+    if (field === "siteName") {
+      if (recommendation.siteName === null) return;
+      manuallyEditedRecommendationFieldsRef.current.delete("siteName");
+      invalidateSteps("design");
+      setSiteName(recommendation.siteName);
+      return;
+    }
+    if (field === "siteGoal") {
+      if (recommendation.siteGoal === null) return;
+      manuallyEditedRecommendationFieldsRef.current.delete("siteGoal");
+      invalidateSteps("design");
+      setSiteGoal(recommendation.siteGoal);
+      return;
+    }
+    if (
+      recommendation.featuredRouteIds.length === 0
+      || recommendation.pageProjection.length === 0
+    ) {
+      return;
+    }
+    manuallyEditedRecommendationFieldsRef.current.delete("featuredRoutes");
+    invalidateSteps("design");
+    const featured = new Set(recommendation.featuredRouteIds);
+    const projectionById = new Map(
+      recommendation.pageProjection.map((page) => [page.id, page]),
+    );
+    // Restore exactly the recommended featured routes. Pages added after the
+    // recommendation stay listed but leave the main navigation.
+    setPages((current) => current.map((page) => {
+      const projected = projectionById.get(page.id);
+      return projected
+        ? { ...projected, enabled: featured.has(page.id) }
+        : { ...page, enabled: false };
+    }));
   };
 
   const importTemplate = (event: FormEvent) => {
@@ -2277,21 +2477,61 @@ export function SimplifiedWebsiteBuilderPreview({
                 <header><span>1</span><div><h3>网站基础</h3><p>推荐内容来自当前发布知识，您可以继续编辑。</p></div></header>
               <div className="sfp-brand-fields">
                 <label className="sfp-brand-name">
-                  <span>网站名称{siteOps && <small>真实 brief 字段</small>}</span>
+                  <span>
+                    网站名称
+                    {siteOps && (recommendationFieldEdited.siteName ? (
+                      <small className="sfp-recommend-flag is-edited" data-testid="website-site-name-recommend-flag">
+                        已修改
+                        {canRestoreRecommendedField("siteName") && (
+                          <button type="button" className="sfp-recommend-restore" aria-label="恢复推荐的网站名称" onClick={() => restoreRecommendedField("siteName")}>恢复推荐</button>
+                        )}
+                      </small>
+                    ) : appliedRecommendation ? (
+                      <small className="sfp-recommend-flag" data-testid="website-site-name-recommend-flag">根据企业资料推荐</small>
+                    ) : (
+                      <small>真实 brief 字段</small>
+                    ))}
+                  </span>
                   <input aria-label="网站名称" data-testid="website-site-name" maxLength={80} value={siteName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteName"); invalidateSteps("design"); setSiteName(event.currentTarget.value); }} />
                 </label>
                 <label className="sfp-brand-name">
-                  <span>站点简介 / 建站目标{siteOps && <small>真实 brief 字段</small>}</span>
+                  <span>
+                    站点简介 / 建站目标
+                    {siteOps && (recommendationFieldEdited.siteGoal ? (
+                      <small className="sfp-recommend-flag is-edited" data-testid="website-site-goal-recommend-flag">
+                        已修改
+                        {canRestoreRecommendedField("siteGoal") && (
+                          <button type="button" className="sfp-recommend-restore" aria-label="恢复推荐的建站目标" onClick={() => restoreRecommendedField("siteGoal")}>恢复推荐</button>
+                        )}
+                      </small>
+                    ) : appliedRecommendation ? (
+                      <small className="sfp-recommend-flag" data-testid="website-site-goal-recommend-flag">根据企业资料推荐</small>
+                    ) : (
+                      <small>真实 brief 字段</small>
+                    ))}
+                  </span>
                   <textarea aria-label="站点简介 / 建站目标" data-testid="website-site-goal" maxLength={200} value={siteGoal} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteGoal"); invalidateSteps("design"); setSiteGoal(event.currentTarget.value); }} />
                 </label>
               </div>
               {siteOps && designRecommendation?.loading && (
                 <p className="sfp-helper" role="status">正在按当前发布知识生成网站名称、建站目标和主栏目推荐…</p>
               )}
-              {siteOps && designRecommendation?.error && (
+              {siteOps && !designRecommendation?.loading && designRecommendation?.error && (
                 <div className="sfp-inline-error" role="alert">
                   <span>自动推荐暂时不可用；手动填写的内容不会丢失。</span>
-                  <button type="button" onClick={() => siteOps.onRetryDesignRecommendation?.()}>重试推荐</button>
+                  <button type="button" onClick={retryDesignRecommendation}>重试推荐</button>
+                </div>
+              )}
+              {siteOps && liveConfigurationEditable && !designRecommendation?.loading && recommendationStale && (
+                <div className="sfp-recommend-stale" role="status" data-testid="website-recommendation-stale">
+                  <span>当前知识或模板版本已更新，新建议可用；已修改的字段不会被覆盖。</span>
+                  <button type="button" onClick={() => requestFreshDesignRecommendation(true)}>刷新推荐</button>
+                </div>
+              )}
+              {siteOps && liveConfigurationEditable && !designRecommendation?.loading && !recommendationStale && appliedRecommendation && (
+                <div className="sfp-recommend-refresh" data-testid="website-recommendation-refresh">
+                  <button type="button" onClick={() => requestFreshDesignRecommendation(true)}>刷新推荐</button>
+                  <small>重新获取建议；手动修改过的字段保持不变。</small>
                 </div>
               )}
               </div>
@@ -2302,6 +2542,16 @@ export function SimplifiedWebsiteBuilderPreview({
                   <FileText size={17} />
                   <span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 示例知识范围"}</strong><small>{siteOps ? `项目版本 ${liveObservation?.project.revision ?? "—"} · ${pages.length} 个真实页面` : `${previewKnowledgeCollectionCount} 个知识集合 · ${previewKnowledgeFragmentCount} 个示例片段`}</small></span>
                 </div>
+                {siteOps && (recommendationFieldEdited.featuredRoutes ? (
+                  <p className="sfp-recommend-row" data-testid="website-routes-recommend-flag">
+                    <span>主栏目已手动调整</span>
+                    {canRestoreRecommendedField("featuredRoutes") && (
+                      <button type="button" className="sfp-recommend-restore" aria-label="恢复推荐的主栏目" onClick={() => restoreRecommendedField("featuredRoutes")}>恢复推荐</button>
+                    )}
+                  </p>
+                ) : appliedRecommendation ? (
+                  <p className="sfp-recommend-row" data-testid="website-routes-recommend-flag">主栏目根据企业资料推荐</p>
+                ) : null)}
                 <details className="sfp-page-disclosure">
                   <summary>共 {pages.length} 个栏目，{enabledPages.length} 个启用</summary>
               <div className="sfp-page-list">

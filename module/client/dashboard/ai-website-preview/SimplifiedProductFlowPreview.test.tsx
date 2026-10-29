@@ -125,6 +125,9 @@ describe("simplified AI website preview", () => {
           tested: false,
         }),
       }));
+      // Legacy name and goal were user-confirmed in the retired structure
+      // step, so the migrated draft shields them from new recommendations.
+      expect(saved.design.recommendationEditedFields).toEqual(["siteName", "siteGoal"]);
       expect(saved.completedStepIds).toEqual(["template"]);
       expect(saved).not.toHaveProperty("brand");
       expect(saved).not.toHaveProperty("assistant");
@@ -162,6 +165,7 @@ describe("simplified AI website preview", () => {
       expect(Object.keys(saved.design).sort()).toEqual([
         "assistant",
         "featuredPageIds",
+        "recommendationEditedFields",
         "siteAccent",
         "siteGoal",
         "siteName",
@@ -178,6 +182,7 @@ describe("simplified AI website preview", () => {
           followSiteAccent: false,
           tested: false,
         },
+        recommendationEditedFields: ["siteName", "siteGoal", "featuredRoutes"],
       });
     });
 
