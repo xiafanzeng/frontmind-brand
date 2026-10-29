@@ -70,8 +70,22 @@ export function normalizeWebsiteBuildStep(value: unknown): BuildStep | null {
   return null;
 }
 
+/** Design-step focus area. Legacy step=structure maps to the site section and
+ * step=assistant to the assistant section; evaluation repair entries target
+ * the exact area they audit. */
+export type WebsiteDesignSection = "site" | "pages" | "theme" | "assistant";
+
+export function normalizeWebsiteDesignSection(value: unknown): WebsiteDesignSection | null {
+  if (value === "site" || value === "pages" || value === "theme" || value === "assistant") {
+    return value;
+  }
+  return null;
+}
+
 export type SimplifiedWebsiteBuilderPreviewProps = {
   initialStep?: BuildStep | LegacyBuildStep;
+  /** Focuses (scrolls + highlights) one design config area on the design step. */
+  initialSection?: WebsiteDesignSection;
   onOpenRag?: () => void;
   /** Opens the established SiteOps UI for Aliyun, domain and release controls. */
   onOpenSiteOpsRelease?: () => void;
@@ -754,6 +768,7 @@ function MiniSitePreview({
 
 export function SimplifiedWebsiteBuilderPreview({
   initialStep = "template",
+  initialSection,
   onOpenRag,
   onOpenSiteOpsRelease,
   onStepChange,
@@ -764,6 +779,9 @@ export function SimplifiedWebsiteBuilderPreview({
   const auditStorage = useMemo(() => scopedEvaluationStorage(storageScope), [storageScope]);
   const [draftSeed] = useState<WebsiteDraftV2>(() => loadWebsiteDraft(storageScope));
   const [activeStep, setActiveStep] = useState<BuildStep>(normalizedInitialStep);
+  const [focusedSection, setFocusedSection] = useState<WebsiteDesignSection | null>(
+    () => normalizeWebsiteDesignSection(initialSection),
+  );
   const [isConfirmed, setIsConfirmed] = useState(draftSeed.confirmed);
   const [completedStepIds, setCompletedStepIds] = useState<BuildStep[]>(draftSeed.completedStepIds);
   const [selectedTemplateId, setSelectedTemplateId] = useState(draftSeed.selectedTemplateId);
@@ -1214,8 +1232,60 @@ export function SimplifiedWebsiteBuilderPreview({
   const templateComplete = templateReady && completedStepSet.has("template");
   const designComplete = structureReady && brandReady && assistantVerified && completedStepSet.has("design");
   const canComplete = templateComplete && designComplete;
-  const configurationConfirmedCount = [templateComplete, structureReady && brandReady && designComplete, assistantVerified && designComplete, canComplete]
-    .filter(Boolean).length;
+  // Four NON-scoring configuration checks. They gate the draft confirmation
+  // only; they never feed the 40/40/20 weighted website score.
+  const configurationChecks: Array<{
+    id: "C01" | "C02" | "C03" | "C04";
+    title: string;
+    passed: boolean;
+    detail: string;
+    onAction: () => void;
+    actionLabel: string;
+  }> = [
+    {
+      id: "C01",
+      title: "模板选择",
+      passed: templateComplete,
+      detail: templateComplete ? "已选择模板版式。" : "尚未选择模板版式。",
+      onAction: () => goTo("template"),
+      actionLabel: "查看模板",
+    },
+    {
+      id: "C02",
+      title: "页面结构",
+      passed: structureReady && designComplete,
+      detail: structureReady
+        ? designComplete ? "主栏目与真实页面已确认。" : "设计步骤尚未整体确认。"
+        : "尚未启用任何主栏目。",
+      onAction: () => goTo("design", "pages"),
+      actionLabel: "查看页面与栏目",
+    },
+    {
+      id: "C03",
+      title: "网站信息与主题",
+      passed: brandReady && designComplete,
+      detail: brandReady
+        ? designComplete ? "网站名称、建站目标与主题已确认。" : "设计步骤尚未整体确认。"
+        : "网站名称或建站目标待补全。",
+      onAction: () => goTo("design", "site"),
+      actionLabel: "查看网站基础",
+    },
+    {
+      id: "C04",
+      title: "助手配置与真实试聊",
+      passed: assistantVerified && designComplete,
+      detail: assistantVerified
+        ? "助手配置有效且已完成一次真实问答。"
+        : siteOps
+          ? "需在真实构建预览中完成一次助手问答。"
+          : "需在预览中完成一次助手问答。",
+      onAction: () => goTo("design", "assistant"),
+      actionLabel: "查看助手设置",
+    },
+  ];
+  const configurationConfirmedCount = configurationChecks
+    .filter((check) => check.passed)
+    .length;
   const completedSteps: Record<BuildStep, boolean> = {
     template: templateComplete,
     design: designComplete,
@@ -1535,6 +1605,27 @@ export function SimplifiedWebsiteBuilderPreview({
   ]);
 
   useEffect(() => setActiveStep(normalizedInitialStep), [normalizedInitialStep]);
+  useEffect(
+    () => setFocusedSection(normalizeWebsiteDesignSection(initialSection)),
+    [initialSection],
+  );
+  // Focus one design config area: scroll it into view and flash a highlight.
+  useEffect(() => {
+    if (activeStep !== "design" || !focusedSection) return;
+    const node = document.querySelector<HTMLElement>(
+      `[data-design-section="${focusedSection}"]`,
+    );
+    if (!node) return;
+    node.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    node.classList.add("is-section-focus");
+    const timer = window.setTimeout(() => {
+      node.classList.remove("is-section-focus");
+    }, 2_400);
+    return () => {
+      window.clearTimeout(timer);
+      node.classList.remove("is-section-focus");
+    };
+  }, [activeStep, focusedSection]);
 
   useEffect(() => {
     const saved = saveWebsiteDraft({
@@ -1688,7 +1779,8 @@ export function SimplifiedWebsiteBuilderPreview({
     );
   };
 
-  const goTo = (step: BuildStep) => {
+  const goTo = (step: BuildStep, section?: WebsiteDesignSection) => {
+    if (section) setFocusedSection(section);
     setActiveStep(step);
     setNotice("");
     onStepChange?.(step);
@@ -1906,7 +1998,7 @@ export function SimplifiedWebsiteBuilderPreview({
       statusLabel: "待核实",
       weight: 20,
       actionLabel: "查看结构",
-      onAction: () => goTo("design"),
+      onAction: () => goTo("design", "pages"),
     },
     {
       id: "website-navigation-contact",
@@ -1916,7 +2008,7 @@ export function SimplifiedWebsiteBuilderPreview({
       statusLabel: "未执行",
       weight: 10,
       actionLabel: "查看结构",
-      onAction: () => goTo("design"),
+      onAction: () => goTo("design", "pages"),
     },
     {
       id: "website-responsive-accessibility",
@@ -2764,6 +2856,25 @@ export function SimplifiedWebsiteBuilderPreview({
                 <span><small>完全通过率</small><strong>{judgedChecks.length > 0 ? `${Math.round((judgedChecks.filter((check) => check.status === "passed").length / judgedChecks.length) * 100)}%` : "无法计算"}</strong></span>
                 <span><small>关键风险提示</small><strong>{unresolvedCriticalChecks.length}</strong></span>
               </div>
+              <section className="sfp-config-checks" aria-label="配置检查项" data-testid="website-config-checks">
+                <header>
+                  <strong>配置检查项</strong>
+                  <small>非计分检查，只作为草稿确认门槛；不参与 40/40/20 加权评分，RAG 评估也不进入网站得分。</small>
+                </header>
+                <ul>
+                  {configurationChecks.map((check) => (
+                    <li key={check.id} className={check.passed ? "is-passed" : ""}>
+                      <span className="sfp-config-check-id">{check.id}</span>
+                      <div>
+                        <strong>{check.title}</strong>
+                        <small>{check.detail}</small>
+                      </div>
+                      <b>{check.passed ? "已确认" : "待确认"}</b>
+                      <button type="button" onClick={check.onAction}>{check.actionLabel}</button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
               <section className="sfp-score-formula" aria-label="加权评估分计算结果">
                 <header>
                   <strong>加权评分</strong>

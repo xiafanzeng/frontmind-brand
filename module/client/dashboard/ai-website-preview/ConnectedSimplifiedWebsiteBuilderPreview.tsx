@@ -7,10 +7,12 @@ import {
   normalizeWebsiteBuildStep,
   type BuildStep,
   type LegacyBuildStep,
+  type WebsiteDesignSection,
 } from "./SimplifiedWebsiteBuilderPreview";
 
 export type ConnectedSimplifiedWebsiteBuilderPreviewProps = {
   initialStep?: BuildStep | LegacyBuildStep;
+  initialSection?: WebsiteDesignSection;
   onOpenRag?: () => void;
   onStepChange?: (step: BuildStep) => void;
   storageScope?: string;
@@ -24,6 +26,7 @@ export type ConnectedSimplifiedWebsiteBuilderPreviewProps = {
  */
 export default function ConnectedSimplifiedWebsiteBuilderPreview({
   initialStep,
+  initialSection,
   onOpenRag,
   onStepChange,
   storageScope: explicitStorageScope,
@@ -63,6 +66,7 @@ export default function ConnectedSimplifiedWebsiteBuilderPreview({
               <SimplifiedWebsiteBuilderPreview
                 key={storageScope}
                 initialStep={initialStep}
+                initialSection={initialSection}
                 onOpenRag={openRag}
                 onOpenSiteOpsRelease={() => setShowSiteOpsRelease(true)}
                 onStepChange={changeStep}

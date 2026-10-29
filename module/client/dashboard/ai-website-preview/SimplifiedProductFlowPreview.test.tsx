@@ -244,6 +244,43 @@ describe("simplified AI website preview", () => {
     expect((screen.getByLabelText("在网站中显示常见问题") as HTMLInputElement).checked).toBe(false);
   });
 
+  it("focuses the requested design section from legacy step coordinates", () => {
+    render(
+      <SimplifiedWebsiteBuilderPreview initialStep="structure" initialSection="site" />,
+    );
+
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+    const siteSection = document.querySelector('[data-design-section="site"]');
+    expect(siteSection?.classList.contains("is-section-focus")).toBe(true);
+    const assistantSection = document.querySelector('[data-design-section="assistant"]');
+    expect(assistantSection?.classList.contains("is-section-focus")).toBe(false);
+  });
+
+  it("shows four non-scoring configuration checks and routes repairs to their area", () => {
+    render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
+
+    const panel = screen.getByTestId("website-config-checks");
+    expect(panel.textContent).toContain("配置检查项");
+    expect(panel.textContent).toContain("非计分检查");
+    expect(panel.textContent).toContain("不参与 40/40/20 加权评分");
+    for (const id of ["C01", "C02", "C03", "C04"]) {
+      expect(panel.textContent).toContain(id);
+    }
+    expect(panel.textContent).toContain("模板选择");
+    expect(panel.textContent).toContain("页面结构");
+    expect(panel.textContent).toContain("网站信息与主题");
+    expect(panel.textContent).toContain("助手配置与真实试聊");
+    expect(panel.textContent).toContain("待确认");
+
+    // The assistant repair entry jumps straight into the assistant area.
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "查看助手设置" }),
+    );
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+    const assistantSection = document.querySelector('[data-design-section="assistant"]');
+    expect(assistantSection?.classList.contains("is-section-focus")).toBe(true);
+  });
+
   it("keeps contract-valid custom accents that sit outside the demo palette", () => {
     window.localStorage.setItem(draftStorageKey, JSON.stringify({
       version: 2,
