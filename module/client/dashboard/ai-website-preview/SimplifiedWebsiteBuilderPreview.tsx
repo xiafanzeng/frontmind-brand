@@ -398,8 +398,13 @@ export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV2 {
     const assistantValue = legacy ? parsed.assistant : design.assistant;
     const assistant = isRecord(assistantValue) ? assistantValue : {};
     const pageIds = new Set(initialPages.map((page) => page.id));
+    // Accept any contract-valid hex: a saved server accent outside the demo
+    // palette must survive a local draft round-trip unchanged instead of being
+    // silently clamped back to the default swatch.
     const validAccent = (value: unknown, defaultValue: string) =>
-      typeof value === "string" && accentOptions.some((option) => option === value) ? value : defaultValue;
+      typeof value === "string" && /^#[0-9a-f]{6}$/iu.test(value)
+        ? value
+        : defaultValue;
     const templateSourceUrl =
       typeof parsed.templateSourceUrl === "string" && isHttpUrl(parsed.templateSourceUrl)
         ? parsed.templateSourceUrl

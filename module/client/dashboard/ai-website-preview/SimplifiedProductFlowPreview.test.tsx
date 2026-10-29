@@ -244,6 +244,36 @@ describe("simplified AI website preview", () => {
     expect((screen.getByLabelText("在网站中显示常见问题") as HTMLInputElement).checked).toBe(false);
   });
 
+  it("keeps contract-valid custom accents that sit outside the demo palette", () => {
+    window.localStorage.setItem(draftStorageKey, JSON.stringify({
+      version: 2,
+      updatedAt: 123,
+      confirmed: false,
+      completedStepIds: ["template"],
+      selectedTemplateId: "help-center",
+      templateSourceUrl: "",
+      design: {
+        siteName: "远山知识站",
+        siteGoal: "让客户找到可信答案",
+        featuredPageIds: ["start"],
+        siteAccent: "#2457a7",
+        assistant: {
+          name: "远山助手",
+          welcome: "您好，我会依据知识库回答。",
+          accent: "#8a2be2",
+          followSiteAccent: false,
+          tested: false,
+        },
+      },
+    }));
+
+    const loaded = loadWebsiteDraft();
+    // A server-saved accent can be any contract hex; reloading the local
+    // draft must not clamp it back to a demo palette default.
+    expect(loaded.design.siteAccent).toBe("#2457a7");
+    expect(loaded.design.assistant.accent).toBe("#8a2be2");
+  });
+
   it("preserves an explicitly empty V2 featured-route selection across refresh", () => {
     window.localStorage.setItem(draftStorageKey, JSON.stringify({
       version: 2,

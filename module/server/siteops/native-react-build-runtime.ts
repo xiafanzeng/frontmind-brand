@@ -1537,6 +1537,7 @@ function assertStaticHardSafety(input: {
   canonicalOrigin: string | null;
   forbiddenTokens: string[];
   assistantApiOrigin: string;
+  siteAccent: string | null;
 }) {
   // Host-authored assistant assets are not provider output; only they may
   // reference the Q&A API origin.
@@ -1563,6 +1564,19 @@ function assertStaticHardSafety(input: {
     `${input.routes.length} routes and 404 are present`,
     "NATIVE_BUILD_ROUTE_MISSING",
   );
+  if (input.siteAccent) {
+    const accentDeclaration = `--frontmind-site-accent:${input.siteAccent}`;
+    requireCheck(
+      "site-design-accent",
+      input.files.some(
+        (file) =>
+          file.path.endsWith(".css") &&
+          file.bytes.toString("utf8").includes(accentDeclaration),
+      ),
+      "the frozen site accent is declared in the shipped CSS design tokens",
+      "NATIVE_BUILD_DIST_INVALID",
+    );
+  }
   const textFiles = input.files.filter((file) =>
     /\.(?:css|html|js|json|mjs|svg|txt|xml)$/iu.test(file.path),
   );
@@ -2641,6 +2655,7 @@ export async function materializeNativeReactSource(
       canonicalOrigin,
       forbiddenTokens: [input.validatedSource.receipt.operationToken],
       assistantApiOrigin,
+      siteAccent: runtimeDesign.siteAccent,
     });
     for (const asset of requiredUserMedia) {
       const outputPath = asset.publicPath.replace(/^\//u, "");

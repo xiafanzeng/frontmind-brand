@@ -520,7 +520,7 @@ export type MaterializedAstroSite = {
   buildDelivery: SiteOpsBuildDelivery;
 };
 
-type SourceFile = { path: string; bytes: Buffer };
+export type SourceFile = { path: string; bytes: Buffer };
 
 function sha256(bytes: Buffer | string) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -3556,7 +3556,7 @@ function hasExecutableScriptTag(html: string) {
   return false;
 }
 
-function qaDist(input: {
+export function qaDist(input: {
   files: readonly SourceFile[];
   brief: SiteBrief;
   mode: "preview" | "production";
@@ -3810,15 +3810,13 @@ function qaDist(input: {
     assistantConfigName,
     assistantWidgetName,
   ]);
+  const runtimeDesign = projectSiteDesignRuntime(input.brief);
   requireCheck(
     "host-owned-assistant-assets",
     files.get(assistantConfigName)?.equals(
       Buffer.from(
         trustedSiteAssistantConfigSource(
-          siteAssistantBootConfig(
-            siteAssistantApiOrigin(),
-            projectSiteDesignRuntime(input.brief),
-          ),
+          siteAssistantBootConfig(siteAssistantApiOrigin(), runtimeDesign),
         ),
         "utf8",
       ),
@@ -3831,6 +3829,18 @@ function qaDist(input: {
       ) === true,
     "the frozen config and exact host-owned assistant assets are present",
   );
+  if (runtimeDesign.siteAccent) {
+    const accentDeclaration = `--frontmind-site-accent:${runtimeDesign.siteAccent}`;
+    requireCheck(
+      "site-design-accent",
+      [...files.entries()].some(
+        ([name, bytes]) =>
+          name.endsWith(".css") &&
+          bytes.toString("utf8").includes(accentDeclaration),
+      ),
+      "the frozen site accent is declared in the shipped CSS design tokens",
+    );
+  }
   requireCheck(
     "no-untrusted-javascript-assets",
     [...files.keys()]
