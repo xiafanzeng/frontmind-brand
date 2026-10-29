@@ -1,5 +1,8 @@
 // @vitest-environment node
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+// Real harness child processes make setup/teardown slow inside constrained
+// build containers; give this file's hooks an explicit generous budget.
+vi.setConfig({hookTimeout:90000,testTimeout:90000});
 import {randomUUID,createHash} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import os from 'node:os';
