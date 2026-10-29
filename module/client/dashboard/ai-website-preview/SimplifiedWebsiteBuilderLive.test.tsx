@@ -1354,8 +1354,12 @@ describe("redesigned live website builder setup", () => {
     expect(blocks[1]).toContain("产品与服务");
     expect(blocks[2]).toContain("联系方式");
     expect(screen.getAllByText(/个知识来源/).length).toBeGreaterThanOrEqual(3);
-    // The unified preview keeps the assistant on the same screen.
-    expect(screen.getByLabelText("在网站助手中提问")).toBeTruthy();
+    // The unified preview keeps the assistant identity on the same screen, but
+    // the live draft never simulates answers: only the real build preview
+    // completes the trial.
+    expect(screen.getByLabelText("网站 AI 助手预览")).toBeTruthy();
+    expect(screen.getByText(/本地草稿不会模拟回答/)).toBeTruthy();
+    expect(screen.queryByLabelText("在网站助手中提问")).toBeNull();
     // Fixture demo copy must not leak into the live preview.
     expect(screen.queryByText("您好，需要了解什么？")).toBeNull();
     expect(screen.queryByText("企业知识帮助中心")).toBeNull();
@@ -1408,6 +1412,7 @@ describe("redesigned live website builder setup", () => {
       ok: true,
       json: async () => ({
         url: "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/embed-preview/?token=abc.def",
+        bridgeToken: "bridge-token-1",
         expiresAt: Date.now() + 600_000,
       }),
     }));
@@ -1464,6 +1469,123 @@ describe("redesigned live website builder setup", () => {
         "_blank",
         "noopener",
       );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("completes the real trial only through a validated bridge report", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        url: "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/embed-preview/?token=abc.def",
+        bridgeToken: "bridge-token-1",
+        expiresAt: Date.now() + 600_000,
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("open", vi.fn());
+    const current = recommendableObservation();
+    const approved = liveBuildObservation("approved");
+    const frozenPreferences = {
+      schemaVersion: 1 as const,
+      siteName: "远山帮助中心",
+      siteGoal: "帮助客户自助排障",
+      featuredRouteIds: ["home", "products", "contact"],
+      siteAccent: "#6f35a5",
+      assistant: {
+        name: "远山助手",
+        welcome: "您好，这里是真实帮助中心。",
+        accentMode: "follow_site" as const,
+        customAccent: "#6f35a5",
+      },
+      knowledgeSnapshot: KNOWLEDGE_COORDINATE,
+      template: TEMPLATE_COORDINATE,
+      designRevision: 4,
+      draftHash: "d".repeat(64),
+    };
+    const observationWithBuild: SiteOpsObservationV1 = {
+      ...current,
+      project: approved.project,
+      brief: {...current.brief!, designPreferences: frozenPreferences},
+      builds: approved.builds.map((build) => ({
+        ...build,
+        designPreferences: frozenPreferences,
+        knowledgeSnapshot: {
+          id: KNOWLEDGE_COORDINATE.id,
+          version: KNOWLEDGE_COORDINATE.version,
+          archiveHash: KNOWLEDGE_COORDINATE.archiveHash,
+        },
+      })),
+      interactionState: "approved",
+    };
+    try {
+      const view = render(
+        <SimplifiedWebsiteBuilderPreview
+          initialStep="design"
+          siteOps={{ observation: observationWithBuild, onAction: vi.fn() }}
+          storageScope="live:7:bridge-trial"
+        />,
+      );
+      await waitFor(() =>
+        expect((screen.getByTitle("真实构建预览") as HTMLIFrameElement).src)
+          .toContain("embed-preview/?token="),
+      );
+      expect(screen.getByText("助手试用未完成")).toBeTruthy();
+
+      const report = (overrides: Record<string, unknown>) => ({
+        schemaVersion: 1,
+        kind: "frontmind_site_assistant_answer_rendered",
+        token: "bridge-token-1",
+        buildId: "44444444-4444-4444-8444-444444444444",
+        knowledgeSnapshotId: KNOWLEDGE_COORDINATE.id,
+        knowledgeArchiveHash: KNOWLEDGE_COORDINATE.archiveHash,
+        designRevision: 4,
+        draftHash: "d".repeat(64),
+        assistantName: "远山助手",
+        welcome: "您好，这里是真实帮助中心。",
+        ...overrides,
+      });
+      const frame = screen.getByTitle("真实构建预览") as HTMLIFrameElement;
+      const dispatch = (payload: unknown) => {
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            data: payload,
+            origin: "null",
+            source: frame.contentWindow,
+          }),
+        );
+      };
+
+      // A forged token or stale assistant identity never completes the trial.
+      dispatch(report({token: "forged"}));
+      dispatch(report({welcome: "旧的欢迎语"}));
+      expect(screen.getByText("助手试用未完成")).toBeTruthy();
+
+      // A message from a foreign window is ignored even with a valid token.
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: report({}),
+          origin: "null",
+          source: window,
+        }),
+      );
+      expect(screen.getByText("助手试用未完成")).toBeTruthy();
+
+      // The genuine report from THIS iframe completes the real trial.
+      dispatch(report({}));
+      await waitFor(() =>
+        expect(screen.getByText("助手试用已完成")).toBeTruthy(),
+      );
+
+      // Renaming the assistant invalidates the completed trial again.
+      fireEvent.change(screen.getByLabelText("助手名称"), {
+        target: {value: "新名字助手"},
+      });
+      await waitFor(() =>
+        expect(screen.getByText("助手试用未完成")).toBeTruthy(),
+      );
+      view.unmount();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1586,16 +1708,8 @@ describe("redesigned live website builder setup", () => {
     });
     expect(screen.getByTestId("website-design-preview")).toBeTruthy();
     expect(screen.queryByLabelText(/展示回答来源/)).toBeNull();
-    // 统一的网站设计步骤必须先完成一次真实问答试用，才能保存配置并开始生成。
-    fireEvent.click(screen.getByTestId("website-build-start"));
-    expect(screen.getByText(/完成助手试用后再继续/)).toBeTruthy();
-    expect(onSaveDesignPreferences).not.toHaveBeenCalled();
-    expect(onAction).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("在网站助手中提问"), {
-      target: { value: "如何配置网站 AI 助手？" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
-    await waitFor(() => expect(screen.getByText("助手试用已完成")).toBeTruthy());
+    // 生成真实预览不再被试用门禁拦截：真实试聊发生在构建完成后的嵌入预览里。
+    expect(screen.getByText("助手试用未完成")).toBeTruthy();
     fireEvent.click(screen.getByTestId("website-build-start"));
 
     await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
@@ -1743,12 +1857,8 @@ describe("redesigned live website builder setup", () => {
     expect(welcome.disabled).toBe(false);
     fireEvent.change(assistantName, { target: { value: "远山改版助手" } });
     fireEvent.change(welcome, { target: { value: "您好，这里是改版后的真实帮助中心。" } });
-    // 修改名称与欢迎语后需要重新完成一次问答试用。
-    fireEvent.change(screen.getByLabelText("在网站助手中提问"), {
-      target: { value: "FrontMind 可以帮企业做什么？" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
-    await waitFor(() => expect(screen.getByText("助手试用已完成")).toBeTruthy());
+    // 修改名称与欢迎语会清除试用状态；真实试聊在新版本构建完成后进行。
+    expect(screen.getByText("助手试用未完成")).toBeTruthy();
     fireEvent.click(screen.getByTestId("website-revision-submit"));
 
     await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
@@ -1803,6 +1913,10 @@ describe("redesigned live website builder setup", () => {
     await waitFor(() =>
       expect((screen.getByLabelText("在网站中显示帮助中心") as HTMLInputElement).checked).toBe(true),
     );
+    // 只有存在未保存的编辑时才会提交改版；真实试聊门禁在生成前不再拦截。
+    fireEvent.change(screen.getByLabelText("网站名称"), {
+      target: { value: "改版提交前的名称调整" },
+    });
     fireEvent.click(screen.getByTestId("website-revision-submit"));
     await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
 
@@ -1839,21 +1953,14 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
+    // 本地草稿不再提供示意问答：真实试聊只能在真实构建预览中完成。
     expect(screen.getByText("助手试用未完成")).toBeTruthy();
+    expect(screen.queryByLabelText("在网站助手中提问")).toBeNull();
     expect((screen.getByTestId("website-build-start") as HTMLButtonElement).disabled)
       .toBe(true);
     expect(onSubmitRevision).not.toHaveBeenCalled();
     expect(onAction).not.toHaveBeenCalled();
-
-    fireEvent.change(screen.getByLabelText("在网站助手中提问"), {
-      target: { value: "能保证两周内上线吗？" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
-    await waitFor(() => expect(screen.getByText("助手试用已完成")).toBeTruthy());
-    expect((screen.getByTestId("website-build-start") as HTMLButtonElement).disabled)
-      .toBe(true);
     expect(onSaveDesignPreferences).not.toHaveBeenCalled();
-    expect(onAction).not.toHaveBeenCalled();
     expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(0);
   });
 

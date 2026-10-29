@@ -45,7 +45,10 @@ import { and, eq, sql, type SQLWrapper } from "drizzle-orm";
 import { z } from "zod";
 
 import { siteContentPlanV2Schema } from "../../contracts/siteops-content-plan.js";
-import { staticTemplateExecutionAdmissionEvidenceSchema } from "../../contracts/siteops.js";
+import {
+  readSiteDesignPreferencesFromBrief,
+  staticTemplateExecutionAdmissionEvidenceSchema,
+} from "../../contracts/siteops.js";
 import { openStaticTemplateCatalogVersionDist } from "./static-template-catalog.js";
 import { previewNavigationBridgeSource } from "./preview-routing.js";
 import { siteAssistantApiOrigin } from "./site-assistant-widget.js";
@@ -789,6 +792,47 @@ export function verifySiteOpsEmbedPreviewToken(
   return parsed.data.expiresAt < input.now ? "expired" : "valid";
 }
 
+export type SiteOpsPreviewBridgeConfig = {
+  token: string;
+  buildId: string;
+  knowledgeSnapshotId: string;
+  knowledgeArchiveHash: string;
+  designRevision: number | null;
+  draftHash: string | null;
+};
+
+/**
+ * Communication capability for the trusted preview bridge: derived
+ * deterministically from the embed capability so the mint endpoint and the
+ * serving route agree without server-side state. Rotates whenever the embed
+ * token is refreshed.
+ */
+export function siteOpsPreviewBridgeToken(
+  embedToken: string,
+  sign: EmbedPreviewSigner,
+) {
+  return sign(`frontmind.siteops-preview-bridge.v1\u0000${embedToken}`);
+}
+
+function bridgeConfigJson(input: SiteOpsPreviewBridgeConfig) {
+  return JSON.stringify(input)
+    .replaceAll("<", "\\u003c")
+    .replaceAll(String.fromCharCode(0x2028), "\\u2028")
+    .replaceAll(String.fromCharCode(0x2029), "\\u2029");
+}
+
+/** Nonce-scoped bootstrap the real assistant widget reads to report rendered
+ * answers back to the embedding dashboard. */
+export function siteOpsPreviewBridgeScript(
+  nonce: string,
+  config: SiteOpsPreviewBridgeConfig,
+) {
+  if (!/^[A-Za-z0-9_-]{16,64}$/u.test(nonce)) {
+    throw new Error("SITEOPS_PREVIEW_NONCE_INVALID");
+  }
+  return `<script nonce="${nonce}">window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__=${bridgeConfigJson(config)};</script>`;
+}
+
 async function frozenPreviewRouteEntries(input: {
   userId: number;
   build: typeof siteBuilds.$inferSelect;
@@ -1415,6 +1459,8 @@ async function sendOwnedBuildPreviewDocument(input: {
   buildId: string;
   previewPrefix: string;
   frame: "top-level" | "embed";
+  /** Raw embed capability token; required for the preview bridge injection. */
+  embedToken?: string;
 }) {
   const owned = await ownedBuild(input.userId, input.buildId);
   if (!owned?.build.distLocalAssetId || !owned.build.distHash) {
@@ -1476,6 +1522,29 @@ async function sendOwnedBuildPreviewDocument(input: {
         ? "canonical_pathname"
         : "legacy_static_literals",
   });
+  // Embed documents carry the trusted preview bridge so the real assistant
+  // widget can report rendered answers (and their frozen build coordinates)
+  // back to the embedding dashboard. Top-level previews never get it.
+  let documentBytes = document.bytes;
+  if (input.frame === "embed" && input.embedToken && typeof signEmbedPreviewToken === "function") {
+    const preferences = readSiteDesignPreferencesFromBrief(owned.build.brief);
+    const bridgeScript = siteOpsPreviewBridgeScript(document.nonce, {
+      token: siteOpsPreviewBridgeToken(input.embedToken, signEmbedPreviewToken),
+      buildId: owned.build.id,
+      knowledgeSnapshotId: owned.build.knowledgeSnapshotId,
+      knowledgeArchiveHash: owned.build.knowledgeArchiveHash,
+      designRevision: preferences?.designRevision ?? null,
+      draftHash: preferences?.draftHash ?? null,
+    });
+    const html = document.bytes.toString("utf8");
+    const headClose = html.search(/<\/head>/iu);
+    documentBytes = Buffer.from(
+      headClose >= 0
+        ? html.slice(0, headClose) + bridgeScript + html.slice(headClose)
+        : bridgeScript + html,
+      "utf8",
+    );
+  }
   input.res.setHeader("Cache-Control", "private, no-store, max-age=0");
   input.res.setHeader("Content-Type", "text/html; charset=utf-8");
   input.res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
@@ -1502,8 +1571,8 @@ async function sendOwnedBuildPreviewDocument(input: {
       sandboxedPreviewContentSecurityPolicy(document.nonce),
     );
   }
-  input.res.setHeader("Content-Length", String(document.bytes.length));
-  input.res.send(document.bytes);
+  input.res.setHeader("Content-Length", String(documentBytes.length));
+  input.res.send(documentBytes);
 }
 
 siteOpsArtifactApi.get("/builds/:buildId/preview/*", async (req, res) => {
@@ -1552,6 +1621,10 @@ siteOpsArtifactApi.get(
         url: enterpriseProjectUrl(
           `/api/site-ops/builds/${encodeURIComponent(req.params.buildId)}/embed-preview/?token=${encodeURIComponent(token)}`,
         ),
+        // Shared secret for the trusted preview bridge: the served document
+        // receives the same value, so the parent can authenticate the real
+        // assistant's trial reports.
+        bridgeToken: siteOpsPreviewBridgeToken(token, signEmbedPreviewToken),
         expiresAt: now + SITEOPS_EMBED_PREVIEW_TOKEN_TTL_MS,
       });
     } catch (error) {
@@ -1587,6 +1660,8 @@ siteOpsArtifactApi.get("/builds/:buildId/embed-preview/*", async (req, res) => {
       return;
     }
     if (tokenState !== "valid") return notFound(res);
+    const embedToken =
+      typeof req.query.token === "string" ? req.query.token : "";
     await sendOwnedBuildPreviewDocument({
       req,
       res,
@@ -1594,6 +1669,7 @@ siteOpsArtifactApi.get("/builds/:buildId/embed-preview/*", async (req, res) => {
       buildId: req.params.buildId,
       previewPrefix: `/api/site-ops/builds/${encodeURIComponent(req.params.buildId)}/embed-preview/`,
       frame: "embed",
+      embedToken,
     });
   } catch (error) {
     sendError(res, error);

@@ -127,6 +127,31 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
   var frozenWelcome = typeof bootConfig.welcome === "string" && bootConfig.welcome.trim() ? bootConfig.welcome.trim() : null;
   var frozenAccent = typeof bootConfig.accent === "string" && /^#[0-9a-f]{6}$/i.test(bootConfig.accent) ? bootConfig.accent : null;
   var designConfig = bootConfig.design && typeof bootConfig.design === "object" ? bootConfig.design : null;
+  var previewBridge = window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__ && typeof window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__ === "object"
+    ? window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__
+    : null;
+  // Trusted preview bridge: inside the owner-only embed preview, report every
+  // RENDERED real answer (a policy refusal arrives as a 200 answer as well) to
+  // the embedding dashboard. Errors, timeouts and local notes never report, so
+  // they can never count as a completed trial.
+  function reportRenderedAnswerToParent() {
+    if (!previewBridge || !binding) return;
+    if (window.parent === window) return;
+    try {
+      window.parent.postMessage({
+        schemaVersion: 1,
+        kind: "frontmind_site_assistant_answer_rendered",
+        token: previewBridge.token,
+        buildId: previewBridge.buildId,
+        knowledgeSnapshotId: binding.knowledgeSnapshotId,
+        knowledgeArchiveHash: binding.knowledgeArchiveHash,
+        designRevision: binding.designRevision,
+        draftHash: binding.draftHash,
+        assistantName: binding.assistantName,
+        welcome: binding.welcome
+      }, "*");
+    } catch (error) { /* the preview bridge is best-effort for the trial gate */ }
+  }
 
   function normalizedPath(value) {
     try {
@@ -440,6 +465,7 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
           transcript.push({ kind: "answer", text: result.body.answer.text, sources: result.body.answer.sources || [], session: result.body.session });
           persist(result.body.session || session);
           appendBubble(transcript[transcript.length - 1]);
+          reportRenderedAnswerToParent();
         } else {
           var message = result.body && result.body.error && typeof result.body.error.message === "string"
             ? result.body.error.message
