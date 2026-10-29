@@ -12,7 +12,7 @@ import {
 
 export type ConnectedSimplifiedWebsiteBuilderPreviewProps = {
   initialStep?: BuildStep | LegacyBuildStep;
-  initialSection?: WebsiteDesignSection;
+  initialSection?: WebsiteDesignSection | null;
   onOpenRag?: () => void;
   onStepChange?: (step: BuildStep) => void;
   storageScope?: string;

@@ -85,7 +85,7 @@ export function normalizeWebsiteDesignSection(value: unknown): WebsiteDesignSect
 export type SimplifiedWebsiteBuilderPreviewProps = {
   initialStep?: BuildStep | LegacyBuildStep;
   /** Focuses (scrolls + highlights) one design config area on the design step. */
-  initialSection?: WebsiteDesignSection;
+  initialSection?: WebsiteDesignSection | null;
   onOpenRag?: () => void;
   /** Opens the established SiteOps UI for Aliyun, domain and release controls. */
   onOpenSiteOpsRelease?: () => void;
