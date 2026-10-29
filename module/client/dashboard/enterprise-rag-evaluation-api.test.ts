@@ -14,6 +14,7 @@ vi.mock("../lib/workspace-rest-scope", () => ({
 }));
 
 import { liveEnterpriseRagEvaluationApi } from "./enterprise-rag-evaluation-api";
+import { createRagChecklist, scoreRagChecklist } from "../../contracts/enterprise-rag-checklist";
 
 function run(status = "running") {
   return {
@@ -94,7 +95,7 @@ it("reads a completed v2 operation whose quality conclusion is pending", async (
   const report = {
     reportId:"report-2",sourceQaTaskId:"task-1",sourceTurnId:"turn-1",questionMessageId:"q",answerMessageId:"a",completedAt:"2026-10-27T01:00:00Z",
     knowledgeBase:{snapshotId:"kb",contentHash:"a".repeat(64)},
-    evaluator:{skillId:"enterprise-rag-evaluation",skillVersion:"2.0.0",ruleVersion:"rag-eval-1.3",model:"fixture"},
+    evaluator:{skillId:"enterprise-rag-evaluation",skillVersion:"2.0.0",judgeVersion:"2.0.0",ruleVersion:"rag-eval-1.3",model:"fixture"},
     judgments:{schemaVersion:2,dimensions:ids.map(id=>({id})),gates:["facts","citations","permissions","safety","unknown","injection","availability"].map(id=>({id})),claims:[{id:"claim-1",statement:"暂无法确认。",kind:"uncertainty",relevance:"core",status:"not_applicable",sourceIds:[],rationale:"合成未知说明。"}],task:{status:"undetermined"},findings:[]},
     result:{skillId:"enterprise-rag-evaluation",version:"2.0.0",status:"pending",answerVerdict:"pending",score:null,coverage:80,recommendation:"publish_with_risk",summary:"必要前提待确认。",relatedReportIds:[],risks:[],
       dimensions:ids.map((id,index)=>({id,label:id,status:index===0?"pending":"passed",score:index===0?null:10,maxScore:20,summary:"合成输入。",evidenceIds:["a"]}))},
@@ -103,5 +104,66 @@ it("reads a completed v2 operation whose quality conclusion is pending", async (
   expect((await liveEnterpriseRagEvaluationApi.observe("operation-1")).report?.result.answerVerdict).toBe("pending");
   const malformed = structuredClone(report); delete (malformed.judgments as {findings?:unknown}).findings;
   mocks.fetch.mockResolvedValueOnce(json({...run("completed"),report:malformed}));
+  await expect(liveEnterpriseRagEvaluationApi.observe("operation-1")).rejects.toThrow(/数据结构不正确/);
+});
+
+it("validates v3 checklist reports and rejects score/checklist drift", async () => {
+  const checklist = createRagChecklist("地址在哪里？", "query");
+  const checks = checklist.checks.map((check) => ({
+    id: check.id,
+    status: "met" as const,
+    rationale: "合成固定判断：本项满足。",
+    evidenceIds: ["answer:a"],
+  }));
+  const scored = scoreRagChecklist(checklist, checks);
+  const judgments = {
+    schemaVersion: 3 as const,
+    operationToken: "operation-1",
+    inputHash: "a".repeat(64),
+    checklist,
+    checks,
+    dimensions: scored.dimensions.map((dimension) => ({
+      id: dimension.id,
+      level: 4,
+      rationale: dimension.summary,
+      evidenceIds: dimension.evidenceIds,
+    })),
+    gates: ["facts", "citations", "permissions", "safety", "unknown", "injection", "availability"].map((id) => ({
+      id, status: "passed" as const, reason: "合成固定判断。", evidenceIds: ["answer:a"],
+    })),
+    claims: [{ id: "claim-1", statement: "地址在合成路1号。", kind: "fact", relevance: "core", status: "supported", sourceIds: ["source-1"], rationale: "合成资料支持。" }],
+    task: { status: "completed", rationale: "任务完成。", evidenceIds: ["answer:a"] },
+    findings: [], optionalSuggestions: [], summary: "合成 v3 报告。",
+  };
+  const report = {
+    reportId: "report-3", sourceQaTaskId: "task-1", sourceTurnId: "turn-1",
+    questionMessageId: "q", answerMessageId: "a", completedAt: "2026-10-28T01:00:00Z",
+    knowledgeBase: { snapshotId: "kb", contentHash: "b".repeat(64) },
+    evaluator: { skillId: "enterprise-rag-evaluation", skillVersion: "3.0.0", judgeVersion: "3.0.0", ruleVersion: "rag-eval-1.4", model: "fixture" },
+    judgments,
+    result: {
+      skillId: "enterprise-rag-evaluation", version: "3.0.0", status: "completed",
+      answerVerdict: "usable", score: scored.score, coverage: scored.coverage,
+      recommendation: "recommended", summary: "合成 v3 报告。", risks: [], relatedReportIds: [],
+      dimensions: scored.dimensions.map(({ checks: _checks, ...dimension }) => dimension),
+    },
+  };
+  mocks.fetch.mockResolvedValueOnce(json({ ...run("completed"), report }));
+  expect((await liveEnterpriseRagEvaluationApi.observe("operation-1")).report?.result.score).toBe(100);
+
+  const drifted = structuredClone(report);
+  drifted.result.score = 99;
+  mocks.fetch.mockResolvedValueOnce(json({ ...run("completed"), report: drifted }));
+  await expect(liveEnterpriseRagEvaluationApi.observe("operation-1")).rejects.toThrow(/数据结构不正确/);
+
+  const mixed = structuredClone(report);
+  mixed.evaluator.ruleVersion = "rag-eval-1.3";
+  mocks.fetch.mockResolvedValueOnce(json({ ...run("completed"), report: mixed }));
+  await expect(liveEnterpriseRagEvaluationApi.observe("operation-1")).rejects.toThrow(/数据结构不正确/);
+
+  const unknown = structuredClone(report) as any;
+  unknown.judgments.schemaVersion = 4;
+  delete unknown.result.answerVerdict;
+  mocks.fetch.mockResolvedValueOnce(json({ ...run("completed"), report: unknown }));
   await expect(liveEnterpriseRagEvaluationApi.observe("operation-1")).rejects.toThrow(/数据结构不正确/);
 });

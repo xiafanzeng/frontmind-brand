@@ -23,6 +23,7 @@ import {
   type EnterpriseRagEvaluationRunDto,
   validateEnterpriseRagJudgeOutput,
   isGradedRagJudgment,
+  isChecklistRagJudgment,
   type EnterpriseRagJudgeOutput,
 } from "../contracts/enterprise-rag-evaluation-run.js";
 import { parseEnterpriseQaAnswerMeta } from "../contracts/enterprise-qa-answer.js";
@@ -38,7 +39,11 @@ import { enterpriseQaDocumentCatalog } from "./enterprise-qa-answer.js";
 import type { ModuleHttpCore } from "./http-api.js";
 import { intentHash, intentSkillPorts } from "./intent-skill-runtime.js";
 
+import { createRagChecklist, RAG_CHECKLIST_RULE_VERSION, RAG_CHECKLIST_VERSION } from "../contracts/enterprise-rag-checklist.js";
+import { checklistEnterpriseRagEvaluationSkill } from "../client/dashboard/ai-website-preview/enterprise-rag-checklist-skill.js";
+
 async function scoreJudgments(input: EnterpriseRagEvaluationFrozenInput, judgments: EnterpriseRagJudgeOutput) {
+  if (isChecklistRagJudgment(judgments)) return runEvaluationSkill(checklistEnterpriseRagEvaluationSkill, judgments);
   return runEvaluationSkill(input.schemaVersion === 2 ? enterpriseRagEvaluationSkill : legacyEnterpriseRagEvaluationSkill, {
     dimensions: judgments.dimensions.map(item => ({ ...item, level: item.level as 0 | 1 | 2 | 3 | 4 | null, applicable: true })),
     gates: judgments.gates.map(item => ({ id: item.id, status: item.status, reason: item.reason })),
@@ -69,7 +74,7 @@ const latestSchema = z.object({
 type RunPhase = EnterpriseRagEvaluationRunDto["status"];
 type RuntimeError = { code: string; message: string };
 type RuntimeState = {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   sourceQaTaskId: string;
   sourceTurnId: string;
   input: EnterpriseRagEvaluationFrozenInput;
@@ -160,12 +165,13 @@ function runtimeFromTask(task: any): RuntimeState {
   const input = value.input as EnterpriseRagEvaluationFrozenInput | undefined;
   const phase = value.phase;
   if (
-    ![1, 2].includes(Number(value.schemaVersion)) ||
+    ![1, 2, 3].includes(Number(value.schemaVersion)) ||
     typeof value.sourceQaTaskId !== "string" ||
     typeof value.sourceTurnId !== "string" ||
     !input ||
     input.schemaVersion !== value.schemaVersion ||
-    (input.schemaVersion === 2 && (input.taskScope !== "single_turn" || input.evaluator.ruleVersion !== RAG_RULE_VERSION || input.evaluator.judgeVersion !== ENTERPRISE_RAG_JUDGE_VERSION || input.evaluator.skillVersion !== ENTERPRISE_RAG_EVALUATION_SKILL_VERSION)) ||
+    (input.schemaVersion === 2 && (input.taskScope !== "single_turn" || input.evaluator.ruleVersion !== RAG_RULE_VERSION || input.evaluator.judgeVersion !== "2.0.0" || input.evaluator.skillVersion !== ENTERPRISE_RAG_EVALUATION_SKILL_VERSION)) ||
+    (input.schemaVersion === 3 && (input.taskScope !== "single_turn" || input.evaluator.ruleVersion !== RAG_CHECKLIST_RULE_VERSION || input.evaluator.judgeVersion !== RAG_CHECKLIST_VERSION || input.evaluator.skillVersion !== RAG_CHECKLIST_VERSION || !input.checklist)) ||
     input.sourceQaTaskId !== value.sourceQaTaskId ||
     input.sourceTurnId !== value.sourceTurnId ||
     typeof input.operationToken !== "string" ||
@@ -278,7 +284,7 @@ export function createEnterpriseRagEvaluationService(
         projectCondition(model.agentOperations.enterpriseProjectId),
         eq(model.agentOperations.operationType, ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE),
         eq(model.agentOperations.contractName, ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE),
-        inArray(model.agentOperations.contractRevision, [1, ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION]),
+        inArray(model.agentOperations.contractRevision, [1, 2, ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION]),
       ))
       .limit(1))[0] as OwnedOperation | undefined;
   }
@@ -369,6 +375,7 @@ export function createEnterpriseRagEvaluationService(
         report.answerHash !== sha256(runtime.input.answer) ||
         intentHash(report.knowledgeBase) !== intentHash(runtime.input.knowledgeBase) ||
         intentHash(report.evaluator) !== intentHash(expectedEvaluator) ||
+        intentHash(report.judgments) !== intentHash(judgments) ||
         intentHash(report.result) !== intentHash(expectedResult) ||
         !Number.isFinite(Date.parse(report.createdAt)) ||
         !Number.isFinite(Date.parse(report.completedAt))
@@ -672,7 +679,8 @@ export function createEnterpriseRagEvaluationService(
     }
 
     const base = {
-      schemaVersion: 2 as const,
+      schemaVersion: 3 as const,
+      checklist: createRagChecklist(questionMessage.content),
       taskScope: "single_turn" as const,
       sourceQaTaskId,
       sourceTurnId,
@@ -696,9 +704,9 @@ export function createEnterpriseRagEvaluationService(
       },
       evaluator: {
         skillId: ENTERPRISE_RAG_EVALUATION_SKILL_ID as "enterprise-rag-evaluation",
-        skillVersion: ENTERPRISE_RAG_EVALUATION_SKILL_VERSION,
-        ruleVersion: RAG_RULE_VERSION,
-        judgeVersion: ENTERPRISE_RAG_JUDGE_VERSION as "2.0.0",
+        skillVersion: RAG_CHECKLIST_VERSION,
+        ruleVersion: RAG_CHECKLIST_RULE_VERSION,
+        judgeVersion: ENTERPRISE_RAG_JUDGE_VERSION as "3.0.0",
       },
     };
     const inputHash = intentHash(base);
@@ -1042,7 +1050,7 @@ export function createEnterpriseRagEvaluationService(
       const judgmentEvidenceRule = clients.validationOptions.allowedClaimIds === null
         ? "维度和门禁的 evidenceIds 只能逐字引用冻结证据 ID，不得引用 claim ID。"
         : "维度和门禁的 evidenceIds 还可以引用本次 JSON 中实际存在且已绑定回答原文的 claim-1 至 claim-30。";
-      const sourceIdRule = runtime.input.schemaVersion === 2
+      const sourceIdRule = runtime.input.schemaVersion >= 2
         ? "claims[].sourceIds 只能逐字复制冻结来源白名单；非事实建议/未知说明用 not_applicable 和空数组。确实没有依据的事实用 unsupported；来源正文缺失或无法核实时用 unverifiable 并保留待补证，不能强判事实错误。部分支持或未展示引用须判断任务影响，不自动升级为重大风险。"
         : runtime.wireContract
         ? "claims[].sourceIds 是更窄的来源集合，只能从冻结来源 ID 白名单逐字复制；问题、回答和 claim-* 的证据别名都不得写入。哪怕只多、少或改一个字符也非法。无法确认有合法来源直接支持时，必须使用 status=unsupported、sourceIds=[]，并同步按无来源调整事实/引用门禁与评分。"
@@ -1410,7 +1418,7 @@ export function createEnterpriseRagEvaluationService(
       wireContract,
     );
     const runtime: RuntimeState = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       sourceQaTaskId: input.sourceQaTaskId,
       sourceTurnId: input.turnId,
       input: frozen,
@@ -1451,7 +1459,7 @@ export function createEnterpriseRagEvaluationService(
           (collision.operation.enterpriseProjectId ?? null) === context.enterpriseProjectId &&
           collision.operation.operationType === ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE &&
           collision.operation.contractName === ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE &&
-          [1, ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION].includes(collision.operation.contractRevision)
+          [1, 2, ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION].includes(collision.operation.contractRevision)
             ? runtimeFromTask(collision.task)
             : null;
         if (
@@ -1552,7 +1560,7 @@ export function createEnterpriseRagEvaluationService(
         projectCondition(model.agentOperations.enterpriseProjectId),
         eq(model.agentOperations.operationType, ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE),
         eq(model.agentOperations.contractName, ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE),
-        inArray(model.agentOperations.contractRevision, [1, ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION]),
+        inArray(model.agentOperations.contractRevision, [1, 2, ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION]),
         // attention_required means an upstream create may have succeeded while
         // its response was lost. It remains a paid-task dedupe fence even
         // though the public runtime is terminal failed.
@@ -1582,7 +1590,7 @@ export function createEnterpriseRagEvaluationService(
         projectCondition(model.agentOperations.enterpriseProjectId),
         eq(model.agentOperations.operationType, ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE),
         eq(model.agentOperations.contractName, ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE),
-        inArray(model.agentOperations.contractRevision, [1, ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION]),
+        inArray(model.agentOperations.contractRevision, [1, 2, ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION]),
         sql`JSON_UNQUOTE(JSON_EXTRACT(${model.agentTasks.providerRuntime}, '$.enterpriseRagEvaluation.sourceQaTaskId')) = ${sourceQaTaskId}`,
         sql`JSON_UNQUOTE(JSON_EXTRACT(${model.agentTasks.providerRuntime}, '$.enterpriseRagEvaluation.sourceTurnId')) = ${sourceTurnId}`,
       ))

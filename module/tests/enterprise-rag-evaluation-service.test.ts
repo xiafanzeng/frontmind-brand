@@ -361,7 +361,7 @@ function harness(documentCount = 2) {
     sourceQaTaskId: SOURCE_TASK_ID,
     turnId: TURN_ID,
   };
-  function acceptedOutput(canonicalIds = false) {
+  function acceptedOutput(canonicalIds = false): any {
     const evaluatorTask = taskRows.find((task) => task.operationId === REQUEST_ID);
     const runtime = evaluatorTask.providerRuntime.enterpriseRagEvaluation;
     const input = runtime.input;
@@ -372,9 +372,9 @@ function harness(documentCount = 2) {
         ).alias;
     const answerEvidenceId = alias(`answer:${ANSWER_MESSAGE_ID}`);
     const sourceId = alias(document.documentId);
-    return {
-      ...(input.schemaVersion === 2 ? {
-        schemaVersion: 2,
+    const result: any = {
+      ...(input.schemaVersion >= 2 ? {
+        schemaVersion: input.schemaVersion,
         task: { status: "completed", rationale: "当前问题已完成。", evidenceIds: [answerEvidenceId, sourceId] },
         findings: [],
       } : {}),
@@ -396,12 +396,18 @@ function harness(documentCount = 2) {
         id: "claim-1",
         statement: "门诊挂号时间为 7:30，就诊时间为 8:00。",
         status: "supported",
-        ...(input.schemaVersion === 2 ? { kind: "fact", relevance: "core" } : {}),
+        ...(input.schemaVersion >= 2 ? { kind: "fact", relevance: "core" } : {}),
         sourceIds: [sourceId],
         rationale: "冻结来源直接包含相同时间信息。",
       }],
       summary: "回答完整且有冻结来源支持。",
     };
+    if (input.schemaVersion === 3) {
+      delete result.dimensions;
+      result.checks = input.checklist.checks.map((c: any) => ({ id: c.id, status: "met", rationale: "合成冻结资料充分满足当前检查项。", evidenceIds: ["claim-1", answerEvidenceId, sourceId] }));
+      result.optionalSuggestions = [];
+    }
+    return result;
   }
   function pushProviderOutput(
     value = acceptedOutput(),
@@ -434,6 +440,7 @@ function harness(documentCount = 2) {
     runtime.schemaVersion = 1;
     runtime.input.schemaVersion = 1;
     delete runtime.input.taskScope;
+    delete runtime.input.checklist;
     runtime.input.evaluator = { skillId: "enterprise-rag-evaluation", skillVersion: "1.0.0", ruleVersion: "rag-eval-1.2", judgeVersion: "1.0.0" };
     const { operationToken: _token, inputHash: _hash, ...base } = runtime.input;
     runtime.input.inputHash = intentHash(base);
@@ -441,6 +448,20 @@ function harness(documentCount = 2) {
     runtime.skill = "Frozen legacy evaluator Skill v1.0.0";
     runtime.skillHash = intentHash(runtime.skill);
     if (runtime.wireContract) operation.schemaHash = intentHash({ wireSchema: enterpriseRagAliasedJudgeWireSchema(runtime.input, runtime.wireContract), wireContract: runtime.wireContract });
+  }
+  function freezeGraded() {
+    freezeLegacy();
+    const operation = operationRows.find(row => row.id === REQUEST_ID);
+    const runtime = taskRows.find(row => row.operationId === REQUEST_ID).providerRuntime.enterpriseRagEvaluation;
+    operation.contractRevision = 2;
+    runtime.schemaVersion = runtime.input.schemaVersion = 2;
+    runtime.input.taskScope = "single_turn";
+    delete runtime.input.checklist;
+    runtime.input.evaluator = { skillId: "enterprise-rag-evaluation", skillVersion: "2.0.0", ruleVersion: "rag-eval-1.3", judgeVersion: "2.0.0" };
+    const { operationToken: _token, inputHash: _hash, ...base } = runtime.input;
+    runtime.input.inputHash = intentHash(base); operation.requestHash = runtime.input.inputHash;
+    runtime.skill = "Frozen graded evaluator Skill v2.0.0"; runtime.skillHash = intentHash(runtime.skill);
+    operation.schemaHash = intentHash({ wireSchema: enterpriseRagAliasedJudgeWireSchema(runtime.input, runtime.wireContract), wireContract: runtime.wireContract });
   }
   function completeProvider() {
     pushProviderOutput();
@@ -454,6 +475,7 @@ function harness(documentCount = 2) {
     pushProviderOutput,
     completeProvider,
     freezeLegacy,
+    freezeGraded,
     operationRows,
     taskRows,
     persistedEvents,
@@ -480,14 +502,14 @@ describe("企业 RAG 自动评估持久化服务", () => {
       frozenInput.operationToken,
     ]);
     expect(
-      createSchema.properties.dimensions.items.properties.evidenceIds.items.enum,
+      createSchema.properties.checks.items.properties.evidenceIds.items.enum,
     ).toEqual(expect.arrayContaining([
       "rag-AAA-000-000-111",
       "rag-SSS-000-000-222",
       "claim-1",
     ]));
     expect(
-      createSchema.properties.dimensions.items.properties.evidenceIds.items.enum,
+      createSchema.properties.checks.items.properties.evidenceIds.items.enum,
     ).not.toContain(`answer:${ANSWER_MESSAGE_ID}`);
     const frozenSources = h.taskRows.find((row) =>
       row.operationId === REQUEST_ID).providerRuntime.enterpriseRagEvaluation.input.sources;
@@ -570,8 +592,8 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const h = harness();
     await h.service.start(h.startInput);
     const invalid = h.acceptedOutput();
-    const allowedAnswerId = invalid.dimensions[0].evidenceIds[1]!;
-    for (const item of [...invalid.dimensions, ...invalid.gates]) {
+    const allowedAnswerId = invalid.checks[0].evidenceIds[1]!;
+    for (const item of [...invalid.checks, ...invalid.gates]) {
       item.evidenceIds = [`${allowedAnswerId}-recalculated`];
     }
     h.pushProviderOutput(invalid, "provider-invalid-result");
@@ -665,7 +687,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
 
     const invalidRepair = h.acceptedOutput();
     invalidRepair.claims[0].sourceIds = [rewrittenSourceId];
-    invalidRepair.dimensions.find(({ id }) => id === "correctness")!
+    invalidRepair.checks.find(({ id }) => id === "facts_core")!
       .evidenceIds.push(rewrittenSourceId);
     invalidRepair.gates.find(({ id }) => id === "facts")!
       .evidenceIds.push(rewrittenSourceId);
@@ -717,11 +739,11 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const repairedWithTypo = h.acceptedOutput();
     const rewrittenSourceAlias = `${citedSourceAlias}4`;
     repairedWithTypo.claims[0].sourceIds = [rewrittenSourceAlias];
-    repairedWithTypo.dimensions.find(({id}) => id === "correctness")!
+    repairedWithTypo.checks.find(({id}) => id === "facts_core")!
       .evidenceIds.push(rewrittenSourceAlias);
     repairedWithTypo.gates.find(({id}) => id === "facts")!
       .evidenceIds.push(rewrittenSourceAlias);
-    repairedWithTypo.dimensions.find(({id}) => id === "citations")!.level = 2;
+    repairedWithTypo.checks.find(({id}) => id === "citation_support")!.status = "partial";
     repairedWithTypo.gates.find(({id}) => id === "citations")!.status = "failed";
     h.pushProviderAssistant(repairedWithTypo, "provider-repair-new-typo");
 
@@ -732,7 +754,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(finalRepair.prompt).toContain(
       "claims[0].sourceIds[0] 不在冻结传输白名单中",
     );
-    expect(finalRepair.prompt).toContain("dimensions[1].evidenceIds[3]");
+    expect(finalRepair.prompt).toContain("checks[2].evidenceIds[3]");
     expect(finalRepair.prompt).toContain("gates[0].evidenceIds[3]");
     expect(finalRepair.prompt).toContain(
       `唯一一处字符编辑可达的合法 ID 是 "${citedSourceAlias}"`,
@@ -773,7 +795,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     await h.service.start(h.startInput);
     const invalid = h.acceptedOutput();
     invalid.claims[0].id = "claim-31";
-    for (const item of [...invalid.dimensions, ...invalid.gates]) {
+    for (const item of [...invalid.checks, ...invalid.gates]) {
       item.evidenceIds = ["claim-31"];
     }
     h.pushProviderAssistant(invalid, "provider-invalid-assistant");
@@ -801,11 +823,11 @@ describe("企业 RAG 自动评估持久化服务", () => {
   it("已执行的模型评估可以保存待核验质量结论，不触发无意义修复重试", async () => {
     const h = harness(); await h.service.start(h.startInput);
     const output = h.acceptedOutput();
-    Object.assign(output, { schemaVersion: 2,
+    Object.assign(output, { schemaVersion: 3,
       task: { status: "undetermined", rationale: "必要前提待确认。", evidenceIds: output.task!.evidenceIds },
-      findings: [{ id: "finding-1", kind: "task", severity: "undetermined", summary: "任务待确认", impact: "无法确定任务的必要前提。", claimIds: [], evidenceIds: output.task!.evidenceIds, dimensionIds: ["intent"] }],
+      findings: [{ id: "finding-1", rootCauseId: "root-cause-1", kind: "task", severity: "undetermined", summary: "任务待确认", impact: "无法确定任务的必要前提。", claimIds: [], evidenceIds: output.task!.evidenceIds, dimensionIds: ["intent"], checkId: "intent_goal" }],
     });
-    output.dimensions[0].level = null as unknown as number;
+    output.checks[0].status = "undetermined";
     output.gates.find(gate => gate.id === "availability")!.status = "pending";
     h.pushProviderOutput(output);
     const completed = await h.service.observe(REQUEST_ID);
@@ -930,6 +952,15 @@ describe("企业 RAG 自动评估持久化服务", () => {
     await h.service.start(h.startInput);
     h.completeProvider();
     await h.service.observe(REQUEST_ID);
+    const persistedReport = h.persistedEvents[0].normalizedPayload.report;
+    const originalRationale = persistedReport.judgments.dimensions[0].rationale;
+    persistedReport.judgments.dimensions[0].rationale = "tampered projection";
+    await expect(h.service.observe(REQUEST_ID)).rejects.toEqual(
+      expect.objectContaining<Partial<EnterpriseRagEvaluationError>>({
+        code: "EVALUATION_REPORT_MISSING",
+      }),
+    );
+    persistedReport.judgments.dimensions[0].rationale = originalRationale;
     h.persistedEvents[0].normalizedPayload.report.result.score = 0;
     await expect(h.service.observe(REQUEST_ID)).rejects.toEqual(
       expect.objectContaining<Partial<EnterpriseRagEvaluationError>>({
@@ -937,4 +968,13 @@ describe("企业 RAG 自动评估持久化服务", () => {
       }),
     );
   });
+});
+
+it("v2在途任务仍使用冻结分级合同，刷新不重新评分", async () => {
+  const h = harness(); await h.service.start(h.startInput); h.freezeGraded(); h.completeProvider();
+  const completed = await h.service.observe(REQUEST_ID);
+  expect(completed.report?.evaluator.ruleVersion).toBe("rag-eval-1.3");
+  expect(completed.report?.result.version).toBe("2.0.0");
+  expect(completed.report?.result.score).toBe(100);
+  expect((await h.service.observe(REQUEST_ID)).report).toEqual(completed.report);
 });

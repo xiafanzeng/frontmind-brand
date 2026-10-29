@@ -5,6 +5,12 @@ import type {
 } from "../../contracts/enterprise-rag-evaluation-run";
 import { captureWorkspaceRestOperation } from "../lib/workspace-rest-scope";
 import { parseEvaluationResult } from "./ai-website-preview/evaluation-skill-contract";
+import {
+  ragCheckJudgmentSchema,
+  ragChecklistSchema,
+  ragOptionalSuggestionSchema,
+  scoreRagChecklist,
+} from "../../contracts/enterprise-rag-checklist";
 
 const ENDPOINT = "/api/modules/brand/rag-evaluations";
 
@@ -36,7 +42,41 @@ function isReport(value: unknown): boolean {
   const evaluator = record(report?.evaluator);
   const judgments = record(report?.judgments);
   const result = parseEvaluationResult(report?.result);
+  const legacy = judgments?.schemaVersion === undefined;
   const graded = judgments?.schemaVersion === 2;
+  const checklist = judgments?.schemaVersion === 3;
+  const versionIsValid = legacy
+    ? evaluator?.ruleVersion === "rag-eval-1.2" && evaluator?.skillVersion === "1.0.0" && evaluator?.judgeVersion === "1.0.0"
+    : graded
+      ? evaluator?.ruleVersion === "rag-eval-1.3" && evaluator?.skillVersion === "2.0.0" && evaluator?.judgeVersion === "2.0.0"
+      : checklist
+        ? evaluator?.ruleVersion === "rag-eval-1.4" && evaluator?.skillVersion === "3.0.0" && evaluator?.judgeVersion === "3.0.0"
+        : false;
+  let checklistIsValid = !checklist;
+  if (checklist) {
+    try {
+      const frozenChecklist = ragChecklistSchema.parse(judgments?.checklist);
+      const checks = Array.isArray(judgments?.checks)
+        ? judgments.checks.map((item) => ragCheckJudgmentSchema.parse(item))
+        : [];
+      if (!Array.isArray(judgments?.optionalSuggestions)) throw new Error("missing suggestions");
+      judgments.optionalSuggestions.forEach((item) => ragOptionalSuggestionSchema.parse(item));
+      const scored = scoreRagChecklist(frozenChecklist, checks);
+      checklistIsValid = Boolean(
+        versionIsValid &&
+          Array.isArray(result?.dimensions) &&
+          result.dimensions.length === scored.dimensions.length &&
+          result.dimensions.every((dimension, index) => {
+            const expected = scored.dimensions[index];
+            return Boolean(expected && dimension.id === expected.id &&
+              dimension.status === expected.status && dimension.score === expected.score &&
+              dimension.maxScore === expected.maxScore);
+          }) && result?.score === scored.score && result?.coverage === scored.coverage,
+      );
+    } catch {
+      checklistIsValid = false;
+    }
+  }
   return Boolean(
     report &&
       typeof report.reportId === "string" &&
@@ -49,6 +89,7 @@ function isReport(value: unknown): boolean {
       typeof knowledgeBase.snapshotId === "string" &&
       typeof knowledgeBase.contentHash === "string" &&
       evaluator &&
+      versionIsValid &&
       typeof evaluator.skillVersion === "string" &&
       typeof evaluator.ruleVersion === "string" &&
       typeof evaluator.model === "string" &&
@@ -61,11 +102,13 @@ function isReport(value: unknown): boolean {
       judgments.claims.length > 0 &&
       result &&
       result.skillId === evaluator.skillId && result.version === evaluator.skillVersion &&
-      (graded || result.answerVerdict === undefined) &&
-      (result.status === "completed" || (graded && result.status === "pending")) &&
-      (!graded || (evaluator.ruleVersion === "rag-eval-1.3" && result.answerVerdict !== undefined && record(judgments.task) && Array.isArray(judgments.findings) && judgments.findings.every((value: unknown) => {
+      (legacy || graded || checklist) &&
+      (graded || checklist || result.answerVerdict === undefined) &&
+      (result.status === "completed" || ((graded || checklist) && result.status === "pending")) &&
+      checklistIsValid &&
+      (!(graded || checklist) || (result.answerVerdict !== undefined && record(judgments.task) && Array.isArray(judgments.findings) && judgments.findings.every((value: unknown) => {
         const finding = record(value);
-        return finding && typeof finding.id === "string" && typeof finding.summary === "string" && typeof finding.impact === "string" && ["critical", "improvement", "undetermined"].includes(String(finding.severity)) && Array.isArray(finding.claimIds) && Array.isArray(finding.evidenceIds) && Array.isArray(finding.dimensionIds);
+        return finding && typeof finding.id === "string" && typeof finding.summary === "string" && typeof finding.impact === "string" && ["critical", "improvement", "undetermined"].includes(String(finding.severity)) && Array.isArray(finding.claimIds) && Array.isArray(finding.evidenceIds) && Array.isArray(finding.dimensionIds) && (!checklist || (typeof finding.checkId === "string" && typeof finding.rootCauseId === "string"));
       }))) &&
       (result.score === null || typeof result.score === "number") &&
       typeof result.coverage === "number" &&

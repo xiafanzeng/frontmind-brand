@@ -518,9 +518,45 @@ describe("simplified AI website preview", () => {
       />,
     );
 
+    const evaluation = screen.getByRole("region", { name: "本轮回答质量" });
+    expect(within(evaluation).getByRole("heading", { name: "本轮回答质量" })).toBeTruthy();
+    expect(within(evaluation).getByLabelText("六维诊断评分").textContent).toContain("84");
+    expect(within(evaluation).queryByText("合成样例 · 预设评审")).toBeNull();
+    expect(within(evaluation).getByText("待改进")).toBeTruthy();
+    expect(within(evaluation).queryByText("用户真正想确认")).toBeNull();
+    expect(within(evaluation).queryByText("优先优化")).toBeNull();
+    const judgmentDisclosure = within(evaluation).getByRole("button", { name: "理解本次判断" });
+    const optimizationDisclosure = within(evaluation).getByRole("button", { name: "查看优化方案" });
+    fireEvent.click(judgmentDisclosure);
+    expect(within(evaluation).queryByRole("heading", { name: "用户要解决的问题" })).toBeNull();
+    expect(within(evaluation).getByText(/快速理解产品能解决哪些问题，以及自己下一步可以从哪里开始。/).textContent).toContain("“人工评审与计算”用于查看评分如何形成");
+    expect(within(evaluation).getByRole("button", { name: "人工评审与计算" })).toBeTruthy();
+    expect(within(evaluation).getByRole("button", { name: "查看回答依据" })).toBeTruthy();
+    fireEvent.click(optimizationDisclosure);
+    expect(within(evaluation).getByText("优先处理")).toBeTruthy();
+    expect(within(evaluation).queryByText("优先优化")).toBeNull();
+    const improvedAnswerButton = within(evaluation).getByRole("button", { name: "查看完整方案" });
+    fireEvent.click(improvedAnswerButton);
+    expect(screen.getByRole("dialog", { name: "优化方案" })).toBeTruthy();
+    expect(screen.getByText("建议改写 · 待复评")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "关闭评估面板" }));
+
+    const input = screen.getByLabelText("输入企业 RAG 示例问题");
+    fireEvent.change(input, { target: { value: "我想咨询新的具体业务问题" } });
+    fireEvent.click(screen.getByRole("button", { name: "试用问题" }));
+
+    expect(screen.getByText("我想咨询新的具体业务问题")).toBeTruthy();
+    expect(screen.getByText(/此问题不在示例库/)).toBeTruthy();
+    expect(within(evaluation).getByRole("heading", { name: "待核验" })).toBeTruthy();
+    expect(within(evaluation).queryByText("人工评审 · 本地计算")).toBeNull();
+    expect(within(evaluation).getByLabelText("六维诊断评分").textContent).toContain("—");
+    expect(within(evaluation).getByText("可能分数 0–100")).toBeTruthy();
+    expect(screen.queryByText("实时预览")).toBeNull();
+
     fireEvent.click(screen.getByRole("button", { name: "开始网站建设" }));
     expect(onOpenWebsite).toHaveBeenCalledOnce();
 
+    expect(screen.queryByRole("button", { name: "进入网站建设的 AI 助手" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "进入网站设计" }));
     expect(onOpenWebsiteAssistant).toHaveBeenCalledOnce();
     expect(onOpenWebsite).toHaveBeenCalledOnce();

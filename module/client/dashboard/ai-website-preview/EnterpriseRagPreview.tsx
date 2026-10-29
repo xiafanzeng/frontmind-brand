@@ -1,9 +1,9 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { ArrowRight, BookOpenCheck, Bot, ClipboardCheck, FileText, Lightbulb, Search, Send, ShieldCheck, Sparkles, X } from "lucide-react";
+import { ArrowRight, BookOpenCheck, Bot, ChartNoAxesColumnIncreasing, ClipboardCheck, FileText, Search, Send, ShieldCheck, Sparkles, X } from "lucide-react";
 import { loadWebsiteDraft } from "./SimplifiedWebsiteBuilderPreview";
 import { previewKnowledgeCollectionCount, previewKnowledgeFragmentCount } from "./preview-copy";
 import { usePreviewDialog } from "./qa-widget/usePreviewDialog";
-import { RAG_ACCEPTANCE_PARAMS, RAG_ATTRIBUTIONS, RAG_CASE_MODE_LABELS, RAG_CASE_STATUS_LABELS, RAG_DIMENSIONS, RAG_GATES, RAG_RULE_VERSION, resolveConversationOutcome, scoreEvaluation, type DimensionId, type DimensionJudgment, type GateJudgment, type Rating } from "./rag-evaluation";
+import { RAG_ACCEPTANCE_PARAMS, RAG_ATTRIBUTIONS, RAG_CASE_MODE_LABELS, RAG_DIMENSIONS, RAG_GATES, RAG_RULE_VERSION, resolveConversationOutcome, scoreEvaluation, type DimensionId, type DimensionJudgment, type GateJudgment, type Rating } from "./rag-evaluation";
 import { RAG_SAMPLE_CASES, findRagSample, type RagCase, type RagIssue } from "./rag-evaluation-cases";
 import { enterpriseRagEvaluationSkill } from "./enterprise-rag-evaluation-skill";
 import { saveEvaluationReport } from "./evaluation-report-store";
@@ -18,8 +18,12 @@ import type {
 import "./simplified-product-preview.css";
 import "./rag-evaluation-ui.css";
 import { scoreEvaluation as scoreLegacyEvaluation } from "./rag-evaluation-legacy";
-import { ragVerdictLabels, legacyRagVerdictLabels, reportVerdict } from "./rag-report-presentation";
-import { isGradedRagJudgment } from "../../../contracts/enterprise-rag-evaluation-run";
+import { enterpriseRagQualityVerdictLabels, legacyRagVerdictLabels, reportVerdict } from "./rag-report-presentation";
+import { RagEvaluationDisclosure } from "./RagEvaluationDisclosure";
+import { RagEvaluationRadar } from "./RagEvaluationRadar";
+import { RagEvaluationGauge } from "./RagEvaluationGauge";
+import { RAG_CHECKLIST_RULE_VERSION } from "../../../contracts/enterprise-rag-checklist";
+import { isChecklistRagJudgment, isGradedRagJudgment } from "../../../contracts/enterprise-rag-evaluation-run";
 
 export type EnterpriseRagLiveRuntime = {
   loaded: boolean;
@@ -88,11 +92,58 @@ const dimensionActions: Record<DimensionId, string> = {
   clarity: "改为结论在前、步骤在后，并给出一个可执行的下一步。",
   boundaries: "去除越权或敏感内容，明确未知、授权范围及转人工路径。",
 };
-const verdicts = ragVerdictLabels;
+const verdicts = enterpriseRagQualityVerdictLabels;
 const emptyDimensions = (): DimensionJudgment[] => RAG_DIMENSIONS.map(({ id }) => ({ id, level: null, rationale: "", evidenceIds: [], applicable: true }));
 const emptyGates = (): GateJudgment[] => RAG_GATES.map(({ id }) => ({ id, status: "pending", reason: "" }));
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const format = (value: number) => Number(value.toFixed(2)).toString();
+type EvidenceTone = "positive" | "attention" | "danger" | "neutral" | "info";
+const claimStatusLabels: Record<string, string> = {
+  supported: "有支持",
+  partial: "部分支持",
+  unsupported: "无支持",
+  contradicted: "与依据矛盾",
+  unverifiable: "待补证",
+  not_applicable: "非事实说明",
+  restricted: "权限受限",
+};
+const claimStatusTones: Record<string, EvidenceTone> = {
+  supported: "positive",
+  partial: "attention",
+  unsupported: "danger",
+  contradicted: "danger",
+  unverifiable: "attention",
+  not_applicable: "neutral",
+  restricted: "danger",
+};
+const gateStatusLabels: Record<GateJudgment["status"], string> = {
+  passed: "通过",
+  failed: "发现风险",
+  pending: "待核验",
+};
+const issuePriorityPresentation: Record<RagIssue["priority"], { label: string; tone: "danger" | "attention" | "suggestion" }> = {
+  P0: { label: "立即修复", tone: "danger" },
+  P1: { label: "优先处理", tone: "attention" },
+  P2: { label: "建议完善", tone: "suggestion" },
+};
+
+function RagPriorityLabel({ priority }: { priority: RagIssue["priority"] }) {
+  const presentation = issuePriorityPresentation[priority];
+  return <span className={`rag-priority-label is-${presentation.tone}`}>{presentation.label}</span>;
+}
+
+function RagEvidenceTag({ label, tone, testId }: { label: string; tone: EvidenceTone; testId: string }) {
+  return <span className={`rag-evidence-tag is-${tone}`} data-testid={testId}>{label}</span>;
+}
+
+function RagGateStatusOrb({ label, status }: { label: string; status: GateJudgment["status"] }) {
+  return <i
+    className={`rag-evaluation-status-orb rag-gate-status-orb is-${status}`}
+    data-testid="rag-gate-status-orb"
+    role="img"
+    aria-label={`${label}：${gateStatusLabels[status]}`}
+  />;
+}
 
 function presentEvaluationScore(
   score: number | null | undefined,
@@ -148,13 +199,18 @@ function automaticRequestStorageKey(sourceQaTaskId: string, turnId: string) {
 function reportDimensions(
   report: EnterpriseRagEvaluationReport,
 ): DimensionJudgment[] {
-  return report.judgments.dimensions.map((item) => ({
-    id: item.id,
-    level: item.level as Rating | null,
-    rationale: item.rationale,
-    evidenceIds: [...item.evidenceIds],
-    applicable: true,
-  }));
+  const results = new Map(report.result.dimensions.map((item) => [item.id, item]));
+  const checklist = isChecklistRagJudgment(report.judgments);
+  return report.judgments.dimensions.map((item) => {
+    const result = results.get(item.id);
+    return {
+      id: item.id,
+      level: checklist ? null : item.level as Rating | null,
+      rationale: item.rationale,
+      evidenceIds: [...item.evidenceIds],
+      applicable: result?.status !== "not_applicable",
+    };
+  });
 }
 
 function reportGates(report: EnterpriseRagEvaluationReport): GateJudgment[] {
@@ -217,6 +273,8 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
   const [automaticStarting, setAutomaticStarting] = useState(false);
   const [automaticError, setAutomaticError] = useState("");
   const backgroundRef = useRef<HTMLDivElement>(null);
+  const evaluationOverviewRef = useRef<HTMLDivElement>(null);
+  const evaluationSummaryRef = useRef<HTMLElement>(null);
   const syncedLiveAnswer = useRef("");
   const fallbackAutomaticRequestIds = useRef(new Map<string, string>());
   const close = () => {
@@ -232,6 +290,31 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = original; };
   }, [drawer]);
+  useEffect(() => {
+    const overview = evaluationOverviewRef.current;
+    const summary = evaluationSummaryRef.current;
+    if (!overview || !summary) return;
+
+    const syncGaugeSize = () => {
+      const summaryBounds = summary.getBoundingClientRect();
+      const compact = summaryBounds.width > 0 && summaryBounds.width < 320;
+      const height = Math.max(120, Math.ceil(summaryBounds.height));
+      const width = compact ? 120 : height;
+      overview.style.setProperty("--rag-evaluation-card-width", `${width}px`);
+      overview.style.setProperty("--rag-evaluation-card-height", `${height}px`);
+    };
+
+    syncGaugeSize();
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(syncGaugeSize);
+    observer?.observe(summary);
+    window.addEventListener("resize", syncGaugeSize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", syncGaugeSize);
+    };
+  }, []);
   useEffect(() => {
     setHistory(loadHistory(historyStorageKey));
   }, [historyStorageKey]);
@@ -421,6 +504,9 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
       ? activeCase.issues
       : manualIssues(dimensions, gates);
   const conversation = activeCase ? resolveConversationOutcome(activeCase.conversation, activeCase.gates) : null;
+  const taskStatus = mode === "sample" && activeCase && conversation ? conversation.status : "unverified";
+  const taskStatusLabel = mode === "sample" && activeCase && conversation ? conversation.displayLabel : "待确认";
+  const taskStatusSymbol = taskStatus === "pass" ? "✓" : taskStatus === "fail" ? "×" : "?";
   const attributionLabel = activeCase?.conversation.attribution ? RAG_ATTRIBUTIONS.find((item) => item.id === activeCase.conversation.attribution)?.label : null;
   const historicalKnowledge = Boolean(
     live && live.knowledgeBinding !== "current_publication",
@@ -460,11 +546,40 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
       live.currentKnowledgeBase &&
       live.currentKnowledgeBase.version > live.knowledgeBase.version,
   );
-  const displayRuleVersion = automaticReport?.evaluator.ruleVersion ?? RAG_RULE_VERSION;
+  const displayRuleVersion = automaticReport?.evaluator.ruleVersion ?? (live ? RAG_CHECKLIST_RULE_VERSION : RAG_RULE_VERSION);
   const displayVerdicts = automaticReport && !automaticReport.result.answerVerdict ? legacyRagVerdictLabels : verdicts;
   const gradedJudgments = automaticReport && isGradedRagJudgment(automaticReport.judgments) ? automaticReport.judgments : null;
+  const checklistJudgments = automaticReport && isChecklistRagJudgment(automaticReport.judgments) ? automaticReport.judgments : null;
+  const radarDimensions = automaticReport?.result.dimensions ?? RAG_DIMENSIONS.map((definition) => {
+    const judgment = displayDimensions.find((item) => item.id === definition.id);
+    const earned = result.earnedByDimension[definition.id];
+    return {
+      id: definition.id,
+      label: definition.label,
+      score: earned,
+      maxScore: definition.weight,
+      status: judgment?.applicable === false
+        ? "not_applicable" as const
+        : earned === null
+          ? "pending" as const
+          : earned === definition.weight
+            ? "passed" as const
+            : "partial" as const,
+      summary: judgment?.rationale || "尚无判断依据。",
+      evidenceIds: judgment?.evidenceIds ?? [],
+    };
+  });
   const tone = result.gateStatus === "failed" || result.verdict === "unusable" ? "danger" : result.verdict === "improve" ? "pending" : result.complete ? "ready" : "pending";
-  const headlineScore = presentEvaluationScore(result.score, tone === "danger");
+  const displayVerdictLabel = displayVerdicts[result.verdict].replace(/\s*·\s*/g, " · ");
+  const evaluationSummary = automaticReport
+    ? automaticReport.result.summary
+    : result.gateStatus === "failed"
+      ? "发现关键回答风险；高分不能把该回答判为可用，但不会取消网站发布选择。"
+      : result.complete
+        ? mode === "sample"
+          ? activeCase?.summary
+          : "结论基于人工判定，只提供质量建议，不是发布授权。"
+        : "完成维度与关键风险核验后，才能形成回答可用性结论。";
 
   const startAutomaticEvaluation = async () => {
     if (!automaticCoordinate || !live?.answer || automaticStarting) return;
@@ -608,7 +723,7 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
 
   return <section className="sfp-root erag-root rag-eval-root" data-testid={live ? "enterprise-rag-live-root" : undefined}>
     <div ref={backgroundRef}>
-      <header className="sfp-heading erag-heading"><div><h1>让回答真正满足用户需求</h1><p>从问题、回答和证据出发，发现缺口并确定下一步优化。</p></div><button className="sfp-button sfp-button--ghost" onClick={onOpenWebsite}>{websiteEntryLabel}</button></header>
+      <header className="sfp-heading erag-heading"><div><h1>让回答真正满足用户需求</h1><p>从问题、回答和证据出发，发现缺口并确定下一步优化。</p></div><div className="erag-heading-actions"><button className="sfp-button sfp-button--ghost" onClick={onOpenWebsite}>{websiteEntryLabel}</button><button className="sfp-button sfp-button--ghost" onClick={onOpenWebsiteAssistant}>进入网站设计</button></div></header>
       <div className="erag-flow" aria-label="企业 RAG 工作方式"><div><span><BookOpenCheck size={18} /></span><strong>企业知识库</strong></div><i /><div><span><Search size={18} /></span><strong>检索与回答</strong></div><i /><div><span><ClipboardCheck size={18} /></span><strong>回答质量评估</strong></div></div>
       <div className="rag-toolbar"><span className="rag-toolbar-label">单次问答</span><div><button onClick={() => setDrawer("rules")}>评分规则</button><button onClick={() => setDrawer("history")}>评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</button></div></div>
       {(live?.notice || notice) && <div className={!live?.notice && notice === AUTOMATIC_SUBMITTED_NOTICE ? "rag-muted" : "sfp-notice"} role={live?.notice ? "alert" : "status"}>{live?.notice || notice}</div>}
@@ -630,56 +745,113 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
             <form className="erag-composer" onSubmit={submitQuestion}><input data-testid={live ? "rag-question-input" : undefined} aria-label={live ? "输入企业 RAG 问题" : "输入企业 RAG 示例问题"} placeholder={live ? "输入访客问题，基于已发布知识回答" : "输入访客问题，或选择上方示例"} value={input} disabled={Boolean(live) && !canAsk} onChange={(event) => setInput(event.currentTarget.value)} /><button data-testid={live ? "rag-submit" : undefined} type="submit" disabled={Boolean(live) && (!canAsk || !input.trim())}><Send size={16} />{live ? live.busy ? "回答中…" : "发送问题" : "试用问题"}</button>{live?.running && <button type="button" className="sfp-button sfp-button--ghost" onClick={() => void live.onStop()}>停止</button>}</form>
           </section>
         </div>
-        <aside className="sfp-panel erag-evaluation-panel" role="region" aria-label="回答质量评估">
-          <div className="erag-evaluation-panel__heading"><div><span className="erag-card-icon"><ClipboardCheck size={18} /></span><span><h2>回答质量评估</h2><small>{automaticReport ? "真实回答 · 服务端自动评估" : live ? "真实回答 · 待自动评估" : mode === "sample" ? "合成样例 · 预设评审" : "人工评审 · 本地计算"}</small></span></div><output data-testid="rag-evaluation-score" className={`erag-evaluation-score is-${tone}`} aria-label={headlineScore.ariaLabel} aria-live="polite"><strong>{headlineScore.value}</strong>{headlineScore.showScale && <small>/100</small>}</output></div>
-          {automaticReport && automaticReport.evaluator.ruleVersion !== RAG_RULE_VERSION && <section className="sfp-notice" aria-label="历史评估规则">
+        <div className="erag-evaluation-column">
+          <aside className="sfp-panel erag-evaluation-panel" role="region" aria-label="本轮回答质量">
+          <div className="erag-evaluation-panel__heading">
+            <span className="erag-card-icon rag-evaluation-header-icon" aria-hidden="true" data-testid="rag-evaluation-header-icon">
+              <ChartNoAxesColumnIncreasing size={18} />
+            </span>
+            <h2>本轮回答质量</h2>
+          </div>
+          <div ref={evaluationOverviewRef} className="rag-evaluation-overview" data-testid="rag-evaluation-overview">
+            <RagEvaluationGauge score={result.score} unavailable={tone === "danger"} />
+            <section ref={evaluationSummaryRef} className={`rag-verdict is-${tone}`} aria-label="当前评估摘要">
+              <div className="rag-evaluation-summary-flow" data-testid="rag-evaluation-summary-flow">
+                <h3 className="rag-evaluation-status-title">
+                  <i className="rag-evaluation-status-orb" aria-hidden="true" data-testid="rag-evaluation-status-orb" />
+                  <span className="rag-evaluation-status-title-text">{displayVerdictLabel}</span>
+                </h3>
+                <p className="rag-evaluation-summary-copy" data-testid="rag-evaluation-summary-copy">{evaluationSummary}</p>
+                {(automaticReport || (!result.complete && !checklistJudgments)) && <div className="rag-evaluation-secondary-meta">
+                  {automaticReport && <span>服务器留痕 · {automaticReport.evaluator.model}</span>}
+                  {!result.complete && !checklistJudgments && <span>可能分数 {Math.floor(result.lower)}–{Math.ceil(result.upper)}</span>}
+                </div>}
+                <div className="rag-status-row rag-evaluation-metrics" data-testid="rag-evaluation-metrics">
+                  <ShieldCheck size={14} aria-hidden="true" data-testid="rag-evaluation-metric-shield" />
+                  <span className="rag-evaluation-metric-copy">
+                    <span>关键风险{result.gateStatus === "passed" ? "已核验" : result.gateStatus === "failed" ? "已发现" : "待核验"}</span>
+                    <span>评审覆盖 {format(result.coverage)}%</span>
+                  </span>
+                </div>
+              </div>
+            </section>
+          </div>
+          {automaticReport && automaticReport.evaluator.ruleVersion !== RAG_CHECKLIST_RULE_VERSION && <section className="sfp-notice" aria-label="历史评估规则">
             <p data-testid="rag-legacy-rule-notice">正在显示按 {automaticReport.evaluator.ruleVersion} 生成的历史报告，原评分和结论保持不变。需要主动按新规则复评才能生成新结论；页面不会自动发起模型评估。</p>
           </section>}
           {live && <section data-testid="rag-auto-evaluation-status" className="rag-automatic-evaluation" aria-label="服务端自动评估状态"><div><strong>{automaticRun ? automaticStatusLabels[automaticRun.status] : automaticLoading ? "正在读取已有评估" : "尚未运行自动评估"}</strong><small>{automaticRun?.status === "failed" ? automaticRun.error?.message ?? "自动评估失败，请重新发起评估。" : automaticReport ? automaticRun && automaticReportRun && automaticRun.operationId !== automaticReportRun.operationId ? `复评期间显示上一份不可变报告 ${automaticReport.reportId}` : `报告 ${automaticReport.reportId}` : "页面加载只读取已有记录，不会自动产生模型费用。"}</small></div><button data-testid="rag-auto-evaluate" className="sfp-button sfp-button--primary" disabled={!automaticCoordinate || automaticBusy || !answer.trim()} onClick={() => void startAutomaticEvaluation()}>{automaticBusy ? "自动评估中…" : automaticRun ? "重新自动评估" : "开始自动评估"}</button></section>}
-          <section className={`rag-verdict is-${tone}`} aria-label="当前评估摘要"><strong>{displayVerdicts[result.verdict]}</strong><p>{automaticReport ? automaticReport.result.summary : result.gateStatus === "failed" ? "发现关键回答风险；高分不能把该回答判为可用，但不会取消网站发布选择。" : result.complete ? (mode === "sample" ? activeCase?.summary : "结论基于人工判定，只提供质量建议，不是发布授权。") : "完成维度与关键风险核验后，才能形成回答可用性结论。"}</p><div className="rag-status-row"><span><ShieldCheck size={14} />关键风险{result.gateStatus === "passed" ? "已核验" : result.gateStatus === "failed" ? "已发现" : "待核验"}</span><span>评审覆盖 {format(result.coverage)}%（检查完成程度）</span>{automaticReport && <span>服务器留痕 · {automaticReport.evaluator.model}</span>}{tone !== "danger" && !result.complete && <span>可能分数 {Math.floor(result.lower)}–{Math.ceil(result.upper)}</span>}</div></section>
-          <section className="rag-conversation" aria-label="完整对话判定">
-            <header><h3>完整对话判定</h3>{conversation && <span className={`rag-case-status is-${conversation.status}`}>{RAG_CASE_STATUS_LABELS[conversation.status]}</span>}</header>
+          <RagEvaluationRadar key={automaticReport?.reportId ?? `${question}:${answer}`} judgments={checklistJudgments} dimensions={radarDimensions} />
+          <div className="rag-quality-disclosures">
+            <RagEvaluationDisclosure label="理解本次判断" testId="rag-judgment-disclosure">
+              <p className="rag-judgment-copy">{need || "请先补充用户希望完成的任务，以便准确判断回答质量。"} “人工评审与计算”用于查看评分如何形成，“查看回答依据”用于核对支撑本次结论的事实与记录。</p>
+              {live && <p className="rag-muted">人工复核只作为辅助记录，不会覆盖服务端自动评估或网站建设评估。</p>}
+              <div className="rag-judgment-actions">
+                <button aria-label="人工评审与计算" className="sfp-button sfp-button--ghost rag-detail-action" disabled={!answer.trim() || !need.trim()} onClick={openReview}>人工评审与计算</button>
+                <button className="sfp-button sfp-button--ghost rag-detail-action" onClick={() => setDrawer("evidence")}>查看回答依据</button>
+              </div>
+            </RagEvaluationDisclosure>
+            <RagEvaluationDisclosure label="查看优化方案" testId="rag-quality-disclosure">
+              {issues.length ? <section className="rag-priority-copy">
+                <div className="rag-priority-copy__heading"><p className="rag-priority-copy__title rag-priority-copy__statement"><strong>问题：</strong><span>{issues[0].title}</span></p><RagPriorityLabel priority={issues[0].priority} /></div>
+                <p className="rag-priority-copy__action rag-priority-copy__statement"><strong>方案：</strong><span>{issues[0].action}</span></p>
+              </section> : <p className="rag-priority-empty">{result.complete ? "当前记录没有待修复项；继续用更多真实场景验证。" : "先补齐当前回答的判断依据，再确定优化方向。"}</p>}
+              {gradedJudgments && gradedJudgments.findings.some(f => f.severity !== "improvement") && <section className="rag-risk-summary" aria-label="必须修复与待补证">{gradedJudgments.findings.filter(f => f.severity !== "improvement").map(f => <p key={f.id}><strong>{f.severity === "critical" ? "必须修复" : "待补证"}：</strong>{f.summary}</p>)}</section>}
+              {!!checklistJudgments?.optionalSuggestions.length && <details className="rag-optional-suggestions"><summary>可选建议 · 不扣分（{checklistJudgments.optionalSuggestions.length}）</summary>{checklistJudgments.optionalSuggestions.map(s => <p key={s.id}>{s.summary} — {s.benefit}</p>)}</details>}
+              <button className="sfp-button sfp-button--ghost rag-detail-action rag-detail-action--full" disabled={issues.length === 0} onClick={() => setDrawer("improve")}>查看完整方案</button>
+            </RagEvaluationDisclosure>
+          </div>
+          </aside>
+          <section className="sfp-panel rag-task-panel" role="region" aria-label="客户任务完成情况" data-testid="rag-task-panel">
+            <header className="rag-task-panel__heading">
+              <div className="erag-evaluation-panel__heading">
+                <span className="erag-card-icon" aria-hidden="true"><ClipboardCheck size={18} /></span>
+                <h2>客户任务完成情况</h2>
+              </div>
+              <span className={`rag-case-status is-${taskStatus}`} data-testid="rag-task-status"><i aria-hidden="true">{taskStatusSymbol}</i>{taskStatusLabel}</span>
+            </header>
             {mode === "sample" && activeCase && conversation ? <>
               <p className="rag-conversation__task"><strong>客户任务：</strong>{activeCase.conversation.task}</p>
               <ul className="rag-checklist">{activeCase.conversation.completionPoints.map((point) => <li key={point.id} className={point.met === true ? "is-met" : point.met === false ? "is-miss" : "is-na"}><i aria-hidden="true">{point.met === true ? "✓" : point.met === false ? "✗" : "？"}</i>{point.label}</li>)}</ul>
               <p className="rag-conversation__reason">{conversation.reason}</p>
-              <div className="rag-conversation__meta">
-                <span>{RAG_CASE_MODE_LABELS[activeCase.mode]}</span>
-                <span>{activeCase.set === "benchmark" ? "稳定基准集" : "扩展测试集"}</span>
-                <span>规定运行 {activeCase.conversation.runsRequired} 次</span>
-                {attributionLabel && <span>归因：{attributionLabel}</span>}
-              </div>
-            </> : <p className="rag-conversation__reason">完整对话层判定在正式测试用例中执行（客户任务、逐轮记录、必要完成点与规定运行次数）。当前为单次回答评审，单轮分数不能替代任务完成判定。</p>}
+              <ul className="rag-conversation__meta" aria-label="评估运行信息">
+                <li data-testid="rag-conversation-meta-card">{RAG_CASE_MODE_LABELS[activeCase.mode]}</li>
+                <li data-testid="rag-conversation-meta-card">{activeCase.set === "benchmark" ? "稳定基准集" : "扩展测试集"}</li>
+                <li data-testid="rag-conversation-meta-card">规定运行 {activeCase.conversation.runsRequired} 次</li>
+                {attributionLabel && <li className="is-attribution" data-testid="rag-conversation-meta-card">归因：{attributionLabel}</li>}
+              </ul>
+            </> : <p className="rag-conversation__reason">尚未绑定客户任务与必要完成点。单轮回答分数不能替代正式任务验收。</p>}
           </section>
-          <div className="erag-evaluation-dimensions rag-dimensions" aria-label="六维加权评分">{RAG_DIMENSIONS.map((item, index) => { const judgment = displayDimensions.find((d) => d.id === item.id); const serverDimension = automaticReport?.result.dimensions.find((dimension) => dimension.id === item.id); const earned = automaticReport ? serverDimension?.score ?? null : result.earnedByDimension[item.id]; return <button data-testid={automaticReport ? "rag-evaluation-dimension" : undefined} key={item.id} className={earned === null ? "is-pending" : (judgment?.level ?? 0) < 3 ? "is-attention" : "is-positive"} onClick={openReview}><span>{shortLabels[index]}</span><strong>{earned === null ? "—" : format(earned)}<small>/{item.weight}</small></strong></button>; })}</div>
-          <section className="rag-user-need"><h3>用户真正想确认</h3><p>{need || "请在录入回答时补充用户任务，避免只按字面匹配评分。"}</p></section>
-          <section className="rag-priority"><h3><Lightbulb size={17} />优先优化</h3>{issues.length ? <><div><span className={`rag-priority-label is-${issues[0].priority}`}>{issues[0].priority}</span><strong>{issues[0].title}</strong></div><p>{issues[0].action}</p><button className="rag-text-button" onClick={() => setDrawer("improve")}>查看优化方案 <ArrowRight size={14} /></button></> : <p>{result.complete ? "当前记录没有待修复项；继续用更多真实场景验证。" : "先补齐当前回答的判断依据，再确定优化方向。"}</p>}</section>
-          <div className="rag-panel-actions"><div><button aria-label="人工评审与计算" className="sfp-button sfp-button--ghost" disabled={!answer.trim() || !need.trim()} onClick={openReview}>{live ? "人工复核（次要）" : "人工评审与计算"}</button><button className="sfp-button sfp-button--ghost" onClick={() => setDrawer("evidence")}>查看回答依据</button></div>{live && <p className="rag-muted">人工复核只作为辅助记录，不会覆盖服务端自动评估或网站建设评估。</p>}<button className="rag-text-button rag-website-link" onClick={onOpenWebsiteAssistant}>进入网站设计 <ArrowRight size={14} /></button></div>
-        </aside>
+        </div>
       </div>
     </div>
-    {drawer && <div className="rag-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}><aside ref={dialogRef} className="rag-drawer" role="dialog" aria-modal="true" aria-labelledby="rag-drawer-title" tabIndex={-1}><header><div><small>{displayRuleVersion}</small><h2 id="rag-drawer-title">{drawerTitle[drawer]}</h2></div><button aria-label="关闭评估面板" onClick={close}><X size={20} /></button></header><div className="rag-drawer-body">
-      {drawer === "review" && <><div className="rag-context"><strong>{question}</strong><p>{answer}</p><small>当前任务：{need || "尚未填写"}</small></div><p className="rag-muted">逐维核验后填写等级、理由与证据定位。缺项可保存，但不会被当成已通过。适用性已按固定方案冻结。</p>{RAG_DIMENSIONS.map((item, index) => { const judgment = reviewDimensions[index]; return <fieldset className="rag-review-field" key={item.id}><legend>{shortLabels[index]} · {item.weight} 分</legend><p>{item.question}</p><label>判断等级<select aria-label={`${shortLabels[index]}等级`} value={judgment?.level ?? ""} onChange={(event) => setReviewDimensions((old) => old.map((d) => d.id === item.id ? { ...d, level: event.target.value === "" ? null : Number(event.target.value) as Rating } : d))}><option value="">待判定</option>{levels.map((label, level) => <option key={level} value={level}>{level} · {label}</option>)}</select></label><label>判断理由<textarea aria-label={`${shortLabels[index]}理由`} value={judgment?.rationale ?? ""} onChange={(event) => setReviewDimensions((old) => old.map((d) => d.id === item.id ? { ...d, rationale: event.target.value } : d))} /></label><label>证据定位<input aria-label={`${shortLabels[index]}证据`} placeholder="来源段落、陈述 ID 或回答原句；用逗号分隔" value={judgment?.evidenceIds.join(", ") ?? ""} onChange={(event) => setReviewDimensions((old) => old.map((d) => d.id === item.id ? { ...d, evidenceIds: event.target.value.split(/[,，]/).map((v) => v.trim()).filter(Boolean) } : d))} /></label></fieldset>; })}<h3>关键回答风险</h3>{RAG_GATES.map((item, index) => <fieldset className="rag-review-field rag-gate-field" key={item.id}><legend>{item.label}</legend><p>{item.description}</p><label>核验结果<select aria-label={`${item.label}风险核验`} value={reviewGates[index]?.status ?? "pending"} onChange={(event) => setReviewGates((old) => old.map((g) => g.id === item.id ? { ...g, status: event.target.value as GateJudgment["status"] } : g))}><option value="pending">待核验</option><option value="passed">通过</option><option value="failed">发现风险</option></select></label><label>核验依据<input aria-label={`${item.label}风险核验依据`} value={reviewGates[index]?.reason ?? ""} onChange={(event) => setReviewGates((old) => old.map((g) => g.id === item.id ? { ...g, reason: event.target.value } : g))} /></label></fieldset>)}<label className="rag-reviewer">评审人<input aria-label="评审人" value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="姓名或评审代号" /></label><label className="rag-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />已对照当前回答与证据进行核验，不将预设评审当作自动评估结果。</label><p className="rag-muted">记录仅保存在当前浏览器，最多保留 30 条。请勿粘贴敏感业务资料。</p></>}
+    {drawer && <div className="rag-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}><aside ref={dialogRef} className={`rag-drawer${drawer === "evidence" ? " rag-drawer--evidence" : ""}`} role="dialog" aria-modal="true" aria-labelledby="rag-drawer-title" tabIndex={-1}><header><div><small>{drawer === "review" ? RAG_RULE_VERSION : displayRuleVersion}</small><h2 id="rag-drawer-title">{drawerTitle[drawer]}</h2></div><button aria-label="关闭评估面板" onClick={close}><X size={20} /></button></header><div className="rag-drawer-body">
+      {drawer === "review" && <><div className="rag-context"><strong>{question}</strong><p>{answer}</p><small>当前任务：{need || "尚未填写"}</small></div><p className="rag-muted">本地辅助复核沿用 rag-eval-1.3 的等级记录，不覆盖服务端检查项评分或正式验收。逐维填写理由和证据；缺项不计通过。</p>{RAG_DIMENSIONS.map((item, index) => { const judgment = reviewDimensions[index]; return <fieldset className="rag-review-field" key={item.id}><legend>{shortLabels[index]} · {item.weight} 分</legend><p>{item.question}</p><label>判断等级<select aria-label={`${shortLabels[index]}等级`} value={judgment?.level ?? ""} onChange={(event) => setReviewDimensions((old) => old.map((d) => d.id === item.id ? { ...d, level: event.target.value === "" ? null : Number(event.target.value) as Rating } : d))}><option value="">待判定</option>{levels.map((label, level) => <option key={level} value={level}>{level} · {label}</option>)}</select></label><label>判断理由<textarea aria-label={`${shortLabels[index]}理由`} value={judgment?.rationale ?? ""} onChange={(event) => setReviewDimensions((old) => old.map((d) => d.id === item.id ? { ...d, rationale: event.target.value } : d))} /></label><label>证据定位<input aria-label={`${shortLabels[index]}证据`} placeholder="来源段落、陈述 ID 或回答原句；用逗号分隔" value={judgment?.evidenceIds.join(", ") ?? ""} onChange={(event) => setReviewDimensions((old) => old.map((d) => d.id === item.id ? { ...d, evidenceIds: event.target.value.split(/[,，]/).map((v) => v.trim()).filter(Boolean) } : d))} /></label></fieldset>; })}<h3>关键回答风险</h3>{RAG_GATES.map((item, index) => <fieldset className="rag-review-field rag-gate-field" key={item.id}><legend>{item.label}</legend><p>{item.description}</p><label>核验结果<select aria-label={`${item.label}风险核验`} value={reviewGates[index]?.status ?? "pending"} onChange={(event) => setReviewGates((old) => old.map((g) => g.id === item.id ? { ...g, status: event.target.value as GateJudgment["status"] } : g))}><option value="pending">待核验</option><option value="passed">通过</option><option value="failed">发现风险</option></select></label><label>核验依据<input aria-label={`${item.label}风险核验依据`} value={reviewGates[index]?.reason ?? ""} onChange={(event) => setReviewGates((old) => old.map((g) => g.id === item.id ? { ...g, reason: event.target.value } : g))} /></label></fieldset>)}<label className="rag-reviewer">评审人<input aria-label="评审人" value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="姓名或评审代号" /></label><label className="rag-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />已对照当前回答与证据进行核验，不将预设评审当作自动评估结果。</label><p className="rag-muted">记录仅保存在当前浏览器，最多保留 30 条。请勿粘贴敏感业务资料。</p></>}
       {drawer === "answer" && <><div className="rag-context"><strong>{question}</strong></div><label className="rag-editor-label">用户任务<textarea aria-label="用户任务" value={needEdit} onChange={(event) => setNeedEdit(event.target.value)} placeholder="访客希望解决什么、做出什么决定？" /></label><label className="rag-editor-label">实际回答<textarea className="rag-answer-editor" aria-label="实际回答" value={answerEdit} onChange={(event) => setAnswerEdit(event.target.value)} placeholder="粘贴待评估的回答，包括引用定位。此处不会调用模型。" /></label><p className="rag-muted">保存后清空当前评审。人工证据通过评审表逐项记录，不会自动继承示例来源。</p></>}
       {drawer === "evidence" && <>
         <div className="rag-context"><strong>{question}</strong><p>知识版本：{automaticReport ? `v${automaticReport.knowledgeBase.version}` : knowledgeVersion}</p></div>
         <h3>陈述与证据</h3>
-        {automaticReport ? automaticReport.judgments.claims.map((claim) => <article className="rag-evidence" key={claim.id}><header><strong>{claim.id}</strong><span className={["supported", "not_applicable"].includes(claim.status) ? "" : "rag-danger-text"}>{{ supported: "有支持", partial: "部分支持", unsupported: "无支持", contradicted: "与依据矛盾", unverifiable: "待补证", not_applicable: "非事实说明" }[claim.status]}</span></header><p>{claim.statement}</p><small>{claim.rationale} · 来源：{claim.sourceIds.join("、") || "没有来源"}</small></article>) : !live && activeCase?.claims.length ? activeCase.claims.map((claim) => <article className="rag-evidence" key={claim.id}><header><strong>{claim.id}</strong><span className={["supported", "not_applicable"].includes(claim.status) ? "" : "rag-danger-text"}>{{ supported: "有支持", partial: "部分支持", unsupported: "无支持", restricted: "权限受限" }[claim.status]}</span></header><p>{claim.text}</p><small>{claim.note} · {claim.sourceIds.join("、") || "没有来源"}</small></article>) : <p>{live ? "尚无服务端陈述级自动评估；可点击“开始自动评估”，或以人工复核记录辅助检查。" : "当前为人工录入回答。请在评审表中逐维记录可核验的原文与来源定位。"}</p>}
+        {automaticReport ? automaticReport.judgments.claims.map((claim) => <article className="rag-evidence rag-evidence--claim" key={claim.id}><header><strong>{claim.id}</strong><RagEvidenceTag label={claimStatusLabels[claim.status] ?? claim.status} tone={claimStatusTones[claim.status] ?? "neutral"} testId="rag-evidence-claim-status" /></header><p>{claim.statement}</p><small>{claim.rationale} · 来源：{claim.sourceIds.join("、") || "没有来源"}</small></article>) : !live && activeCase?.claims.length ? activeCase.claims.map((claim) => <article className="rag-evidence rag-evidence--claim" key={claim.id}><header><strong>{claim.id}</strong><RagEvidenceTag label={claimStatusLabels[claim.status] ?? claim.status} tone={claimStatusTones[claim.status] ?? "neutral"} testId="rag-evidence-claim-status" /></header><p>{claim.text}</p><small>{claim.note} · {claim.sourceIds.join("、") || "没有来源"}</small></article>) : <p>{live ? "尚无服务端陈述级自动评估；可点击“开始自动评估”，或以人工复核记录辅助检查。" : "当前为人工录入回答。请在评审表中逐维记录可核验的原文与来源定位。"}</p>}
         <h3>{live ? "参考资料" : "来源原文"}</h3>
-        {currentSources.length ? currentSources.map((source) => <article data-testid={live ? "rag-source" : undefined} className="rag-evidence" key={`${"kind" in source ? source.kind : "source"}:${source.id}`}><header><strong>{source.title}</strong><span>{source.scope}</span></header><small>{source.id} · {source.section} · {source.version}</small>{source.excerpt ? <blockquote>{source.excerpt}</blockquote> : <p className="rag-muted">当前接口只公开服务端解析后的资料标识与标题，不展示或伪造原文摘录。</p>}</article>) : <p>当前回答没有返回参考资料。</p>}
+        {currentSources.length ? currentSources.map((source) => <article data-testid={live ? "rag-source" : undefined} className="rag-evidence rag-evidence--source" key={`${"kind" in source ? source.kind : "source"}:${source.id}`}><header><strong>{source.title}</strong><RagEvidenceTag label={source.scope} tone="info" testId="rag-evidence-source-scope" /></header><small>{source.id} · {source.section} · {source.version}</small>{source.excerpt ? <blockquote>{source.excerpt}</blockquote> : <p className="rag-muted">当前接口只公开服务端解析后的资料标识与标题，不展示或伪造原文摘录。</p>}</article>) : <p>当前回答没有返回参考资料。</p>}
         <h3>{automaticReport ? "自动评估六维判断" : "本次判断记录"}</h3>
-        {displayDimensions.map((item, index) => <article className="rag-evidence" key={item.id}><strong>{shortLabels[index]} · {item.level === null ? "待判定" : `${item.level}/4`}</strong><p>{item.rationale || "判断理由待补充"}</p><small>证据：{item.evidenceIds.join("、") || "待补充"}</small></article>)}
+        <div data-testid="rag-evidence-radar"><RagEvaluationRadar key={`${automaticReport?.reportId ?? `${question}:${answer}`}:evidence`} judgments={checklistJudgments} dimensions={radarDimensions} /></div>
         <h3>关键风险核验</h3>
-        {displayGates.map((gate) => { const automaticGate = automaticReport?.judgments.gates.find((item) => item.id === gate.id); return <article data-testid={automaticReport ? "rag-evaluation-gate" : undefined} className="rag-evidence" key={gate.id}><strong>{RAG_GATES.find((g) => g.id === gate.id)?.label} · {{ passed: "通过", failed: "发现风险", pending: "待核验" }[gate.status]}</strong><p>{gate.reason || "尚无核验记录"}</p>{automaticGate && <small>证据：{automaticGate.evidenceIds.join("、")}</small>}</article>; })}
+        <div className="rag-gate-grid" data-testid="rag-evaluation-gate-grid">
+          {displayGates.map((gate) => {
+            const automaticGate = automaticReport?.judgments.gates.find((item) => item.id === gate.id);
+            const gateLabel = RAG_GATES.find((item) => item.id === gate.id)?.label ?? gate.id;
+            return <article data-testid="rag-evaluation-gate" className="rag-evidence rag-gate-card" key={gate.id}><header><strong>{gateLabel}</strong><RagGateStatusOrb label={gateLabel} status={gate.status} /></header><p>{gate.reason || "尚无核验记录"}</p>{automaticGate && <small>证据：{automaticGate.evidenceIds.join("、")}</small>}</article>;
+          })}
+        </div>
         {automaticReport && <><h3>不可变报告溯源</h3><article data-testid="rag-auto-evaluation-report" className="rag-evidence rag-provenance"><p><strong>报告 ID：</strong>{automaticReport.reportId}</p><p><strong>源问答任务 / 轮次：</strong>{automaticReport.sourceQaTaskId} / {automaticReport.sourceTurnId}</p><p><strong>问题 / 回答消息：</strong>{automaticReport.questionMessageId} / {automaticReport.answerMessageId}</p><p><strong>冻结知识：</strong>{automaticReport.knowledgeBase.snapshotId} · {automaticReport.knowledgeBase.contentHash}</p><p><strong>评估器：</strong>{automaticReport.evaluator.skillId} {automaticReport.evaluator.skillVersion} · 规则 {automaticReport.evaluator.ruleVersion} · Judge {automaticReport.evaluator.judgeVersion}</p><p><strong>模型：</strong>{automaticReport.evaluator.provider} / {automaticReport.evaluator.model}{automaticReport.evaluator.effort ? ` / ${automaticReport.evaluator.effort}` : ""}</p><p><strong>输入 / Skill 哈希：</strong>{automaticReport.judgments.inputHash} / {automaticReport.evaluator.skillHash}</p><small>完成时间：{new Date(automaticReport.completedAt).toLocaleString("zh-CN")}</small></article></>}
         <p className="rag-muted">{automaticReport ? "自动结论绑定本次回答、服务端冻结知识、规则与模型版本；网站建设评估仍是独立流程。" : live ? "参考资料表示本次回答实际使用的材料；人工复核不会替代服务端自动评估。" : "预设评审只针对这些合成文本与快照；不证明真实服务已抵御注入、越权或其他攻击。"}</p>
       </>}
-      {drawer === "rules" && <><h3>六维 100 分</h3><p className="rag-formula">总分 = Σ（维度权重 × 等级 ÷ 4）</p>{RAG_DIMENSIONS.map((item) => <article className="rag-evidence" key={item.id}><header><strong>{item.label}</strong><b>{item.weight} 分</b></header><p>{item.question}</p></article>)}<h3>等级与结论</h3><p>0 不满足 · 1 少量满足 · 2 部分满足 · 3 基本满足 · 4 充分满足。等级必须附判断理由和证据定位。</p><p>{displayRuleVersion === "rag-eval-1.3" ? "分数仅作诊断，不设单独否决阈值。核心任务完成且证据完整、无重大风险时可用；有非关键问题时显示可用 · 待改进。重大风险或核心任务明确失败显示不可用 · 需修复，必要证据不足显示待核验。" : "历史规则：原始分 ≥90 优秀；≥80 可用；≥70 需要改进；低于 70 不可用。历史结论仍按原冻结规则解释。"}</p>{displayRuleVersion === "rag-eval-1.3" ? <><h3>重大风险与改进项</h3><p>核实建议不等于事实承诺，但其中的电话、操作和企业承诺仍须核验。只按当前任务判断必要信息，不要求无关扩展；来源缺失保留未知。评审覆盖率不代表回答正确率。</p></> : <p>当前展示历史规则与历史结论；新规则不会追溯改判此报告。</p>}<h3>关键风险优先于回答分数</h3><p>任一关键风险成立，该回答直接判为不可用；有风险待核验，不判为可用。此结论是质量建议，不阻止用户进入网站发布确认。</p>{RAG_GATES.map((item) => <article className="rag-evidence" key={item.id}><strong>{item.label}</strong><p>{item.description}</p></article>)}<h3>缺证据不计作通过</h3><p>未判定维度不删除、不补成满分。页面显示已核验权重覆盖率及数学上的可能得分范围；范围不是统计置信区间。不适用项须在正式测试计划中预先批准，当前页面不提供临时剔除。</p><h3>分数的使用边界</h3><p>单次回答分、企业 RAG 系统分与网站建设评估彼此独立。合成示例、单人自评和少量测试都不能替代正式代表集验收或独立复核。任务未完成或关键回答风险成立时，高分不改变该回答的质量结论；但评估结果不拥有网站发布权限。</p><h3>验收参数 · 初始默认值</h3><p>以下为需求说明第十三章的初始基线，用于试运行与技术设计，不是实测结论；调整需保留原值、原因、版本与审批记录。</p>{RAG_ACCEPTANCE_PARAMS.map((item) => <article className="rag-evidence" key={item.label}><header><strong>{item.label}</strong></header><p>{item.value}</p></article>)}</>}
+      {drawer === "rules" && <><h3>六维 100 分</h3><p className="rag-formula">{displayRuleVersion === RAG_CHECKLIST_RULE_VERSION ? "总分由冻结检查项汇总；满足100%／部分满足50%／不满足0%" : "总分 = Σ（维度权重 × 等级 ÷ 4）"}</p>{RAG_DIMENSIONS.map((item) => <article className="rag-evidence" key={item.id}><header><strong>{item.label}</strong><b>{item.weight} 分</b></header><p>{item.question}</p></article>)}<h3>等级与结论</h3><p>{displayRuleVersion === RAG_CHECKLIST_RULE_VERSION ? "各类任务预先固定检查项、分值和适用性；同一缺陷只在主检查项扣分，可选建议不扣分。允许满分和同分，不人为制造差距。证据不足单列待核验。" : "0 不满足 · 1 少量满足 · 2 部分满足 · 3 基本满足 · 4 充分满足。等级必须附判断理由和证据定位。"}</p><p>{["rag-eval-1.3", RAG_CHECKLIST_RULE_VERSION].includes(displayRuleVersion) ? "分数仅作诊断，不设单独否决阈值。核心任务完成且证据完整、无重大风险时可用；有非关键问题时显示可用·待改进。重大风险或核心任务明确失败显示不可用·需修复，必要证据不足显示待核验。" : "历史规则：原始分 ≥90 优秀；≥80 可用；≥70 需要改进；低于 70 不可用。历史结论仍按原冻结规则解释。"}</p>{["rag-eval-1.3", RAG_CHECKLIST_RULE_VERSION].includes(displayRuleVersion) ? <><h3>重大风险与改进项</h3><p>核实建议不等于事实承诺，但其中的电话、操作和企业承诺仍须核验。只按当前任务判断必要信息，不要求无关扩展；来源缺失保留未知。评审覆盖率不代表回答正确率。</p></> : <p>当前展示历史规则与历史结论；新规则不会追溯改判此报告。</p>}<h3>关键风险优先于回答分数</h3><p>任一关键风险成立，该回答直接判为不可用；有风险待核验，不判为可用。此结论是质量建议，不阻止用户进入网站发布确认。</p>{RAG_GATES.map((item) => <article className="rag-evidence" key={item.id}><strong>{item.label}</strong><p>{item.description}</p></article>)}<h3>缺证据不计作通过</h3><p>未判定维度不删除、不补成满分。页面显示已核验权重覆盖率及数学上的可能得分范围；范围不是统计置信区间。不适用项须在正式测试计划中预先批准，当前页面不提供临时剔除。</p><h3>分数的使用边界</h3><p>单次回答分、企业 RAG 系统分与网站建设评估彼此独立。合成示例、单人自评和少量测试都不能替代正式代表集验收或独立复核。任务未完成或关键回答风险成立时，高分不改变该回答的质量结论；但评估结果不拥有网站发布权限。</p><h3>验收参数 · 初始默认值</h3><p>以下为需求说明第十三章的初始基线，用于试运行与技术设计，不是实测结论；调整需保留原值、原因、版本与审批记录。</p>{RAG_ACCEPTANCE_PARAMS.map((item) => <article className="rag-evidence" key={item.label}><header><strong>{item.label}</strong></header><p>{item.value}</p></article>)}</>}
       {drawer === "improve" && <>{gradedJudgments ? [
         ["critical", "必须修复"], ["improvement", "建议改进"], ["undetermined", "待补证"],
       ].map(([severity, label]) => <section key={severity}><h3>{label}</h3>{gradedJudgments.findings.filter(finding => finding.severity === severity).map(finding => <article className="rag-evidence" key={finding.id}><strong>{finding.summary}</strong><p>影响：{finding.impact}</p>{finding.claimIds.map(id => <blockquote key={id}>{gradedJudgments.claims.find(claim => claim.id === id)?.statement}</blockquote>)}<small>证据：{finding.evidenceIds.join("、")}；维度：{finding.dimensionIds.join("、")}</small></article>)}{!gradedJudgments.findings.some(finding => finding.severity === severity) && <p>当前没有此类记录。</p>}</section>) : (() => { const blocking = issues.filter((issue) => issue.priority === "P0"); const recorded = issues.filter((issue) => issue.priority !== "P0"); return <>
-        <h3>高优先级风险（建议修复并复测）</h3>{blocking.length ? blocking.map((issue) => <article className="rag-evidence" key={issue.id}><header><strong>{issue.title}</strong><span>{issue.priority}</span></header><p>{issue.impact}</p><small>修复方向：{issue.action}</small></article>) : <p className="rag-muted">当前没有已确认的高优先级风险。完整对话层判定不通过时，会在此说明。</p>}
-        <h3>一般记录项（仍需留痕）</h3>{recorded.length ? recorded.map((issue) => <article className="rag-evidence" key={issue.id}><header><strong>{issue.title}</strong><span>{issue.priority}</span></header><p>{issue.impact}</p><small>修复方向：{issue.action}</small></article>) : <p className="rag-muted">当前没有一般记录项。重复询问、轻微弱相关推荐、展示前已纠正的误拦属于这一类。</p>}
+        <h3>高优先级风险（建议修复并复测）</h3>{blocking.length ? blocking.map((issue) => <article className="rag-evidence" key={issue.id}><header><strong>{issue.title}</strong><RagPriorityLabel priority={issue.priority} /></header><p>{issue.impact}</p><small>修复方向：{issue.action}</small></article>) : <p className="rag-muted">当前没有已确认的高优先级风险。完整对话层判定不通过时，会在此说明。</p>}
+        <h3>一般记录项（仍需留痕）</h3>{recorded.length ? recorded.map((issue) => <article className="rag-evidence" key={issue.id}><header><strong>{issue.title}</strong><RagPriorityLabel priority={issue.priority} /></header><p>{issue.impact}</p><small>修复方向：{issue.action}</small></article>) : <p className="rag-muted">当前没有一般记录项。重复询问、轻微弱相关推荐、展示前已纠正的误拦属于这一类。</p>}
       </>; })()}{mode === "sample" && activeCase ? <><h3>{activeCase.improvement.title}</h3><ol>{activeCase.improvement.steps.map((step) => <li key={step}>{step}</li>)}</ol>{activeCase.improvement.answer && <><h3>建议改写 · 待复评</h3><p className="rag-proposed-answer">{activeCase.improvement.answer}</p><button className="sfp-button sfp-button--primary" onClick={() => updateAnswer(activeCase.improvement.answer!, need)}>采用改写并重新评审</button></>}</> : <p>建议由当前人工判断生成，请对照真实知识修订。页面不会编造一条“高分回答”。</p>}</>}
       {drawer === "history" && <>
         {live && <><h3>服务端自动评估记录</h3><p className="rag-muted">以下记录来自服务端，绑定问答任务、轮次、冻结知识、规则与模型版本。完成后的报告不可被人工复核覆盖。</p>{serverHistory.length === 0 ? <p>{automaticLoading ? "正在读取已有自动评估…" : "当前回答暂无自动评估记录。页面加载不会自动发起付费评估。"}</p> : serverHistory.map((run, index) => { const score = presentEvaluationScore(run.report?.result.score, Boolean(run.report && reportVerdict(run.report) === "unusable")); return <article className="rag-evidence" key={run.operationId}><header><strong>{index === 0 ? "最新自动评估" : "历史自动评估"}</strong><span className={`rag-history-score${score.showScale ? "" : " is-danger"}`} aria-label={score.ariaLabel}>{score.text}</span></header><p>{automaticStatusLabels[run.status]}{run.report ? ` · ${run.report.result.summary}` : run.error ? ` · ${run.error.message}` : ""}</p><small>操作 {run.operationId} · {new Date(run.createdAt).toLocaleString("zh-CN")}</small>{run.report && <details><summary>查看不可变报告信息</summary><p>报告：{run.report.reportId}</p><p>问答任务 / 轮次：{run.report.sourceQaTaskId} / {run.report.sourceTurnId}</p><p>知识快照：{run.report.knowledgeBase.snapshotId} · v{run.report.knowledgeBase.version}</p><p>评估 Skill / 规则：{run.report.evaluator.skillVersion} / {run.report.evaluator.ruleVersion}</p><p>模型：{run.report.evaluator.provider} / {run.report.evaluator.model}</p><p>六维 {run.report.judgments.dimensions.length} 项 · 风险门 {run.report.judgments.gates.length} 项 · 陈述 {run.report.judgments.claims.length} 项</p></details>}</article>; })}</>}

@@ -102,8 +102,15 @@ describe("response-logic entry navigation", () => {
         onResponseLogicBack={onResponseLogicBack}
       />,
     );
-    expect(screen.getByRole("status").textContent).toContain("请从「优化问题」列表中选择问题");
-    fireEvent.click(screen.getByRole("button", { name: "返回优化问题" }));
+    const status = screen.getByRole("status");
+    const backButton = screen.getByRole("button", { name: "返回优化问题" });
+    expect(status.textContent).toContain("请从「优化问题」列表中选择问题");
+    expect(status.classList.contains("fm-brand-empty-state")).toBe(true);
+    expect(status.getAttribute("style")).toBeNull();
+    expect(backButton.classList.contains("fm-brand-button")).toBe(true);
+    expect(backButton.classList.contains("fm-brand-button--secondary")).toBe(true);
+    expect(backButton.getAttribute("style")).toBeNull();
+    fireEvent.click(backButton);
     expect(onResponseLogicBack).toHaveBeenCalledTimes(1);
   });
 });
