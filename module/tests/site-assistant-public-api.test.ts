@@ -8,6 +8,11 @@ import {
   SITE_ASSISTANT_DEFAULT_LIMITS,
   type SiteAssistantInternalClient,
 } from "../server/site-assistant-public-api.js";
+import {
+  signSiteAssistantBuildBinding,
+  siteAssistantBuildBindingPayloadSchema,
+  SITE_ASSISTANT_BINDING_SECRET_ENV,
+} from "../server/siteops/site-assistant-binding.js";
 
 type Call = {method: "GET" | "POST"; path: string; body?: unknown};
 type Handler = {
@@ -280,5 +285,110 @@ describe("public site assistant api", () => {
     const response = await fetch(`${baseUrl}/nope`);
     expect(response.status).toBe(404);
     expect(response.headers.get("access-control-allow-origin")).toBe("*");
+  });
+});
+
+
+const BINDING_SECRET = "unit-test-binding-secret";
+
+function bindingPayloadFor(snapshotId: string, archiveHash: string) {
+  return siteAssistantBuildBindingPayloadSchema.parse({
+    schemaVersion: 1,
+    buildId: "44444444-4444-4444-8444-444444444444",
+    knowledgeSnapshotId: snapshotId,
+    knowledgeArchiveHash: archiveHash,
+    designRevision: 7,
+    draftHash: "b".repeat(64),
+    assistantName: "知识助手",
+    welcome: "你好，我可以基于本站知识回答问题。",
+    assistantAccent: "#8a2be2",
+  });
+}
+
+describe("public site assistant build bindings", () => {
+  it("pins the dispatched knowledge snapshot from a signed build binding", async () => {
+    vi.stubEnv(SITE_ASSISTANT_BINDING_SECRET_ENV, BINDING_SECRET);
+    const payload = bindingPayloadFor("22222222-2222-4222-8222-222222222222", "a".repeat(64));
+    const binding = {...payload, signature: signSiteAssistantBuildBinding(payload, BINDING_SECRET)};
+    let polls = 0;
+    const {calls} = mountApi([
+      runtimeConfigWithKnowledge,
+      conversationSync,
+      {match: (call) => call.method === "POST" && call.path === "/api/frontmind/v2/tasks", json: {id: "task-b1", status: "running"}},
+      {
+        match: (call) => call.method === "GET" && call.path === "/api/frontmind/v2/tasks/task-b1",
+        json: () => {
+          polls += 1;
+          return polls < 2 ? {id: "task-b1", status: "running"} : completedTask;
+        },
+      },
+    ]);
+
+    const response = await ask({question: "问一下企业服务", binding});
+    vi.unstubAllEnvs();
+
+    expect(response.status).toBe(200);
+    expect(response.body.answer.text).toBe("FrontMind 提供品牌知识管理。");
+    const taskCreate = calls.find((call) => call.path === "/api/frontmind/v2/tasks");
+    expect(taskCreate?.body).toMatchObject({
+      knowledgeBase: {snapshotId: payload.knowledgeSnapshotId, contentHash: "a".repeat(64)},
+    });
+    const sync = calls.find((call) => call.path === "/api/brand/conversations/sync");
+    const dispatch = (sync?.body as {conversations: Array<{messages: Array<{generalChatDispatch: {knowledgeBase?: unknown}}>}>})
+      .conversations[0]!.messages.at(-1)!.generalChatDispatch;
+    expect(dispatch.knowledgeBase).toEqual({
+      snapshotId: payload.knowledgeSnapshotId,
+      contentHash: "a".repeat(64),
+    });
+  });
+
+  it("rejects forged or unsupported bindings before any internal call", async () => {
+    const payload = bindingPayloadFor("22222222-2222-4222-8222-222222222222", "a".repeat(64));
+    const valid = {...payload, signature: signSiteAssistantBuildBinding(payload, BINDING_SECRET)};
+    const forged = {
+      ...payload,
+      signature: signSiteAssistantBuildBinding(payload, "some-other-secret"),
+    };
+
+    // No secret configured on the API side: any binding is unsupported.
+    const {calls} = mountApi([]);
+    const first = await ask({question: "问一下", binding: valid});
+    expect(first.status).toBe(400);
+    expect(first.body.error.code).toBe("ASSISTANT_BINDING_UNSUPPORTED");
+    expect(calls).toHaveLength(0);
+
+    // With a secret configured, a forged signature is rejected outright.
+    vi.stubEnv(SITE_ASSISTANT_BINDING_SECRET_ENV, BINDING_SECRET);
+    const strict = mountApi([]);
+    const second = await ask({question: "问一下", binding: forged});
+    vi.unstubAllEnvs();
+    expect(second.status).toBe(400);
+    expect(second.body.error.code).toBe("ASSISTANT_BINDING_INVALID");
+  });
+
+  it("starts a new conversation when the binding knowledge changes", async () => {
+    vi.stubEnv(SITE_ASSISTANT_BINDING_SECRET_ENV, BINDING_SECRET);
+    const firstPayload = bindingPayloadFor("22222222-2222-4222-8222-222222222222", "a".repeat(64));
+    const secondPayload = bindingPayloadFor("33333333-3333-4333-8333-333333333333", "c".repeat(64));
+    const firstBinding = {...firstPayload, signature: signSiteAssistantBuildBinding(firstPayload, BINDING_SECRET)};
+    const secondBinding = {...secondPayload, signature: signSiteAssistantBuildBinding(secondPayload, BINDING_SECRET)};
+    const {calls} = mountApi([
+      runtimeConfigWithKnowledge,
+      conversationSync,
+      {match: (call) => call.method === "POST" && call.path === "/api/frontmind/v2/tasks", json: () => ({id: `task-${calls.length}`, status: "completed", output: assistantOutput})},
+    ]);
+
+    const first = await ask({question: "第一问", binding: firstBinding});
+    expect(first.status).toBe(200);
+    const second = await ask({question: "第二问", session: first.body.session, binding: secondBinding});
+    vi.unstubAllEnvs();
+
+    expect(second.status).toBe(200);
+    expect(second.body.session).not.toBe(first.body.session);
+    const conversations = calls
+      .filter((call) => call.path === "/api/brand/conversations/sync")
+      .map((call) => (call.body as {conversations: Array<{id: string}>}).conversations[0]!.id);
+    expect(conversations).toHaveLength(2);
+    expect(conversations[1]).not.toBe(conversations[0]);
   });
 });

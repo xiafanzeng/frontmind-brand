@@ -11,6 +11,9 @@ export interface ArtifactApiCore {
  readSiteOpsArtifact: typeof import("./artifact-store.js").readSiteOpsArtifact;
  exchangeAliyunOAuthCode: typeof import("./aliyun-platform-service.js").exchangeAliyunOAuthCode;
  completeSiteOpsAliyunOAuth: typeof import("./service.js").completeSiteOpsAliyunOAuth;
+ /** Host-injected HMAC over the domain-separated payload; the module
+  * re-derives and compares with timingSafeEqual when verifying. */
+ signEmbedPreviewToken: (payload: string) => string;
 }
 let siteBuilds: SiteOpsInfrastructureTables["siteBuilds"];
 let siteProjects: SiteOpsInfrastructureTables["siteProjects"];
@@ -27,12 +30,13 @@ let runWithSiteOpsOAuthProjectScope: ArtifactApiCore["runWithSiteOpsOAuthProject
 let readSiteOpsArtifact: ArtifactApiCore["readSiteOpsArtifact"];
 let exchangeAliyunOAuthCode: ArtifactApiCore["exchangeAliyunOAuthCode"];
 let completeSiteOpsAliyunOAuth: ArtifactApiCore["completeSiteOpsAliyunOAuth"];
+let signEmbedPreviewToken: ArtifactApiCore["signEmbedPreviewToken"];
 export function configureArtifactApiCore(core: ArtifactApiCore) {
  ({siteBuilds,siteProjects,socialPackages,websiteStyleSampleBatches,websiteStyleSamples}=core.tables);
- ({enterpriseOwnerPredicate,enterpriseProjectUrl,getEnterpriseProjectScope,enterpriseWorkspaceUserId,getDb,requestActor,runWithSiteOpsOAuthProjectScope,readSiteOpsArtifact,exchangeAliyunOAuthCode,completeSiteOpsAliyunOAuth}=core);
+ ({enterpriseOwnerPredicate,enterpriseProjectUrl,getEnterpriseProjectScope,enterpriseWorkspaceUserId,getDb,requestActor,runWithSiteOpsOAuthProjectScope,readSiteOpsArtifact,exchangeAliyunOAuthCode,completeSiteOpsAliyunOAuth,signEmbedPreviewToken}=core);
 }
 
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { Readable } from "node:stream";
 import express from "express";
@@ -701,6 +705,90 @@ async function ownedBuild(userId: number, buildId: string) {
   return rows[0] ?? null;
 }
 
+/**
+ * Short-lived capability token for the same-origin embed preview. A valid
+ * dashboard session is still required on every request; the token only bounds
+ * how long a minted embed URL stays usable, and refreshing it never triggers a
+ * rebuild.
+ */
+export const SITEOPS_EMBED_PREVIEW_TOKEN_TTL_MS = 10 * 60_000;
+
+const SITEOPS_EMBED_PREVIEW_TOKEN_DOMAIN = "frontmind.siteops-embed-preview.v1";
+const SITEOPS_EMBED_PREVIEW_TOKEN_MAX_CHARS = 4_096;
+
+const embedPreviewTokenPayloadSchema = z
+  .object({
+    v: z.literal(1),
+    buildId: z.string().uuid(),
+    userId: z.number().int().positive(),
+    nonce: z.string().regex(/^[A-Za-z0-9_-]{16,128}$/u),
+    expiresAt: z.number().int().positive(),
+  })
+  .strict();
+
+type EmbedPreviewSigner = (payload: string) => string;
+
+function embedPreviewTokenSignature(payload: string, sign: EmbedPreviewSigner) {
+  return sign(`${SITEOPS_EMBED_PREVIEW_TOKEN_DOMAIN}\u0000${payload}`);
+}
+
+function timingSafeEqualText(left: string, right: string) {
+  const leftBytes = Buffer.from(left, "utf8");
+  const rightBytes = Buffer.from(right, "utf8");
+  return leftBytes.length === rightBytes.length
+    && timingSafeEqual(leftBytes, rightBytes);
+}
+
+export function buildSiteOpsEmbedPreviewToken(input: {
+  buildId: string;
+  userId: number;
+  now: number;
+  ttlMs?: number;
+  sign: EmbedPreviewSigner;
+}) {
+  const payload = JSON.stringify({
+    v: 1,
+    buildId: input.buildId,
+    userId: input.userId,
+    nonce: randomBytes(18).toString("base64url"),
+    expiresAt: input.now + (input.ttlMs ?? SITEOPS_EMBED_PREVIEW_TOKEN_TTL_MS),
+  });
+  return `${payload}.${embedPreviewTokenSignature(payload, input.sign)}`;
+}
+
+export function verifySiteOpsEmbedPreviewToken(
+  token: unknown,
+  input: { buildId: string; userId: number; now: number; sign: EmbedPreviewSigner },
+): "valid" | "expired" | "invalid" {
+  if (typeof token !== "string" || token.length > SITEOPS_EMBED_PREVIEW_TOKEN_MAX_CHARS) {
+    return "invalid";
+  }
+  const separator = token.lastIndexOf(".");
+  if (separator <= 0) return "invalid";
+  const payloadText = token.slice(0, separator);
+  const signature = token.slice(separator + 1);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadText);
+  } catch {
+    return "invalid";
+  }
+  const parsed = embedPreviewTokenPayloadSchema.safeParse(payload);
+  if (!parsed.success) return "invalid";
+  if (
+    !timingSafeEqualText(
+      signature,
+      embedPreviewTokenSignature(payloadText, input.sign),
+    )
+  ) {
+    return "invalid";
+  }
+  if (parsed.data.buildId !== input.buildId || parsed.data.userId !== input.userId) {
+    return "invalid";
+  }
+  return parsed.data.expiresAt < input.now ? "expired" : "valid";
+}
+
 async function frozenPreviewRouteEntries(input: {
   userId: number;
   build: typeof siteBuilds.$inferSelect;
@@ -1319,86 +1407,194 @@ siteOpsArtifactApi.get("/builds/:buildId/qa", async (req, res) => {
   }
 });
 
+/** Shared dist pipeline for the top-level preview and the embed preview. */
+async function sendOwnedBuildPreviewDocument(input: {
+  req: express.Request;
+  res: express.Response;
+  userId: number;
+  buildId: string;
+  previewPrefix: string;
+  frame: "top-level" | "embed";
+}) {
+  const owned = await ownedBuild(input.userId, input.buildId);
+  if (!owned?.build.distLocalAssetId || !owned.build.distHash) {
+    return notFound(input.res);
+  }
+  const allowedRouteEntries = await frozenPreviewRouteEntries({
+    userId: input.userId,
+    build: owned.build,
+  });
+  if (owned.build.workflowVersion === "2.9.0" && !allowedRouteEntries) {
+    return notFound(input.res);
+  }
+  const asset = await readSiteOpsArtifact({
+    userId: input.userId,
+    localAssetId: owned.build.distLocalAssetId,
+    expectedSha256: owned.build.distHash,
+    expectedMimeTypes: ["application/zip"],
+  });
+  if (!asset) return notFound(input.res);
+  const archive = await streamToBuffer(
+    asset.stored.createReadStream(),
+    MAX_ARCHIVE_BYTES,
+  );
+  const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
+  const entries = Object.values(zip.files).filter((entry) => !entry.dir);
+  if (entries.length < 1 || entries.length > MAX_ARCHIVE_ENTRIES) {
+    throw new Error("SITEOPS_DIST_STRUCTURE_INVALID");
+  }
+  const wildcard = (input.req.params as Record<string, string | undefined>)["0"];
+  const requestPath = safePreviewPath(wildcard ?? "");
+  const candidates = requestPath.endsWith("/")
+    ? [`${requestPath}index.html`]
+    : [requestPath, `${requestPath}/index.html`];
+  const entry = candidates
+    .filter(
+      (candidate) =>
+        allowedRouteEntries == null || allowedRouteEntries.has(candidate),
+    )
+    .map((candidate) => zip.file(candidate))
+    .find(Boolean);
+  if (
+    !entry ||
+    !entry.name.endsWith(".html") ||
+    entry.name.includes("\\") ||
+    entry.name.includes("..")
+  ) {
+    return notFound(input.res);
+  }
+  const mode = Number(entry.unixPermissions ?? 0);
+  if (mode && (mode & 0o170000) === 0o120000) {
+    throw new Error("SITEOPS_DIST_SYMLINK_REJECTED");
+  }
+  const document = await createSandboxedPreviewDocument({
+    zip,
+    entryName: entry.name,
+    previewPrefix: input.previewPrefix,
+    previewRoutingMode:
+      owned.build.workflowVersion === "2.9.0"
+        ? "canonical_pathname"
+        : "legacy_static_literals",
+  });
+  input.res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  input.res.setHeader("Content-Type", "text/html; charset=utf-8");
+  input.res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  input.res.setHeader(
+    "Permissions-Policy",
+    "camera=(), geolocation=(), microphone=()",
+  );
+  input.res.setHeader("Referrer-Policy", "no-referrer");
+  input.res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+  if (input.frame === "embed") {
+    // The builder embeds this document in a same-origin iframe; the top-level
+    // preview keeps its stricter DENY policy untouched.
+    input.res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    input.res.setHeader(
+      "Content-Security-Policy",
+      sandboxedPreviewContentSecurityPolicy(document.nonce, {
+        frameAncestors: "'self'",
+      }),
+    );
+  } else {
+    input.res.setHeader("X-Frame-Options", "DENY");
+    input.res.setHeader(
+      "Content-Security-Policy",
+      sandboxedPreviewContentSecurityPolicy(document.nonce),
+    );
+  }
+  input.res.setHeader("Content-Length", String(document.bytes.length));
+  input.res.send(document.bytes);
+}
+
 siteOpsArtifactApi.get("/builds/:buildId/preview/*", async (req, res) => {
   try {
     const userId = requestActor(req) ? enterpriseWorkspaceUserId(requestActor(req)!.id) : undefined;
     if (!userId) return notFound(res);
-    const owned = await ownedBuild(userId, req.params.buildId);
-    if (!owned?.build.distLocalAssetId || !owned.build.distHash) {
-      return notFound(res);
-    }
-    const allowedRouteEntries = await frozenPreviewRouteEntries({
+    await sendOwnedBuildPreviewDocument({
+      req,
+      res,
       userId,
-      build: owned.build,
-    });
-    if (owned.build.workflowVersion === "2.9.0" && !allowedRouteEntries) {
-      return notFound(res);
-    }
-    const asset = await readSiteOpsArtifact({
-      userId,
-      localAssetId: owned.build.distLocalAssetId,
-      expectedSha256: owned.build.distHash,
-      expectedMimeTypes: ["application/zip"],
-    });
-    if (!asset) return notFound(res);
-    const archive = await streamToBuffer(
-      asset.stored.createReadStream(),
-      MAX_ARCHIVE_BYTES,
-    );
-    const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
-    const entries = Object.values(zip.files).filter((entry) => !entry.dir);
-    if (entries.length < 1 || entries.length > MAX_ARCHIVE_ENTRIES) {
-      throw new Error("SITEOPS_DIST_STRUCTURE_INVALID");
-    }
-    const wildcard = (req.params as Record<string, string | undefined>)["0"];
-    const requestPath = safePreviewPath(wildcard ?? "");
-    const candidates = requestPath.endsWith("/")
-      ? [`${requestPath}index.html`]
-      : [requestPath, `${requestPath}/index.html`];
-    const entry = candidates
-      .filter(
-        (candidate) =>
-          allowedRouteEntries == null || allowedRouteEntries.has(candidate),
-      )
-      .map((candidate) => zip.file(candidate))
-      .find(Boolean);
-    if (
-      !entry ||
-      !entry.name.endsWith(".html") ||
-      entry.name.includes("\\") ||
-      entry.name.includes("..")
-    ) {
-      return notFound(res);
-    }
-    const mode = Number(entry.unixPermissions ?? 0);
-    if (mode && (mode & 0o170000) === 0o120000) {
-      throw new Error("SITEOPS_DIST_SYMLINK_REJECTED");
-    }
-    const document = await createSandboxedPreviewDocument({
-      zip,
-      entryName: entry.name,
+      buildId: req.params.buildId,
       previewPrefix: `/api/site-ops/builds/${encodeURIComponent(req.params.buildId)}/preview/`,
-      previewRoutingMode:
-        owned.build.workflowVersion === "2.9.0"
-          ? "canonical_pathname"
-          : "legacy_static_literals",
+      frame: "top-level",
     });
-    res.setHeader("Cache-Control", "private, no-store, max-age=0");
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader(
-      "Permissions-Policy",
-      "camera=(), geolocation=(), microphone=()",
-    );
-    res.setHeader("Referrer-Policy", "no-referrer");
-    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader(
-      "Content-Security-Policy",
-      sandboxedPreviewContentSecurityPolicy(document.nonce),
-    );
-    res.setHeader("Content-Length", String(document.bytes.length));
-    res.send(document.bytes);
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+/** Mints a fresh embed URL for an owned build; refreshing never rebuilds. */
+siteOpsArtifactApi.get(
+  "/builds/:buildId/embed-preview-token",
+  async (req, res) => {
+    try {
+      const userId = requestActor(req)
+        ? enterpriseWorkspaceUserId(requestActor(req)!.id)
+        : undefined;
+      if (!userId) return notFound(res);
+      const owned = await ownedBuild(userId, req.params.buildId);
+      if (!owned?.build.distLocalAssetId || !owned.build.distHash) {
+        return notFound(res);
+      }
+      if (typeof signEmbedPreviewToken !== "function") {
+        throw new Error("SITEOPS_EMBED_SIGNER_UNCONFIGURED");
+      }
+      const now = Date.now();
+      const token = buildSiteOpsEmbedPreviewToken({
+        buildId: req.params.buildId,
+        userId,
+        now,
+        sign: signEmbedPreviewToken,
+      });
+      res.setHeader("Cache-Control", "private, no-store, max-age=0");
+      res.json({
+        schemaVersion: 1,
+        url: enterpriseProjectUrl(
+          `/api/site-ops/builds/${encodeURIComponent(req.params.buildId)}/embed-preview/?token=${encodeURIComponent(token)}`,
+        ),
+        expiresAt: now + SITEOPS_EMBED_PREVIEW_TOKEN_TTL_MS,
+      });
+    } catch (error) {
+      sendError(res, error);
+    }
+  },
+);
+
+/**
+ * Owner-only same-origin embeddable variant of the build preview. Requires a
+ * valid dashboard session AND a fresh embed token; expiry is reported so the
+ * client can refresh the signature without rebuilding.
+ */
+siteOpsArtifactApi.get("/builds/:buildId/embed-preview/*", async (req, res) => {
+  try {
+    const userId = requestActor(req)
+      ? enterpriseWorkspaceUserId(requestActor(req)!.id)
+      : undefined;
+    if (!userId) return notFound(res);
+    if (typeof signEmbedPreviewToken !== "function") {
+      throw new Error("SITEOPS_EMBED_SIGNER_UNCONFIGURED");
+    }
+    const tokenState = verifySiteOpsEmbedPreviewToken(req.query.token, {
+      buildId: req.params.buildId,
+      userId,
+      now: Date.now(),
+      sign: signEmbedPreviewToken,
+    });
+    if (tokenState === "expired") {
+      res
+        .status(401)
+        .json({ error: "SITEOPS_EMBED_TOKEN_EXPIRED" });
+      return;
+    }
+    if (tokenState !== "valid") return notFound(res);
+    await sendOwnedBuildPreviewDocument({
+      req,
+      res,
+      userId,
+      buildId: req.params.buildId,
+      previewPrefix: `/api/site-ops/builds/${encodeURIComponent(req.params.buildId)}/embed-preview/`,
+      frame: "embed",
+    });
   } catch (error) {
     sendError(res, error);
   }

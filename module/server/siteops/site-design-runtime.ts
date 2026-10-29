@@ -1,5 +1,9 @@
 import type { SiteDesignPreferences } from "../../contracts/site-design-preferences.js";
 import type { SiteBrief } from "../../contracts/siteops.js";
+import {
+  signSiteAssistantBuildBinding,
+  siteAssistantBindingSecret,
+} from "./site-assistant-binding.js";
 
 export type SiteDesignRuntimeProjection = {
   navigation: Array<{
@@ -94,10 +98,48 @@ export function siteDesignAccentCss(
 export function siteAssistantBootConfig(
   apiBase: string,
   projection: SiteDesignRuntimeProjection,
+  build?: {
+    id: string;
+    knowledgeSnapshotId: string;
+    knowledgeArchiveHash: string;
+  } | null,
 ) {
+  // The binding is only minted when a secret is configured and the frozen
+  // projection carries a complete structured design; legacy builds keep the
+  // unsigned boot config and answer from the workspace's current snapshot.
+  const secret = siteAssistantBindingSecret();
+  const binding =
+    secret && build && projection.assistant && projection.designRevision !== null && projection.draftHash !== null
+      ? {
+          schemaVersion: 1 as const,
+          buildId: build.id,
+          knowledgeSnapshotId: build.knowledgeSnapshotId,
+          knowledgeArchiveHash: build.knowledgeArchiveHash,
+          designRevision: projection.designRevision,
+          draftHash: projection.draftHash,
+          assistantName: projection.assistant.name,
+          welcome: projection.assistant.welcome,
+          assistantAccent: projection.assistant.accent,
+          signature: signSiteAssistantBuildBinding(
+            {
+              schemaVersion: 1,
+              buildId: build.id,
+              knowledgeSnapshotId: build.knowledgeSnapshotId,
+              knowledgeArchiveHash: build.knowledgeArchiveHash,
+              designRevision: projection.designRevision,
+              draftHash: projection.draftHash,
+              assistantName: projection.assistant.name,
+              welcome: projection.assistant.welcome,
+              assistantAccent: projection.assistant.accent,
+            },
+            secret,
+          ),
+        }
+      : undefined;
   return {
     apiBase,
     ...(projection.assistant ?? {}),
+    ...(binding ? { binding } : {}),
     design: {
       navigation: projection.navigation,
       allRoutePaths: projection.allRoutePaths,

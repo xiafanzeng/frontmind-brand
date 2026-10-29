@@ -1,6 +1,11 @@
 import { Router, type Request, type Response } from "express";
 import { createHash, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
+import {
+  siteAssistantBindingKnowledgeKey,
+  siteAssistantBindingSecret,
+  verifySiteAssistantBuildBinding,
+} from "./siteops/site-assistant-binding.js";
 
 /**
  * Public AI assistant API for the published static website.
@@ -68,6 +73,9 @@ type AssistantSession = {
   taskId: string | null;
   turns: number;
   lastSeenAt: number;
+  /** Knowledge identity the session was started under; a different binding
+   * always starts a new conversation instead of continuing the old one. */
+  bindingKey: string | null;
   /** Synced user turns; the provider owns assistant projections. */
   messages: Array<{
     id: string;
@@ -84,7 +92,9 @@ export type SiteAssistantAskErrorCode =
   | "ASSISTANT_KNOWLEDGE_UNAVAILABLE"
   | "ASSISTANT_UNAVAILABLE"
   | "ASSISTANT_ANSWER_TIMEOUT"
-  | "ASSISTANT_ANSWER_UNAVAILABLE";
+  | "ASSISTANT_ANSWER_UNAVAILABLE"
+  | "ASSISTANT_BINDING_UNSUPPORTED"
+  | "ASSISTANT_BINDING_INVALID";
 
 const ASSISTANT_NAME = "AI 助手";
 const ASSISTANT_GREETING = "你好，我是本站的 AI 助手，可以就网站内容向你解答。";
@@ -407,6 +417,35 @@ export function createSiteAssistantPublicApi(
       );
     }
 
+    // A signed build binding pins the frozen knowledge snapshot the site pages
+    // were built from; unsigned or forged bindings are rejected outright so
+    // anonymous clients can never pick an arbitrary snapshot.
+    const bindingSecret = siteAssistantBindingSecret();
+    const rawBinding = (req.body as { binding?: unknown } | undefined)?.binding;
+    let verifiedBinding: ReturnType<typeof verifySiteAssistantBuildBinding> = null;
+    if (rawBinding !== undefined && rawBinding !== null) {
+      if (!bindingSecret) {
+        return publicError(
+          res,
+          400,
+          "ASSISTANT_BINDING_UNSUPPORTED",
+          "本站助手未启用构建绑定，请重新发布网站。",
+        );
+      }
+      verifiedBinding = verifySiteAssistantBuildBinding(rawBinding, bindingSecret);
+      if (!verifiedBinding) {
+        return publicError(
+          res,
+          400,
+          "ASSISTANT_BINDING_INVALID",
+          "助手构建绑定校验失败，请重新打开网站。",
+        );
+      }
+    }
+    const bindingKey = verifiedBinding
+      ? siteAssistantBindingKnowledgeKey(verifiedBinding)
+      : null;
+
     const requestedSession =
       typeof (req.body as { session?: unknown } | undefined)?.session === "string"
         ? (req.body as { session: string }).session
@@ -414,6 +453,8 @@ export function createSiteAssistantPublicApi(
     let session = requestedSession
       ? sessions.get(requestedSession) ?? null
       : null;
+    // Sessions never cross knowledge identities.
+    if (session && session.bindingKey !== bindingKey) session = null;
     if (session && session.turns >= limits.sessionMaxTurns) {
       return publicError(
         res,
@@ -448,6 +489,7 @@ export function createSiteAssistantPublicApi(
         taskId: null,
         turns: 0,
         lastSeenAt: timestamp,
+        bindingKey,
         messages: [],
       };
       sessions.set(session.token, session);
@@ -474,6 +516,14 @@ export function createSiteAssistantPublicApi(
         localTaskId: session.taskId,
         modelProfile: session.taskId ? null : "frontmind-base",
         ...(session.taskId ? {} : {purpose: "enterprise_qa" as const}),
+        ...(verifiedBinding
+          ? {
+              knowledgeBase: {
+                snapshotId: verifiedBinding.knowledgeSnapshotId,
+                contentHash: verifiedBinding.knowledgeArchiveHash,
+              },
+            }
+          : {}),
       };
       const userMessage = {
         id: clientRequestId,
@@ -529,6 +579,14 @@ export function createSiteAssistantPublicApi(
             modelProfile: "frontmind-base",
             purpose: "enterprise_qa",
             localAssetIds: [],
+            ...(verifiedBinding
+              ? {
+                  knowledgeBase: {
+                    snapshotId: verifiedBinding.knowledgeSnapshotId,
+                    contentHash: verifiedBinding.knowledgeArchiveHash,
+                  },
+                }
+              : {}),
           });
       if (dispatch.status >= 400 || !dispatch.json) {
         throw Object.assign(new Error("ASSISTANT_TASK_DISPATCH_FAILED"), {
