@@ -121,7 +121,7 @@ export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeRe
       {judgePhase==="failed"
         ?<WorkbenchCard title="LLM 语义评估未完成">
           <p className="rl-eval-score-description">本次 LLM 语义评估未能完成，暂无法生成四维评分。{judgeError?`（${judgeError}）`:""}请检查错误信息后重试；应答逻辑未被修改。</p>
-          {onRetry&&<div className="rl-eval-actions" style={{marginTop:12}}><button type="button" className="rl-eval-primary" onClick={onRetry}>重新发起评估</button></div>}
+          {onRetry&&<div className="rl-eval-actions rl-eval-actions--retry"><button type="button" className="rl-eval-primary" onClick={onRetry}>重新发起评估</button></div>}
         </WorkbenchCard>
         :judgePhase==="idle"
           ?<WorkbenchCard title="尚未评估"><p className="rl-eval-score-description">当前应答逻辑尚未发起 LLM 语义评估。</p></WorkbenchCard>

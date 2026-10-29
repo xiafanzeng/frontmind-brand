@@ -1069,16 +1069,16 @@ function PreviewResponseLogicEditor({
     <section className="rl-single-page">
       <ResponseLogicPageHeader group={entry.group} question={entry.question} />
       {showDemo && demoView === "detail" && (
-        <div className="rl-eval-entry" style={{display:"flex",gap:10,flexWrap:"wrap",margin:"18px 0"}}>
+        <div className="rl-eval-entry rl-eval-entry--row">
           <button type="button" className="rl-eval-entry-button" onClick={beginDemoEvaluation}>查看四维评估</button>
           <button type="button" className="rl-eval-entry-button" onClick={()=>setDemoView("optimize")}>生成优化应答逻辑</button>
         </div>
       )}
       {showDemo && demoView === "evaluation" && (
-        <div className="rl-eval-entry" role="status" style={{margin:"18px 0"}}>本地预览模式未连接服务器，LLM 语义评估不可用；请在正式环境中查看四维评估。<button type="button" className="rl-text-button" onClick={()=>setDemoView("detail")}>返回应答逻辑编辑</button></div>
+        <div className="rl-eval-entry" role="status">本地预览模式未连接服务器，LLM 语义评估不可用；请在正式环境中查看四维评估。<button type="button" className="rl-text-button" onClick={()=>setDemoView("detail")}>返回应答逻辑编辑</button></div>
       )}
       {showDemo && demoView === "optimize" && (
-        <div className="rl-eval-entry" role="status" style={{margin:"18px 0"}}>本地预览模式未连接服务器，LLM 优化不可用；请在正式环境中完成四维评估后使用优化。<button type="button" className="rl-text-button" onClick={()=>setDemoView("detail")}>返回应答逻辑编辑</button></div>
+        <div className="rl-eval-entry" role="status">本地预览模式未连接服务器，LLM 优化不可用；请在正式环境中完成四维评估后使用优化。<button type="button" className="rl-text-button" onClick={()=>setDemoView("detail")}>返回应答逻辑编辑</button></div>
       )}
 
       {demoView === "detail" && <LogicEditorCard
@@ -2140,7 +2140,7 @@ function ResponseLogicQuestionEditor({
       )}
 
       {(questionFreshness.deleted || questionFreshness.stale || questionFreshness.checkError) && (
-        <div className="rl-eval-entry" role={questionFreshness.checkError ? "alert" : "status"} style={{display:"flex",gap:10,flexWrap:"wrap",margin:"18px 0",alignItems:"center"}}>
+        <div className="rl-eval-entry rl-eval-entry--row" role={questionFreshness.checkError ? "alert" : "status"}>
           {questionFreshness.deleted ? (
             <span>当前问题已被删除或不可访问，请返回优化问题列表重新选择。</span>
           ) : questionFreshness.stale ? (
@@ -2157,7 +2157,7 @@ function ResponseLogicQuestionEditor({
         </div>
       )}
       {showDemo && demoView === "detail" && (
-        <div className="rl-eval-entry" style={{display:"flex",gap:10,flexWrap:"wrap",margin:"18px 0",alignItems:"center"}}>
+        <div className="rl-eval-entry rl-eval-entry--row">
           <button type="button" className="rl-eval-entry-button" onClick={beginDemoEvaluation}>查看四维评估</button>
           <button type="button" className="rl-eval-entry-button" onClick={()=>setDemoView("optimize")}>生成优化应答逻辑</button>
         </div>

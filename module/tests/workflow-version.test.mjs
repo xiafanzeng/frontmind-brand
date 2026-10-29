@@ -39,8 +39,8 @@ test('enterprise RAG evaluator publishes its declared version and follows source
   const outputRoot=path.join(root,'dist/workflows/evaluate-enterprise-rag');
   const first=await buildEnterpriseRagEvaluationWorkflow({sourcePath,outputRoot});
   const initial=await fs.readFile(first.outputPath,'utf8');
-  assert.equal(ENTERPRISE_RAG_EVALUATION_WORKFLOW.version,'2.0.0');
-  assert.match(initial,/^---\r?\nname: evaluate-enterprise-rag\r?\nversion: 2\.0\.0\r?\n/u);
+  assert.equal(ENTERPRISE_RAG_EVALUATION_WORKFLOW.version,'3.0.0');
+  assert.match(initial,/^---\r?\nname: evaluate-enterprise-rag\r?\nversion: 3\.0\.0\r?\n/u);
   await fs.appendFile(sourcePath,'\nSynthetic evaluator revision.\n');
   await buildEnterpriseRagEvaluationWorkflow({sourcePath,outputRoot});
   const updated=await fs.readFile(first.outputPath,'utf8');

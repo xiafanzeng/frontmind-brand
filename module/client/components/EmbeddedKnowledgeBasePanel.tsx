@@ -5,7 +5,6 @@ import KnowledgePublicExecution from "./KnowledgePublicExecution";
 import KnowledgeWorkbenchActions from "./KnowledgeWorkbenchActions";
 import KnowledgeImageLibrary, { PreviewKnowledgeImageLibrary } from "./KnowledgeImageLibrary";
 import {
-  type CSSProperties,
   createContext,
   useContext,
   useCallback,
@@ -522,9 +521,8 @@ function KnowledgeResetButton({
         }}
       >
         <DialogContent
-          style={
-            { "--module-accent": "#16794f" } as CSSProperties
-          }
+          className="fm-brand-portal-theme knowledge-workspace-dialog"
+          data-brand-page="knowledge"
           onCloseAutoFocus={(event) => {
             const resetButton = resetButtonRef.current;
             const target =
@@ -907,9 +905,8 @@ function ManualKnowledgeUpdateButton({
         }}
       >
         <DialogContent
-          style={
-            { "--module-accent": "#16794f" } as CSSProperties
-          }
+          className="fm-brand-portal-theme knowledge-workspace-dialog"
+          data-brand-page="knowledge"
           onEscapeKeyDown={(event) => {
             if (updating) event.preventDefault();
           }}

@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { ragCheckJudgmentSchema, ragOptionalSuggestionSchema, scoreRagChecklist, validateRagChecklist, type RagChecklist } from "./enterprise-rag-checklist.js";
 
 export const ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE =
   "brand_rag_answer_evaluation";
-export const ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION = 2;
-export const ENTERPRISE_RAG_JUDGE_VERSION = "2.0.0";
+export const ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION = 3;
+export const ENTERPRISE_RAG_JUDGE_VERSION = "3.0.0";
 
 export const ENTERPRISE_RAG_DIMENSION_IDS = [
   "intent",
@@ -45,7 +46,8 @@ export type EnterpriseRagEvaluationSource = {
 };
 
 export type EnterpriseRagEvaluationFrozenInput = {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
+  checklist?: RagChecklist;
   /** New single-answer judgments must not claim full-conversation acceptance. */
   taskScope?: "single_turn";
   operationToken: string;
@@ -70,7 +72,7 @@ export type EnterpriseRagEvaluationFrozenInput = {
     skillId: "enterprise-rag-evaluation";
     skillVersion: string;
     ruleVersion: string;
-    judgeVersion: "1.0.0" | "2.0.0";
+    judgeVersion: "1.0.0" | "2.0.0" | "3.0.0";
   };
 };
 
@@ -158,11 +160,41 @@ const gradedJudgeOutputSchema = judgeOutputSchema.extend({
   }).strict()).max(30),
 }).strict();
 
-export type EnterpriseRagGradedJudgeOutput = z.infer<typeof gradedJudgeOutputSchema>;
+const checklistJudgeOutputSchema = gradedJudgeOutputSchema.omit({ dimensions: true }).extend({
+  schemaVersion: z.literal(3),
+  checks: z.array(ragCheckJudgmentSchema).min(1).max(40),
+  findings: z.array(gradedJudgeOutputSchema.shape.findings.element.extend({
+    checkId: identifier,
+    rootCauseId: z.string().regex(/^root-cause-([1-9]|[12][0-9]|30)$/u),
+    dimensionIds: z.array(z.enum(ENTERPRISE_RAG_DIMENSION_IDS)).length(1),
+  }).strict()).max(30),
+  optionalSuggestions: z.array(ragOptionalSuggestionSchema).max(10),
+}).strict();
+export type EnterpriseRagChecklistJudgeOutput = z.infer<typeof checklistJudgeOutputSchema> & {
+  checklist: RagChecklist;
+  /** Derived by the server, never used as model-authored scores. */
+  dimensions: z.infer<typeof gradedJudgeOutputSchema>["dimensions"];
+};
+export type EnterpriseRagGradedJudgeOutput = z.infer<typeof gradedJudgeOutputSchema> | EnterpriseRagChecklistJudgeOutput;
+export function isChecklistRagJudgment(value: EnterpriseRagJudgeOutput): value is EnterpriseRagChecklistJudgeOutput {
+  return "schemaVersion" in value && value.schemaVersion === 3;
+}
 export function isGradedRagJudgment(value: EnterpriseRagJudgeOutput): value is EnterpriseRagGradedJudgeOutput {
-  return "schemaVersion" in value && value.schemaVersion === 2;
+  return "schemaVersion" in value && (value.schemaVersion === 2 || value.schemaVersion === 3);
 }
 function parseJudgeOutput(value: unknown, input: EnterpriseRagEvaluationFrozenInput): EnterpriseRagJudgeOutput {
+  if (input.schemaVersion === 3) {
+    const checklist = validateRagChecklist(input.checklist);
+    // Decoded/persisted values may contain these server projections. Always
+    // recompute them from frozen input, never trust supplied derived scores.
+    const { dimensions: _dimensions, checklist: _checklist, ...raw } = (value ?? {}) as Record<string, unknown>;
+    const parsed = checklistJudgeOutputSchema.parse(raw);
+    const scored = scoreRagChecklist(checklist, parsed.checks);
+    return { ...parsed, checklist, dimensions: scored.dimensions.map(d => ({
+      id: d.id, level: d.score === null ? null : 4 * d.score / d.maxScore,
+      rationale: d.summary, evidenceIds: d.evidenceIds,
+    })) };
+  }
   return input.schemaVersion === 2 ? gradedJudgeOutputSchema.parse(value) : judgeOutputSchema.parse(value);
 }
 
@@ -184,7 +216,7 @@ export const ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA = z.toJSONSchema(
 export function enterpriseRagJudgeWireSchema(
   input: EnterpriseRagEvaluationFrozenInput,
 ) {
-  const schema = structuredClone(input.schemaVersion === 2 ? z.toJSONSchema(gradedJudgeOutputSchema, { target: "draft-7" }) : ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA) as Record<
+  const schema = structuredClone(input.schemaVersion === 3 ? z.toJSONSchema(checklistJudgeOutputSchema, { target: "draft-7" }) : input.schemaVersion === 2 ? z.toJSONSchema(gradedJudgeOutputSchema, { target: "draft-7" }) : ENTERPRISE_RAG_JUDGE_WIRE_SCHEMA) as Record<
     string,
     any
   >;
@@ -197,15 +229,23 @@ export function enterpriseRagJudgeWireSchema(
     (id) => !frozenEvidenceIds.includes(id),
   );
   const judgmentEvidenceIds = [...frozenEvidenceIds, ...claimIds];
-  for (const key of ["dimensions", "gates"] as const) {
+  for (const key of input.schemaVersion === 3 ? ["checks", "gates", "optionalSuggestions"] : ["dimensions", "gates"]) {
     properties[key].items.properties.evidenceIds.items.enum =
       judgmentEvidenceIds;
   }
-  if (input.schemaVersion === 2) {
+  if (input.schemaVersion >= 2) {
     properties.task.properties.evidenceIds.items.enum = judgmentEvidenceIds;
     const findings = properties.findings.items.properties;
     findings.evidenceIds.items.enum = judgmentEvidenceIds;
     findings.claimIds.items.enum = claimIds;
+  }
+  if (input.schemaVersion === 3) {
+    const checklist = validateRagChecklist(input.checklist);
+    const ids = checklist.checks.map(c => c.id);
+    properties.checks.minItems = ids.length;
+    properties.checks.maxItems = ids.length;
+    properties.checks.items.properties.id.enum = ids;
+    properties.findings.items.properties.checkId.enum = ids;
   }
 
   const claims = properties.claims.items.properties as Record<string, any>;
@@ -542,7 +582,7 @@ export function decodeEnterpriseRagAliasedJudgeOutput(
   };
   const decoded = {
     ...parsed,
-    dimensions: parsed.dimensions.map((item, itemIndex) => ({
+    dimensions: (isChecklistRagJudgment(parsed) ? [] : parsed.dimensions).map((item, itemIndex) => ({
       ...item,
       evidenceIds: item.evidenceIds.map((id, evidenceIndex) =>
         ENTERPRISE_RAG_CLAIM_IDS.includes(id)
@@ -588,6 +628,15 @@ export function decodeEnterpriseRagAliasedJudgeOutput(
       })),
     });
   }
+  if (isChecklistRagJudgment(parsed)) {
+    const decodeItem = <T extends { evidenceIds: string[] }>(item: T, path: string): T => ({ ...item,
+      evidenceIds: item.evidenceIds.map((id, index) => ENTERPRISE_RAG_CLAIM_IDS.includes(id) ? id : decode(id, evidenceAliases, `${path}.evidenceIds[${index}]`, "检查项引用了未授权证据别名")),
+    });
+    Object.assign(decoded, {
+      checks: parsed.checks.map((item, i) => decodeItem(item, `checks[${i}]`)),
+      optionalSuggestions: parsed.optionalSuggestions.map((item, i) => decodeItem(item, `optionalSuggestions[${i}]`)),
+    });
+  }
   if (invalidAliases.length) {
     const groups = new Map<string, {
       label: string;
@@ -616,7 +665,10 @@ export function decodeEnterpriseRagAliasedJudgeOutput(
       repairable ? "repairable_identifier" : "unauthorized_identifier",
     );
   }
-  return decoded as EnterpriseRagJudgeOutput;
+  // Rebuild all server-owned projections after alias replacement. In v3 this
+  // also restores the six derived dimensions instead of returning a value
+  // that only satisfies the provider wire shape.
+  return parseJudgeOutput(decoded, input);
 }
 
 /** Validate the model's semantic coordinates before the existing deterministic
@@ -650,10 +702,36 @@ function validateGradedJudgments(
       return claim?.kind === "fact" && claim.relevance === "core" && ["partial", "unsupported", "contradicted"].includes(claim.status);
     })) fail("重大事实风险必须对应核心事实缺口，不能把已充分支持的事实或核实建议升级为事实错误");
   }
-  for (const dimension of value.dimensions) {
+  for (const dimension of value.schemaVersion === 3 ? [] : value.dimensions) {
     const findings = value.findings.filter(finding => finding.dimensionIds.includes(dimension.id));
     if (dimension.level === null && !findings.some(finding => finding.severity === "undetermined")) fail("未判定维度缺少待补证项");
     if (dimension.level !== null && dimension.level < 4 && !findings.length) fail("扣分项缺少对应问题或改进理由");
+  }
+  if (value.schemaVersion === 3) {
+    const checks = new Map(value.checks.map(c => [c.id, c]));
+    for (const check of value.checks) checkEvidence(check.evidenceIds);
+    unique(value.optionalSuggestions.map(s => s.id), "可选建议 ID");
+    for (const suggestion of value.optionalSuggestions) checkEvidence(suggestion.evidenceIds);
+    const rootCauses = new Set<string>();
+    const deductedClaims = new Set<string>();
+    for (const finding of value.findings) {
+      const definition = value.checklist.checks.find(c => c.id === finding.checkId);
+      const check = checks.get(finding.checkId);
+      if (!check) throw new EnterpriseRagEvaluationValidationError("问题关联的检查项不存在");
+      if (!definition?.applicable || definition.dimensionId !== finding.dimensionIds[0] || !check) fail("问题必须关联一个适用检查项及主维度");
+      if (finding.severity === "undetermined" ? check.status !== "undetermined" : !["partial", "unmet"].includes(check.status)) fail("问题与检查项状态矛盾");
+      if (rootCauses.has(finding.rootCauseId)) fail("同一根因不能重复扣分");
+      rootCauses.add(finding.rootCauseId);
+      for (const claimId of finding.claimIds) {
+        if (deductedClaims.has(claimId)) fail("同一回答陈述不能跨检查项重复扣分");
+        deductedClaims.add(claimId);
+      }
+    }
+    for (const check of value.checks) {
+      const findings = value.findings.filter(f => f.checkId === check.id);
+      if (["partial", "unmet"].includes(check.status) && !findings.some(f => f.severity !== "undetermined")) fail("扣分检查项缺少具体缺陷");
+      if (check.status === "undetermined" && !findings.some(f => f.severity === "undetermined")) fail("未知检查项缺少待补证记录");
+    }
   }
   for (const gate of value.gates) {
     const findings = value.findings.filter(finding => gateByKind[finding.kind] === gate.id);
@@ -679,7 +757,7 @@ function validateGradedJudgments(
     if (claim.status === "unsupported" && ![...sources.values()].some(source => source.content)) fail("没有可读取的来源正文，不能确认事实无支持；应保留无法核验");
     if (claim.kind === "fact" && claim.relevance === "core" && ["unsupported", "contradicted"].includes(claim.status) && !findings.some(finding => finding.severity === "critical" && ["fact", "condition"].includes(finding.kind))) fail("无依据或矛盾的核心事实不能降级为轻微问题");
     if (claim.status === "partial" && claim.sourceIds.some(id => !sources.get(id)?.content) && !findings.some(finding => finding.severity === "undetermined")) fail("来源正文缺失必须保留未知");
-    if (claim.kind === "fact" && claim.sourceIds.some(id => sources.get(id)?.citedByAnswer !== true) && !findings.some(finding => finding.kind === "citation")) fail("依据未展示为引用时须保留引用改进或风险项");
+    if (claim.kind === "fact" && claim.status === "supported" && claim.sourceIds.some(id => sources.get(id)?.citedByAnswer !== true) && !findings.some(finding => finding.kind === "citation")) fail("已支持事实的依据未展示为引用时须保留引用改进或风险项");
   }
 }
 
@@ -688,10 +766,12 @@ export function validateEnterpriseRagJudgeOutput(
   input: EnterpriseRagEvaluationFrozenInput,
   options: EnterpriseRagJudgeValidationOptions = {},
 ): EnterpriseRagJudgeOutput {
-  const expected = input.schemaVersion === 2
+  const expected = input.schemaVersion === 3
+    ? { skillVersion: "3.0.0", judgeVersion: "3.0.0", ruleVersion: "rag-eval-1.4" }
+    : input.schemaVersion === 2
     ? { skillVersion: "2.0.0", judgeVersion: "2.0.0", ruleVersion: "rag-eval-1.3" }
     : { skillVersion: "1.0.0", judgeVersion: "1.0.0", ruleVersion: "rag-eval-1.2" };
-  if (![1, 2].includes(input.schemaVersion) || Object.entries(expected).some(([key, version]) => input.evaluator[key as keyof typeof expected] !== version)) {
+  if (![1, 2, 3].includes(input.schemaVersion) || Object.entries(expected).some(([key, version]) => input.evaluator[key as keyof typeof expected] !== version)) {
     throw new EnterpriseRagEvaluationValidationError("不支持或混用了冻结评估版本，不能套用当前规则");
   }
   if (Buffer.byteLength(JSON.stringify(value) ?? "", "utf8") > 512 * 1024) {

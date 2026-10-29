@@ -6,7 +6,7 @@ import { parseEvaluationResult, runEvaluationSkill } from "./evaluation-skill-co
 function input(): EvaluationInput {
   return { dimensions: RAG_DIMENSIONS.map(({id}) => ({id,level: 2,applicable:true,rationale:"合成表达问题，不影响核心任务。",evidenceIds:["answer"]})), gates: RAG_GATES.map(({id}) => ({id,status:"passed",reason:"已核验。"})) };
 }
-const layer = (): ConversationLayer => ({ task: "完成查询", completionPoints: [{id:"task",label:"提供真实路径",met:true}], runsRequired: 1 });
+const layer = (): ConversationLayer => ({ task: "完成查询", completionPoints: [{id:"task",label:"提供真实路径",failureLabel:"缺真实路径",met:true}], runsRequired: 1 });
 describe("graded task decisions and legacy boundaries", () => {
   it("removes score vetoes without reinterpreting legacy scores", () => {
     expect(scoreEvaluation(input())).toMatchObject({score:50, usable:true, verdict:"improve"});
@@ -18,16 +18,29 @@ describe("graded task decisions and legacy boundaries", () => {
   it("distinguishes false completion from unknown, and keeps pending gates unverified", () => {
     const task = layer(), gates = input().gates;
     task.completionPoints[0].met = null;
-    expect(resolveConversationOutcome(task,gates).status).toBe("unverified");
+    expect(resolveConversationOutcome(task,gates)).toMatchObject({status:"unverified",displayLabel:"待确认"});
     task.completionPoints[0].met = false;
-    expect(resolveConversationOutcome(task,gates).status).toBe("fail");
+    expect(resolveConversationOutcome(task,gates)).toMatchObject({status:"fail",displayLabel:"缺真实路径"});
     task.completionPoints[0].met = true; gates[0].status = "pending";
-    expect(resolveConversationOutcome(task,gates).status).toBe("unverified");
+    expect(resolveConversationOutcome(task,gates)).toMatchObject({status:"unverified",displayLabel:"待确认"});
+  });
+  it("summarizes multiple missing points and prioritizes confirmed gate failures", () => {
+    const task = layer(), gates = input().gates;
+    task.completionPoints = [
+      {...task.completionPoints[0],met:false},
+      {id:"second",label:"提供可执行下一步",failureLabel:"缺下一步",met:false},
+    ];
+    expect(resolveConversationOutcome(task,gates)).toMatchObject({status:"fail",displayLabel:"缺 2 项"});
+    gates[0].status = "failed";
+    expect(resolveConversationOutcome(task,gates)).toMatchObject({status:"fail",displayLabel:"发现风险"});
+  });
+  it("labels a fully completed task as passed", () => {
+    expect(resolveConversationOutcome(layer(),input().gates)).toMatchObject({status:"pass",displayLabel:"通过"});
   });
   it("retains confirmed major failures when prerequisites or other checks are unknown", () => {
     const task = layer(); task.prerequisiteMissing = true;
     const gates = input().gates; gates[2].status = "failed";
-    expect(resolveConversationOutcome(task,gates)).toMatchObject({status:"fail",blockingCount:1});
+    expect(resolveConversationOutcome(task,gates)).toMatchObject({status:"fail",blockingCount:1,displayLabel:"发现风险"});
   });
   it("keeps invalid configuration pending and provides no publication authority", async () => {
     const sample = input(); sample.gates.push({...sample.gates[0]});
