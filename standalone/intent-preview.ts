@@ -1,5 +1,6 @@
 import {createIntentPlan, emptyIntentState, evaluateIntent, type IntentWorkspace, type IntentState, type IntentNode, type IntentQuestion} from "../module/contracts/intent-workbench";
 import type {IntentWorkbenchApi} from "../module/client/dashboard/intent-workbench-api";
+import {updateIntentQuestionSchema, deleteIntentQuestionSchema, mutateIntentQuestion} from "../module/contracts/intent-question-mutations";
 const demoNodes: IntentNode[] = [
   {id: "materials", title: "材料介绍", branch: "诊疗项目 / 隆鼻", verified: true, editable: true, content: "# 材料介绍\n\n不同材料的产品特点、支撑力和稳定性存在差异。材料选择应根据鼻部基础、皮肤厚度、适用人群与面诊结果综合判断。\n\n## 术后护理\n术后护理与维护应遵从医生指导，出现异常时应联系医疗机构复诊。"},
   {id: "guide", title: "材料选型指南", branch: "诊疗项目 / 隆鼻", verified: true, editable: true, content: "# 材料选型指南\n\n选择隆鼻材料时，可根据个人需求进行判断。\n\n## 适用人群\n适用人群需要结合鼻部基础、皮肤厚度和期望效果，由医生面诊评估。"},
@@ -17,6 +18,10 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
     async observe() {return snapshot();},
     async command(value) {
       const input = value as any; check(input.expectedRevision);
+      if (input.kind === "update-question" || input.kind === "delete-question") {
+        mutateIntentQuestion(memory.state, input.kind === "update-question"
+          ? updateIntentQuestionSchema.parse(input) : deleteIntentQuestionSchema.parse(input));
+      }
       if (input.kind === "intake") for (const question of input.questions as IntentQuestion[]) {
         if (!memory.state.questions.some(item => item.id === question.id || item.question === question.question)) memory.state.questions.push(structuredClone(question));
       }

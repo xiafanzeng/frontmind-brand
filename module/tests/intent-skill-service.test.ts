@@ -92,6 +92,40 @@ function harness() {
     core, storedEvents, ledger: () => ledger!};
 }
 describe("优化模型持久化任务", () => {
+  it("问题修改和删除通过真实命令落库，保留历史且不创建模型任务", async () => {
+    const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
+    const completed = await h.service.poll();
+    const history = structuredClone(completed.state.jobs);
+    const updated = await h.service.command({kind: "update-question", expectedRevision: completed.revision,
+      questionId: "q", question: "材料选型需要哪些依据？", category: "industry", subdivision: "选型"});
+    expect(updated.state.questions[0]).toEqual({...completed.state.questions[0],
+      question: "材料选型需要哪些依据？", category: "industry", subdivision: "选型"});
+    expect(updated.state.evaluations).toEqual([]);
+    expect(updated.state.plans).toEqual([]);
+    expect(updated.state.jobs).toEqual(history);
+    const reopened = createIntentWorkbenchService(h.core, {frontmindUser: {id: 42, role: "user"}} as unknown as Request);
+    expect((await reopened.observe()).state.questions).toEqual(updated.state.questions);
+    await expect(reopened.command({kind: "delete-question", expectedRevision: completed.revision, questionId: "q"})).rejects.toThrow("清单已被更新");
+    expect((await reopened.observe()).state.questions).toHaveLength(1);
+    const removed = await reopened.command({kind: "delete-question", expectedRevision: updated.revision, questionId: "q"});
+    expect(removed.state.questions).toEqual([]);
+    expect(removed.state.jobs).toEqual(history);
+    expect((await reopened.observe()).state.questions).toEqual([]);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
+  it("重复问题、非法输入和评估中的修改均拒绝且不改动数据库", async () => {
+    const h = harness(); const initial = await h.intake();
+    const second = await h.service.command({kind: "intake", expectedRevision: initial.revision,
+      questions: [{...initial.state.questions[0], id: "q2", question: "另一个材料问题？", rowIndex: 1}]});
+    await expect(h.service.command({kind: "update-question", expectedRevision: second.revision,
+      questionId: "q", question: second.state.questions[1].question, category: "industry", subdivision: ""})).rejects.toThrow("相同问题");
+    await expect(h.service.command({kind: "update-question", expectedRevision: second.revision,
+      questionId: "q", question: " ", category: "industry", subdivision: ""})).rejects.toThrow();
+    expect((await h.service.observe()).state.questions).toEqual(second.state.questions);
+    const running = await h.service.command({...h.request, expectedRevision: second.revision});
+    await expect(h.service.command({kind: "delete-question", expectedRevision: running.revision, questionId: "q"})).rejects.toThrow("等待当前");
+    expect((await h.service.observe()).state.questions).toHaveLength(2);
+  });
   it("完成结果固化，修改方案和失败重评均不覆盖历史，刷新无需调用模型", async () => {
     const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
     const completed = await h.service.poll();

@@ -159,7 +159,7 @@
 .iw-catalog-table th:first-child,.iw-catalog-table td:first-child{width:44px;padding-right:0}
 .iw-catalog-table td:nth-child(2){width:34%;line-height:1.8}
 .iw-catalog-table td:nth-child(3),.iw-catalog-table td:nth-child(4){white-space:nowrap}
-.iw-catalog-actions{display:flex;align-items:flex-start;gap:8px;white-space:nowrap}
+.iw-catalog-actions{display:grid;grid-template-columns:repeat(2,max-content);align-items:flex-start;gap:8px;white-space:nowrap}
 .iw-catalog-actions button{font-size:13px;min-height:38px;padding:8px 10px}
 .iw-catalog-actions .iw-assess-entry{color:#7545a0;background:#faf7fc;border-color:#d9c7e5}
 .iw-catalog-actions button:disabled{opacity:1;color:#98a2b3;background:#fff;border-color:#e7ebef}
@@ -170,6 +170,9 @@
 .iw-workbench .iw-more-actions>summary:focus-visible,.brand-keyword-workspace .iw-more-actions>summary:focus-visible{outline:2px solid #7545a0;outline-offset:3px}
 .iw-workbench .iw-more-actions>div,.brand-keyword-workspace .iw-more-actions>div{display:flex;flex-direction:column;gap:6px;padding-top:8px}
 .iw-workbench .iw-more-actions:not([open])>div,.brand-keyword-workspace .iw-more-actions:not([open])>div{display:none}
+.iw-question-fields{display:grid;gap:14px}
+.iw-question-fields label{display:grid;gap:6px;font-size:14px}
+.iw-question-fields textarea,.iw-question-fields input,.iw-question-fields select{width:100%;border:1px solid #d0d5dd;border-radius:8px;padding:10px;font:inherit}
 .iw-catalog-category{color:#9a7028;background:#fbf4e5;border-radius:4px;padding:3px 6px;font-size:12px}
 .iw-catalog-category[data-category=competitor_comparison]{color:#496f9d;background:#edf3fa}
 .iw-catalog-category[data-category=product_scenario]{color:#2f7e7a;background:#eaf6f4}

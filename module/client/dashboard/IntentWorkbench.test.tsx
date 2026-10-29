@@ -307,21 +307,61 @@ describe("优化工作台任务入口", () => {
     expect(api.command).not.toHaveBeenCalled();
     expect(api.observe).toHaveBeenCalledTimes(2);
   });
-  it("列表隐藏无能力入口，评分只读，详情仍可进入应答逻辑", async () => {
+  it("列表直接进入应答逻辑，保留修改删除及只读评分", async () => {
     const saved = workspace("succeeded"), onOpenAnswer = vi.fn();
     saved.state.plans = [{questionId: "q1", actions: [{id: "a", kind: "todo", title: "部署资料",
       nodeId: null, before: "", after: "原方案", source: "缺口", selected: true}]}];
     const {api} = pendingApi(saved);
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api} catalogIntegration={{onOpenAnswer}}/>);
     await screen.findByRole("button", {name: "查看优化方案"});
-    for (const name of ["新增问题", "修改问题", "删除问题", "进入应答逻辑", "返回词条生成与保存", "继续审核已保存方案"]) {
+    for (const name of ["新增问题", "返回词条生成与保存", "继续审核已保存方案"]) {
       expect(screen.queryByRole("button", {name})).toBeNull();
     }
     expect(screen.queryByText("从企业信息和参考材料生成问题")).toBeNull();
-    fireEvent.click(screen.getByRole("button", {name: `查看知识支撑：${question.question}`}));
     fireEvent.click(screen.getByRole("button", {name: "进入应答逻辑"}));
     expect(onOpenAnswer).toHaveBeenCalledWith(question);
+    expect(screen.getByRole("button", {name: "修改问题"})).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: "删除问题"})).toHaveProperty("disabled", false);
+    fireEvent.click(screen.getByRole("button", {name: `查看知识支撑：${question.question}`}));
     expect(api.command).not.toHaveBeenCalled();
+  });
+  it("修改只提交所选问题，失败保留输入，成功显示最新内容而不发起评估", async () => {
+    const initial = workspace("succeeded");
+    const updated = structuredClone(initial);
+    updated.revision++; updated.state.questions[0].question = "企业软件的部署条件有哪些？";
+    updated.state.evaluations = [];
+    const api: IntentWorkbenchApi = {observe: vi.fn(async () => initial),
+      command: vi.fn().mockRejectedValueOnce(new Error("保存失败")).mockResolvedValue(updated), execute: vi.fn(), rollback: vi.fn()};
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "修改问题"}));
+    fireEvent.change(screen.getByRole("textbox", {name: "问题内容"}), {target: {value: updated.state.questions[0].question}});
+    fireEvent.click(screen.getByRole("button", {name: "保存修改"}));
+    await waitFor(() => expect(screen.getByRole("textbox", {name: "问题内容"})).toHaveProperty("disabled", false));
+    expect(screen.getByRole("textbox", {name: "问题内容"})).toHaveProperty("value", updated.state.questions[0].question);
+    fireEvent.click(screen.getByRole("button", {name: "保存修改"}));
+    await waitFor(() => expect(screen.queryByRole("textbox", {name: "问题内容"})).toBeNull());
+    expect(api.command).toHaveBeenLastCalledWith({kind: "update-question", expectedRevision: 1, questionId: "q1",
+      question: updated.state.questions[0].question, category: "industry", subdivision: ""});
+    expect(screen.getByText(updated.state.questions[0].question)).toBeTruthy();
+    expect(screen.getByRole("button", {name: "评估问题"})).toBeTruthy();
+    expect(api.execute).not.toHaveBeenCalled();
+  });
+  it("删除必须确认，取消不写入，确认后清除选中项并保留历史入口", async () => {
+    const initial = workspace("succeeded"), removed = structuredClone(initial);
+    removed.state.questions = []; removed.state.evaluations = [];
+    const api: IntentWorkbenchApi = {observe: vi.fn(async () => initial), command: vi.fn(async () => removed),
+      execute: vi.fn(), rollback: vi.fn()};
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("checkbox", {name: `选择${question.question}`}));
+    fireEvent.click(screen.getByRole("button", {name: "删除问题"}));
+    fireEvent.click(screen.getByRole("button", {name: "取消"}));
+    expect(api.command).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "删除问题"}));
+    fireEvent.click(screen.getByRole("button", {name: "确认删除"}));
+    await waitFor(() => expect(screen.queryByRole("button", {name: "删除问题"})).toBeNull());
+    expect(api.command).toHaveBeenCalledWith({kind: "delete-question", questionId: "q1", expectedRevision: 1});
+    expect(screen.queryByRole("button", {name: "批量评估并优化（1）"})).toBeNull();
+    expect(screen.getByRole("button", {name: "历史记录（0）"})).toBeTruthy();
   });
   it("第二行生成方案只针对该问题，不沿用上一次查看的评分范围", async () => {
     const saved = workspace("succeeded");
