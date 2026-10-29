@@ -3,6 +3,8 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildSiteOpsEmbedPreviewToken,
+  siteOpsPreviewBridgeScript,
+  siteOpsPreviewBridgeToken,
   SITEOPS_EMBED_PREVIEW_TOKEN_TTL_MS,
   verifySiteOpsEmbedPreviewToken,
 } from "../server/siteops/artifact-api.js";
@@ -94,5 +96,52 @@ describe("site ops embed preview tokens", () => {
 
   it("uses a short-lived default TTL", () => {
     expect(SITEOPS_EMBED_PREVIEW_TOKEN_TTL_MS).toBe(10 * 60_000);
+  });
+
+  it("derives a deterministic bridge token from the embed capability", () => {
+    const token = buildSiteOpsEmbedPreviewToken({
+      buildId: "44444444-4444-4444-8444-444444444444",
+      userId: 7,
+      now: 1_000,
+      sign: signWithSecret,
+    });
+    expect(siteOpsPreviewBridgeToken(token, signWithSecret))
+      .toBe(siteOpsPreviewBridgeToken(token, signWithSecret));
+    expect(siteOpsPreviewBridgeToken(token, signWithSecret))
+      .not.toBe(siteOpsPreviewBridgeToken(`${token}x`, signWithSecret));
+  });
+
+  it("escapes the bridge bootstrap for a nonce-scoped inline script", () => {
+    const script = siteOpsPreviewBridgeScript("nonce-1234567890abcdef", {
+      token: "bridge",
+      buildId: "44444444-4444-4444-8444-444444444444",
+      knowledgeSnapshotId: "22222222-2222-4222-8222-222222222222",
+      knowledgeArchiveHash: "a".repeat(64),
+      designRevision: 4,
+      draftHash: "d".repeat(64),
+    });
+    expect(script).toContain('<script nonce="nonce-1234567890abcdef">');
+    expect(script).toContain("window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__=");
+    expect(script).toContain('"buildId":"44444444-4444-4444-8444-444444444444"');
+    expect(script.endsWith("</script>")).toBe(true);
+    // Dangerous characters in any value stay escaped inside the script body.
+    const hostile = siteOpsPreviewBridgeScript("nonce-1234567890abcdef", {
+      token: "<script>",
+      buildId: "44444444-4444-4444-8444-444444444444",
+      knowledgeSnapshotId: "22222222-2222-4222-8222-222222222222",
+      knowledgeArchiveHash: "a".repeat(64),
+      designRevision: 4,
+      draftHash: "d".repeat(64),
+    });
+    expect(hostile).toContain("\u003c");
+    expect(hostile).not.toContain("<script>");
+    expect(() => siteOpsPreviewBridgeScript("short", {
+      token: "bridge",
+      buildId: "44444444-4444-4444-8444-444444444444",
+      knowledgeSnapshotId: "22222222-2222-4222-8222-222222222222",
+      knowledgeArchiveHash: "a".repeat(64),
+      designRevision: 4,
+      draftHash: "d".repeat(64),
+    })).toThrow("SITEOPS_PREVIEW_NONCE_INVALID");
   });
 });

@@ -1,10 +1,7 @@
 import type { CSSProperties } from "react";
 import { FileText, PanelTop } from "lucide-react";
 import type { SiteDesignPreviewBlock } from "../../../contracts/site-design-preferences";
-import {
-  PreviewAssistantWidget,
-  type AssistantExchangeBinding,
-} from "./preview-assistant-widget";
+import { PreviewAssistantWidget } from "./preview-assistant-widget";
 
 export type PreviewDevice = "desktop" | "mobile";
 
@@ -33,10 +30,8 @@ export function SiteDesignDraftPreview({
   brandMark,
   device,
   error,
-  exchangeBinding,
   knowledgeVersion,
   loading,
-  onExchange,
   pages,
   siteAccent,
   siteDomain,
@@ -51,14 +46,8 @@ export function SiteDesignDraftPreview({
   brandMark: string;
   device: PreviewDevice;
   error: string | null;
-  exchangeBinding: AssistantExchangeBinding;
   knowledgeVersion: number | null;
   loading: boolean;
-  onExchange?: (
-    question: string,
-    answered: boolean,
-    binding: AssistantExchangeBinding,
-  ) => void;
   pages: DraftPreviewPage[];
   siteAccent: string;
   siteDomain: string;
@@ -164,10 +153,10 @@ export function SiteDesignDraftPreview({
 
         <PreviewAssistantWidget
           assistantName={assistantName}
-          exchangeBinding={exchangeBinding}
           initiallyOpen
-          onExchange={onExchange}
+          interactive={false}
           showSources
+          trialNote="真实问答与助手试用在下方真实构建预览中进行；本地草稿不会模拟回答。"
           welcome={welcome}
         />
       </div>

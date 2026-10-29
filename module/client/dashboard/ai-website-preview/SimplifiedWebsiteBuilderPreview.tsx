@@ -1153,6 +1153,25 @@ export function SimplifiedWebsiteBuilderPreview({
       .map((route) => ({ id: route.id, slug: route.slug, title: route.title })),
     [latestBuild?.brief?.routes, liveObservation?.brief?.routes],
   );
+  // Frozen coordinates a legitimate trial report must match. The embed only
+  // renders while the draft is synced, so the current assistant identity is
+  // the frozen one by construction.
+  const embedTrialBinding = embeddableBuild
+    && latestBuild?.designPreferences
+    && Boolean(assistantName.trim() && welcome.trim())
+    ? {
+        buildId: latestBuild.id,
+        knowledgeArchiveHash: latestBuild.knowledgeSnapshot?.archiveHash ?? null,
+        designRevision: latestBuild.designPreferences.designRevision,
+        draftHash: latestBuild.designPreferences.draftHash,
+        assistantName,
+        welcome,
+      }
+    : null;
+  const handleRealTrialComplete = useCallback(() => {
+    setAssistantTested(true);
+    setNotice("已在真实构建预览中完成一次助手问答，真实试聊已记录。");
+  }, []);
   const handleAssistantExchange = (
     _question: string,
     answered: boolean,
@@ -1849,21 +1868,30 @@ export function SimplifiedWebsiteBuilderPreview({
       setNotice("请补充助手名称和欢迎语。");
       return;
     }
-    if (activeStep === "design" && !assistantTested) {
-      setNotice("请先在右侧统一预览中提问一次并得到回答，完成助手试用后再继续。");
-      return;
-    }
-    if (
-      activeStep === "design"
-      && siteOps
-      && liveObservation?.interactionState === "awaiting_visual_selection"
-    ) {
+    if (activeStep === "design" && siteOps && templateSelectionOpen) {
+      // First real build: submit and stay. The real trial can only happen in
+      // the embedded build preview once it exists.
       const accepted = await submitLiveConfigurationAndBuild();
       if (!accepted) return;
+      setNotice("真实预览已开始生成；构建完成后请在右侧真实构建预览中完成一次助手问答，再继续进入建设评估。");
+      return;
     }
     if (activeStep === "design" && siteOps && liveRevisionEditable) {
-      const accepted = await submitLiveRevision();
-      if (!accepted) return;
+      if (!designDraftSynced) {
+        const accepted = await submitLiveRevision();
+        if (!accepted) return;
+        setNotice("改版要求已提交；新版本生成后请在右侧完成一次助手问答，再继续进入建设评估。");
+        return;
+      }
+      if (!assistantTested) {
+        setNotice("请先在右侧真实构建预览中向助手提问并得到真实回答，完成真实试聊后再继续。");
+        return;
+      }
+    }
+    if (activeStep === "design" && !siteOps && !assistantTested) {
+      // The offline demo keeps its illustrative trial gate.
+      setNotice("请先在右侧统一预览中提问一次并得到回答，完成助手试用后再继续。");
+      return;
     }
     setCompletedStepIds((current) => current.includes(activeStep) ? current : [...current, activeStep]);
     goTo(steps[stepIndex + 1].id);
@@ -2608,8 +2636,12 @@ export function SimplifiedWebsiteBuilderPreview({
                   <span>
                     <strong>{assistantTested ? "助手试用已完成" : "助手试用未完成"}</strong>
                     <small>{assistantTested
-                      ? "已在右侧统一预览中完成一次问答；修改名称或欢迎语后需重新试用。"
-                      : "请在右侧统一预览中提问一次并得到回答，再进入建设评估。"}</small>
+                      ? siteOps
+                        ? "已在右侧真实构建预览中完成一次真实问答；修改名称、欢迎语或知识版本后需重新试用。"
+                        : "已在右侧预览中完成一次问答；修改名称或欢迎语后需重新试用。"
+                      : siteOps
+                        ? "请在右侧真实构建预览中向助手提问并得到真实回答；本地草稿问答不计入试用。"
+                        : "请在右侧预览中提问一次并得到回答，再进入建设评估。"}</small>
                   </span>
                 </div>
               </div>
@@ -2620,6 +2652,8 @@ export function SimplifiedWebsiteBuilderPreview({
                 <SiteOpsBuildEmbedPreview
                   build={embeddableBuild}
                   device={device}
+                  expectedTrialBinding={embedTrialBinding}
+                  onTrialComplete={handleRealTrialComplete}
                   routes={embedRoutes}
                 />
               ) : isLiveBuilder ? (
@@ -2630,10 +2664,8 @@ export function SimplifiedWebsiteBuilderPreview({
                   brandMark={brandMark}
                   device={device}
                   error={designRecommendation?.error ?? null}
-                  exchangeBinding={assistantTrialBinding}
                   knowledgeVersion={draftPreviewData?.knowledgeVersion ?? null}
                   loading={Boolean(designRecommendation?.loading)}
-                  onExchange={handleAssistantExchange}
                   pages={draftPreviewPages}
                   siteAccent={siteAccent}
                   siteDomain={previewDomain}

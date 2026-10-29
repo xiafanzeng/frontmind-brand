@@ -73,6 +73,14 @@ describe("site assistant trusted build integration", () => {
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("frozenWelcome");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("--fma-accent");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("data-frontmind-site-navigation");
+    // Trusted preview bridge: only rendered 200 answers report a completed
+    // trial; errors and local notes never do.
+    expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE)
+      .toContain("__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__");
+    expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE)
+      .toContain("frontmind_site_assistant_answer_rendered");
+    expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE)
+      .toContain("reportRenderedAnswerToParent();");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_CSS).toContain(".fm-assistant-panel");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_CSS).toContain("prefers-reduced-motion");
   });

@@ -41,19 +41,25 @@ export function PreviewAssistantWidget({
   assistantName,
   exchangeBinding,
   initiallyOpen,
+  interactive = true,
   onExchange,
   showSources,
+  trialNote,
   welcome,
 }: {
   assistantName: string;
-  exchangeBinding: AssistantExchangeBinding;
+  exchangeBinding?: AssistantExchangeBinding;
   initiallyOpen: boolean;
+  /** False in the live real-data draft: local synthetic answers never count
+   * as a trial, so the panel only presents the assistant identity there. */
+  interactive?: boolean;
   onExchange?: (
     question: string,
     answered: boolean,
     binding: AssistantExchangeBinding,
   ) => void;
   showSources: boolean;
+  trialNote?: string;
   welcome: string;
 }) {
   const [widgetOpen, setWidgetOpen] = useState(initiallyOpen);
@@ -71,7 +77,7 @@ export function PreviewAssistantWidget({
     const value = raw.trim();
     if (!value || pending) return;
     const reply = resolveAssistantReply(value);
-    const submittedBinding = exchangeBinding;
+    const submittedBinding = exchangeBinding ?? null;
     setMessages((current) => [...current, { id: messageIdRef.current++, from: "visitor", text: value, sources: [] }]);
     setQuestion("");
     setWidgetOpen(true);
@@ -84,7 +90,9 @@ export function PreviewAssistantWidget({
         ...current,
         { id: messageIdRef.current++, from: "assistant", text: reply.text, sources: reply.sources },
       ]);
-      onExchange?.(value, reply.sources.length > 0, submittedBinding);
+      if (submittedBinding) {
+        onExchange?.(value, reply.sources.length > 0, submittedBinding);
+      }
     }, 500);
   };
 
@@ -125,23 +133,26 @@ export function PreviewAssistantWidget({
               </p>
             ))}
             {pending && <p className="sfp-widget-bubble sfp-widget-typing">正在检索示例知识…</p>}
-            {messages.length === 0 && !pending && (
+            {messages.length === 0 && !pending && interactive && (
               <div className="sfp-widget-suggestions">
                 {previewAssistantSuggestions.map((suggestion) => (
                   <button key={suggestion} type="button" onClick={() => ask(suggestion)}>{suggestion}</button>
                 ))}
               </div>
             )}
+            {trialNote && <p className="sfp-widget-bubble sfp-widget-note">{trialNote}</p>}
           </div>
-          <form onSubmit={submitQuestion}>
-            <input
-              aria-label="在网站助手中提问"
-              placeholder="继续提问…"
-              value={question}
-              onChange={(event) => setQuestion(event.currentTarget.value)}
-            />
-            <button type="submit" aria-label="发送问题"><Send size={16} /></button>
-          </form>
+          {interactive ? (
+            <form onSubmit={submitQuestion}>
+              <input
+                aria-label="在网站助手中提问"
+                placeholder="继续提问…"
+                value={question}
+                onChange={(event) => setQuestion(event.currentTarget.value)}
+              />
+              <button type="submit" aria-label="发送问题"><Send size={16} /></button>
+            </form>
+          ) : null}
         </section>
       )}
     </>
