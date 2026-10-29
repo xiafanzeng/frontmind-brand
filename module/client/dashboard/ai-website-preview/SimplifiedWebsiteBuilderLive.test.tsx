@@ -369,7 +369,13 @@ function designRecommendation(
     previewBlocks: candidates.map(([id, , title]) => ({
       id: `block_${id}`,
       routeId: id,
-      kind: id === "contact" ? "contact" : "summary",
+      kind: id === "home"
+        ? "hero"
+        : id === "products"
+          ? "offerings"
+          : id === "contact"
+            ? "contact"
+            : "summary",
       title: `${title}真实内容`,
       body: `${title}的知识投影`,
       items: [],
@@ -1289,6 +1295,182 @@ describe("redesigned live website builder setup", () => {
     expect(
       screen.getByRole("button", { name: "恢复推荐的网站名称" }),
     ).toBeTruthy();
+  });
+
+  it("renders the real-data draft preview from the server projection", async () => {
+    const current = recommendableObservation();
+    const onRequestDesignRecommendation = vi.fn();
+    const baseProps: SiteOpsConversationPanelProps = {
+      observation: current,
+      onAction: vi.fn(),
+      onRequestDesignRecommendation,
+    };
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={baseProps}
+        storageScope="live:7:draft-preview"
+      />,
+    );
+    await waitFor(() =>
+      expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
+    );
+    // Before the projection arrives the preview stays honest: a waiting
+    // state, never a fixture website.
+    expect(screen.getByTestId("website-draft-preview-state").textContent)
+      .toContain("尚未生成真实数据草稿");
+    expect(screen.queryByText("您好，需要了解什么？")).toBeNull();
+    expect(screen.queryByText("搜索文档，或直接询问 AI 助手")).toBeNull();
+
+    const request = onRequestDesignRecommendation.mock.calls[0]![0] as
+      SiteDesignRecommendationInput;
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{
+          ...baseProps,
+          designRecommendation: {
+            request,
+            data: designRecommendation(request),
+            loading: false,
+            error: null,
+          },
+        }}
+        storageScope="live:7:draft-preview"
+      />,
+    );
+
+    const banner = screen.getByTestId("website-draft-preview-banner");
+    expect(banner.textContent).toContain("真实数据草稿");
+    expect(banner.textContent).toContain("知识库 v3");
+    expect(banner.textContent).toContain("构建完成后以真实构建预览为准");
+    const blocks = screen
+      .getAllByTestId("website-draft-block")
+      .map((block) => block.textContent);
+    expect(blocks).toHaveLength(3);
+    expect(blocks[0]).toContain("首页 Hero");
+    expect(blocks[0]).toContain("首页真实内容");
+    expect(blocks[0]).toContain("首页的知识投影");
+    expect(blocks[1]).toContain("产品与服务");
+    expect(blocks[2]).toContain("联系方式");
+    expect(screen.getAllByText(/个知识来源/).length).toBeGreaterThanOrEqual(3);
+    // The unified preview keeps the assistant on the same screen.
+    expect(screen.getByLabelText("在网站助手中提问")).toBeTruthy();
+    // Fixture demo copy must not leak into the live preview.
+    expect(screen.queryByText("您好，需要了解什么？")).toBeNull();
+    expect(screen.queryByText("企业知识帮助中心")).toBeNull();
+  });
+
+  it("shows an in-progress draft state instead of mock pages while projecting", async () => {
+    const current = recommendableObservation();
+    const onRequestDesignRecommendation = vi.fn();
+    const baseProps: SiteOpsConversationPanelProps = {
+      observation: current,
+      onAction: vi.fn(),
+      onRequestDesignRecommendation,
+    };
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={baseProps}
+        storageScope="live:7:draft-loading"
+      />,
+    );
+    await waitFor(() =>
+      expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
+    );
+    const request = onRequestDesignRecommendation.mock.calls[0]![0] as
+      SiteDesignRecommendationInput;
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{
+          ...baseProps,
+          designRecommendation: {
+            request,
+            data: null,
+            loading: true,
+            error: null,
+          },
+        }}
+        storageScope="live:7:draft-loading"
+      />,
+    );
+
+    expect(screen.getByTestId("website-draft-preview-state").textContent)
+      .toContain("正在按当前发布知识生成真实数据草稿");
+    expect(screen.queryByText("您好，需要了解什么？")).toBeNull();
+    expect(screen.queryByTestId("website-draft-block")).toBeNull();
+  });
+
+  it("feeds the draft preview without rewriting saved design preferences", async () => {
+    const withPreferences = recommendableObservation();
+    withPreferences.brief = {
+      ...withPreferences.brief!,
+      designPreferences: {
+        schemaVersion: 1,
+        siteName: "已保存网站名称",
+        siteGoal: "已保存建站目标",
+        featuredRouteIds: ["home", "products", "contact"],
+        siteAccent: "#6f35a5",
+        assistant: {
+          name: "已保存助手",
+          welcome: "这是已保存的欢迎语。",
+          accentMode: "follow_site",
+          customAccent: "#6f35a5",
+        },
+        knowledgeSnapshot: KNOWLEDGE_COORDINATE,
+        template: TEMPLATE_COORDINATE,
+        designRevision: 2,
+        draftHash: "e".repeat(64),
+      },
+    };
+    const onRequestDesignRecommendation = vi.fn();
+    const baseProps: SiteOpsConversationPanelProps = {
+      observation: withPreferences,
+      onAction: vi.fn(),
+      onRequestDesignRecommendation,
+    };
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={baseProps}
+        storageScope="live:7:draft-preview-only"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
+    );
+    const request = onRequestDesignRecommendation.mock.calls[0]![0] as
+      SiteDesignRecommendationInput;
+    expect(request.requestContext.baseDesignRevision).toBe(2);
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{
+          ...baseProps,
+          designRecommendation: {
+            request,
+            data: designRecommendation(request),
+            loading: false,
+            error: null,
+          },
+        }}
+        storageScope="live:7:draft-preview-only"
+      />,
+    );
+
+    // The saved preferences still own the form.
+    expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
+      .toBe("已保存网站名称");
+    expect(
+      (screen.getByLabelText("站点简介 / 建站目标") as HTMLTextAreaElement).value,
+    ).toBe("已保存建站目标");
+    // The real-data draft preview still renders from the projection.
+    expect(screen.getByTestId("website-draft-preview-banner").textContent)
+      .toContain("真实数据草稿");
+    expect(screen.getAllByTestId("website-draft-block").length).toBe(3);
   });
 
   it("saves the real brief configuration before selecting the admitted template", async () => {
