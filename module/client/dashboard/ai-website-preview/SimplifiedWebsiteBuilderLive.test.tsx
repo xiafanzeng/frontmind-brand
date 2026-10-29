@@ -1531,6 +1531,13 @@ describe("redesigned live website builder setup", () => {
         expect((screen.getByTitle("真实构建预览") as HTMLIFrameElement).src)
           .toContain("embed-preview/?token="),
       );
+      // The trial binding echoes the frozen assistant identity, so wait until
+      // the form has hydrated it before dispatching bridge reports; slower
+      // environments hydrate after the token iframe resolves.
+      await waitFor(() =>
+        expect((screen.getByLabelText("助手名称") as HTMLInputElement).value)
+          .toBe("远山助手"),
+      );
       expect(screen.getByText("助手试用未完成")).toBeTruthy();
 
       const report = (overrides: Record<string, unknown>) => ({

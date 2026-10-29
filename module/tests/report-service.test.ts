@@ -54,7 +54,13 @@ beforeEach(async()=>{
  root=await mkdtemp(path.join(os.tmpdir(),'brand-report-service-'));db=new MemoryDb();mock.runs=[];mock.pending.clear();mock.monitorSubmits=[];mock.monitorWait=null;mock.workflowHash='workflow-v2';
  mock.ports={agentOperations:table('operations'),agentTasks:table('tasks'),assertActorAllowed:()=>{},lockAccountRecord:async()=>{},lockCustomerProjectBusinessWrite:async()=>{},getDashboardWorkspace:async()=>({payload:profile}),createCredentialAgentClient:()=>{throw new Error('XTY must never run');}};
 });
-afterEach(async()=>{for(const operation of db.data.operations){const service=makeService();await service.stop(operation.id).catch(()=>{});await service.schedule(operation.id);}vi.restoreAllMocks();await rm(root,{recursive:true,force:true});});
+afterEach(async()=>{
+// Interruption tests intentionally leave unresolved fake harness jobs; a
+// stop/schedule on those can never settle, so cleanup is bounded instead of
+// hanging slower environments (image-build containers) after the assertions.
+ const cleanup=(async()=>{for(const operation of db.data.operations){const service=makeService();await service.stop(operation.id).catch(()=>{});await service.schedule(operation.id).catch(()=>{});}})();
+ await Promise.race([cleanup,new Promise(resolve=>setTimeout(resolve,5000))]);
+ vi.restoreAllMocks();await rm(root,{recursive:true,force:true});});
 function captureHeartbeat(){
  const intervals=vi.spyOn(globalThis,'setInterval'),deadlines=vi.spyOn(globalThis,'setTimeout');
  return {
