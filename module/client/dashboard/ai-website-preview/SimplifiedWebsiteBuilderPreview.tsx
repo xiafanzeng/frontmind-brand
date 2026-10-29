@@ -35,6 +35,7 @@ import {
   type AssistantExchangeBinding,
 } from "./preview-assistant-widget";
 import { SiteDesignDraftPreview } from "./site-design-draft-preview";
+import { SiteOpsBuildEmbedPreview } from "./siteops-build-embed-preview";
 import { usePreviewDialog } from "./qa-widget/usePreviewDialog";
 import {
   findLatestEvaluationReport,
@@ -856,6 +857,9 @@ export function SimplifiedWebsiteBuilderPreview({
     projectId: string;
     editSequence: number;
   } | null>(null);
+  // Edit sequence at the last successful structured save; a build embed is
+  // only shown while the design draft has no unsaved edits on top of it.
+  const savedDesignSequenceRef = useRef<number | null>(null);
   const currentAssistantTrialBindingRef = useRef<AssistantExchangeBinding>({
     designEditSequence: 0,
     assistantName,
@@ -1124,6 +1128,30 @@ export function SimplifiedWebsiteBuilderPreview({
   const draftPreviewPages = useMemo(
     () => enabledPages.map((page) => ({ id: page.id, name: page.name })),
     [enabledPages],
+  );
+  // Two-stage preview: once a real build with a dist exists and the design
+  // draft has no unsaved edits on top of it, the right panel switches from the
+  // real-data draft to the embedded real build. Editing falls back to the
+  // draft (with the transitional trial widget) until the design is saved and
+  // rebuilt.
+  const designDraftSynced = latestBuild?.previewUrl
+    ? !liveBriefHydrationRef.current
+      || designEditSequenceRef.current === liveBriefHydrationRef.current.editSequence
+      || designEditSequenceRef.current === savedDesignSequenceRef.current
+    : false;
+  const embeddableBuild = designDraftSynced && latestBuild?.previewUrl
+    ? {
+        id: latestBuild.id,
+        ordinal: latestBuild.ordinal,
+        status: latestBuild.status,
+        previewUrl: latestBuild.previewUrl,
+        knowledgeSnapshotVersion: latestBuild.knowledgeSnapshot?.version ?? null,
+      }
+    : null;
+  const embedRoutes = useMemo(
+    () => (latestBuild?.brief?.routes ?? liveObservation?.brief?.routes ?? [])
+      .map((route) => ({ id: route.id, slug: route.slug, title: route.title })),
+    [latestBuild?.brief?.routes, liveObservation?.brief?.routes],
   );
   const handleAssistantExchange = (
     _question: string,
@@ -1695,12 +1723,14 @@ export function SimplifiedWebsiteBuilderPreview({
     if (!siteOps?.onSaveDesignPreferences || !liveObservation) {
       throw new Error("真实建站服务当前不能保存网站设计，请刷新后重试。");
     }
-    return await siteOps.onSaveDesignPreferences({
+    const observation = await siteOps.onSaveDesignPreferences({
       conversationId: liveObservation.project.conversationId,
       expectedProjectRevision: liveObservation.project.revision,
       expectedDesignRevision: currentDesignRevision,
       draft: createLiveDesignPreferencesDraft(),
     });
+    savedDesignSequenceRef.current = designEditSequenceRef.current;
+    return observation;
   };
 
   const submitLiveConfigurationAndBuild = async () => {
@@ -2585,8 +2615,14 @@ export function SimplifiedWebsiteBuilderPreview({
               </div>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel" aria-label="网站与助手统一预览" data-testid="website-design-preview">
-              <div className="sfp-preview-heading"><span><strong>{isLiveBuilder ? "真实数据草稿" : "知识驱动统一预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? " · 内容来自当前知识投影，构建完成后以真实构建预览为准" : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-              {isLiveBuilder ? (
+              <div className="sfp-preview-heading"><span><strong>{isLiveBuilder ? (embeddableBuild ? "真实构建预览" : "真实数据草稿") : "知识驱动统一预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? (embeddableBuild ? " · 已嵌入真实构建产物" : " · 内容来自当前知识投影，构建完成后以真实构建预览为准") : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+              {isLiveBuilder && embeddableBuild ? (
+                <SiteOpsBuildEmbedPreview
+                  build={embeddableBuild}
+                  device={device}
+                  routes={embedRoutes}
+                />
+              ) : isLiveBuilder ? (
                 <SiteDesignDraftPreview
                   assistantAccent={effectiveAssistantAccent}
                   assistantName={assistantName}

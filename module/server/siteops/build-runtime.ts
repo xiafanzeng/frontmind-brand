@@ -1493,10 +1493,17 @@ function trustedAssistantAssetName(assetPath: string) {
   return assetPath.replace(/^\/+/, "");
 }
 
+type SiteAssistantBuildCoordinate = {
+  id: string;
+  knowledgeSnapshotId: string;
+  knowledgeArchiveHash: string;
+};
+
 function addTrustedSiteAssistantAssets(input: {
   files: SourceFile[];
   pathPrefix: "" | "public/";
   runtimeDesign: SiteDesignRuntimeProjection;
+  build?: SiteAssistantBuildCoordinate | null;
 }) {
   const pathFor = (assetPath: string) =>
     `${input.pathPrefix}${trustedAssistantAssetName(assetPath)}`;
@@ -1504,7 +1511,11 @@ function addTrustedSiteAssistantAssets(input: {
     input.files,
     pathFor(SITE_ASSISTANT_CONFIG_ASSET_PATH),
     trustedSiteAssistantConfigSource(
-      siteAssistantBootConfig(siteAssistantApiOrigin(), input.runtimeDesign),
+      siteAssistantBootConfig(
+        siteAssistantApiOrigin(),
+        input.runtimeDesign,
+        input.build ?? null,
+      ),
     ),
   );
   addTextFile(
@@ -1714,6 +1725,7 @@ function buildTrustedAstroSource(input: {
     files,
     pathPrefix: "public/",
     runtimeDesign,
+    build: input.frozenRuntimeInput.build,
   });
   if (input.brandAsset) {
     addTextFile(files, input.brandAsset.publicPath, input.brandAsset.bytes);
@@ -1955,7 +1967,11 @@ function buildTrustedReactSource(input: {
       brandLogoWidth: frozenBrandAsset?.width ?? null,
       brandLogoHeight: frozenBrandAsset?.height ?? null,
       bodyClass: projection.bodyClass,
-      assistant: siteAssistantBootConfig(assistantApiOrigin, runtimeDesign),
+      assistant: siteAssistantBootConfig(
+        assistantApiOrigin,
+        runtimeDesign,
+        input.frozenRuntimeInput.build,
+      ),
     }),
   );
 
@@ -2224,6 +2240,7 @@ function buildTrustedReactSource(input: {
     files,
     pathPrefix: "public/",
     runtimeDesign,
+    build: input.frozenRuntimeInput.build,
   });
   if (input.brandAsset) {
     addTextFile(files, input.brandAsset.publicPath, input.brandAsset.bytes);
@@ -2352,6 +2369,7 @@ function buildTrustedFallbackDist(input: {
   mode: "preview" | "production";
   canonicalOrigin: string | null;
   brandAsset: TrustedSiteBrandAsset | null;
+  build: SiteAssistantBuildCoordinate;
 }) {
   const files: SourceFile[] = [];
   const runtimeDesign = projectSiteDesignRuntime(input.brief);
@@ -2413,7 +2431,7 @@ function buildTrustedFallbackDist(input: {
       : '<meta name="robots" content="index,follow">';
   const style = `:root{color-scheme:light;--canvas:${palette.canvas};--ink:${palette.ink};--accent:${siteAccent};--frontmind-site-accent:${siteAccent};--muted:${palette.muted};accent-color:${siteAccent};font-family:${fontFamily};background:var(--canvas);color:var(--ink)}*{box-sizing:border-box}body{margin:0;min-width:320px;line-height:1.65;background:var(--canvas);color:var(--ink)}a{color:var(--accent);text-underline-offset:.18em}a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}.shell{width:min(70rem,calc(100% - 2rem));margin-inline:auto}.site-header{border-bottom:2px solid var(--ink);background:var(--canvas)}.nav{min-height:4.5rem;display:flex;align-items:center;justify-content:space-between;gap:1.5rem}.brand{display:flex;align-items:center;gap:.75rem;color:var(--ink);font-weight:800;text-decoration:none}.brand-logo{display:block;width:auto;height:2.5rem;max-width:11rem;object-fit:contain}.nav-links{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:.75rem 1.25rem}.hero{padding:${spacing.hero} 0 ${spacing.content};background:var(--ink);color:var(--canvas)}.eyebrow{font-size:.8rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.hero h1{max-width:20ch;margin:.3em 0;font-size:clamp(2.5rem,7vw,5.5rem);line-height:1}.lede{max-width:65ch;font-size:1.15rem}.content{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;padding-block:${spacing.content} 5rem}.section{border:2px solid var(--ink);padding:${spacing.card};background:var(--canvas)}.section h2{margin-top:0;line-height:1.15}.contact{padding:${spacing.content} 0;background:var(--ink);color:var(--canvas)}.contact a{color:var(--canvas)}.site-footer{padding:2rem 0;border-top:2px solid var(--ink)}.empty{grid-column:1/-1}.empty p{font-size:1.1rem}@media(max-width:44rem){.nav{align-items:flex-start;padding-block:1rem}.nav-links{gap:.5rem}.content{grid-template-columns:1fr}.hero{padding-top:3.5rem}}`;
   addTextFile(files, "styles.css", `${style}\n`);
-  addTrustedSiteAssistantAssets({ files, pathPrefix: "", runtimeDesign });
+  addTrustedSiteAssistantAssets({ files, pathPrefix: "", runtimeDesign, build: input.build });
 
   const sharedHead = (inputValue: {
     title: string;
@@ -3566,6 +3584,7 @@ export function qaDist(input: {
   qaPolicyVersion: string;
   sourceDocumentIds: readonly string[];
   expectedHeroFamily?: string;
+  build?: SiteAssistantBuildCoordinate | null;
 }) {
   const files = new Map(input.files.map((file) => [file.path, file.bytes]));
   const routeOutputs = input.brief.routes.map((route) =>
@@ -3816,7 +3835,11 @@ export function qaDist(input: {
     files.get(assistantConfigName)?.equals(
       Buffer.from(
         trustedSiteAssistantConfigSource(
-          siteAssistantBootConfig(siteAssistantApiOrigin(), runtimeDesign),
+          siteAssistantBootConfig(
+            siteAssistantApiOrigin(),
+            runtimeDesign,
+            input.build ?? null,
+          ),
         ),
         "utf8",
       ),
@@ -4274,6 +4297,7 @@ async function materializeSiteWithWorkflow(
             mode: input.mode,
             canonicalOrigin: validated.canonicalOrigin,
             brandAsset: validated.brandAsset,
+            build: input.build,
           }),
       });
       buildLog = jsonBuffer({
@@ -4374,6 +4398,7 @@ async function materializeSiteWithWorkflow(
               designSpec: reactDesign,
               mode: input.mode,
               canonicalOrigin: validated.canonicalOrigin,
+              build: input.build,
               brandAsset: validated.brandAsset,
             }),
         });
@@ -4391,6 +4416,7 @@ async function materializeSiteWithWorkflow(
         qaDist({
           files: distFiles,
           brief: validated.brief,
+          build: input.build,
           mode: input.mode,
           canonicalOrigin: validated.canonicalOrigin,
           assetDecisions: validated.assetDecisions,

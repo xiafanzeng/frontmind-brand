@@ -49,7 +49,9 @@ export function createResponseLogicCredentialMiddleware(core: ModuleHttpCore): R
         return;
       }
       if (credential) {
-        (request as Request & { frontmindCredential?: unknown }).frontmindCredential = credential;
+        // Narrow to a plain shape: Core augments Express.Request with a
+        // concrete credential type that a module-side handle must not fake.
+        (request as { frontmindCredential?: unknown }).frontmindCredential = credential;
       }
       next();
     })();

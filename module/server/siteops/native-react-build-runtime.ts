@@ -85,6 +85,11 @@ const buildCoordinatesSchema = z
     id: z.string().uuid(),
     projectId: z.string().uuid(),
     knowledgeSnapshotId: z.string().max(191).nullable().optional(),
+    knowledgeArchiveHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable()
+      .optional(),
     workflowVersion: z.string().trim().min(1).max(64).nullable().optional(),
     selectionHash: z
       .string()
@@ -1364,12 +1369,17 @@ function normalizeRoutePages(input: {
   canonicalOrigin: string | null;
   assistantApiOrigin: string;
   design: SiteDesignRuntimeProjection;
+  build: {
+    id: string;
+    knowledgeSnapshotId: string;
+    knowledgeArchiveHash: string;
+  } | null;
 }) {
   const fileMap = new Map(input.files.map((file) => [file.path, file.bytes]));
   const documentCsp = nativeDocumentCsp(input.assistantApiOrigin);
   // Host-owned assistant assets; provider content never flows into these.
   const assistantConfig = trustedSiteAssistantConfigSource(
-    siteAssistantBootConfig(input.assistantApiOrigin, input.design),
+    siteAssistantBootConfig(input.assistantApiOrigin, input.design, input.build),
   );
   const assistantHeadMarkup =
     '<link rel="stylesheet" href="/site-design.css">' +
@@ -2647,6 +2657,13 @@ export async function materializeNativeReactSource(
       canonicalOrigin,
       assistantApiOrigin,
       design: runtimeDesign,
+      build: build.knowledgeSnapshotId && build.knowledgeArchiveHash
+        ? {
+            id: build.id,
+            knowledgeSnapshotId: build.knowledgeSnapshotId,
+            knowledgeArchiveHash: build.knowledgeArchiveHash,
+          }
+        : null,
     });
     const checks = assertStaticHardSafety({
       files,

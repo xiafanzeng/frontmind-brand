@@ -1403,6 +1403,72 @@ describe("redesigned live website builder setup", () => {
     expect(screen.queryByTestId("website-draft-block")).toBeNull();
   });
 
+  it("embeds the real build through the owner-only preview endpoint", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        url: "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/embed-preview/?token=abc.def",
+        expiresAt: Date.now() + 600_000,
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const openMock = vi.fn();
+    vi.stubGlobal("open", openMock);
+    const current = recommendableObservation();
+    const approved = liveBuildObservation("approved");
+    const observationWithBuild: SiteOpsObservationV1 = {
+      ...current,
+      project: approved.project,
+      builds: approved.builds.map((build) => ({
+        ...build,
+        knowledgeSnapshot: {
+          id: KNOWLEDGE_COORDINATE.id,
+          version: KNOWLEDGE_COORDINATE.version,
+          archiveHash: KNOWLEDGE_COORDINATE.archiveHash,
+        },
+      })),
+      interactionState: "approved",
+    };
+    try {
+      render(
+        <SimplifiedWebsiteBuilderPreview
+          initialStep="design"
+          siteOps={{ observation: observationWithBuild, onAction: vi.fn() }}
+          storageScope="live:7:embed-preview"
+        />,
+      );
+
+      await waitFor(() => {
+        const frame = screen.getByTitle("真实构建预览") as HTMLIFrameElement;
+        expect(frame.src).toContain(
+          "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/embed-preview/?token=abc.def",
+        );
+      });
+      const toolbar = screen.getByTestId("website-embed-preview-toolbar");
+      expect(toolbar.textContent).toContain("真实构建 v1");
+      expect(toolbar.textContent).toContain("知识快照 v3");
+      // The real build replaces the draft; no fixture draft banner remains.
+      expect(screen.queryByTestId("website-draft-preview-banner")).toBeNull();
+
+      fireEvent.change(screen.getByLabelText("选择预览页面"), {
+        target: {value: "/products"},
+      });
+      await waitFor(() => {
+        const frame = screen.getByTitle("真实构建预览") as HTMLIFrameElement;
+        expect(frame.src).toContain("/embed-preview/products/?token=");
+      });
+
+      fireEvent.click(screen.getByRole("button", {name: /新窗口打开/}));
+      expect(openMock).toHaveBeenCalledWith(
+        "/api/frontmind/v2/siteops/builds/preview-1/products/",
+        "_blank",
+        "noopener",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("feeds the draft preview without rewriting saved design preferences", async () => {
     const withPreferences = recommendableObservation();
     withPreferences.brief = {

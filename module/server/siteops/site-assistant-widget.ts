@@ -112,7 +112,17 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
   if (!bootConfig || typeof bootConfig.apiBase !== "string" || !/^https:\/\//.test(bootConfig.apiBase)) return;
   var apiBase = bootConfig.apiBase.replace(/\/+$/, "") + "/api/public/site-assistant";
   var MAX_QUESTION = 500;
-  var storageKey = "fm-assistant:" + apiBase;
+  var binding = bootConfig.binding && typeof bootConfig.binding === "object"
+    && typeof bootConfig.binding.knowledgeArchiveHash === "string"
+    && typeof bootConfig.binding.signature === "string"
+      ? bootConfig.binding
+      : null;
+  // Sessions are keyed on the binding's knowledge identity: a new knowledge
+  // snapshot always starts a fresh conversation, while pure visual revisions
+  // of the same knowledge keep the transcript.
+  var storageKey = "fm-assistant:" + apiBase + (binding
+    ? ":" + binding.knowledgeSnapshotId + ":" + binding.knowledgeArchiveHash
+    : "");
   var frozenName = typeof bootConfig.name === "string" && bootConfig.name.trim() ? bootConfig.name.trim() : null;
   var frozenWelcome = typeof bootConfig.welcome === "string" && bootConfig.welcome.trim() ? bootConfig.welcome.trim() : null;
   var frozenAccent = typeof bootConfig.accent === "string" && /^#[0-9a-f]{6}$/i.test(bootConfig.accent) ? bootConfig.accent : null;
@@ -418,7 +428,7 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
     fetch(apiBase + "/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ question: question, session: session }),
+      body: JSON.stringify({ question: question, session: session, binding: binding }),
       signal: controller.signal,
     })
       .then(function (response) {
