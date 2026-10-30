@@ -3,7 +3,6 @@ import {
   Bot,
   Check,
   CircleAlert,
-  ExternalLink,
   FileText,
   Globe2,
   LayoutTemplate,
@@ -2395,23 +2394,27 @@ export function SimplifiedWebsiteBuilderPreview({
       data-step={activeStep}
       data-testid={siteOps ? "website-builder-live-root" : undefined}
     >
-      {/* The live workspace keeps its own page chrome; the demo heading and
-          status card would only duplicate the live status strip below. */}
-      {!siteOps && (
-        <header className="sfp-heading">
-          <div>
-            <h1>从知识库快速搭建帮助中心</h1>
-            <p>先完成网站建设与整体评估，再考虑域名和正式上线。</p>
-          </div>
-          <div className={`sfp-draft-state ${storageAvailable ? "" : "is-session-only"}`}>
-            <i />
-            <span>
-              <strong>{isConfirmed ? "草稿已确认" : "建设中"}</strong>
-              <small>{storageAvailable ? `本地草稿 · ${isConfirmed ? "草稿确认状态已保存" : "配置已自动保存"}` : "仅本次页面保存"}</small>
-            </span>
-          </div>
-        </header>
-      )}
+      <header className="sfp-heading">
+        <div>
+          <h1>从知识库快速搭建帮助中心</h1>
+          <p>先完成网站建设与整体评估，再考虑域名和正式上线。</p>
+        </div>
+        <div className={`sfp-draft-state ${storageAvailable ? "" : "is-session-only"}`}>
+          <i />
+          <span>
+            <strong>
+              {siteOps
+                ? LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus
+                : isConfirmed ? "草稿已确认" : "建设中"}
+            </strong>
+            <small>
+              {siteOps
+                ? `真实 SiteOps · 项目版本 ${liveObservation?.project.revision ?? "—"}`
+                : storageAvailable ? `本地草稿 · ${isConfirmed ? "草稿确认状态已保存" : "配置已自动保存"}` : "仅本次页面保存"}
+            </small>
+          </span>
+        </div>
+      </header>
 
       <ol className="sfp-steps" aria-label="网站建设流程">
         {steps.map((step) => (
@@ -2432,29 +2435,6 @@ export function SimplifiedWebsiteBuilderPreview({
             <button type="button" onClick={() => siteOps.onRefresh?.()}>
               <RefreshCw size={15} />重新载入
             </button>
-          )}
-        </div>
-      )}
-      {siteOps && (
-        <div className="sfp-live-status" data-testid="siteops-build-status" role="status">
-          <span>
-            {liveInteractionPending || siteOps.refreshing ? <Loader2 className="sfp-spin" size={17} /> : <i />}
-            <strong>{LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus}</strong>
-            <small>
-              {latestBuild
-                ? `真实构建 #${latestBuild.ordinal} · ${latestBuild.buildDelivery?.qaStatus ?? "检查中"}`
-                : liveObservation?.knowledgeSnapshots[0]?.label ?? "正在读取当前知识库"}
-            </small>
-          </span>
-          {latestBuild?.previewUrl && (
-            <a
-              data-testid="siteops-preview-link"
-              href={latestBuild.previewUrl}
-              target="frontmind-siteops-preview"
-              rel="noreferrer"
-            >
-              打开真实网站预览<ExternalLink size={15} />
-            </a>
           )}
         </div>
       )}
