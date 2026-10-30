@@ -1661,6 +1661,13 @@ function ResponseLogicQuestionEditor({
       });
       applyAuthoritativeRecord(outcome.record);
       finish(true);
+      // Persisted records still hold the pre-adopt snapshot until the next
+      // 30s store refresh. Refresh immediately so the editor's fallback
+      // recordDraft matches the adopted content without waiting for the
+      // timer — without this, a slow localDraft state propagation leaves
+      // the four sections blank on the current page (user reported a
+      // "white screen" until re-entering the question).
+      void persistenceRef.current.refresh().catch(() => undefined);
     } catch (error) {
       const supersededResultId = (
         error as { supersededResultId?: string }
@@ -2163,7 +2170,7 @@ function ResponseLogicQuestionEditor({
         </div>
       )}
       {showDemo && demoView === "evaluation" && (
-        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={retryDemoEvaluation}/>
+        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} judgeErrorCode={judge.state.errorCode} judgeErrorDetails={judge.state.errorDetails} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={retryDemoEvaluation}/>
       )}
       {showDemo && demoView === "optimize" && (
         <ResponseLogicOptimizationWorkflow key={`${questionId}:${currentVersion}:${currentRevision}:${currentFingerprint}`} question={question.question} intent={question.intent ?? ""} logic={currentLogic} judgeTaskId={judge.state.phase === "completed" && judge.state.taskId ? judge.state.taskId : ""} optimization={guardedOptimization} onAdopt={adoptOptimizationPatch} onBack={()=>setDemoView("evaluation")}/>

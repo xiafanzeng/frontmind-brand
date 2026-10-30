@@ -230,4 +230,69 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
     ).toBeGreaterThanOrEqual(1);
     view.unmount();
   });
+
+  it("WHITE-SCREEN REPRO: adopt succeeds -> page must render four sections immediately (no remount)", async () => {
+    const adoptedRec = {
+      ...record,
+      questionId: "q-white",
+      lastTaskId: "task-white",
+      revision: 3,
+      draft: { ...emptyDraft, concern: "白屏测试一", conclusion: "白屏测试二", facts: "白屏测试三", boundaries: "白屏测试四" },
+      appliedModelResult: { taskId: "task-white", resultId: "res-white", source: "structured_output", adoptedAt: 1 },
+    };
+    h.router = async (url: string) => {
+      const response = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+      if (url.includes("/tasks/task-white/status")) {
+        return response({
+          status: "completed", taskId: "task-white", operationRevision: 2, model: "frontmind-pro",
+          resultId: "res-white", source: "structured_output",
+          structuredDraft: { concern: "白屏测试一", conclusion: "白屏测试二", facts: "白屏测试三", boundaries: "白屏测试四" },
+          execution: { schemaVersion: 1, taskId: "task-white", coverage: "partial", runId: "task-white", timeline: [] },
+        });
+      }
+      if (url.includes("/adopt-result")) {
+        return response({ status: "adopted", adopted: true, resultId: "res-white", record: adoptedRec });
+      }
+      if (url.replace(/[?].*$/, "").endsWith("/response-logic")) {
+        return response({ records: [{ ...record, questionId: "q-white", lastTaskId: "task-white" }] });
+      }
+      return response({}, 404);
+    };
+    const { screen } = await import("@testing-library/react");
+    render(
+      <BrandResponseLogicEntry
+        question={{ id: "q-white", question: "白屏测试问题", category: "行业" } as never}
+        onBack={() => undefined}
+        visual={{
+          Button: (props: Record<string, unknown>) => <button {...props} />,
+          BusinessExecutionActivity: () => null,
+          FilePreview: () => null,
+          ImagePreview: () => null,
+        } as never}
+        toast={{ success: () => undefined, error: () => undefined }}
+      />,
+    );
+    // Wait for recovery -> status -> completed -> adopt to finish.
+    await waitFor(() => {
+      expect(document.body.textContent ?? "").not.toContain("正在生成应答逻辑");
+    }, { timeout: 5000 });
+    // Extra settle time for React state propagation.
+    await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
+    // THE assertion: four sections render in the SAME mounted page.
+    const body = document.body.textContent ?? "";
+    const concernBox = document.querySelector("textarea");
+    const textareas = Array.from(document.querySelectorAll("textarea"));
+    const diag = {
+      hasFailed: body.includes("生成未完成"),
+      hasCompleted: body.includes("已生成并进入编辑"),
+      concernBoxCount: textareas.length,
+      firstTaValue: concernBox ? (concernBox as HTMLTextAreaElement).value : null,
+      bodyHead: body.slice(0, 200),
+    };
+    expect(
+      textareas.some(t => (t as HTMLTextAreaElement).value.includes("白屏测试")),
+      `WHITE-SCREEN DIAG ${JSON.stringify(diag)}`,
+    ).toBe(true);
+  });
 });
