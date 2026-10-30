@@ -142,10 +142,18 @@ describe("simplified AI website preview", () => {
   it("persists every editable design field through the single V2 design draft", async () => {
     const firstMount = render(<SimplifiedWebsiteBuilderPreview initialStep="design" />);
 
+    // Columns start fully selected, so a single opt-out is enough to shape
+    // the persisted navigation.
+    expect(
+      ["快速开始", "产品与服务", "使用指南", "常见问题", "联系我们"].every(
+        (name) =>
+          (screen.getByLabelText(`在网站中显示${name}`) as HTMLInputElement)
+            .checked,
+      ),
+    ).toBe(true);
     fireEvent.change(screen.getByLabelText("网站名称"), { target: { value: "远山知识站" } });
     fireEvent.change(screen.getByLabelText("站点简介 / 建站目标"), { target: { value: "提供可信的产品答案" } });
     fireEvent.click(screen.getByLabelText("在网站中显示使用指南"));
-    fireEvent.click(screen.getByLabelText("在网站中显示常见问题"));
     fireEvent.click(screen.getByRole("button", { name: "选择网站主题色 #315b8a" }));
     fireEvent.change(screen.getByLabelText("助手名称"), { target: { value: "远山助手" } });
     fireEvent.change(screen.getByLabelText("欢迎语"), { target: { value: "您好，请问想了解哪项产品？" } });
@@ -173,7 +181,7 @@ describe("simplified AI website preview", () => {
       expect(saved.design).toEqual({
         siteName: "远山知识站",
         siteGoal: "提供可信的产品答案",
-        featuredPageIds: ["start", "services", "faq"],
+        featuredPageIds: ["start", "services", "faq", "contact"],
         siteAccent: "#315b8a",
         assistant: {
           name: "远山助手",
@@ -237,11 +245,11 @@ describe("simplified AI website preview", () => {
     expect((screen.getByRole("radio", { name: /知识帮助中心/ }) as HTMLInputElement).checked).toBe(true);
     expect(screen.queryByText("products:cloud")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
-    expect(screen.getByText("共 5 个栏目，3 个启用")).toBeTruthy();
+    expect(screen.getByText("共 5 个栏目，5 个启用")).toBeTruthy();
     expect((screen.getByLabelText("在网站中显示快速开始") as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText("在网站中显示产品与服务") as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText("在网站中显示使用指南") as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText("在网站中显示常见问题") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText("在网站中显示常见问题") as HTMLInputElement).checked).toBe(true);
   });
 
   it("focuses the requested design section from legacy step coordinates", () => {

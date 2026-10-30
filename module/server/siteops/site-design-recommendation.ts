@@ -525,7 +525,10 @@ export function createSiteDesignRecommendation(
     .filter((route) => !selectedIds.has(route.id))
     .sort(compareEvidence);
   const ranked = [...selected, ...remaining];
-  const featuredRouteIds = selected.map((route) => route.id);
+  // Every source-backed route is featured by default; the priority picks only
+  // drive ordering and the recommendation reasons, never a hard column cap.
+  const featuredRouteIds = ranked.map((route) => route.id);
+  const featuredIds = new Set(featuredRouteIds);
   const name = siteNameRecommendation(input.brief.companyName, documents);
   const goal = siteGoalRecommendation(
     selected,
@@ -557,7 +560,7 @@ export function createSiteDesignRecommendation(
       sourceDocumentIds: route.sourceDocumentIds,
       evidenceDocumentCount: route.evidenceDocumentCount,
       importanceRank: index + 1,
-      featured: selectedIds.has(route.id),
+      featured: featuredIds.has(route.id),
       recommendationReason:
         reasonById.get(route.id) ?? "secondary_knowledge_coverage",
     })),
