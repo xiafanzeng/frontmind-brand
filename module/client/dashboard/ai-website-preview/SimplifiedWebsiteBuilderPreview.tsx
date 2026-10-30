@@ -1385,18 +1385,24 @@ export function SimplifiedWebsiteBuilderPreview({
         nextAssistantName !== current.assistantName || nextWelcome !== current.welcome;
       return {
         ...current,
-        pages: brief.routes.map((route) => ({
-          id: route.id,
-          name: route.title,
-          detail: `${route.sourceDocumentIds.length} 个知识来源`,
-          // Persisted server preferences win. Otherwise retain the route IDs
-          // from the local unified draft until the user saves them.
-          enabled: designPreferences
-            ? featuredRouteIds.has(route.id)
-            : localSelectionTargetsLiveRoutes
-              ? localFeaturedRouteIds.has(route.id)
-              : true,
-        })),
+        // Only source-backed routes are eligible for the navigation: the save
+        // contract rejects featured routes without knowledge sources, so a
+        // source-less placeholder route must never appear as a toggleable
+        // column.
+        pages: brief.routes
+          .filter((route) => route.sourceDocumentIds.length > 0)
+          .map((route) => ({
+            id: route.id,
+            name: route.title,
+            detail: `${route.sourceDocumentIds.length} 个知识来源`,
+            // Persisted server preferences win. Otherwise retain the route IDs
+            // from the local unified draft until the user saves them.
+            enabled: designPreferences
+              ? featuredRouteIds.has(route.id)
+              : localSelectionTargetsLiveRoutes
+                ? localFeaturedRouteIds.has(route.id)
+                : true,
+          })),
         // A saved user edit outranks both the brief fallback and a later
         // recommendation; unedited fields still hydrate from the real brief.
         siteName: designPreferences?.siteName
