@@ -2306,7 +2306,7 @@
   margin-bottom: var(--fm-brand-space-3);
 }
 
-.fm-brand-theme[data-brand-page="website"] :where(.sfp-source-strip, .sfp-rag-link-card, .sfp-live-status, .sfp-live-start, .sfp-siteops-release-entry) {
+.fm-brand-theme[data-brand-page="website"] :where(.sfp-source-strip, .sfp-rag-link-card, .sfp-live-start, .sfp-siteops-release-entry) {
   gap: var(--fm-brand-space-2);
   padding: var(--fm-brand-space-2);
   border: 0.5px solid var(--fm-brand-line);
@@ -2895,7 +2895,6 @@
 .fm-brand-theme[data-brand-page="website"] :where(
   .sfp-source-strip,
   .sfp-rag-link-card,
-  .sfp-live-status,
   .sfp-live-start,
   .sfp-siteops-release-entry,
   .sfp-template-grid > label,

@@ -2231,10 +2231,9 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    expect(screen.getByTestId("siteops-build-status").textContent).toContain("网站已通过构建检查");
-    expect(screen.getByTestId("siteops-preview-link").getAttribute("href")).toBe(
-      "/api/frontmind/v2/siteops/builds/preview-1",
-    );
+    expect(screen.getByText("网站已通过构建检查")).toBeTruthy();
+    expect(screen.getByText(/真实 SiteOps · 项目版本/)).toBeTruthy();
+    expect(screen.queryByTestId("siteops-build-status")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "进入发布确认" }));
     fireEvent.click(screen.getByRole("button", { name: /继续发布|确认继续发布/ }));
