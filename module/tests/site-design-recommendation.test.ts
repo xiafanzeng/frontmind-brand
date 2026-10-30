@@ -157,11 +157,14 @@ describe("site design recommendation", () => {
   it("ranks home, the best-covered core page and verified contact first", () => {
     const recommendation = createSiteDesignRecommendation(input());
 
-    expect(recommendation.featuredRouteIds).toEqual([
-      "home",
-      "products",
-      "contact",
-    ]);
+    // Every source-backed route joins the default navigation; the priority
+    // picks only fix the head of the ranking.
+    expect(recommendation.featuredRouteIds).toEqual(
+      recommendation.candidates.map((candidate) => candidate.id),
+    );
+    expect(
+      recommendation.candidates.every((candidate) => candidate.featured),
+    ).toBe(true);
     expect(
       recommendation.candidates.slice(0, 3).map((candidate) => ({
         id: candidate.id,
@@ -278,17 +281,15 @@ describe("site design recommendation", () => {
 
     const recommendation = createSiteDesignRecommendation(input(brief));
 
-    expect(recommendation.featuredRouteIds).toEqual([
-      "home",
-      "products",
-      "about",
-    ]);
+    expect(recommendation.featuredRouteIds).toEqual(
+      recommendation.candidates.map((candidate) => candidate.id),
+    );
     expect(recommendation.candidates[2].recommendationReason).toBe(
       "fallback_knowledge_coverage",
     );
   });
 
-  it("keeps sourced secondary pages without promoting them into the third slot", () => {
+  it("keeps sourced secondary pages in the default navigation after the priority picks", () => {
     const brief = fullBrief();
     brief.contacts = [];
     brief.routes = brief.routes
@@ -303,15 +304,16 @@ describe("site design recommendation", () => {
 
     const recommendation = createSiteDesignRecommendation(input(brief));
 
-    expect(recommendation.featuredRouteIds).toEqual(["home", "products"]);
     expect(recommendation.candidates.map((candidate) => candidate.id)).toEqual([
       "home",
       "products",
       "news",
     ]);
-    expect(recommendation.unresolved).toContain(
-      "fewer_than_three_featured_routes",
-    );
+    expect(recommendation.featuredRouteIds).toEqual([
+      "home",
+      "products",
+      "news",
+    ]);
   });
 
   it("does not invent missing routes or recommend an untrusted placeholder name", () => {

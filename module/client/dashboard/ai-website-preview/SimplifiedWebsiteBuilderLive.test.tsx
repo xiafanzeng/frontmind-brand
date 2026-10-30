@@ -338,7 +338,8 @@ function designRecommendation(
     ["contact", "/contact", "联系我们", "verified_contact_conversion"],
     ["about", "/about", "关于我们", "secondary_knowledge_coverage"],
   ] as const;
-  const featuredRouteIds = ["home", "products", "contact"];
+  // Mirrors the server recommender: every source-backed route is featured.
+  const featuredRouteIds = candidates.map(([id]) => id);
   return {
     schemaVersion: 1,
     requestContext: request.requestContext,
@@ -659,7 +660,7 @@ describe("redesigned live website builder setup", () => {
     ).toBe("/api/site-ops/style-previews/33333333-3333-4333-8333-333333333333");
   });
 
-  it("requests source-backed recommendations and allows replacing at most three featured routes", async () => {
+  it("requests source-backed recommendations and enables every column by default", async () => {
     const current = recommendableObservation();
     const onRequestDesignRecommendation = vi.fn();
     const baseProps: SiteOpsConversationPanelProps = {
@@ -674,6 +675,19 @@ describe("redesigned live website builder setup", () => {
         storageScope="live:7:recommendation"
       />,
     );
+
+    // Before any recommendation arrives, a fresh session already selects every
+    // real column; no three-column cap applies.
+    await waitFor(() =>
+      expect(
+        ["首页", "产品与服务", "联系我们", "关于我们"].every(
+          (name) =>
+            (screen.getByLabelText(`在网站中显示${name}`) as HTMLInputElement)
+              .checked,
+        ),
+      ).toBe(true),
+    );
+    expect(screen.getByText("共 4 个栏目，4 个启用")).toBeTruthy();
 
     await waitFor(() =>
       expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
@@ -710,7 +724,7 @@ describe("redesigned live website builder setup", () => {
       expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
         .toBe("远山企业官网"),
     );
-    expect(screen.getByText("共 4 个栏目，3 个启用")).toBeTruthy();
+    expect(screen.getByText("共 4 个栏目，4 个启用")).toBeTruthy();
     expect(screen.getAllByText("首页真实内容").length).toBeGreaterThan(0);
     expect(
       ["首页", "产品与服务", "联系我们", "关于我们"].filter(
@@ -718,20 +732,19 @@ describe("redesigned live website builder setup", () => {
           (screen.getByLabelText(`在网站中显示${name}`) as HTMLInputElement)
             .checked,
       ),
-    ).toEqual(["首页", "产品与服务", "联系我们"]);
+    ).toEqual(["首页", "产品与服务", "联系我们", "关于我们"]);
 
+    // Columns toggle freely in both directions without a replacement notice.
     fireEvent.click(screen.getByLabelText("在网站中显示关于我们"));
-    expect(screen.getByText("主栏目最多选择 3 个；请先取消一个已选栏目再替换。")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("在网站中显示联系我们"));
+    expect(
+      (screen.getByLabelText("在网站中显示关于我们") as HTMLInputElement)
+        .checked,
+    ).toBe(false);
     fireEvent.click(screen.getByLabelText("在网站中显示关于我们"));
     expect(
       (screen.getByLabelText("在网站中显示关于我们") as HTMLInputElement)
         .checked,
     ).toBe(true);
-    expect(
-      (screen.getByLabelText("在网站中显示联系我们") as HTMLInputElement)
-        .checked,
-    ).toBe(false);
   });
 
   it("does not treat a frozen build design snapshot as the editable project OCC state", async () => {
@@ -828,7 +841,9 @@ describe("redesigned live website builder setup", () => {
       expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
         .toBe("用户手填网站名称"),
     );
-    expect(screen.queryByText("首页真实内容")).toBeNull();
+    // 表单字段全部保持用户值或 brief 回退值；推荐响应只服务右侧草稿预览。
+    expect((screen.getByLabelText("站点简介 / 建站目标") as HTMLTextAreaElement).value)
+      .toBe("帮助客户找到答案");
   });
 
   it("rejects a recommendation whose knowledge coordinate is no longer current", async () => {
@@ -887,7 +902,9 @@ describe("redesigned live website builder setup", () => {
     );
     expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
       .toBe("测试企业");
-    expect(screen.queryByText("首页真实内容")).toBeNull();
+    // 表单保持 brief 回退值；过期推荐不会改写任何设计字段。
+    expect((screen.getByLabelText("站点简介 / 建站目标") as HTMLTextAreaElement).value)
+      .toBe("帮助客户找到答案");
   });
 
   it("keeps manual fields usable when recommendation fails", async () => {
@@ -1195,6 +1212,7 @@ describe("redesigned live website builder setup", () => {
     expect(screen.getByTestId("website-routes-recommend-flag").textContent)
       .toContain("主栏目已手动调整");
     fireEvent.click(screen.getByRole("button", { name: "恢复推荐的主栏目" }));
+    // 恢复推荐即回到默认全选的推荐导航。
     await waitFor(() => {
       expect(
         (screen.getByLabelText("在网站中显示联系我们") as HTMLInputElement)
@@ -1203,7 +1221,7 @@ describe("redesigned live website builder setup", () => {
       expect(
         (screen.getByLabelText("在网站中显示关于我们") as HTMLInputElement)
           .checked,
-      ).toBe(false);
+      ).toBe(true);
     });
     expect(screen.getByTestId("website-routes-recommend-flag").textContent)
       .toContain("主栏目根据企业资料推荐");
@@ -1347,12 +1365,15 @@ describe("redesigned live website builder setup", () => {
     const blocks = screen
       .getAllByTestId("website-draft-block")
       .map((block) => block.textContent);
-    expect(blocks).toHaveLength(3);
+    // Every column is enabled by default, so the projection covers all four
+    // real routes.
+    expect(blocks).toHaveLength(4);
     expect(blocks[0]).toContain("首页 Hero");
     expect(blocks[0]).toContain("首页真实内容");
     expect(blocks[0]).toContain("首页的知识投影");
     expect(blocks[1]).toContain("产品与服务");
     expect(blocks[2]).toContain("联系方式");
+    expect(blocks[3]).toContain("关于我们真实内容");
     expect(screen.getAllByText(/个知识来源/).length).toBeGreaterThanOrEqual(3);
     // The unified preview keeps the assistant identity on the same screen, but
     // the live draft never simulates answers: only the real build preview
@@ -1469,6 +1490,67 @@ describe("redesigned live website builder setup", () => {
         "_blank",
         "noopener",
       );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the embedded real build visible while design edits are pending", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        url: "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/embed-preview/?token=abc.def",
+        bridgeToken: "bridge-token-1",
+        expiresAt: Date.now() + 600_000,
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = recommendableObservation();
+    const approved = liveBuildObservation("approved");
+    const observationWithBuild: SiteOpsObservationV1 = {
+      ...current,
+      project: approved.project,
+      builds: approved.builds,
+      interactionState: "approved",
+    };
+    try {
+      render(
+        <SimplifiedWebsiteBuilderPreview
+          initialStep="design"
+          siteOps={{ observation: observationWithBuild, onAction: vi.fn() }}
+          storageScope="live:7:embed-while-editing"
+        />,
+      );
+
+      await waitFor(() =>
+        expect((screen.getByTitle("真实构建预览") as HTMLIFrameElement).src)
+          .toContain("embed-preview/?token="),
+      );
+
+      // Selecting or deselecting a column must not yank the real site away;
+      // the panel stays on the last real build and labels the pending edits.
+      fireEvent.click(screen.getByLabelText("在网站中显示关于我们"));
+      await waitFor(() => {
+        expect(screen.getByText("真实构建预览 · 有未提交修改")).toBeTruthy();
+      });
+      expect((screen.getByTitle("真实构建预览") as HTMLIFrameElement).src)
+        .toContain("embed-preview/?token=");
+      expect(screen.queryByTestId("website-draft-preview-banner")).toBeNull();
+
+      // A trial report against that not-yet-submitted design never counts.
+      const frame = screen.getByTitle("真实构建预览") as HTMLIFrameElement;
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            schemaVersion: 1,
+            kind: "frontmind_site_assistant_answer_rendered",
+            token: "bridge-token-1",
+          },
+          origin: "null",
+          source: frame.contentWindow,
+        }),
+      );
+      expect(screen.getByText("助手试用未完成")).toBeTruthy();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1703,7 +1785,7 @@ describe("redesigned live website builder setup", () => {
     fireEvent.change(screen.getByLabelText("站点简介 / 建站目标"), {
       target: { value: "帮助客户自助解决产品问题" },
     });
-    fireEvent.click(screen.getByLabelText("在网站中显示帮助中心"));
+    // 帮助中心默认已加入导航，无需再手动勾选。
     fireEvent.click(screen.getByRole("button", { name: "选择网站主题色 #315b8a" }));
     expect(screen.queryByLabelText("站点语言")).toBeNull();
 
@@ -1857,7 +1939,7 @@ describe("redesigned live website builder setup", () => {
     expect(siteGoal.disabled).toBe(false);
     fireEvent.change(siteName, { target: { value: "远山帮助中心改版" } });
     fireEvent.change(siteGoal, { target: { value: "让客户更快完成真实自助排障" } });
-    fireEvent.click(screen.getByLabelText("在网站中显示帮助中心"));
+    // 帮助中心默认已加入导航；改版提交无需再改动栏目。
     const assistantName = screen.getByTestId("website-assistant-name") as HTMLInputElement;
     const welcome = screen.getByTestId("website-assistant-welcome") as HTMLTextAreaElement;
     expect(assistantName.disabled).toBe(false);
@@ -1959,6 +2041,16 @@ describe("redesigned live website builder setup", () => {
         storageScope="live:7:workspace-a"
       />,
     );
+
+    // Columns start fully selected; the gate only engages once the owner
+    // explicitly turns every column off.
+    await waitFor(() =>
+      expect((screen.getByLabelText("在网站中显示帮助中心") as HTMLInputElement).checked)
+        .toBe(true),
+    );
+    fireEvent.click(screen.getByLabelText("在网站中显示帮助中心"));
+    expect((screen.getByLabelText("在网站中显示帮助中心") as HTMLInputElement).checked)
+      .toBe(false);
 
     // 本地草稿不再提供示意问答：真实试聊只能在真实构建预览中完成。
     expect(screen.getByText("助手试用未完成")).toBeTruthy();

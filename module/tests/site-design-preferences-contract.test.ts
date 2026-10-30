@@ -167,6 +167,19 @@ describe("SiteDesignPreferences v1", () => {
       .toEqual(value);
   });
 
+  it("accepts a fully selected navigation with more than three routes", () => {
+    const value = preferences();
+    value.featuredRouteIds = [
+      "home",
+      "services",
+      "contact",
+      "about",
+      "faq",
+      "news",
+    ];
+    expect(siteDesignPreferencesV1Schema.parse(value)).toEqual(value);
+  });
+
   it("retains a valid custom assistant color while follow mode is active", () => {
     const value = preferences();
     value.assistant.accentMode = "follow_site";

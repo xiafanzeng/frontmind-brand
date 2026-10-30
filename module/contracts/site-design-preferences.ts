@@ -61,13 +61,21 @@ const siteDesignAssistantSchema = z
   })
   .strict();
 
+// Every source-backed route joins the navigation by default, matching the
+// route-candidate ceiling the recommender can produce for one snapshot.
+const SITE_DESIGN_FEATURED_ROUTE_LIMIT = 30 as const;
+
 const siteDesignPreferencesDraftShape = {
   schemaVersion: z.literal(SITE_DESIGN_PREFERENCES_SCHEMA_VERSION),
   siteName: z.string().trim().min(1).max(80),
   siteGoal: z.string().trim().min(1).max(200),
   // A persisted design must expose at least one real, source-backed page.
   // Honest empty recommendations remain valid in the separate response schema.
-  featuredRouteIds: uniqueStringArray(siteDesignRouteIdSchema, 3, 1),
+  featuredRouteIds: uniqueStringArray(
+    siteDesignRouteIdSchema,
+    SITE_DESIGN_FEATURED_ROUTE_LIMIT,
+    1,
+  ),
   siteAccent: hexColorSchema,
   assistant: siteDesignAssistantSchema,
   knowledgeSnapshot: siteDesignKnowledgeSnapshotCoordinateSchema,
@@ -413,7 +421,10 @@ export const siteDesignRecommendationOutputSchema = z
     siteName: siteNameRecommendationSchema,
     siteGoal: siteGoalRecommendationSchema,
     candidates: z.array(siteDesignRouteRecommendationSchema).max(30),
-    featuredRouteIds: uniqueStringArray(siteDesignRouteIdSchema, 3),
+    featuredRouteIds: uniqueStringArray(
+      siteDesignRouteIdSchema,
+      SITE_DESIGN_FEATURED_ROUTE_LIMIT,
+    ),
     previewBlocks: z.array(siteDesignPreviewBlockSchema).max(100),
     unresolved: uniqueStringArray(
       z
