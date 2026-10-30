@@ -92,7 +92,7 @@ describe("brand response-logic adapter REST wiring", () => {
   it("starts generation tasks at the module namespace /start route", async () => {
     const harness = createHarness();
     harness.setResponse(async () =>
-      ({ ok: true, status: 200, json: async () => ({ id: "task-1", operationRevision: 1 }) }) as unknown as Response);
+      ({ ok: true, status: 200, json: async () => ({ task: { id: "task-1", operationRevision: 1 }, startedAt: 1, knowledgeVersion: 1 }) }) as unknown as Response);
     const task = await harness.host.createResponseLogicTask(
       [{ role: "user", content: "请生成应答逻辑" }],
       {
@@ -115,7 +115,7 @@ describe("brand response-logic adapter REST wiring", () => {
   it("converts string messages to userMessage (fixes the 400 INVALID_RESPONSE_LOGIC_INPUT)", async () => {
     const harness = createHarness();
     harness.setResponse(async () =>
-      ({ ok: true, status: 200, json: async () => ({ id: "t", operationRevision: 1 }) }) as unknown as Response);
+      ({ ok: true, status: 200, json: async () => ({ task: { id: "t", operationRevision: 1 }, startedAt: 1, knowledgeVersion: 1 }) }) as unknown as Response);
     await harness.host.createResponseLogicTask(
       [{ role: "user", content: "生成应答逻辑" }, { role: "user", content: "补充要求" }],
       { questionId: "q1", groupId: "g", groupTitle: "T", question: "Q", intent: "", summary: "",
@@ -130,7 +130,7 @@ describe("brand response-logic adapter REST wiring", () => {
   it("converts content-block messages to userMessage + attachments matching the server attachmentSchema", async () => {
     const harness = createHarness();
     harness.setResponse(async () =>
-      ({ ok: true, status: 200, json: async () => ({ id: "t" }) }) as unknown as Response);
+      ({ ok: true, status: 200, json: async () => ({ task: { id: "t" }, startedAt: 1, knowledgeVersion: 1 }) }) as unknown as Response);
     await harness.host.createResponseLogicTask(
       [{ role: "user", content: [
         { type: "input_text", text: "请按资料生成" },
@@ -152,7 +152,7 @@ describe("brand response-logic adapter REST wiring", () => {
   it("handles empty messages without crashing or sending [object Object]", async () => {
     const harness = createHarness();
     harness.setResponse(async () =>
-      ({ ok: true, status: 200, json: async () => ({ id: "t" }) }) as unknown as Response);
+      ({ ok: true, status: 200, json: async () => ({ task: { id: "t" }, startedAt: 1, knowledgeVersion: 1 }) }) as unknown as Response);
     await harness.host.createResponseLogicTask(
       [{ role: "user", content: [] }],
       { questionId: "q1", groupId: "g", groupTitle: "T", question: "Q", intent: "", summary: "",
@@ -168,7 +168,7 @@ describe("brand response-logic adapter REST wiring", () => {
   it("sends a request body that passes the real server responseLogicStartSchema", async () => {
     const harness = createHarness();
     harness.setResponse(async () =>
-      ({ ok: true, status: 200, json: async () => ({ id: "t" }) }) as unknown as Response);
+      ({ ok: true, status: 200, json: async () => ({ task: { id: "t" }, startedAt: 1, knowledgeVersion: 1 }) }) as unknown as Response);
     await harness.host.createResponseLogicTask(
       [{ role: "user", content: [
         { type: "input_text", text: "请生成" },

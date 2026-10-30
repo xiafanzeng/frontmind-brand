@@ -179,4 +179,55 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
     // No generation task was (re)created.
     expect(h.restCalls.some((c) => c.startsWith("POST") && c.includes("/start"))).toBe(false);
   });
+
+  it("NEW: start path — clicking 生成应答 starts polling the created task (no recovery involved)", async () => {
+    let startCalls = 0;
+    h.router = async (url: string, init?: RequestInit) => {
+      const response = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+      if (url.includes("/response-logic/start")) {
+        startCalls += 1;
+        return response({ task: { id: "task-start", status: "running", model: "frontmind-pro", metadata: {}, operationRevision: 2 }, startedAt: 1, knowledgeVersion: 2 });
+      }
+      if (url.includes("/tasks/task-start/status")) return response(runningEnvelope, 202);
+      if (url.replace(/[?].*$/, "").endsWith("/response-logic")) {
+        void init;
+        return response({
+          records: [{
+            ...record,
+            questionId: "q-start",
+            lastTaskId: null,
+          }],
+        });
+      }
+      return response({}, 404);
+    };
+    const mkProps = () => ({
+      question: { id: "q-start", question: "企业内容管理平台推荐", category: "行业" } as never,
+      onBack: () => undefined,
+      visual: {
+        Button: (props: Record<string, unknown>) => <button {...props} />,
+        BusinessExecutionActivity: () => null,
+        FilePreview: () => null,
+        ImagePreview: () => null,
+      } as never,
+      toast: { success: () => undefined, error: () => undefined },
+    });
+    const view = render(<BrandResponseLogicEntry {...mkProps()} />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 60)); });
+    // The generation button is rendered when there is no active generation card.
+    const btn = await import("@testing-library/react").then(m => m.screen.findByRole("button", { name: /生成应答/ }));
+    await act(async () => { btn.click(); await new Promise((r) => setTimeout(r, 80)); });
+    const diag = {
+      startCalls,
+      statusCalls: h.restCalls.filter((c) => c.includes("/tasks/task-start/status")).length,
+      hasLoading: (document.body.textContent ?? "").includes("正在生成应答逻辑"),
+      hasFailed: (document.body.textContent ?? "").includes("生成未完成"),
+    };
+    expect(
+      diag.statusCalls,
+      `START-PATH DIAG ${JSON.stringify(diag)} calls=${JSON.stringify(h.restCalls.slice(0, 10))}`,
+    ).toBeGreaterThanOrEqual(1);
+    view.unmount();
+  });
 });

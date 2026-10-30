@@ -143,7 +143,20 @@ export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInp
     if (!response.ok) {
       throw new Error((body as { error?: { message?: string } })?.error?.message ?? `生成任务创建失败（${response.status}）`);
     }
-    return body as { id: string; operationRevision?: number };
+    // The server wraps the task in an envelope: {task:{id,…},startedAt,…}.
+    // Returning the raw body here leaves task.id undefined, the workspace
+    // writes generation.taskId=undefined, the polling effect returns early,
+    // and the page spins on 生成中 forever while the upstream task finishes
+    // unobserved (live: tasks 712b31c5/e932f604/1f724bc9/5275fc1c all had
+    // zero status calls after a 200 start). Unwrap strictly.
+    const task = (body as { task?: { id?: unknown; operationRevision?: unknown } }).task;
+    if (!task || typeof task.id !== "string" || !task.id) {
+      throw new Error("生成任务创建响应无效（缺少任务标识）");
+    }
+    return {
+      id: task.id,
+      operationRevision: typeof task.operationRevision === "number" ? task.operationRevision : undefined,
+    };
   };
 
   const uploadAsset: UploadIntentAsset = async (file, _onProgress, options) => {
