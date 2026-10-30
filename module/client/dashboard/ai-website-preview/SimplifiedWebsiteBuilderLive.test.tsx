@@ -532,6 +532,38 @@ describe("redesigned live website builder setup", () => {
     ) as HTMLInputElement).disabled).toBe(false);
   });
 
+  it("lists only source-backed routes as toggleable columns", async () => {
+    const current = recommendableObservation();
+    const withSourcelessRoute: SiteOpsObservationV1 = {
+      ...current,
+      brief: {
+        ...current.brief!,
+        routes: [
+          ...current.brief!.routes,
+          {
+            id: "news",
+            slug: "/news",
+            title: "企业动态",
+            sourceDocumentIds: [],
+          },
+        ],
+      },
+    };
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ observation: withSourcelessRoute, onAction: vi.fn() }}
+        storageScope="live:7:sourceless-routes"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("共 4 个栏目，4 个启用")).toBeTruthy(),
+    );
+    // 无知识来源的占位路由不是可选栏目，否则保存会被契约拒绝。
+    expect(screen.queryByLabelText("在网站中显示企业动态")).toBeNull();
+  });
+
   it("hydrates unsaved live route and template IDs, then lets persisted server design preferences win", async () => {
     const scope = "live:7:opaque-draft-hydration";
     const base = recommendableObservation();
