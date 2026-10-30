@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties } from "react";
+import { useRef, useState } from "react";
 import {
   ArrowLeft,
   Expand,
@@ -36,11 +36,6 @@ export type KnowledgeLibraryImage = {
   pending?: "add" | "remove";
   pendingPublication?: boolean;
 };
-
-const theme = {
-  "--module-accent": "#16794f",
-  "--module-color": "#16794f",
-} as CSSProperties;
 
 export default function KnowledgeImageLibraryDialog({
   open,
@@ -111,8 +106,8 @@ export default function KnowledgeImageLibraryDialog({
       }}
     >
       <DialogContent
-        className="knowledge-image-library-dialog"
-        style={theme}
+        className="fm-brand-portal-theme knowledge-image-library-dialog"
+        data-brand-page="knowledge"
         showCloseButton={false}
         onCloseAutoFocus={onCloseAutoFocus}
         onEscapeKeyDown={(event) => {

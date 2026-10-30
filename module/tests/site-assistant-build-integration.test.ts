@@ -3,10 +3,16 @@ import {describe, expect, it} from "vitest";
 import {TRUSTED_REACT_COMPONENT_LIBRARY_SOURCE} from "../server/siteops/react-static-runtime.js";
 import {nativeDocumentCsp} from "../server/siteops/native-react-build-runtime.js";
 import {
+  SITE_ASSISTANT_CONFIG_ASSET_PATH,
+  SITE_ASSISTANT_STYLES_ASSET_PATH,
+  SITE_ASSISTANT_WIDGET_ASSET_PATH,
   SITE_ASSISTANT_WIDGET_API_ORIGIN_DEFAULT,
+  TRUSTED_SITE_ASSISTANT_HEAD_MARKUP,
   TRUSTED_SITE_ASSISTANT_WIDGET_CSS,
   TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE,
+  isTrustedSiteAssistantExternalScriptTag,
   siteAssistantApiOrigin,
+  trustedSiteAssistantConfigSource,
 } from "../server/siteops/site-assistant-widget.js";
 
 describe("site assistant trusted build integration", () => {
@@ -14,10 +20,48 @@ describe("site assistant trusted build integration", () => {
     const library = TRUSTED_REACT_COMPONENT_LIBRARY_SOURCE;
     expect(library).toContain("SiteAssistantTags");
     expect(library).toContain('"/assistant.css"');
+    expect(library).toContain('"/assistant-config.js"');
     expect(library).toContain('"/assistant.js"');
-    expect(library).toContain("__FRONTMIND_ASSISTANT__");
+    expect(library).not.toContain("assistantConfigScript");
     // Every rendered page keeps the assistant, including the 404 document.
     expect(library).toMatch(/NotFoundDocument[\s\S]*?SiteAssistantTags/);
+  });
+
+  it("uses one external frozen config boundary for Astro, React and fallback pages", () => {
+    expect(TRUSTED_SITE_ASSISTANT_HEAD_MARKUP).toContain(
+      `href="${SITE_ASSISTANT_STYLES_ASSET_PATH}"`,
+    );
+    expect(TRUSTED_SITE_ASSISTANT_HEAD_MARKUP).toContain(
+      `src="${SITE_ASSISTANT_CONFIG_ASSET_PATH}" defer`,
+    );
+    expect(TRUSTED_SITE_ASSISTANT_HEAD_MARKUP).toContain(
+      `src="${SITE_ASSISTANT_WIDGET_ASSET_PATH}" defer`,
+    );
+    const source = trustedSiteAssistantConfigSource({
+      apiBase: "https://brand.frontmind.cn",
+      name: "冻结</script>助手",
+      welcome: `欢迎\u2028使用`,
+      accent: "#8a2be2",
+    });
+    expect(source).toContain("window.__FRONTMIND_ASSISTANT__=");
+    expect(source).toContain("#8a2be2");
+    expect(source).not.toContain("</script>");
+    expect(source).not.toContain(String.fromCharCode(0x2028));
+    expect(
+      isTrustedSiteAssistantExternalScriptTag(
+        '<script defer="" src="/assistant-config.js">',
+      ),
+    ).toBe(true);
+    expect(
+      isTrustedSiteAssistantExternalScriptTag(
+        '<script src="/assistant.js" defer onload="steal()">',
+      ),
+    ).toBe(false);
+    expect(
+      isTrustedSiteAssistantExternalScriptTag(
+        '<script src="https://example.com/evil.js" defer>',
+      ),
+    ).toBe(false);
   });
 
   it("keeps the widget dependency-free and multi-turn capable", () => {
@@ -26,6 +70,17 @@ describe("site assistant trusted build integration", () => {
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("/ask");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("/config");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("session");
+    expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("frozenWelcome");
+    expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("--fma-accent");
+    expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE).toContain("data-frontmind-site-navigation");
+    // Trusted preview bridge: only rendered 200 answers report a completed
+    // trial; errors and local notes never do.
+    expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE)
+      .toContain("__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__");
+    expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE)
+      .toContain("frontmind_site_assistant_answer_rendered");
+    expect(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE)
+      .toContain("reportRenderedAnswerToParent();");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_CSS).toContain(".fm-assistant-panel");
     expect(TRUSTED_SITE_ASSISTANT_WIDGET_CSS).toContain("prefers-reduced-motion");
   });

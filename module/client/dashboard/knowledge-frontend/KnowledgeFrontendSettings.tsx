@@ -1482,7 +1482,10 @@ function SettingsWorkspace({
         </section>
       )}
       <Dialog open={!isWorkbench && preview} onOpenChange={setPreview}>
-        <DialogContent className="kf-preview-dialog">
+        <DialogContent
+          className="fm-brand-portal-theme kf-preview-dialog"
+          data-brand-page="website-settings"
+        >
           <DialogTitle>站点预览 · {draft.template}</DialogTitle>
           <DialogDescription>
             使用本地示例栏目预览布局；设置尚未发布到域名。

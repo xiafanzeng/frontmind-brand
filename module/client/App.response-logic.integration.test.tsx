@@ -75,8 +75,7 @@ describe("standalone response-logic navigation (integration)", () => {
     window.history.replaceState({}, "", "/?view=intent");
     render(<App preview />);
 
-    fireEvent.click(await screen.findByRole("button", {name: `查看评估：${seedQuestion.question}`}));
-    const enter = screen.getByRole("button", { name: "进入应答逻辑" });
+    const enter = await screen.findByRole("button", { name: "进入应答逻辑" });
     expect((enter as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(enter);
 

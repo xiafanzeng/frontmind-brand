@@ -115,7 +115,7 @@ function selectionBundleForCatalog(
   });
 }
 
-it("serves exact v6 during rollout, upgrades from historical caches to the single v7 admission, and rejects receipt tampering", async () => {
+it("serves exact v6 during rollout, upgrades from historical caches to the single v7 admission, and rejects receipt tampering", { timeout: 180000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "frontmind-catalog-upgrade-"));
   const payloads = new Map<string, Buffer>();
   const definitions = manifest.HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG;

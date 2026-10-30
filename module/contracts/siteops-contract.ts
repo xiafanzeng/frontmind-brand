@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { staticTemplatePageLength, staticTemplatePagination } from "./static-template-pagination.js";
 import {
+  siteDesignKnowledgeSnapshotCoordinateSchema,
+  siteDesignPreferencesV1Schema,
+  siteDesignTemplateCoordinateSchema,
+} from "./site-design-preferences.js";
+import {
   siteBriefSchema,
   siteOpsBuildStatusSchema,
   siteOpsCardSchema,
@@ -23,6 +28,7 @@ export const siteOpsKnowledgeSnapshotSchema = z
     sourceProfile: z.string().trim().min(1).max(64).nullable().default(null),
     createdAt: z.string().datetime(),
     active: z.boolean().default(false),
+    coordinate: siteDesignKnowledgeSnapshotCoordinateSchema.optional(),
   })
   .strict();
 
@@ -98,6 +104,7 @@ export const siteOpsVisualCandidateProjectionSchema = z
       .max(500)
       .nullable()
       .optional(),
+    templateCoordinate: siteDesignTemplateCoordinateSchema.nullable().default(null),
   })
   .strict();
 
@@ -163,9 +170,19 @@ export const siteOpsBuildProjectionSchema = z
     id: z.string().uuid(),
     ordinal: z.number().int().positive(),
     parentBuildId: z.string().uuid().nullable(),
+    knowledgeSnapshotId: z.string().uuid().nullable().optional(),
+    /** Immutable knowledge coordinate owned by this build. Unlike the
+     * selectable snapshot list, this remains available after archival. */
+    knowledgeSnapshot: siteDesignKnowledgeSnapshotCoordinateSchema
+      .nullable()
+      .optional(),
     status: siteOpsBuildStatusSchema,
     previewUrl: z.string().max(2_048).nullable().default(null),
     sourceUrl: z.string().max(2_048).nullable().default(null),
+    designPreferences: siteDesignPreferencesV1Schema.nullable().optional(),
+    /** The immutable Brief evaluated and rendered by this build. Never
+     * substitute the mutable project Brief at evaluation time. */
+    brief: siteBriefSchema.nullable().optional(),
     contentPlan: z
       .object({
         status: z.enum(["pending", "ready"]),
@@ -224,7 +241,19 @@ export const siteOpsBuildProjectionSchema = z
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.knowledgeSnapshot &&
+      value.knowledgeSnapshot.id !== value.knowledgeSnapshotId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["knowledgeSnapshot"],
+        message: "Build knowledge snapshot coordinate must match knowledgeSnapshotId",
+      });
+    }
+  });
 
 export const siteOpsExecutionStepProjectionSchema = z
   .object({

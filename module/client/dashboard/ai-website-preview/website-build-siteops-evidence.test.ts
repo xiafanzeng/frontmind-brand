@@ -10,6 +10,35 @@ import {
 function approvedObservation(): SiteOpsObservationV1 {
   const snapshotId = "22222222-2222-4222-8222-222222222222";
   const buildId = "44444444-4444-4444-8444-444444444444";
+  const frozenBrief: NonNullable<SiteOpsObservationV1["brief"]> = {
+    companyName: "测试企业",
+    primaryLanguage: "zh-CN",
+    contacts: [{
+      kind: "email",
+      value: "hello@example.com",
+      sourceDocumentIds: ["document-1"],
+    }],
+    offerings: ["企业服务"],
+    audience: ["客户"],
+    conversionGoal: "帮助客户找到答案",
+    contentInventory: {
+      schemaVersion: 1,
+      source: "frozen_knowledge_snapshot",
+      entries: [{ kind: "product", sourceDocumentIds: ["document-1"] }],
+    },
+    routes: [{
+      id: "help",
+      slug: "/help",
+      title: "帮助中心",
+      sourceDocumentIds: ["document-1"],
+    }],
+    verifiedFacts: [{
+      statement: "测试企业提供企业服务。",
+      sourceDocumentIds: ["document-1"],
+    }],
+    publicAssetIds: [],
+    unknowns: [],
+  };
   return {
     schemaVersion: 1,
     executionKind: "site_ops",
@@ -38,35 +67,7 @@ function approvedObservation(): SiteOpsObservationV1 {
       canonicalHostname: null,
       updatedAt: "2026-10-23T01:10:00.000Z",
     },
-    brief: {
-      companyName: "测试企业",
-      primaryLanguage: "zh-CN",
-      contacts: [{
-        kind: "email",
-        value: "hello@example.com",
-        sourceDocumentIds: ["document-1"],
-      }],
-      offerings: ["企业服务"],
-      audience: ["客户"],
-      conversionGoal: "帮助客户找到答案",
-      contentInventory: {
-        schemaVersion: 1,
-        source: "frozen_knowledge_snapshot",
-        entries: [{ kind: "product", sourceDocumentIds: ["document-1"] }],
-      },
-      routes: [{
-        id: "help",
-        slug: "/help",
-        title: "帮助中心",
-        sourceDocumentIds: ["document-1"],
-      }],
-      verifiedFacts: [{
-        statement: "测试企业提供企业服务。",
-        sourceDocumentIds: ["document-1"],
-      }],
-      publicAssetIds: [],
-      unknowns: [],
-    },
+    brief: frozenBrief,
     knowledgeSnapshots: [{
       id: snapshotId,
       label: "知识库 ZIP · 第 3 版",
@@ -101,9 +102,13 @@ function approvedObservation(): SiteOpsObservationV1 {
       id: buildId,
       ordinal: 1,
       parentBuildId: null,
+      knowledgeSnapshotId: snapshotId,
+      knowledgeSnapshot: null,
       status: "approved",
       previewUrl: "/api/frontmind/v2/siteops/builds/preview-1",
       sourceUrl: null,
+      designPreferences: null,
+      brief: frozenBrief,
       contentPlan: { status: "ready", sha256: "a".repeat(64) },
       buildDelivery: {
         renderMode: "twenty_first_native",
@@ -127,6 +132,214 @@ function approvedObservation(): SiteOpsObservationV1 {
 }
 
 describe("website SiteOps evaluation evidence", () => {
+  it("evaluates the build-owned design contract instead of a later project draft", () => {
+    const observation = approvedObservation();
+    const frozenPreferences = {
+      schemaVersion: 1 as const,
+      siteName: "冻结站点",
+      siteGoal: "冻结目标",
+      featuredRouteIds: ["help"],
+      siteAccent: "#2457a7",
+      assistant: {
+        name: "冻结助手",
+        welcome: "欢迎查看冻结版本",
+        accentMode: "custom" as const,
+        customAccent: "#8a2be2",
+      },
+      knowledgeSnapshot: {
+        id: observation.builds[0]!.knowledgeSnapshotId!,
+        version: 3,
+        archiveHash: "a".repeat(64),
+      },
+      template: { id: "template-a", version: "catalog-v1" },
+      designRevision: 4,
+      draftHash: "b".repeat(64),
+    };
+    const frozenBrief = {
+      ...observation.builds[0]!.brief!,
+      companyName: frozenPreferences.siteName,
+      conversionGoal: frozenPreferences.siteGoal,
+      designPreferences: frozenPreferences,
+    };
+    const frozen = {
+      ...observation,
+      builds: [{
+        ...observation.builds[0]!,
+        brief: frozenBrief,
+        designPreferences: frozenPreferences,
+      }],
+    } satisfies SiteOpsObservationV1;
+    const laterProjectDraft = {
+      ...frozen,
+      project: {
+        ...frozen.project,
+        revision: frozen.project.revision + 1,
+        currentKnowledgeSnapshotId: "33333333-3333-4333-8333-333333333333",
+        updatedAt: "2026-10-23T02:00:00.000Z",
+      },
+      brief: {
+        ...frozenBrief,
+        companyName: "后来修改的项目",
+        routes: [{
+          id: "later",
+          slug: "/later",
+          title: "后来栏目",
+          sourceDocumentIds: [],
+        }],
+        designPreferences: undefined,
+      },
+      knowledgeSnapshots: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          label: "后来发布的知识库",
+          sourceProfile: "dashboard-core-v1",
+          createdAt: "2026-10-23T02:00:00.000Z",
+          active: true,
+        },
+      ],
+    } satisfies SiteOpsObservationV1;
+
+    const judgments = buildWebsiteEvaluationJudgmentsFromSiteOps(laterProjectDraft);
+    const navigation = judgments.find(
+      ({ checkId }) => checkId === "website-navigation-contact",
+    )!;
+    expect(navigation.summary).toContain("冻结设计中的 1 个主栏目");
+    expect(navigation.evidenceIds).toContain(
+      `siteops:build:${observation.builds[0]!.id}:design:r4:${"b".repeat(64)}`,
+    );
+    expect(navigation.evidenceIds.some((id) => id.includes("later"))).toBe(false);
+    expect(siteOpsWebsiteEvaluationVersion(laterProjectDraft)).toBe(
+      siteOpsWebsiteEvaluationVersion(frozen),
+    );
+    expect(siteOpsWebsiteEvaluationObservedAt(laterProjectDraft)).toBe(
+      siteOpsWebsiteEvaluationObservedAt(frozen),
+    );
+  });
+
+  it("keeps a legacy build stable after its frozen snapshot leaves the selectable list", () => {
+    const observation = approvedObservation();
+    const knowledgeSnapshot = {
+      id: observation.builds[0]!.knowledgeSnapshotId!,
+      version: 3,
+      archiveHash: "a".repeat(64),
+    };
+    const frozen = {
+      ...observation,
+      builds: [{
+        ...observation.builds[0]!,
+        knowledgeSnapshot,
+        designPreferences: null,
+      }],
+    } satisfies SiteOpsObservationV1;
+    const afterNewPublication = {
+      ...frozen,
+      project: {
+        ...frozen.project,
+        currentKnowledgeSnapshotId: "33333333-3333-4333-8333-333333333333",
+        revision: frozen.project.revision + 1,
+        updatedAt: "2026-10-23T02:00:00.000Z",
+      },
+      knowledgeSnapshots: [{
+        id: "33333333-3333-4333-8333-333333333333",
+        label: "知识库 ZIP · 第 4 版",
+        sourceProfile: "dashboard-core-v1",
+        createdAt: "2026-10-23T02:00:00.000Z",
+        active: true,
+      }],
+    } satisfies SiteOpsObservationV1;
+
+    expect(siteOpsWebsiteEvaluationVersion(afterNewPublication)).toBe(
+      siteOpsWebsiteEvaluationVersion(frozen),
+    );
+    expect(siteOpsWebsiteEvaluationObservedAt(afterNewPublication)).toBe(
+      siteOpsWebsiteEvaluationObservedAt(frozen),
+    );
+    expect(
+      buildWebsiteEvaluationJudgmentsFromSiteOps(afterNewPublication).find(
+        ({ checkId }) => checkId === "website-content-structure",
+      ),
+    ).toMatchObject({ status: "passed" });
+  });
+
+  it("treats source-free company news as a legal empty state when inventory has no company news", () => {
+    const observation = approvedObservation();
+    const frozenBrief = {
+      ...observation.builds[0]!.brief!,
+      routes: [
+        ...observation.builds[0]!.brief!.routes,
+        {
+          id: "news",
+          slug: "/news",
+          title: "企业动态",
+          sourceDocumentIds: [],
+        },
+      ],
+    } satisfies NonNullable<SiteOpsObservationV1["brief"]>;
+    const withEmptyNews = {
+      ...observation,
+      brief: frozenBrief,
+      builds: [{ ...observation.builds[0]!, brief: frozenBrief }],
+    } satisfies SiteOpsObservationV1;
+
+    const judgments = buildWebsiteEvaluationJudgmentsFromSiteOps(withEmptyNews);
+    const content = judgments.find(
+      ({ checkId }) => checkId === "website-content-structure",
+    )!;
+    const navigation = judgments.find(
+      ({ checkId }) => checkId === "website-navigation-contact",
+    )!;
+    const facts = judgments.find(
+      ({ checkId }) => checkId === "website-facts-evidence",
+    )!;
+
+    expect(content).toMatchObject({ status: "passed" });
+    expect(content.summary).toContain("1 个需来源栏目");
+    expect(content.summary).toContain("1 个栏目使用有据可审计的企业新闻空态");
+    expect(content.evidenceIds).toContain(
+      `siteops:build:${observation.builds[0]!.id}:brief:route:news:empty:company_news_unavailable`,
+    );
+    expect(navigation).toMatchObject({ status: "passed" });
+    expect(facts).toMatchObject({ status: "passed" });
+  });
+
+  it("still fails every other source-free route", () => {
+    const observation = approvedObservation();
+    const frozenBrief = {
+      ...observation.builds[0]!.brief!,
+      routes: [
+        ...observation.builds[0]!.brief!.routes,
+        {
+          id: "about",
+          slug: "/about",
+          title: "关于我们",
+          sourceDocumentIds: [],
+        },
+      ],
+    } satisfies NonNullable<SiteOpsObservationV1["brief"]>;
+    const withUnsourcedRoute = {
+      ...observation,
+      brief: frozenBrief,
+      builds: [{ ...observation.builds[0]!, brief: frozenBrief }],
+    } satisfies SiteOpsObservationV1;
+
+    const judgments = buildWebsiteEvaluationJudgmentsFromSiteOps(withUnsourcedRoute);
+    const content = judgments.find(
+      ({ checkId }) => checkId === "website-content-structure",
+    )!;
+    const navigation = judgments.find(
+      ({ checkId }) => checkId === "website-navigation-contact",
+    )!;
+    const facts = judgments.find(
+      ({ checkId }) => checkId === "website-facts-evidence",
+    )!;
+
+    expect(content).toMatchObject({ status: "failed" });
+    expect(content.summary).toContain("1/2 个需来源栏目已绑定来源");
+    expect(navigation).toMatchObject({ status: "partial" });
+    expect(facts).toMatchObject({ status: "failed" });
+    expect(facts.summary).toContain("1/2 个需来源栏目有来源");
+  });
+
   it("turns an approved real build into seven evidence-backed judgments", () => {
     const observation = approvedObservation();
     const judgments = buildWebsiteEvaluationJudgmentsFromSiteOps(observation);

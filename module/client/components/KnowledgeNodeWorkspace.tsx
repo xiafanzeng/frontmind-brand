@@ -1607,7 +1607,8 @@ function KnowledgeNodeWorkspaceSession({
               }}
             >
               <DialogContent
-                className="knowledge-node-workspace knowledge-node-workspace-modal"
+                className="fm-brand-portal-theme knowledge-node-workspace knowledge-node-workspace-modal"
+                data-brand-page="knowledge"
                 overlayClassName="knowledge-node-workspace-overlay"
                 showCloseButton={false}
                 onCloseAutoFocus={restoreDrawerFocus}
@@ -1632,7 +1633,8 @@ function KnowledgeNodeWorkspaceSession({
             >
               <SheetContent
                 side="right"
-                className="knowledge-node-workspace knowledge-node-workspace-drawer"
+                className="fm-brand-portal-theme knowledge-node-workspace knowledge-node-workspace-drawer"
+                data-brand-page="knowledge"
                 overlayClassName="knowledge-node-workspace-overlay"
                 showCloseButton={false}
                 onCloseAutoFocus={restoreDrawerFocus}
@@ -1658,7 +1660,8 @@ function KnowledgeNodeWorkspaceSession({
         }}
       >
         <DialogContent
-          className="knowledge-node-workspace-dialog"
+          className="fm-brand-portal-theme knowledge-node-workspace-dialog"
+          data-brand-page="knowledge"
           showCloseButton={!mutationPending}
           onEscapeKeyDown={(event) => {
             if (mutationPending) event.preventDefault();

@@ -1,7 +1,4 @@
-import {
-  siteBriefSchema,
-  type SiteBrief,
-} from "../../contracts/siteops.js";
+import { siteBriefSchema, type SiteBrief } from "../../contracts/siteops.js";
 
 function compactBriefText(value: unknown, max = 600) {
   return String(value ?? "")
@@ -12,22 +9,22 @@ function compactBriefText(value: unknown, max = 600) {
     .slice(0, max);
 }
 
-function normalizedSiteLanguage(value: string) {
-  const compact = compactBriefText(value, 32);
-  if (/^(?:zh(?:-CN)?|中文(?:（简体）|\(简体\)|简体)?|简体中文)$/iu.test(compact)) {
-    return "zh-CN";
-  }
-  if (/^(?:en(?:-US)?|English|英文|英语)$/iu.test(compact)) {
-    return "en-US";
-  }
-  return null;
+const legacyStructuredDesignLabelPattern =
+  /(?:网站名称|站点名称|企业名称|公司名称|站点语言|网站语言|主要语言|转化目标|核心目标|建站目标|站点简介|网站主题色|站点主题色|(?:AI\s*)?助手名称|(?:AI\s*)?助手欢迎语|欢迎语|助手配色(?:模式)?|助手主题色)\s*(?:[:：]|\s)/u;
+
+function siteGoalWithoutLegacyDesignSuffix(value: string) {
+  return (
+    value.split(
+      /\s*[；;]\s*(?:(?:网站|站点)主题色|(?:AI\s*)?助手(?:名称|欢迎语|配色(?:模式)?|主题色)|欢迎语)\s*(?:[:：]|\s)/u,
+      1,
+    )[0] ?? ""
+  );
 }
 
 /**
- * Merge customer-confirmed text into the existing SiteBrief fields that the
- * build runtime already freezes. Visual and assistant preferences can travel
- * inside conversionGoal, but are deliberately not promoted to first-class
- * fields because the current SiteBrief protocol has no such contract.
+ * Merge legacy customer-confirmed text into the existing SiteBrief fields.
+ * Structured design colors and assistant settings are persisted only through
+ * SiteDesignPreferences and must never be folded into conversionGoal.
  */
 export function mergeSiteOpsCustomerBriefMessage(
   brief: SiteBrief,
@@ -71,9 +68,6 @@ export function mergeSiteOpsCustomerBriefMessage(
   const companyNameValue = normalized.match(
     /(?:网站名称|站点名称|企业名称|公司名称)\s*[:：]\s*([^\n]{1,255})/u,
   )?.[1];
-  const languageValue = normalized.match(
-    /(?:站点语言|网站语言|主要语言)\s*[:：]\s*([^\n]{2,32})/u,
-  )?.[1];
   const audienceValue = normalized.match(
     /(?:目标受众|核心受众|受众|面向)\s*[:：]\s*([^\n]{2,500})/u,
   )?.[1];
@@ -81,29 +75,37 @@ export function mergeSiteOpsCustomerBriefMessage(
     /(?:转化目标|核心目标|建站目标|站点简介)\s*[:：]\s*([^\n]{1,500})/u,
   )?.[1];
   const hasBuilderStructuredLabel =
-    /(?:网站名称|站点名称|企业名称|公司名称|站点语言|网站语言|主要语言|转化目标|核心目标|建站目标|站点简介)\s*[:：]/u.test(
-      normalized,
-    );
+    legacyStructuredDesignLabelPattern.test(normalized);
   const companyNameCandidate = companyNameValue
     ? compactBriefText(companyNameValue, 255)
     : "";
-  const companyName = companyNameCandidate && !/[<>]/u.test(companyNameCandidate)
-    ? companyNameCandidate
-    : brief.companyName;
-  const primaryLanguage = languageValue
-    ? normalizedSiteLanguage(languageValue) ?? brief.primaryLanguage
-    : brief.primaryLanguage;
+  const hasStructuredDesign = brief.designPreferences !== undefined;
+  const companyName =
+    !hasStructuredDesign &&
+    companyNameCandidate &&
+    !/[<>]/u.test(companyNameCandidate)
+      ? companyNameCandidate
+      : brief.companyName;
+  // Site language is server-owned and no longer configurable by customer text.
+  const primaryLanguage = brief.primaryLanguage;
   const audienceCandidate = audienceValue
     ? compactBriefText(audienceValue, 500)
     : "";
   const audience = audienceCandidate ? [audienceCandidate] : brief.audience;
   const conversionCandidate = compactBriefText(
-    conversionValue ?? (hasBuilderStructuredLabel ? "" : normalized),
+    conversionValue
+      ? siteGoalWithoutLegacyDesignSuffix(conversionValue)
+      : hasBuilderStructuredLabel
+        ? ""
+        : normalized,
     500,
   );
-  const conversionGoal = conversionCandidate && !/[<>]/u.test(conversionCandidate)
-    ? conversionCandidate
-    : brief.conversionGoal;
+  const conversionGoal =
+    !hasStructuredDesign &&
+    conversionCandidate &&
+    !/[<>]/u.test(conversionCandidate)
+      ? conversionCandidate
+      : brief.conversionGoal;
   const hasNewContact = nextContacts.length > brief.contacts.length;
 
   return siteBriefSchema.parse({
@@ -114,8 +116,13 @@ export function mergeSiteOpsCustomerBriefMessage(
     audience,
     conversionGoal,
     unknowns: brief.unknowns.filter((item) => {
-      if (companyName !== brief.companyName && /(?:企业|公司|网站|站点).*名称/u.test(item)) return false;
-      if (primaryLanguage !== brief.primaryLanguage && item.includes("语言")) return false;
+      if (
+        companyName !== brief.companyName &&
+        /(?:企业|公司|网站|站点).*名称/u.test(item)
+      )
+        return false;
+      if (primaryLanguage !== brief.primaryLanguage && item.includes("语言"))
+        return false;
       if (audienceCandidate && item.includes("目标受众")) return false;
       if (conversionValue && item.includes("转化")) return false;
       if (hasNewContact && item.includes("联系方式")) return false;

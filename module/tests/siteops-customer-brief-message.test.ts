@@ -28,7 +28,7 @@ function brief(): SiteBrief {
 }
 
 describe("SiteOps customer brief messages", () => {
-  it("merges the builder's structured configuration into frozen brief fields", () => {
+  it("keeps language server-owned and excludes design widgets from the legacy goal", () => {
     const result = mergeSiteOpsCustomerBriefMessage(
       brief(),
       [
@@ -39,15 +39,52 @@ describe("SiteOps customer brief messages", () => {
     );
 
     expect(result.companyName).toBe("远山帮助中心");
-    expect(result.primaryLanguage).toBe("en-US");
-    expect(result.conversionGoal).toContain("帮助访客自助解决问题");
-    // Markdown heading markers are stripped by the established brief sanitizer,
-    // while the full six-digit palette coordinate remains frozen.
-    expect(result.conversionGoal).toContain("网站主题色 315b8a");
-    expect(result.conversionGoal).toContain("AI 助手欢迎语 您好，请问需要什么帮助？");
+    expect(result.primaryLanguage).toBe("zh-CN");
+    expect(result.conversionGoal).toBe("帮助访客自助解决问题");
+    expect(result.conversionGoal).not.toContain("网站主题色");
+    expect(result.conversionGoal).not.toContain("助手");
     expect(result.routes).toEqual(brief().routes);
     expect(result.unknowns).not.toContain("企业名称待确认");
-    expect(result.unknowns).not.toContain("主要语言待确认");
+    expect(result.unknowns).toContain("主要语言待确认");
+  });
+
+  it("does not let legacy chat text diverge an existing structured design", () => {
+    const original: SiteBrief = {
+      ...brief(),
+      designPreferences: {
+        schemaVersion: 1,
+        siteName: "冻结名称",
+        siteGoal: "冻结目标",
+        featuredRouteIds: ["help"],
+        siteAccent: "#315b8a",
+        assistant: {
+          name: "知识助手",
+          welcome: "您好，请问需要什么帮助？",
+          accentMode: "follow_site",
+          customAccent: null,
+        },
+        knowledgeSnapshot: {
+          id: "11111111-1111-4111-8111-111111111111",
+          version: 1,
+          archiveHash: "a".repeat(64),
+        },
+        template: { id: "template-1", version: "catalog-1" },
+        designRevision: 1,
+        draftHash: "b".repeat(64),
+      },
+    };
+    original.companyName = original.designPreferences!.siteName;
+    original.conversionGoal = original.designPreferences!.siteGoal;
+
+    const result = mergeSiteOpsCustomerBriefMessage(
+      original,
+      "网站名称: 被覆盖名称\n建站目标: 被覆盖目标\n站点语言: en-US",
+    );
+
+    expect(result.companyName).toBe("冻结名称");
+    expect(result.conversionGoal).toBe("冻结目标");
+    expect(result.primaryLanguage).toBe("zh-CN");
+    expect(result.designPreferences).toEqual(original.designPreferences);
   });
 
   it("does not let invalid structured values replace trusted brief fields", () => {

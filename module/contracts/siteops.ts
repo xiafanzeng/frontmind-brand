@@ -1,5 +1,10 @@
 import { staticTemplatePagination, staticTemplatePageLength } from "./static-template-pagination.js";
 import { z } from "zod";
+import {
+  parseSiteDesignPreferencesForRoutes,
+  persistedSiteDesignPreferencesSchema,
+  type SiteDesignPreferences,
+} from "./site-design-preferences.js";
 
 /** Every persisted/runtime workflow coordinate must satisfy this shared
  * boundary before quota reservation or build persistence begins. */
@@ -595,8 +600,35 @@ export const siteBriefSchema = z
       .max(200),
     publicAssetIds: z.array(z.string().max(191)).max(100).default([]),
     unknowns: z.array(z.string().trim().min(1).max(500)).max(50).default([]),
+    designPreferences: persistedSiteDesignPreferencesSchema.optional(),
   })
   .strict();
+
+export function readSiteDesignPreferencesFromBrief(
+  value: unknown,
+): SiteDesignPreferences | null {
+  const parsed = siteBriefSchema.safeParse(value);
+  return parsed.success ? (parsed.data.designPreferences ?? null) : null;
+}
+
+export function applySiteDesignPreferencesToBrief(
+  brief: unknown,
+  preferences: unknown,
+) {
+  const parsedBrief = siteBriefSchema.parse(brief);
+  const parsedPreferences = parseSiteDesignPreferencesForRoutes(
+    preferences,
+    parsedBrief.routes
+      .filter((route) => route.sourceDocumentIds.length > 0)
+      .map((route) => route.id),
+  );
+  return siteBriefSchema.parse({
+    ...parsedBrief,
+    companyName: parsedPreferences.siteName,
+    conversionGoal: parsedPreferences.siteGoal,
+    designPreferences: parsedPreferences,
+  });
+}
 
 export const visualTaxonomySchema = z
   .object({

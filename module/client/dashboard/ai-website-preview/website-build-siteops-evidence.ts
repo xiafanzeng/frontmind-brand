@@ -66,6 +66,57 @@ function buildHasFailed(
   return Boolean(build && TERMINAL_BUILD_FAILURES.has(build.status));
 }
 
+function frozenSnapshotForBuild(
+  observation: SiteOpsObservationV1,
+  build: SiteOpsObservationV1["builds"][number] | null,
+) {
+  if (!build?.knowledgeSnapshotId) return null;
+
+  if (build.knowledgeSnapshot?.id === build.knowledgeSnapshotId) {
+    return {
+      id: build.knowledgeSnapshot.id,
+      coordinate: build.knowledgeSnapshot,
+      createdAt: null,
+    };
+  }
+
+  const designPreferences =
+    build.designPreferences ?? build.brief?.designPreferences ?? null;
+  const buildOwnedCoordinate = designPreferences?.knowledgeSnapshot ?? null;
+  if (buildOwnedCoordinate?.id === build.knowledgeSnapshotId) {
+    return {
+      id: buildOwnedCoordinate.id,
+      coordinate: buildOwnedCoordinate,
+      createdAt: null,
+    };
+  }
+
+  const projectedSnapshot = observation.knowledgeSnapshots.find(
+    (candidate) => candidate.id === build.knowledgeSnapshotId,
+  );
+  return projectedSnapshot
+    ? {
+        id: projectedSnapshot.id,
+        coordinate: projectedSnapshot.coordinate ?? null,
+        createdAt: projectedSnapshot.createdAt,
+      }
+    : null;
+}
+
+function isLegalEmptyNewsRoute(
+  brief: NonNullable<SiteOpsObservationV1["brief"]> | null,
+  route: NonNullable<SiteOpsObservationV1["brief"]>["routes"][number],
+) {
+  return Boolean(
+    brief &&
+      route.id === "news" &&
+      route.slug === "/news" &&
+      !brief.contentInventory.entries.some(
+        (entry) => entry.kind === "company_news",
+      ),
+  );
+}
+
 function stableHash(value: unknown) {
   const text = JSON.stringify(value);
   let left = 2_166_136_261;
@@ -82,56 +133,101 @@ function stableHash(value: unknown) {
 export function siteOpsWebsiteEvaluationVersion(
   observation: SiteOpsObservationV1,
 ) {
+  const build = observation.builds[0] ?? null;
+  const buildId = build?.id ?? null;
   return `${WEBSITE_BUILD_SITEOPS_EVIDENCE_VERSION}-${stableHash({
-    project: observation.project,
-    brief: observation.brief,
-    knowledgeSnapshots: observation.knowledgeSnapshots,
-    executionSteps: observation.executionSteps,
-    builds: observation.builds,
-    deployments: observation.deployments,
+    project: {
+      id: observation.project.id,
+      globalLiveDeploymentId: observation.project.globalLiveDeploymentId,
+      mainlandLiveDeploymentId: observation.project.mainlandLiveDeploymentId,
+    },
+    knowledgeSnapshot: frozenSnapshotForBuild(observation, build),
+    executionSteps: buildId
+      ? observation.executionSteps.filter((step) => step.buildId === buildId)
+      : [],
+    build,
+    deployments: buildId
+      ? observation.deployments.filter((deployment) => deployment.buildId === buildId)
+      : [],
     aliyunConnection: observation.aliyunConnection,
     domainState: observation.domainState,
-    interactionState: observation.interactionState,
   })}`;
 }
 
 export function siteOpsWebsiteEvaluationObservedAt(
   observation: SiteOpsObservationV1,
 ) {
+  const build = observation.builds[0] ?? null;
+  const buildId = build?.id ?? null;
+  const frozenSnapshot = frozenSnapshotForBuild(observation, build);
   const timestamps = [
-    observation.project.updatedAt,
     observation.aliyunConnection.verifiedAt,
     observation.domainState?.icpVerifiedAt,
-    ...observation.knowledgeSnapshots.map((item) => item.createdAt),
-    ...observation.executionSteps.flatMap((item) => [item.startedAt, item.completedAt]),
-    ...observation.builds.flatMap((item) => [item.createdAt, item.updatedAt]),
-    ...observation.deployments.map((item) => item.createdAt),
+    frozenSnapshot?.createdAt,
+    ...(buildId
+      ? observation.executionSteps
+          .filter((item) => item.buildId === buildId)
+          .flatMap((item) => [item.startedAt, item.completedAt])
+      : []),
+    ...(build ? [build.createdAt, build.updatedAt] : []),
+    ...(buildId
+      ? observation.deployments
+          .filter((item) => item.buildId === buildId)
+          .map((item) => item.createdAt)
+      : []),
   ].filter((value): value is string => Boolean(value));
   return timestamps.reduce((latest, candidate) =>
     Date.parse(candidate) > Date.parse(latest) ? candidate : latest,
-  observation.project.updatedAt);
+  build?.updatedAt ?? observation.project.updatedAt);
 }
 
 export function buildWebsiteEvaluationJudgmentsFromSiteOps(
   observation: SiteOpsObservationV1,
 ): WebsiteBuildEvaluationJudgment[] {
   const build = observation.builds[0] ?? null;
-  const brief = observation.brief;
-  const snapshotId = observation.project.currentKnowledgeSnapshotId;
-  const snapshot = snapshotId
-    ? observation.knowledgeSnapshots.find((item) => item.id === snapshotId) ?? null
-    : null;
+  // Evaluation is build-bound: a later edit to project.brief must not rewrite
+  // the evidence used to score an already materialized build.
+  const brief = build?.brief ?? null;
+  const designPreferences = build?.designPreferences ?? brief?.designPreferences ?? null;
+  const snapshot = frozenSnapshotForBuild(observation, build);
   const routes = brief?.routes ?? [];
-  const sourcedRoutes = routes.filter((route) => route.sourceDocumentIds.length > 0);
-  const allRoutesSourced = routes.length > 0 && sourcedRoutes.length === routes.length;
+  const featuredRouteIds = designPreferences?.featuredRouteIds ?? routes.map((route) => route.id);
+  const featuredRoutes = featuredRouteIds
+    .map((routeId) => routes.find((route) => route.id === routeId) ?? null)
+    .filter((route): route is (typeof routes)[number] => route !== null);
+  const legalEmptyNewsRoutes = routes.filter((route) =>
+    isLegalEmptyNewsRoute(brief, route),
+  );
+  const requiredRoutes = routes.filter((route) =>
+    !isLegalEmptyNewsRoute(brief, route),
+  );
+  const sourcedRoutes = requiredRoutes.filter(
+    (route) => route.sourceDocumentIds.length > 0,
+  );
+  const allRoutesSourced =
+    routes.length > 0 && sourcedRoutes.length === requiredRoutes.length;
+  const legalEmptyNewsSummary = legalEmptyNewsRoutes.length > 0
+    ? `，另有 ${legalEmptyNewsRoutes.length} 个栏目使用有据可审计的企业新闻空态`
+    : "";
   const contentPlanReady = Boolean(
     build?.contentPlan?.status === "ready" && build.contentPlan.sha256,
   );
   const buildEvidence = currentBuildEvidence(build);
   const deliveryEvidence = qaEvidence(build);
   const routeEvidence = routes.map((route) =>
-    `siteops:brief:route:${route.id}:sources:${route.sourceDocumentIds.length}`,
+    isLegalEmptyNewsRoute(brief, route)
+      ? `siteops:build:${build?.id ?? "missing"}:brief:route:${route.id}:empty:company_news_unavailable`
+      : `siteops:build:${build?.id ?? "missing"}:brief:route:${route.id}:sources:${route.sourceDocumentIds.length}`,
   );
+  const featuredRouteEvidence = featuredRoutes.map((route) =>
+    `siteops:build:${build?.id ?? "missing"}:featured-route:${route.id}:sources:${route.sourceDocumentIds.length}`,
+  );
+  const designEvidence = designPreferences && build
+    ? `siteops:build:${build.id}:design:r${designPreferences.designRevision}:${designPreferences.draftHash}`
+    : null;
+  const assistantEvidence = designPreferences && build
+    ? `siteops:build:${build.id}:assistant:${designPreferences.assistant.accentMode}`
+    : null;
   const snapshotEvidence = snapshot
     ? `siteops:knowledge:${snapshot.id}`
     : null;
@@ -168,7 +264,7 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
     contentStructure = judgment(
       "website-content-structure",
       "failed",
-      `真实构建已完成，但知识快照、Brief 或栏目来源不完整（${sourcedRoutes.length}/${routes.length} 个栏目已绑定来源）。`,
+      `真实构建已完成，但知识快照、Brief 或栏目来源不完整（${sourcedRoutes.length}/${requiredRoutes.length} 个需来源栏目已绑定来源${legalEmptyNewsSummary}）。`,
       evidence(buildEvidence, deliveryEvidence, snapshotEvidence, ...routeEvidence),
     );
   } else {
@@ -177,13 +273,14 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
       "website-content-structure",
       complete ? "passed" : "partial",
       complete
-        ? `真实构建 #${build.ordinal} 已绑定知识快照、${routes.length} 个有来源栏目及冻结内容计划。`
-        : `真实构建 #${build.ordinal} 已绑定知识快照和 ${routes.length} 个有来源栏目，但内容计划或预览坐标未完整投影。`,
+        ? `真实构建 #${build.ordinal} 已绑定知识快照、${requiredRoutes.length} 个需来源栏目及冻结内容计划${legalEmptyNewsSummary}。`
+        : `真实构建 #${build.ordinal} 已绑定知识快照和 ${requiredRoutes.length} 个需来源栏目${legalEmptyNewsSummary}，但内容计划或预览坐标未完整投影。`,
       evidence(
         buildEvidence,
         deliveryEvidence,
         snapshotEvidence,
         contentPlanEvidence,
+        designEvidence,
         build.previewUrl ? `siteops:build:${build.id}:preview` : null,
         ...routeEvidence,
       ),
@@ -216,18 +313,29 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
     );
     const cleanQa = build.buildDelivery.qaStatus === "passed";
     const contactReady = sourcedContacts.length > 0;
+    const featuredNavigationReady =
+      featuredRoutes.length === featuredRouteIds.length &&
+      featuredRoutes.length > 0 &&
+      featuredRoutes.every(
+        (route) =>
+          isLegalEmptyNewsRoute(brief, route) ||
+          route.sourceDocumentIds.length > 0,
+      );
     navigationContact = judgment(
       "website-navigation-contact",
-      cleanQa && contactReady ? "passed" : "partial",
-      cleanQa && contactReady
-        ? `浏览器 QA 已通过，${routes.length} 个路由与 ${sourcedContacts.length} 个有来源联系入口已纳入真实构建。`
-        : `浏览器 QA 为 ${build.buildDelivery.qaStatus}；${routes.length} 个路由、${sourcedContacts.length} 个有来源联系入口可核对，仍有一项未形成完整通过证据。`,
+      cleanQa && contactReady && featuredNavigationReady ? "passed" : "partial",
+      cleanQa && contactReady && featuredNavigationReady
+        ? `浏览器 QA 已通过，冻结设计中的 ${featuredRoutes.length} 个主栏目、${routes.length} 个真实页面与 ${sourcedContacts.length} 个有来源联系入口已纳入构建。`
+        : `浏览器 QA 为 ${build.buildDelivery.qaStatus}；冻结设计主栏目 ${featuredRoutes.length}/${featuredRouteIds.length}、真实页面 ${routes.length} 个、有来源联系入口 ${sourcedContacts.length} 个，仍有一项未形成完整通过证据。`,
       evidence(
         buildEvidence,
         deliveryEvidence,
+        designEvidence,
+        assistantEvidence,
         ...routeEvidence,
+        ...featuredRouteEvidence,
         ...sourcedContacts.map((contact) =>
-          `siteops:brief:contact:${contact.kind}:sources:${contact.sourceDocumentIds.length}`,
+          `siteops:build:${build.id}:brief:contact:${contact.kind}:sources:${contact.sourceDocumentIds.length}`,
         ),
         ...warningEvidence,
       ),
@@ -282,7 +390,7 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
     factsEvidence = judgment(
       "website-facts-evidence",
       "failed",
-      `真实构建缺少完整知识快照或页面来源（${sourcedRoutes.length}/${routes.length} 个栏目有来源），不能确认企业事实。`,
+      `真实构建缺少完整知识快照或页面来源（${sourcedRoutes.length}/${requiredRoutes.length} 个需来源栏目有来源${legalEmptyNewsSummary}），不能确认企业事实。`,
       evidence(buildEvidence, snapshotEvidence, ...routeEvidence),
     );
   } else {
@@ -294,16 +402,17 @@ export function buildWebsiteEvaluationJudgmentsFromSiteOps(
       "website-facts-evidence",
       complete ? "passed" : "partial",
       complete
-        ? `${verifiedFacts.length} 条企业事实和 ${routes.length} 个栏目均绑定冻结知识来源。`
-        : `${routes.length} 个栏目已绑定来源；可追溯企业事实 ${verifiedFacts.length} 条、待确认事项 ${brief.unknowns.length} 条。`,
+        ? `${verifiedFacts.length} 条企业事实和 ${requiredRoutes.length} 个需来源栏目均绑定冻结知识来源${legalEmptyNewsSummary}。`
+        : `${requiredRoutes.length} 个需来源栏目已绑定来源${legalEmptyNewsSummary}；可追溯企业事实 ${verifiedFacts.length} 条、待确认事项 ${brief.unknowns.length} 条。`,
       evidence(
         buildEvidence,
         snapshotEvidence,
+        designEvidence,
         ...routeEvidence,
         ...verifiedFacts.map((_, index) =>
-          `siteops:brief:verified-fact:${index + 1}`,
+          `siteops:build:${build.id}:brief:verified-fact:${index + 1}`,
         ),
-        ...brief.unknowns.map((_, index) => `siteops:brief:unknown:${index + 1}`),
+        ...brief.unknowns.map((_, index) => `siteops:build:${build.id}:brief:unknown:${index + 1}`),
       ),
     );
   }

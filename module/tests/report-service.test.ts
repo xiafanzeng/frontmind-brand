@@ -1,5 +1,8 @@
 // @vitest-environment node
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+// Real harness child processes make setup/teardown slow inside constrained
+// build containers; give this file's hooks an explicit generous budget.
+vi.setConfig({hookTimeout:90000,testTimeout:90000});
 import {randomUUID,createHash} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import os from 'node:os';
@@ -51,7 +54,13 @@ beforeEach(async()=>{
  root=await mkdtemp(path.join(os.tmpdir(),'brand-report-service-'));db=new MemoryDb();mock.runs=[];mock.pending.clear();mock.monitorSubmits=[];mock.monitorWait=null;mock.workflowHash='workflow-v2';
  mock.ports={agentOperations:table('operations'),agentTasks:table('tasks'),assertActorAllowed:()=>{},lockAccountRecord:async()=>{},lockCustomerProjectBusinessWrite:async()=>{},getDashboardWorkspace:async()=>({payload:profile}),createCredentialAgentClient:()=>{throw new Error('XTY must never run');}};
 });
-afterEach(async()=>{for(const operation of db.data.operations){const service=makeService();await service.stop(operation.id).catch(()=>{});await service.schedule(operation.id);}vi.restoreAllMocks();await rm(root,{recursive:true,force:true});});
+afterEach(async()=>{
+// Interruption tests intentionally leave unresolved fake harness jobs; a
+// stop/schedule on those can never settle, so cleanup is bounded instead of
+// hanging slower environments (image-build containers) after the assertions.
+ const cleanup=(async()=>{for(const operation of db.data.operations){const service=makeService();await service.stop(operation.id).catch(()=>{});await service.schedule(operation.id).catch(()=>{});}})();
+ await Promise.race([cleanup,new Promise(resolve=>setTimeout(resolve,5000))]);
+ vi.restoreAllMocks();await rm(root,{recursive:true,force:true});});
 function captureHeartbeat(){
  const intervals=vi.spyOn(globalThis,'setInterval'),deadlines=vi.spyOn(globalThis,'setTimeout');
  return {
@@ -216,7 +225,7 @@ describe('DeepSeek report durable lifecycle',()=>{
   r.phase='researching';delete r.error;await service.advance(id);
   expect(state(id).error.code).toBe('REPORT_LEGACY_STOPPED');expect(mock.runs).toHaveLength(1);
  });
- it('requires explicit recovery after a harness process interruption',async()=>{
+ it('requires explicit recovery after a harness process interruption',{timeout:60000,hookTimeout:60000},async()=>{
   const {id,service}=await begin();mock.pending.get(state(id).job.id).reject(new Error('process ended'));await service.schedule(id);
   const r=state(id);r.phase='researching';delete r.error;delete r.lease;
   await service.advance(id);expect(state(id).error.code).toBe('HARNESS_INTERRUPTED');expect(mock.runs).toHaveLength(1);

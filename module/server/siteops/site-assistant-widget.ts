@@ -11,6 +11,52 @@
 /** The brand module container's public origin is deterministic per deployment. */
 export const SITE_ASSISTANT_WIDGET_API_ORIGIN_DEFAULT = "https://brand.frontmind.cn";
 
+export const SITE_ASSISTANT_CONFIG_ASSET_PATH = "/assistant-config.js";
+export const SITE_ASSISTANT_WIDGET_ASSET_PATH = "/assistant.js";
+export const SITE_ASSISTANT_STYLES_ASSET_PATH = "/assistant.css";
+
+/**
+ * Every trusted renderer uses the same external, host-owned assets. Keeping
+ * the frozen config out of inline script text lets preview CSP nonce the exact
+ * files and avoids an executable customer-controlled inline boundary.
+ */
+export const TRUSTED_SITE_ASSISTANT_HEAD_MARKUP =
+  `<link rel="stylesheet" href="${SITE_ASSISTANT_STYLES_ASSET_PATH}">` +
+  `<script src="${SITE_ASSISTANT_CONFIG_ASSET_PATH}" defer></script>` +
+  `<script src="${SITE_ASSISTANT_WIDGET_ASSET_PATH}" defer></script>`;
+
+const trustedAssistantScriptPaths = new Set([
+  SITE_ASSISTANT_CONFIG_ASSET_PATH,
+  SITE_ASSISTANT_WIDGET_ASSET_PATH,
+]);
+
+export function isTrustedSiteAssistantExternalScriptTag(tag: string) {
+  const attributes = tag
+    .replace(/^<script\b/iu, "")
+    .replace(/>$/u, "")
+    .trim();
+  const source = attributes.match(/\bsrc\s*=\s*(["'])([^"']+)\1/iu);
+  if (!source || !trustedAssistantScriptPaths.has(source[2]!)) return false;
+  if (!/\bdefer(?:\s*=|\s|$)/iu.test(attributes)) return false;
+  return attributes
+    .replace(source[0], "")
+    .replace(
+      /\bdefer(?:\s*=\s*(?:"(?:defer)?"|'(?:defer)?'|defer))?/giu,
+      "",
+    )
+    .trim().length === 0;
+}
+
+export function trustedSiteAssistantConfigSource(
+  config: Readonly<Record<string, unknown>>,
+) {
+  const serialized = JSON.stringify(config)
+    .replaceAll("<", "\\u003c")
+    .replaceAll(String.fromCharCode(0x2028), "\\u2028")
+    .replaceAll(String.fromCharCode(0x2029), "\\u2029");
+  return `window.__FRONTMIND_ASSISTANT__=${serialized};\n`;
+}
+
 export function siteAssistantApiOrigin(
   env: Record<string, string | undefined> = process.env,
 ): string {
@@ -66,7 +112,151 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
   if (!bootConfig || typeof bootConfig.apiBase !== "string" || !/^https:\/\//.test(bootConfig.apiBase)) return;
   var apiBase = bootConfig.apiBase.replace(/\/+$/, "") + "/api/public/site-assistant";
   var MAX_QUESTION = 500;
-  var storageKey = "fm-assistant:" + apiBase;
+  var binding = bootConfig.binding && typeof bootConfig.binding === "object"
+    && typeof bootConfig.binding.knowledgeArchiveHash === "string"
+    && typeof bootConfig.binding.signature === "string"
+      ? bootConfig.binding
+      : null;
+  // Sessions are keyed on the binding's knowledge identity: a new knowledge
+  // snapshot always starts a fresh conversation, while pure visual revisions
+  // of the same knowledge keep the transcript.
+  var storageKey = "fm-assistant:" + apiBase + (binding
+    ? ":" + binding.knowledgeSnapshotId + ":" + binding.knowledgeArchiveHash
+    : "");
+  var frozenName = typeof bootConfig.name === "string" && bootConfig.name.trim() ? bootConfig.name.trim() : null;
+  var frozenWelcome = typeof bootConfig.welcome === "string" && bootConfig.welcome.trim() ? bootConfig.welcome.trim() : null;
+  var frozenAccent = typeof bootConfig.accent === "string" && /^#[0-9a-f]{6}$/i.test(bootConfig.accent) ? bootConfig.accent : null;
+  var designConfig = bootConfig.design && typeof bootConfig.design === "object" ? bootConfig.design : null;
+  var previewBridge = window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__ && typeof window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__ === "object"
+    ? window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__
+    : null;
+  // Trusted preview bridge: inside the owner-only embed preview, report every
+  // RENDERED real answer (a policy refusal arrives as a 200 answer as well) to
+  // the embedding dashboard. Errors, timeouts and local notes never report, so
+  // they can never count as a completed trial.
+  function reportRenderedAnswerToParent() {
+    if (!previewBridge || !binding) return;
+    if (window.parent === window) return;
+    try {
+      window.parent.postMessage({
+        schemaVersion: 1,
+        kind: "frontmind_site_assistant_answer_rendered",
+        token: previewBridge.token,
+        buildId: previewBridge.buildId,
+        knowledgeSnapshotId: binding.knowledgeSnapshotId,
+        knowledgeArchiveHash: binding.knowledgeArchiveHash,
+        designRevision: binding.designRevision,
+        draftHash: binding.draftHash,
+        assistantName: binding.assistantName,
+        welcome: binding.welcome
+      }, "*");
+    } catch (error) { /* the preview bridge is best-effort for the trial gate */ }
+  }
+
+  function normalizedPath(value) {
+    try {
+      var pathname = new URL(value, document.baseURI).pathname.replace(/\/+$/, "");
+      return pathname || "/";
+    } catch (error) { return null; }
+  }
+
+  function applyFrozenSiteDesign() {
+    if (!designConfig) return;
+    var siteAccent = typeof designConfig.siteAccent === "string" && /^#[0-9a-f]{6}$/i.test(designConfig.siteAccent)
+      ? designConfig.siteAccent : null;
+    if (siteAccent) {
+      document.documentElement.style.setProperty("--frontmind-site-accent", siteAccent);
+      document.documentElement.style.setProperty("--accent", siteAccent, "important");
+      document.documentElement.style.setProperty("accent-color", siteAccent);
+      var theme = document.querySelector('meta[name="theme-color"]');
+      if (!theme) {
+        theme = document.createElement("meta");
+        theme.setAttribute("name", "theme-color");
+        document.head.appendChild(theme);
+      }
+      if (theme.getAttribute("content") !== siteAccent) theme.setAttribute("content", siteAccent);
+    }
+    if (!Array.isArray(designConfig.navigation) || !Array.isArray(designConfig.allRoutePaths)) return;
+    var allPaths = designConfig.allRoutePaths.map(normalizedPath).filter(Boolean);
+    var featured = designConfig.navigation.map(function (item) {
+      return item && typeof item.href === "string" && typeof item.title === "string"
+        ? { href: item.href, path: normalizedPath(item.href), title: item.title }
+        : null;
+    }).filter(Boolean);
+    var allPathSet = new Set(allPaths);
+    var featuredIndex = new Map(featured.map(function (item, index) { return [item.path, index]; }));
+    var navigations = document.querySelectorAll("header nav, nav[aria-label], [role=navigation]");
+    for (var navIndex = 0; navIndex < navigations.length; navIndex += 1) {
+      var nav = navigations[navIndex];
+      if (nav.closest(".fma-root")) continue;
+      var routeAnchors = Array.from(nav.querySelectorAll("a[href]")).filter(function (anchor) {
+        var className = typeof anchor.className === "string" ? anchor.className : "";
+        return allPathSet.has(normalizedPath(anchor.getAttribute("href") || "")) &&
+          !anchor.querySelector("img,svg") && !/(?:^|[-_\s])brand(?:$|[-_\s])/i.test(className);
+      });
+      if (!routeAnchors.length && featured.length) continue;
+      var candidates = new Map();
+      routeAnchors.forEach(function (anchor) {
+        var current = anchor.parentElement;
+        var depth = 0;
+        while (current && current !== nav) {
+          var value = candidates.get(current) || { count: 0, depth: depth };
+          value.count += 1;
+          value.depth = Math.max(value.depth, depth);
+          candidates.set(current, value);
+          current = current.parentElement;
+          depth += 1;
+        }
+      });
+      var container = nav;
+      var bestCount = 0;
+      var bestDepth = -1;
+      candidates.forEach(function (value, candidate) {
+        if (value.count > bestCount || (value.count === bestCount && value.depth > bestDepth)) {
+          container = candidate;
+          bestCount = value.count;
+          bestDepth = value.depth;
+        }
+      });
+      var found = new Set();
+      routeAnchors.forEach(function (anchor) {
+        if (!container.contains(anchor)) return;
+        var path = normalizedPath(anchor.getAttribute("href") || "");
+        var index = featuredIndex.has(path) ? featuredIndex.get(path) : -1;
+        var wrapper = anchor;
+        while (wrapper.parentElement && wrapper.parentElement !== container) wrapper = wrapper.parentElement;
+        if (wrapper.hidden !== (index < 0)) wrapper.hidden = index < 0;
+        if (index >= 0) {
+          wrapper.style.order = String(index);
+          var item = featured[index];
+          if (anchor.textContent.trim() !== item.title) anchor.textContent = item.title;
+          found.add(path);
+        }
+      });
+      featured.forEach(function (item, index) {
+        if (found.has(item.path)) return;
+        var anchor = document.createElement("a");
+        anchor.href = item.href;
+        anchor.textContent = item.title;
+        anchor.style.order = String(index);
+        anchor.setAttribute("data-frontmind-featured-route", "true");
+        container.appendChild(anchor);
+      });
+      container.setAttribute("data-frontmind-site-navigation", "featured");
+      break;
+    }
+  }
+
+  function watchFrozenSiteDesign() {
+    if (!designConfig) return;
+    applyFrozenSiteDesign();
+    var scheduled = false;
+    new MutationObserver(function () {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(function () { scheduled = false; applyFrozenSiteDesign(); });
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  }
 
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, function (character) {
@@ -132,6 +322,7 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
   function mount() {
     var root = document.createElement("div");
     root.className = "fma-root";
+    if (frozenAccent) root.style.setProperty("--fma-accent", frozenAccent);
     root.appendChild(panel);
     root.appendChild(launcher);
     document.body.appendChild(root);
@@ -139,6 +330,11 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
     input = panel.querySelector(".fm-assistant-input");
     send = panel.querySelector(".fm-assistant-send");
     title = panel.querySelector("#fma-title");
+    if (frozenName) {
+      title.textContent = frozenName;
+      panel.setAttribute("aria-label", frozenName);
+      launcher.setAttribute("aria-label", "打开" + frozenName);
+    }
     panel.querySelector(".fm-assistant-close").addEventListener("click", function () { setOpen(false); });
     panel.querySelector(".fm-assistant-form").addEventListener("submit", function (event) {
       event.preventDefault();
@@ -158,7 +354,8 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
     });
     launcher.addEventListener("click", function () { setOpen(!state.open); });
     for (var index = 0; index < transcript.length; index += 1) appendBubble(transcript[index]);
-    if (!transcript.length) appendBubble({ kind: "note", text: "你好，我是本站的 AI 助手，可以就网站内容向你解答。" });
+    if (!transcript.length) appendBubble({ kind: "note", text: frozenWelcome || "你好，我是本站的 AI 助手，可以就网站内容向你解答。" });
+    watchFrozenSiteDesign();
   }
 
   function appendBubble(entry) {
@@ -210,7 +407,7 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
       .then(function (body) {
         state.ready = true;
         state.unavailable = false;
-        if (body.assistant && typeof body.assistant.name === "string") {
+        if (!frozenName && body.assistant && typeof body.assistant.name === "string") {
           title.textContent = body.assistant.name;
           launcher.setAttribute("aria-label", "打开" + body.assistant.name);
         }
@@ -256,7 +453,7 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
     fetch(apiBase + "/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ question: question, session: session }),
+      body: JSON.stringify({ question: question, session: session, binding: binding }),
       signal: controller.signal,
     })
       .then(function (response) {
@@ -268,6 +465,7 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
           transcript.push({ kind: "answer", text: result.body.answer.text, sources: result.body.answer.sources || [], session: result.body.session });
           persist(result.body.session || session);
           appendBubble(transcript[transcript.length - 1]);
+          reportRenderedAnswerToParent();
         } else {
           var message = result.body && result.body.error && typeof result.body.error.message === "string"
             ? result.body.error.message

@@ -19,6 +19,20 @@ async function editPlan(api: IntentWorkbenchApi, data: IntentWorkspace, question
 }
 describe("standalone intent interaction adapter", () => {
   beforeEach(() => localStorage.clear());
+  it("问题修改保留身份和来源，删除后刷新不再显示，其他问题不受影响", async () => {
+    const api = createIntentPreviewApi("question-edit");
+    let data = await prepare(api);
+    data = await api.command({kind: "update-question", expectedRevision: data.revision, questionId: "q2",
+      question: "双眼皮修复有哪些选择标准？", category: "industry", subdivision: "选型"});
+    expect(data.state.questions[1]).toMatchObject({id: "q2", tableId: "t1", rowIndex: 2, sourceRevision: 1});
+    expect(data.state.evaluations.some(item => item.questionId === "q2")).toBe(false);
+    expect(data.state.plans.some(item => item.questionId === "q2")).toBe(false);
+    const reopened = createIntentPreviewApi("question-edit");
+    expect((await reopened.observe()).state.questions[1].question).toBe("双眼皮修复有哪些选择标准？");
+    data = await reopened.command({kind: "delete-question", expectedRevision: data.revision, questionId: "q2"});
+    expect((await createIntentPreviewApi("question-edit").observe()).state.questions).toEqual([questions[0]]);
+    expect(data.state.evaluations.map(item => item.questionId)).toEqual(["q1"]);
+  });
   it("executes only the selected non-first question and chosen action, survives refresh, then restores it", async () => {
     const api = createIntentPreviewApi("selective");
     let data = await prepare(api);

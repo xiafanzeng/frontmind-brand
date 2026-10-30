@@ -238,6 +238,8 @@ export const RAG_CASE_MODE_LABELS: Record<RagCaseMode, string> = { normal: "正�
 export interface CompletionPoint {
   id: string;
   label: string;
+  /** Pre-registered short copy for a failed point; never inferred from label text. */
+  failureLabel?: string;
   /** true 已满足；false 未满足（回答级关键风险）；null 前提不足、无法判定。 */
   met: boolean | null;
 }
@@ -258,6 +260,7 @@ export interface ConversationLayer {
 
 export interface ConversationOutcome {
   status: RagCaseStatus;
+  displayLabel: string;
   /** 已确认回答级关键风险数：失败检查数 + 未满足的必要完成点数。 */
   blockingCount: number;
   unmetPoints: string[];
@@ -265,7 +268,8 @@ export interface ConversationOutcome {
 }
 
 export function resolveConversationOutcome(layer: ConversationLayer, gates: GateJudgment[]): ConversationOutcome {
-  const unmetPoints = layer.prerequisiteMissing ? [] : layer.completionPoints.filter((point) => point.met === false).map((point) => point.label);
+  const unmetDefinitions = layer.prerequisiteMissing ? [] : layer.completionPoints.filter((point) => point.met === false);
+  const unmetPoints = unmetDefinitions.map((point) => point.label);
   const unknownPoints = layer.completionPoints.filter((point) => point.met === null).map((point) => point.label);
   const failedGates = gates.filter((gate) => gate.status === "failed");
   if (failedGates.length > 0 || (!layer.prerequisiteMissing && unmetPoints.length > 0)) {
@@ -273,16 +277,21 @@ export function resolveConversationOutcome(layer: ConversationLayer, gates: Gate
       failedGates.length > 0 ? `${failedGates.length} 项关键回答风险已发现` : "",
       unmetPoints.length > 0 ? `必要完成点未全部满足：${unmetPoints.join("、")}` : "",
     ].filter(Boolean).join("；");
-    return { status: "fail", blockingCount: failedGates.length + unmetPoints.length, unmetPoints,
+    const displayLabel = failedGates.length > 0
+      ? "发现风险"
+      : unmetDefinitions.length > 1
+        ? `缺 ${unmetDefinitions.length} 项`
+        : nonempty(unmetDefinitions[0]?.failureLabel) ? unmetDefinitions[0].failureLabel.trim() : "未通过";
+    return { status: "fail", displayLabel, blockingCount: failedGates.length + unmetPoints.length, unmetPoints,
       reason: `${parts}。单轮高分不能抵消已确认的回答级风险；此结论不决定网站能否进入发布确认。` };
   }
   if (layer.prerequisiteMissing || unknownPoints.length || !layer.completionPoints.length || RAG_GATES.some(definition => {
     const matches = gates.filter(gate => gate.id === definition.id);
     return matches.length !== 1 || matches[0].status !== "passed" || !nonempty(matches[0].reason);
   }) || gates.some(gate => !RAG_GATES.some(definition => definition.id === gate.id))) {
-    return { status: "unverified", blockingCount: 0, unmetPoints: unknownPoints, reason: "任务前提、必要完成点或风险证据尚未确认；保留未知，补齐后复核。" };
+    return { status: "unverified", displayLabel: "待确认", blockingCount: 0, unmetPoints: unknownPoints, reason: "任务前提、必要完成点或风险证据尚未确认；保留未知，补齐后复核。" };
   }
-  return { status: "pass", blockingCount: 0, unmetPoints: [],
+  return { status: "pass", displayLabel: "通过", blockingCount: 0, unmetPoints: [],
     reason: "全部必要完成点满足且关键风险检查通过，经人工确认后记为通过。" };
 }
 

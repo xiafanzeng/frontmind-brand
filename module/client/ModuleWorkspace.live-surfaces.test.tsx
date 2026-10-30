@@ -4,16 +4,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   ragProps: null as null | Record<string, unknown>,
   websiteProps: null as null | Record<string, unknown>,
+  websiteSettingsProps: null as null | Record<string, unknown>,
 }));
 
 vi.mock("./components/EmbeddedKnowledgeBasePanel", () => ({
   default: () => <div data-testid="knowledge-surface" />,
 }));
+vi.mock("./BrandReportWorkspace", () => ({
+  default: () => <div data-testid="reports-surface" />,
+}));
 vi.mock("./dashboard/IntentWorkbench", () => ({
   default: () => <div data-testid="intent-surface" />,
 }));
 vi.mock("./dashboard/knowledge-frontend/KnowledgeFrontendSettings", () => ({
-  default: () => <div data-testid="website-settings-surface" />,
+  default: (props: Record<string, unknown>) => {
+    mocks.websiteSettingsProps = props;
+    return <div data-testid="website-settings-surface" />;
+  },
 }));
 vi.mock("./dashboard/EnterpriseRagWorkspace", () => ({
   default: (props: Record<string, unknown>) => {
@@ -31,7 +38,7 @@ vi.mock(
   }),
 );
 
-import ModuleWorkspace, { type ModuleContext } from "./ModuleWorkspace";
+import ModuleWorkspace, { type BrandPage, type ModuleContext } from "./ModuleWorkspace";
 
 const context: ModuleContext = {
   module: "brand",
@@ -45,9 +52,39 @@ afterEach(() => {
   cleanup();
   mocks.ragProps = null;
   mocks.websiteProps = null;
+  mocks.websiteSettingsProps = null;
 });
 
 describe("ModuleWorkspace redesigned live routes", () => {
+  it("scopes every Brand page inside the Apple theme boundary", () => {
+    const pages: BrandPage[] = [
+      "reports",
+      "knowledge",
+      "keywords",
+      "intent",
+      "response-logic",
+      "enterprise-qa",
+      "website",
+      "website-settings",
+    ];
+
+    for (const page of pages) {
+      const view = render(
+        <ModuleWorkspace
+          context={context}
+          page={page}
+          keywordData={keywordData}
+          preview
+          previewQa={<div data-testid="fixture-rag" />}
+          previewSiteOps={<div data-testid="fixture-website" />}
+        />,
+      );
+      const boundary = view.container.querySelector(".fm-brand-theme");
+      expect(boundary?.getAttribute("data-brand-page")).toBe(page);
+      view.unmount();
+    }
+  });
+
   it("uses the connected later RAG design without legacy workbench chrome", () => {
     const onOpenWebsite = vi.fn();
     const onOpenWebsiteAssistant = vi.fn();
@@ -120,7 +157,7 @@ describe("ModuleWorkspace redesigned live routes", () => {
         preview={false}
         previewSiteOps={<div data-testid="fixture-website" />}
         websiteBuilderNavigation={{
-          initialStep: "assistant",
+          initialStep: "design",
           onOpenRag,
           onStepChange,
         }}
@@ -130,7 +167,7 @@ describe("ModuleWorkspace redesigned live routes", () => {
     expect(screen.getByTestId("live-designed-website")).toBeTruthy();
     expect(screen.queryByTestId("fixture-website")).toBeNull();
     expect(mocks.websiteProps).toMatchObject({
-      initialStep: "assistant",
+      initialStep: "design",
       onOpenRag,
       onStepChange,
       storageScope: "live:1:workspace-1",
@@ -165,6 +202,25 @@ describe("ModuleWorkspace redesigned live routes", () => {
     expect(screen.getByRole("status").textContent).toContain(
       "预览模式不会打开真实建站项目",
     );
+    expect(screen.queryByTestId("live-designed-website")).toBeNull();
+  });
+
+  it("routes website settings to the scoped project without opening a real build", () => {
+    render(
+      <ModuleWorkspace
+        context={context}
+        page="website-settings"
+        keywordData={keywordData}
+        preview
+      />,
+    );
+
+    expect(screen.getByTestId("website-settings-surface")).toBeTruthy();
+    expect(mocks.websiteSettingsProps).toEqual({
+      ownerId: 1,
+      projectId: "workspace-1",
+      demo: true,
+    });
     expect(screen.queryByTestId("live-designed-website")).toBeNull();
   });
 });

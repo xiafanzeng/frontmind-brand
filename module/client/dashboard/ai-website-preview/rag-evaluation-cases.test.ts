@@ -20,6 +20,49 @@ describe("synthetic RAG evaluation cases", () => {
     expect(RAG_SAMPLE_CASES.filter((sample) => sample.category === "challenge")).toHaveLength(5);
   });
 
+  it("documents the three-step website design flow without the retired assistant step or source toggle", () => {
+    const workflow = RAG_SAMPLE_CASES.find((sample) => sample.id === "syn-assistant-workflow")!;
+    const visibleCopy = [
+      workflow.answer,
+      workflow.improvement.title,
+      ...workflow.improvement.steps,
+      workflow.improvement.answer,
+      ...workflow.claims.map((claim) => `${claim.text} ${claim.note}`),
+      ...workflow.sources.map((source) => `${source.section} ${source.excerpt}`),
+    ].join("\n");
+
+    expect(visibleCopy).toContain("选择模板、网站设计、建设评估");
+    expect(visibleCopy).toContain("网站基础、页面与栏目、主题颜色和助手设置");
+    expect(visibleCopy).toContain("同一个设计草稿");
+    expect(visibleCopy).not.toContain("确认结构");
+    expect(visibleCopy).not.toContain("来源展示");
+    expect(visibleCopy).not.toContain("四步");
+  });
+
+  it("uses neutral, scannable issue titles instead of colloquial or agentive wording", () => {
+    const issueTitles = Object.fromEntries(
+      RAG_SAMPLE_CASES.flatMap((sample) => sample.issues.map((issue) => [issue.id, issue.title])),
+    );
+    expect(issueTitles).toMatchObject({
+      "overview-missing-next": "下一步操作指引缺失",
+      "overview-missing-scenario": "能力与使用场景对应不足",
+      "workflow-minor-context": "保存与资料不足提示缺失",
+      "leak-permission": "内部范围资料暴露风险",
+      "promise-fabrication": "上线期限缺乏依据",
+      "promise-missing-conditions": "范围与验收条件未确认",
+      "deploy-knowledge-gap": "部署资料前提缺失",
+    });
+    expect(Object.values(issueTitles)).not.toContain("用户不知道下一步怎么开始");
+    expect(Object.values(issueTitles)).not.toContain("向公开访客暴露内部范围资料");
+  });
+
+  it("uses full-width double quotation marks throughout user-visible sample copy", () => {
+    const serializedCases = JSON.stringify(RAG_SAMPLE_CASES);
+    expect(serializedCases).not.toContain("‘");
+    expect(serializedCases).not.toContain("’");
+    expect(RAG_SAMPLE_CASES[0].issues[0].action).toContain("“网站建设”");
+  });
+
   it.each(expectedCases)("derives $id score and gate conclusion from its judgments", (expected) => {
     const sample = RAG_SAMPLE_CASES.find((item) => item.id === expected.id)!;
     expect(sample).toBeDefined();
@@ -96,18 +139,18 @@ describe("RAG sample matching", () => {
 });
 
 describe("conversation-layer statuses across sample cases", () => {
-  const statusOf = (id: string) => {
+  const outcomeOf = (id: string) => {
     const sample = RAG_SAMPLE_CASES.find((item) => item.id === id)!;
-    return resolveConversationOutcome(sample.conversation, sample.gates).status;
+    return resolveConversationOutcome(sample.conversation, sample.gates);
   };
   it("assigns expected statuses: high score cannot rescue an incomplete task", () => {
-    expect(statusOf("syn-capability-overview")).toBe("fail");
-    expect(statusOf("syn-assistant-workflow")).toBe("pass");
-    expect(statusOf("syn-unknown-deadline")).toBe("pass");
-    expect(statusOf("syn-clarification")).toBe("pass");
-    expect(statusOf("syn-permission-leak")).toBe("fail");
-    expect(statusOf("syn-fabricated-promise")).toBe("fail");
-    expect(statusOf("syn-deployment-prereq")).toBe("unverified");
+    expect(outcomeOf("syn-capability-overview")).toMatchObject({status:"fail",displayLabel:"缺下一步"});
+    expect(outcomeOf("syn-assistant-workflow")).toMatchObject({status:"pass",displayLabel:"通过"});
+    expect(outcomeOf("syn-unknown-deadline").status).toBe("pass");
+    expect(outcomeOf("syn-clarification").status).toBe("pass");
+    expect(outcomeOf("syn-permission-leak")).toMatchObject({status:"fail",displayLabel:"发现风险"});
+    expect(outcomeOf("syn-fabricated-promise")).toMatchObject({status:"fail",displayLabel:"发现风险"});
+    expect(outcomeOf("syn-deployment-prereq")).toMatchObject({status:"unverified",displayLabel:"待确认"});
   });
   it("maps every case to at least one declared coverage point", () => {
     const known = new Set(RAG_COVERAGE_POINTS.map((point) => point.id));

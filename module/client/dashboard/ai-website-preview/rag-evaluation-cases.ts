@@ -79,10 +79,10 @@ const capability: RagSource = {
 const workflow: RagSource = {
   id: "syn-workflow",
   title: "合成资料 · 网站建设操作说明",
-  section: "原型四步与配置范围",
+  section: "原型三步与配置范围",
   version: VERSION,
   scope: "公开演示",
-  excerpt: "网站建设分为选择模板、确认结构、AI 助手、建设评估四步。AI 助手页可设置名称、欢迎语、主题色和来源展示；助手主题色默认跟随网站主题色，也可单独自定义。在预览中完成一次问答试用后，AI 助手步骤才会标记完成；不在示例知识库内的问题会如实拒答。配置在本地草稿中自动保存；本地预览未执行真实检索或正式发布。知识资料不足时需先确认并补充可公开的资料。",
+  excerpt: "网站建设分为选择模板、网站设计、建设评估三步。网站设计包含网站基础、页面与栏目、主题颜色和助手设置；助手设置可编辑名称、欢迎语和配色，助手主题色默认跟随网站主题色，也可单独自定义。网站与助手配置写入同一个设计草稿，并在同一个预览中呈现；完成一次问答试用后，网站设计步骤才会标记完成。不在示例知识库内的问题会如实拒答。配置在本地草稿中自动保存；本地预览未执行真实检索或正式发布。知识资料不足时需先确认并补充可公开的资料。",
 };
 
 const contact: RagSource = {
@@ -100,7 +100,7 @@ const audit: RagSource = {
   section: "检查范围与缺失事项",
   version: VERSION,
   scope: "公开演示",
-  excerpt: "KB-SYN-v1 仅包含合成的产品能力、原型四步、咨询路径及内部测试排期。逐段检查该锁定清单：未定义任何真实交付期限、两周上线保证、价格或 SLA。此审计仅支持本测试快照内的‘未找到’判断，不代表真实企业事实或真实知识库完整性；未执行真实服务、跨租户、运行时提示注入和多轮权限测试。",
+  excerpt: "KB-SYN-v1 仅包含合成的产品能力、原型三步、咨询路径及内部测试排期。逐段检查该锁定清单：未定义任何真实交付期限、两周上线保证、价格或 SLA。此审计仅支持本测试快照内的“未找到”判断，不代表真实企业事实或真实知识库完整性；未执行真实服务、跨租户、运行时提示注入和多轮权限测试。",
 };
 
 const internal: RagSource = {
@@ -168,21 +168,21 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       { id: "overview-2", text: "网站回答和企业 RAG 示例使用同一套知识来源。", status: "supported", sourceIds: ["syn-capability"], note: "能力说明直接陈述共用知识来源；不等于已接入真实检索。" },
     ],
     issues: [
-      { id: "overview-missing-next", priority: "P1", title: "用户不知道下一步怎么开始", impact: "看懂了能力，但仍要追问在哪里创建和配置网站。", action: "增加‘网站建设’四步及当前本地演示边界，再复测用户是否能找到入口。", dimensionId: "completeness" },
-      { id: "overview-missing-scenario", priority: "P2", title: "能力未对应具体使用场景", impact: "首次使用者不易判断与自己的资料查询或重复咨询是否相关。", action: "用帮助中心内容与网站问答两种来源已支持的场景解释，不扩展未经确认的企业能力。", dimensionId: "intent" },
+      { id: "overview-missing-next", priority: "P1", title: "下一步操作指引缺失", impact: "看懂了能力，但仍要追问在哪里创建和配置网站。", action: "增加“网站建设”三步及当前本地演示边界，再复测用户是否能找到入口。", dimensionId: "completeness" },
+      { id: "overview-missing-scenario", priority: "P2", title: "能力与使用场景对应不足", impact: "首次使用者不易判断与自己的资料查询或重复咨询是否相关。", action: "用帮助中心内容与网站问答两种来源已支持的场景解释，不扩展未经确认的企业能力。", dimensionId: "intent" },
     ],
     improvement: {
       title: "补上适用场景和下一步",
-      steps: ["用公开合成能力说明解释帮助中心与网站问答。", "增加网站建设四步入口，注明本地预览边界。", "复测：用户能否说明产品用途并找到第一步。"],
-      answer: "FrontMind 的演示能力包括：将企业资料整理为可追溯知识库、生成帮助中心内容，以及为网站 AI 助手提供问答能力。网站问答与这里的示例共用知识来源。您可以进入‘网站建设’，依次选择模板、确认结构、配置 AI 助手，再做建设评估。当前为本地原型，问答使用合成示例，未执行真实检索或正式发布。",
+      steps: ["用公开合成能力说明解释帮助中心与网站问答。", "增加网站建设三步入口，注明本地预览边界。", "复测：用户能否说明产品用途并找到第一步。"],
+      answer: "FrontMind 的演示能力包括：将企业资料整理为可追溯知识库、生成帮助中心内容，以及为网站 AI 助手提供问答能力。网站问答与这里的示例共用知识来源。您可以进入“网站建设”，依次选择模板、完成网站设计，再做建设评估；网站基础、页面与栏目、主题颜色和助手设置都在同一个网站设计步骤中完成。当前为本地原型，问答使用合成示例，未执行真实检索或正式发布。",
     },
     conversation: {
       task: "快速理解产品能解决哪些问题，并知道下一步从哪里开始。",
       completionPoints: [
         { id: "cp-capability-known", label: "能说明产品能力与知识来源", met: true },
-        { id: "cp-next-step", label: "获得下一步行动入口", met: false },
+        { id: "cp-next-step", label: "获得下一步行动入口", failureLabel: "缺下一步", met: false },
       ],
-      allowedAnswers: "任一经资料支持的入口说明均可（如网站建设四步、示例入口），不要求唯一说法。",
+      allowedAnswers: "任一经资料支持的入口说明均可（如网站建设三步、示例入口），不要求唯一说法。",
       runsRequired: 1,
       attribution: "generation",
     },
@@ -190,19 +190,19 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
   },
   {
     id: "syn-assistant-workflow",
-    title: "配置网站 AI 助手",
+    title: "在网站设计中配置助手",
     category: "representative",
     set: "benchmark",
     mode: "normal",
     scenario: "公开用户希望完成原型建站操作；合成代表用例，非真实流量抽样。",
     weight: 1,
     question: "如何配置网站 AI 助手？",
-    answer: "在‘网站建设’中依次完成：1. 选择模板；2. 确认结构；3. 进入‘AI 助手’，设置名称、欢迎语、主题色和来源展示（主题色默认跟随网站主题色），并在预览中完成一次问答试用；4. 进入‘建设评估’核对草稿。当前是本地演示，不会执行真实检索或正式发布。",
+    answer: "在“网站建设”中依次完成：1. 选择模板；2. 进入“网站设计”，在同一个设计草稿中配置网站基础、页面与栏目、主题颜色和助手设置，并在统一预览中完成一次问答试用；3. 进入“建设评估”核对草稿。助手设置可编辑名称、欢迎语和配色，主题色默认跟随网站主题色，也可单独自定义。当前是本地演示，不会执行真实检索或正式发布。",
     need: "知道配置入口、步骤顺序和能修改的内容，避免把本地示例当成已经上线。",
     summary: "操作路径与演示边界清楚；可补充自动保存说明及资料不足时的处理。",
     dimensions: dimensions([
       [4, "直接回应配置入口、步骤顺序和可修改字段，满足当前操作任务。", ["workflow-1", "workflow-2", "syn-workflow"]],
-      [4, "四步、配置范围及本地预览边界与原文一致，没有声称真实 RAG 已上线。", ["workflow-1", "workflow-2", "workflow-3", "syn-workflow"]],
+      [4, "三步、配置范围及本地预览边界与原文一致，没有声称真实 RAG 已上线。", ["workflow-1", "workflow-2", "workflow-3", "syn-workflow"]],
       [3, "主要步骤齐全，轻微遗漏自动保存与资料不足需先补充的提示。", ["workflow-2", "syn-workflow"]],
       [4, "各项配置与边界都能定位到 KB-SYN-v1 操作说明，没有虚构外部链接。", ["workflow-1", "workflow-2", "workflow-3", "syn-workflow"]],
       [3, "步骤可执行且顺序明确，但连在一个段落中，拆行后更便于边看边操作。", ["workflow-1", "workflow-2"]],
@@ -211,22 +211,22 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
     gates: gates(),
     sources: [workflow, audit],
     claims: [
-      { id: "workflow-1", text: "网站建设顺序为选择模板、确认结构、AI 助手、建设评估。", status: "supported", sourceIds: ["syn-workflow"], note: "四步名称与顺序有明确原文。" },
-      { id: "workflow-2", text: "AI 助手可设置名称、欢迎语、主题色、来源展示并生成示例回答。", status: "supported", sourceIds: ["syn-workflow"], note: "操作说明直接列出对应配置和合成示例能力。" },
+      { id: "workflow-1", text: "网站建设顺序为选择模板、网站设计、建设评估。", status: "supported", sourceIds: ["syn-workflow"], note: "三步名称与顺序有明确原文。" },
+      { id: "workflow-2", text: "网站设计统一包含网站基础、页面与栏目、主题颜色和助手设置；助手可设置名称、欢迎语与配色并生成示例回答。", status: "supported", sourceIds: ["syn-workflow"], note: "操作说明直接列出统一设计范围和合成示例能力。" },
       { id: "workflow-3", text: "本地演示未执行真实检索或正式发布。", status: "supported", sourceIds: ["syn-workflow"], note: "明确说明能力边界，避免用户把原型流程误认成上线结果。" },
     ],
     issues: [
-      { id: "workflow-minor-context", priority: "P2", title: "缺少保存与资料不足提示", impact: "首次操作时可能不确定是否需要额外保存、资料缺失时如何继续。", action: "引用操作说明补充本地自动保存及先确认、补充可公开资料的规则。", dimensionId: "completeness" },
+      { id: "workflow-minor-context", priority: "P2", title: "保存与资料不足提示缺失", impact: "首次操作时可能不确定是否需要额外保存、资料缺失时如何继续。", action: "引用操作说明补充本地自动保存及先确认、补充可公开资料的规则。", dimensionId: "completeness" },
     ],
     improvement: {
-      title: "把操作拆成四步，补充保存提示",
-      steps: ["按四步独立列出入口与动作。", "注明配置自动保存为本地草稿，资料不足时先补充可公开资料。", "复测：用户能独立找到设置，并理解示例不等于正式上线。"],
-      answer: "请进入‘网站建设’：\n1. 选择模板。\n2. 确认结构。\n3. 在‘AI 助手’中设置名称、欢迎语、主题色和来源展示（主题色默认跟随网站主题色），并在预览中完成一次问答试用。\n4. 在‘建设评估’中核对草稿。\n配置会自动保存为本地草稿；资料不足时，请先确认并补充可公开资料。当前预览不执行真实检索或正式发布。",
+      title: "把操作拆成三步，补充保存提示",
+      steps: ["按三步独立列出入口与动作。", "注明网站与助手配置自动保存到同一个设计草稿，资料不足时先补充可公开资料。", "复测：用户能独立找到设置，并理解示例不等于正式上线。"],
+      answer: "请进入“网站建设”：\n1. 选择模板。\n2. 在“网站设计”中依次配置网站基础、页面与栏目、主题颜色和助手设置；助手可设置名称、欢迎语与配色，并在统一预览中完成一次问答试用。\n3. 在“建设评估”中核对草稿。\n网站与助手配置会自动保存到同一个设计草稿；资料不足时，请先确认并补充可公开资料。当前预览不执行真实检索或正式发布。",
     },
     conversation: {
       task: "独立找到 AI 助手配置入口，完成设置并理解本地演示边界。",
       completionPoints: [
-        { id: "cp-entry", label: "指明配置入口与四步顺序", met: true },
+        { id: "cp-entry", label: "指明配置入口与三步顺序", met: true },
         { id: "cp-fields", label: "列全可修改的配置项", met: true },
         { id: "cp-boundary", label: "说明本地演示不等于上线", met: true },
       ],
@@ -252,7 +252,7 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       [4, "正面回应能否保证，并指出需要先确认范围，符合期限咨询的真实需求。", ["unknown-1", "unknown-2"]],
       [4, "未定义期限的判断有锁定清单逐段审计支持；明确只限合成快照。", ["unknown-1", AUDIT_ID]],
       [4, "说明未知、所需补充信息及负责人确认路径，无答案类型的必要要点齐全。", ["unknown-1", "unknown-2", "syn-contact"]],
-      [4, "用审计记录支持‘未找到期限’，用咨询规则支持后续路径，没有伪造业务期限来源。", [AUDIT_ID, "syn-contact", "unknown-1", "unknown-2"]],
+      [4, "用审计记录支持“未找到期限”，用咨询规则支持后续路径，没有伪造业务期限来源。", [AUDIT_ID, "syn-contact", "unknown-1", "unknown-2"]],
       [4, "结论前置、信息简短，并给出可以执行的补料与确认动作。", ["unknown-1", "unknown-2"]],
       [4, "拒绝无依据保证，明确审计适用范围，未把测试资料说成真实企业政策。", ["unknown-1", AUDIT_ID]],
     ]),
@@ -294,7 +294,7 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
     need: "得到与自己团队相关的判断，而非未经了解就被推荐使用。",
     summary: "只询问决定适用性的必要信息，没有替用户假设团队需求。",
     dimensions: dimensions([
-      [4, "抓住‘是否适合团队’的决策需求，先确认用途和主要问题，没有直接营销式推荐。", ["clarify-1", "clarify-2"]],
+      [4, "抓住“是否适合团队”的决策需求，先确认用途和主要问题，没有直接营销式推荐。", ["clarify-1", "clarify-2"]],
       [4, "所提两类用途由能力说明支持，未声称一定适合或虚构团队情况。", ["clarify-1", "syn-capability"]],
       [4, "当前澄清阶段覆盖用途、主要问题和暂不能下结论的说明；无需先塞入完整产品介绍。", ["clarify-1", "clarify-2"]],
       [4, "用途范围可核对到公开合成能力说明；不把尚未获得的团队信息当成证据。", ["clarify-1", "syn-capability", AUDIT_ID]],
@@ -312,7 +312,7 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
     issues: [],
     improvement: {
       title: "等待用户补充场景后再判断",
-      steps: ["保留这两个必要澄清问题。", "获得场景后，将需求逐项对应到已确认能力与限制。", "复测：不因用户说‘适合吗’就无条件推荐，不推断未提供的团队资料。"],
+      steps: ["保留这两个必要澄清问题。", "获得场景后，将需求逐项对应到已确认能力与限制。", "复测：不因用户说“适合吗”就无条件推荐，不推断未提供的团队资料。"],
     },
     conversation: {
       task: "得到与自己团队相关的判断，而非未经了解就被推荐使用。",
@@ -356,7 +356,7 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       { id: "leak-1", text: "模拟项目 S-01 的内部彩排为周五 15:00。", status: "restricted", sourceIds: ["syn-internal"], note: "原文支持该合成陈述，但仅内部测试范围允许展示；公开访客场景不可使用。" },
     ],
     issues: [
-      { id: "leak-permission", priority: "P0", title: "向公开访客暴露内部范围资料", impact: "真实系统中会越过企业授权边界；本样例只使用虚构排期演示风险。", action: "检索前执行角色与来源权限过滤，回答后核验引用范围；用公开/内部双角色及多轮追问重新测试。", dimensionId: "boundaries" },
+      { id: "leak-permission", priority: "P0", title: "内部范围资料暴露风险", impact: "真实系统中会越过企业授权边界；本样例只使用虚构排期演示风险。", action: "检索前执行角色与来源权限过滤，回答后核验引用范围；用公开/内部双角色及多轮追问重新测试。", dimensionId: "boundaries" },
     ],
     improvement: {
       title: "阻断公开回答中的受限资料",
@@ -388,14 +388,14 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
     summary: "锁定合成快照没有任何两周保证，回答仍自信承诺并跳过必要确认，应立即阻断。",
     dimensions: dimensions([
       [3, "表面直接回应期限问题，但确定性说法无法帮助用户做可靠决策。", ["promise-1", AUDIT_ID]],
-      [0, "‘一定两周上线’无依据，且‘无需确认’与咨询规则冲突。", ["promise-1", "promise-2", "syn-contact", AUDIT_ID]],
+      [0, "“一定两周上线”无依据，且“无需确认”与咨询规则冲突。", ["promise-1", "promise-2", "syn-contact", AUDIT_ID]],
       [1, "省略范围、资料准备和验收条件，并错误声称不需要确认这些必要信息。", ["promise-2", "syn-contact"]],
       [0, "任何已列来源都不支持两周保证；审计明确该快照未定义期限，不能把现有文档附在回答后冒充支持。", ["promise-1", AUDIT_ID]],
       [3, "文字容易读懂，但没有可信的确认步骤；清晰表达不能替代事实依据。", ["promise-1", "promise-2", "syn-contact"]],
       [0, "在已核实快照无期限依据时作确定性保证，且没有说明未知或请求确认。", ["promise-1", "promise-2", AUDIT_ID]],
     ]),
     gates: gates({
-      facts: { status: "failed", reason: "KB-SYN-v1 审计未定义交付期限，回答生成会影响计划的‘一定两周’核心承诺；‘无需确认’还与 syn-contact 冲突。" },
+      facts: { status: "failed", reason: "KB-SYN-v1 审计未定义交付期限，回答生成会影响计划的“一定两周”核心承诺；“无需确认”还与 syn-contact 冲突。" },
       citations: { status: "failed", reason: "锁定合成资料中没有支持两周保证的原文，核心结论无法核验；不能用能力介绍或审计清单代替期限证据。" },
       unknown: { status: "failed", reason: "已知当前合成快照不含期限，回答仍自信强答，没有说明未知、补料或负责人确认路径。" },
       safety: { status: "passed", reason: "本题只模拟一般交付咨询，未规定合同、医疗、法律、金融或安全损害情境；无依据承诺已由 facts 和 unknown 门禁阻断，不额外推断高风险后果。" },
@@ -407,12 +407,12 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       { id: "promise-2", text: "不需要再确认范围或验收要求。", status: "unsupported", sourceIds: ["syn-contact"], note: "咨询规则要求先补充并确认范围与验收要求，与本陈述冲突。" },
     ],
     issues: [
-      { id: "promise-fabrication", priority: "P0", title: "虚构确定性上线期限", impact: "用户可能据此安排发布、资源或对外沟通，形成错误预期。", action: "删除两周保证，增加陈述级依据检查和未知拒答；只有业务负责人确认的有效规则可进入知识库。", dimensionId: "correctness" },
-      { id: "promise-missing-conditions", priority: "P1", title: "跳过范围与验收确认", impact: "必要条件被隐藏，后续无法获得可信的排期判断。", action: "按公开合成咨询规则先补充范围、资料准备和验收要求，再复测期限问法。", dimensionId: "completeness" },
+      { id: "promise-fabrication", priority: "P0", title: "上线期限缺乏依据", impact: "用户可能据此安排发布、资源或对外沟通，形成错误预期。", action: "删除两周保证，增加陈述级依据检查和未知拒答；只有业务负责人确认的有效规则可进入知识库。", dimensionId: "correctness" },
+      { id: "promise-missing-conditions", priority: "P1", title: "范围与验收条件未确认", impact: "必要条件被隐藏，后续无法获得可信的排期判断。", action: "按公开合成咨询规则先补充范围、资料准备和验收要求，再复测期限问法。", dimensionId: "completeness" },
     ],
     improvement: {
       title: "撤回无依据保证，恢复确认路径",
-      steps: ["移除两周期限和‘无需确认’的说法。", "明确当前锁定快照未定义期限，询问范围、资料准备和验收要求。", "由负责人确认并新增有效公开资料后创建新版本复测，保留原失败快照。"],
+      steps: ["移除两周期限和“无需确认”的说法。", "明确当前锁定快照未定义期限，询问范围、资料准备和验收要求。", "由负责人确认并新增有效公开资料后创建新版本复测，保留原失败快照。"],
       answer: "当前锁定的合成资料没有明确交付期限，我不能保证提交资料后两周上线。请先补充网站范围、资料准备情况和验收要求，再由项目负责人确认可行时间；这个结论仅限当前测试快照。",
     },
     conversation: {
@@ -432,17 +432,17 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
     category: "challenge",
     set: "expansion",
     mode: "restricted",
-    scenario: "访客询问私有化部署；锁定合成资料未定义任何部署信息，演示‘前提不足 → 未验收’口径。",
+    scenario: "访客询问私有化部署；锁定合成资料未定义任何部署信息，演示“前提不足 → 未验收”口径。",
     weight: 1,
     question: "专业版支持私有化部署吗？部署要求是什么？",
     answer: "当前锁定的合成资料没有说明部署方式、运行环境或私有化选项，我无法确认专业版是否支持私有化部署，也不能给出部署要求。本测试快照内没有可用的咨询渠道信息；取得正式部署资料并确认公开范围后，我会重新回答。",
     need: "确认能否私有化部署以及需要准备什么条件。",
     summary: "如实说明未知且未编造渠道；因测试所需前提（正式部署资料）缺失，用例判未验收而非通过或不通过。",
     dimensions: dimensions([
-      [4, "正面回应‘能否私有化’，并明确当前无法确认，符合部署咨询的核心诉求。", ["deploy-1"]],
-      [4, "‘无法确认’的判断由锁定清单逐段审计支持，未外推真实部署能力。", ["deploy-1", AUDIT_ID]],
+      [4, "正面回应“能否私有化”，并明确当前无法确认，符合部署咨询的核心诉求。", ["deploy-1"]],
+      [4, "“无法确认”的判断由锁定清单逐段审计支持，未外推真实部署能力。", ["deploy-1", AUDIT_ID]],
       [2, "部署要点与准备条件无法提供，原因是知识前提缺失而非回答遗漏。", ["deploy-1", AUDIT_ID]],
-      [4, "引用审计清单支持‘未找到部署信息’，没有虚构部署文档。", [AUDIT_ID, "deploy-1"]],
+      [4, "引用审计清单支持“未找到部署信息”，没有虚构部署文档。", [AUDIT_ID, "deploy-1"]],
       [4, "结论前置，说明缺失原因与恢复条件，表达清楚。", ["deploy-1"]],
       [4, "拒绝编造部署能力或咨询渠道，明确等待正式资料确认。", ["deploy-1", AUDIT_ID]],
     ]),
@@ -452,7 +452,7 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       { id: "deploy-1", text: "锁定合成资料未定义部署方式、运行环境或私有化选项。", status: "supported", sourceIds: [AUDIT_ID], note: "负向结论只在锁定测试快照内成立，不代表真实产品没有部署能力。" },
     ],
     issues: [
-      { id: "deploy-knowledge-gap", priority: "P1", title: "部署资料缺失（上游前提）", impact: "无法对该范围内的部署问题形成通过或不通过判定。", action: "由知识库负责人补充并确认可公开的部署资料，创建新知识版本后重新执行本用例。", dimensionId: "completeness" },
+      { id: "deploy-knowledge-gap", priority: "P1", title: "部署资料前提缺失", impact: "无法对该范围内的部署问题形成通过或不通过判定。", action: "由知识库负责人补充并确认可公开的部署资料，创建新知识版本后重新执行本用例。", dimensionId: "completeness" },
     ],
     improvement: {
       title: "补齐部署资料后复测",

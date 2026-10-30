@@ -56,10 +56,9 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
           {savedPlanIds.includes(question.id)
             ? <button className="iw-primary" disabled={pending} onClick={() => onViewPlan(question.id)}>查看优化方案</button>
             : <button className="iw-primary" disabled={pending} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
-          {(integration?.onEditQuestion || integration?.onDeleteQuestion) && <details className="iw-more-actions"><summary>更多</summary><div>
-            {integration.onEditQuestion && <button disabled={pending} onClick={() => integration.onEditQuestion?.(question)}>修改问题</button>}
-            {integration.onDeleteQuestion && <button disabled={pending} onClick={() => integration.onDeleteQuestion?.(question)}>删除问题</button>}
-          </div></details>}
+          <button disabled={pending || !integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
+          <button disabled={pending || !integration?.onEditQuestion} onClick={() => integration?.onEditQuestion?.(question)}>修改问题</button>
+          <button disabled={pending || !integration?.onDeleteQuestion} onClick={() => integration?.onDeleteQuestion?.(question)}>删除问题</button>
         </div></td>
       </tr>;})}</tbody>
     </table>{!visible.length && <div className="iw-empty">{questions.length ? "没有匹配问题，请调整筛选条件。" : "从推荐问题或已保存词库中选择词条，加入优化清单。"}</div>}</section>

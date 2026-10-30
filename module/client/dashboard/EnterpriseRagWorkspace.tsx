@@ -80,7 +80,7 @@ function EnterpriseRagLiveWorkspace({
     onOpenWebsite ?? (() => navigateWithinWorkspace("/?view=website"));
   const openWebsiteAssistant =
     onOpenWebsiteAssistant ??
-    (() => navigateWithinWorkspace("/?view=website&step=assistant"));
+    (() => navigateWithinWorkspace("/?view=website&step=design"));
 
   const startNewConversation = useCallback(() => {
     if (

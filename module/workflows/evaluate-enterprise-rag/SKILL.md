@@ -1,7 +1,7 @@
 ---
 name: evaluate-enterprise-rag
-version: 2.0.0
-rule: rag-eval-1.3
+version: 3.0.0
+rule: rag-eval-1.4
 description: 按当前用户任务、冻结资料和实际影响评价单次企业回答，输出可追溯的分级判断。
 ---
 
@@ -37,7 +37,7 @@ sources 是已冻结的全部候选依据，citedByAnswer 表示是否展示在�
 
 ## 3. 问题、严重程度与七项检查
 
-findings 每项使用 finding-1 至 finding-30，包含 kind、severity、summary、impact、claimIds、evidenceIds、dimensionIds。所有影响理由具体说明对当前任务的影响；证据必须定位回答原句或冻结正文，不凭猜测升级风险。遗漏必要条件可定位问题、回答和条件来源，无须伪造回答中不存在的原句。
+findings 每项使用 finding-1 至 finding-30，并给出唯一的 rootCauseId（root-cause-1 至 root-cause-30），包含 kind、severity、summary、impact、claimIds、evidenceIds、dimensionIds、checkId。所有影响理由具体说明对当前任务的影响；证据必须定位回答原句或冻结正文，不凭猜测升级风险。遗漏必要条件可定位问题、回答和条件来源，无须伪造回答中不存在的原句。
 
 severity：
 - critical：越权/隐私披露、危险建议、影响决策或行动的核心事实错误/无依据承诺、关键条件遗漏，或前提充分时核心任务失败。必要选型需求确认属于任务要求时仍必须满足。不得用高分抵消。
@@ -50,15 +50,23 @@ kind 到 gate 对应：fact/condition→facts；citation→citations；privacy�
 
 维度、门禁、task 的 evidenceIds 可以引用本次存在的 claim ID 或冻结证据 ID。findings.claimIds 只能引用本次实际存在的 claim ID。不存在、近似、截短或自行重算的来源 ID 都非法。
 
-## 4. 六维诊断评分
+## 4. 冻结检查项评分
 
-维度顺序固定 intent、correctness、completeness、citations、clarity、boundaries，权重 20/25/15/15/15/10；等级 0–4，无法判定用 null。六维分数只描述质量，任何分数阈值都不能单独否决任务完成且无重大风险的回答。
+读取 input.checklist；任务类型、检查项、适用性、三档标准和分值已经由服务端冻结。逐项按原顺序返回 checks：id、status、rationale、evidenceIds。禁止改变模板、分值、适用性或自行增加必答内容；不要输出 dimensions 或总分。
 
-4=本任务充分满足；3=基本满足、有轻微改进；2=局部欠缺；1=大部分欠缺；0=未满足。每个扣分维度必须有 dimensionIds 对应的具体 finding；未知维度须有 undetermined finding；已确认问题对应维度不得仍为满分。必要完整性仅考察当前任务所需信息，不要求无关扩展。
+status=met / partial / unmet 分别获得本项100% / 50% / 0%。partial 必须说明已满足什么、缺少什么并定位证据，不能凭感觉打中间分。证据不足为 undetermined；只有冻结 applicable=false 的条目才允许 not_applicable。没有事实陈述时不要编造事实要求；有据地说明未知可以满足受限任务。证据缺失不能直接当作事实错误，也不能评分为正确。
+
+每个实际缺陷只关联一个 rootCauseId 和一个主检查项 checkId，dimensionIds 只包含其所属主维度。同一个错误号码或同一句回答陈述不能换 rootCauseId、换说法再扣引用、完整性、行动性；伪造来源等另有独立缺陷才另记 finding。每个扣分条目必须有具体 finding；每个未知条目必须有待补证 finding。一个 finding 不能在多个条目重复扣分；同项多个缺陷也只按该项三档上限计算。重大风险继续独立阻断，分数不能抵消。只有 status=supported 的事实在依据未展示时才另记引用展示问题；partial、contradicted、unsupported 或 unverifiable 的同一事实不能再以“引用未展示”重复扣分。
+
+optionalSuggestions 独立记录锦上添花建议（id、dimensionId、summary、benefit、evidenceIds）。它们不扣分、不变成 improvement，不因此影响可用结论。没有实际缺陷可以满分；同质量回答可以同分。禁止为了制造改进空间、分数差距或固定分布编造缺陷。一处不影响完成任务的明确重复在 clarity_concise 为 partial，扣1.5分；这不是所有轻微问题的统一扣分。
+
+六维权重20/25/15/15/15/10，由程序汇总。缺证据不形成完整总分；可选建议不能冒充实际错误。检查评分只评价本轮回答，不证明正式验收或检索过程已验证。
+
+六维稳定 ID 依次为 intent、correctness、completeness、citations、clarity、boundaries；不得改名、缺项或调换顺序。
 
 ## 5. 输出与自检
 
-输出字段严格按 schema：schemaVersion=2、operationToken、inputHash、dimensions、gates、claims、task、findings、summary。operationToken / inputHash 原样复制；六维和七门禁按 schema 锁定顺序完整返回。
+输出字段严格按 schema：schemaVersion=3、operationToken、inputHash、checks、gates、claims、task、findings、optionalSuggestions、summary。operationToken / inputHash 原样复制；检查项和七门禁按冻结顺序完整返回。
 
 最终可用性由服务端程序计算，模型不输出总分、发布权限或正式验收通过。自检：
 1. 没有混淆事实、核实建议和未知说明；嵌入建议中的事实已拆开。

@@ -95,10 +95,22 @@ import {
   TRUSTED_REACT_VISUAL_CONTRACT_V4_CSS,
 } from "./react-static-runtime.js";
 import {
+  SITE_ASSISTANT_CONFIG_ASSET_PATH,
+  SITE_ASSISTANT_STYLES_ASSET_PATH,
+  SITE_ASSISTANT_WIDGET_ASSET_PATH,
+  TRUSTED_SITE_ASSISTANT_HEAD_MARKUP,
   TRUSTED_SITE_ASSISTANT_WIDGET_CSS,
   TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE,
+  isTrustedSiteAssistantExternalScriptTag,
   siteAssistantApiOrigin,
+  trustedSiteAssistantConfigSource,
 } from "./site-assistant-widget.js";
+import {
+  projectSiteDesignRuntime,
+  siteAssistantBootConfig,
+  siteDesignAccentCss,
+  type SiteDesignRuntimeProjection,
+} from "./site-design-runtime.js";
 
 export {
   SiteOpsMaterializationError,
@@ -508,7 +520,7 @@ export type MaterializedAstroSite = {
   buildDelivery: SiteOpsBuildDelivery;
 };
 
-type SourceFile = { path: string; bytes: Buffer };
+export type SourceFile = { path: string; bytes: Buffer };
 
 function sha256(bytes: Buffer | string) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -1374,6 +1386,7 @@ const jsonLdText = jsonLd
     {jsonLdText && <script type="application/ld+json" set:html={jsonLdText} />}
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
+    ${TRUSTED_SITE_ASSISTANT_HEAD_MARKUP}
     <title>{title}</title>
   </head>
   <body class={bodyClass}>
@@ -1476,6 +1489,47 @@ function addTextFile(
   });
 }
 
+function trustedAssistantAssetName(assetPath: string) {
+  return assetPath.replace(/^\/+/, "");
+}
+
+type SiteAssistantBuildCoordinate = {
+  id: string;
+  knowledgeSnapshotId: string;
+  knowledgeArchiveHash: string;
+};
+
+function addTrustedSiteAssistantAssets(input: {
+  files: SourceFile[];
+  pathPrefix: "" | "public/";
+  runtimeDesign: SiteDesignRuntimeProjection;
+  build?: SiteAssistantBuildCoordinate | null;
+}) {
+  const pathFor = (assetPath: string) =>
+    `${input.pathPrefix}${trustedAssistantAssetName(assetPath)}`;
+  addTextFile(
+    input.files,
+    pathFor(SITE_ASSISTANT_CONFIG_ASSET_PATH),
+    trustedSiteAssistantConfigSource(
+      siteAssistantBootConfig(
+        siteAssistantApiOrigin(),
+        input.runtimeDesign,
+        input.build ?? null,
+      ),
+    ),
+  );
+  addTextFile(
+    input.files,
+    pathFor(SITE_ASSISTANT_WIDGET_ASSET_PATH),
+    TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE,
+  );
+  addTextFile(
+    input.files,
+    pathFor(SITE_ASSISTANT_STYLES_ASSET_PATH),
+    `${TRUSTED_SITE_ASSISTANT_WIDGET_CSS}\n`,
+  );
+}
+
 function buildTrustedAstroSource(input: {
   contract: BuildContractV2;
   frozenRuntimeInput: z.infer<typeof siteOpsFrozenRuntimeInputSchema>;
@@ -1489,6 +1543,7 @@ function buildTrustedAstroSource(input: {
   workflow: SiteOpsMaterializerCoordinates;
 }) {
   const files: SourceFile[] = [];
+  const runtimeDesign = projectSiteDesignRuntime(input.brief);
   const routePairs = input.brief.routes.map((route, index) => ({
     route,
     index,
@@ -1549,9 +1604,9 @@ function buildTrustedAstroSource(input: {
     files,
     "src/data/site.json",
     jsonBuffer({
-      navigation: input.brief.routes.map((route) => ({
-        href: route.slug,
-        title: route.title,
+      navigation: runtimeDesign.navigation.map(({ href, title }) => ({
+        href,
+        title,
       })),
       companyName: input.brief.companyName,
       language: input.brief.primaryLanguage,
@@ -1664,8 +1719,14 @@ function buildTrustedAstroSource(input: {
   addTextFile(
     files,
     "public/styles.css",
-    `${cssForMaterializer(input.visual, input.designSpec, input.workflow)}\n`,
+    `${cssForMaterializer(input.visual, input.designSpec, input.workflow)}\n${siteDesignAccentCss(runtimeDesign)}`,
   );
+  addTrustedSiteAssistantAssets({
+    files,
+    pathPrefix: "public/",
+    runtimeDesign,
+    build: input.frozenRuntimeInput.build,
+  });
   if (input.brandAsset) {
     addTextFile(files, input.brandAsset.publicPath, input.brandAsset.bytes);
   }
@@ -1673,7 +1734,7 @@ function buildTrustedAstroSource(input: {
     /^#[a-f0-9]{6}$/iu.test(value),
   );
   const brandInk = brandColors[0] ?? "#10212B";
-  const brandAccent = brandColors[1] ?? "#A33A1B";
+  const brandAccent = runtimeDesign.siteAccent ?? brandColors[1] ?? "#A33A1B";
   const brandCanvas = "#F5F2EA";
   const companyGlyph = escapeXml(
     Array.from(input.brief.companyName.trim()).slice(0, 1).join("") || "•",
@@ -1752,6 +1813,7 @@ function buildTrustedReactSource(input: {
 }) {
   const reactCoordinates = reactStaticCoordinatesForWorkflow(input.workflow);
   const files: SourceFile[] = [];
+  const runtimeDesign = projectSiteDesignRuntime(input.brief);
   const projection = siteDesignMaterializationProjectionFor(
     input.designSpec,
     input.workflow,
@@ -1889,9 +1951,9 @@ function buildTrustedReactSource(input: {
     files,
     "src/data/site.json",
     jsonBuffer({
-      navigation: input.brief.routes.map((route) => ({
-        href: route.slug,
-        title: route.title,
+      navigation: runtimeDesign.navigation.map(({ href, title }) => ({
+        href,
+        title,
       })),
       companyName: input.brief.companyName,
       language: input.brief.primaryLanguage,
@@ -1905,7 +1967,11 @@ function buildTrustedReactSource(input: {
       brandLogoWidth: frozenBrandAsset?.width ?? null,
       brandLogoHeight: frozenBrandAsset?.height ?? null,
       bodyClass: projection.bodyClass,
-      assistant: { apiBase: assistantApiOrigin },
+      assistant: siteAssistantBootConfig(
+        assistantApiOrigin,
+        runtimeDesign,
+        input.frozenRuntimeInput.build,
+      ),
     }),
   );
 
@@ -2168,10 +2234,14 @@ function buildTrustedReactSource(input: {
   addTextFile(
     files,
     "public/styles.css",
-    `${cssForMaterializer(input.visual, input.designSpec, input.workflow)}\n`,
+    `${cssForMaterializer(input.visual, input.designSpec, input.workflow)}\n${siteDesignAccentCss(runtimeDesign)}`,
   );
-  addTextFile(files, "public/assistant.js", TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE);
-  addTextFile(files, "public/assistant.css", `${TRUSTED_SITE_ASSISTANT_WIDGET_CSS}\n`);
+  addTrustedSiteAssistantAssets({
+    files,
+    pathPrefix: "public/",
+    runtimeDesign,
+    build: input.frozenRuntimeInput.build,
+  });
   if (input.brandAsset) {
     addTextFile(files, input.brandAsset.publicPath, input.brandAsset.bytes);
   }
@@ -2180,7 +2250,7 @@ function buildTrustedReactSource(input: {
     /^#[a-f0-9]{6}$/iu.test(value),
   );
   const brandInk = brandColors[0] ?? "#10212B";
-  const brandAccent = brandColors[1] ?? "#A33A1B";
+  const brandAccent = runtimeDesign.siteAccent ?? brandColors[1] ?? "#A33A1B";
   const brandCanvas = "#F5F2EA";
   const companyGlyph = escapeXml(
     Array.from(input.brief.companyName.trim()).slice(0, 1).join("") || "•",
@@ -2289,8 +2359,8 @@ function buildTrustedFallbackSource(input: {
 
 /**
  * Last-resort host renderer for already validated frozen input. It accepts no
- * provider HTML, CSS, JavaScript, paths or URLs: every route and byte is
- * projected by the host into a fixed, high-contrast, no-JavaScript document.
+ * provider HTML, CSS, JavaScript, paths or URLs: every route and byte,
+ * including the assistant assets, is projected by the host.
  */
 function buildTrustedFallbackDist(input: {
   brief: SiteBrief;
@@ -2299,8 +2369,10 @@ function buildTrustedFallbackDist(input: {
   mode: "preview" | "production";
   canonicalOrigin: string | null;
   brandAsset: TrustedSiteBrandAsset | null;
+  build: SiteAssistantBuildCoordinate;
 }) {
   const files: SourceFile[] = [];
+  const runtimeDesign = projectSiteDesignRuntime(input.brief);
   const generatedByRoute = new Map(
     input.content.routes.map((route) => [route.routeId, route]),
   );
@@ -2318,6 +2390,7 @@ function buildTrustedFallbackDist(input: {
           accent: "#0057b8",
           muted: "#e5e7eb",
         };
+  const siteAccent = runtimeDesign.siteAccent ?? palette.accent;
   const typeSystem =
     "typeSystem" in blueprint
       ? blueprint.typeSystem
@@ -2343,10 +2416,10 @@ function buildTrustedFallbackDist(input: {
   const brandPath = input.brandAsset
     ? input.brandAsset.publicPath.slice("public/".length)
     : null;
-  const navigation = input.brief.routes
+  const navigation = runtimeDesign.navigation
     .map(
       (route) =>
-        `<a href="${escapeHtml(route.slug)}">${escapeHtml(route.title)}</a>`,
+        `<a href="${escapeHtml(route.href)}">${escapeHtml(route.title)}</a>`,
     )
     .join("");
   const brand = brandPath
@@ -2356,8 +2429,9 @@ function buildTrustedFallbackDist(input: {
     input.mode === "preview"
       ? '<meta name="robots" content="noindex,nofollow">'
       : '<meta name="robots" content="index,follow">';
-  const style = `:root{color-scheme:light;--canvas:${palette.canvas};--ink:${palette.ink};--accent:${palette.accent};--muted:${palette.muted};font-family:${fontFamily};background:var(--canvas);color:var(--ink)}*{box-sizing:border-box}body{margin:0;min-width:320px;line-height:1.65;background:var(--canvas);color:var(--ink)}a{color:var(--accent);text-underline-offset:.18em}a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}.shell{width:min(70rem,calc(100% - 2rem));margin-inline:auto}.site-header{border-bottom:2px solid var(--ink);background:var(--canvas)}.nav{min-height:4.5rem;display:flex;align-items:center;justify-content:space-between;gap:1.5rem}.brand{display:flex;align-items:center;gap:.75rem;color:var(--ink);font-weight:800;text-decoration:none}.brand-logo{display:block;width:auto;height:2.5rem;max-width:11rem;object-fit:contain}.nav-links{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:.75rem 1.25rem}.hero{padding:${spacing.hero} 0 ${spacing.content};background:var(--ink);color:var(--canvas)}.eyebrow{font-size:.8rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.hero h1{max-width:20ch;margin:.3em 0;font-size:clamp(2.5rem,7vw,5.5rem);line-height:1}.lede{max-width:65ch;font-size:1.15rem}.content{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;padding-block:${spacing.content} 5rem}.section{border:2px solid var(--ink);padding:${spacing.card};background:var(--canvas)}.section h2{margin-top:0;line-height:1.15}.contact{padding:${spacing.content} 0;background:var(--ink);color:var(--canvas)}.contact a{color:var(--canvas)}.site-footer{padding:2rem 0;border-top:2px solid var(--ink)}.empty{grid-column:1/-1}.empty p{font-size:1.1rem}@media(max-width:44rem){.nav{align-items:flex-start;padding-block:1rem}.nav-links{gap:.5rem}.content{grid-template-columns:1fr}.hero{padding-top:3.5rem}}`;
+  const style = `:root{color-scheme:light;--canvas:${palette.canvas};--ink:${palette.ink};--accent:${siteAccent};--frontmind-site-accent:${siteAccent};--muted:${palette.muted};accent-color:${siteAccent};font-family:${fontFamily};background:var(--canvas);color:var(--ink)}*{box-sizing:border-box}body{margin:0;min-width:320px;line-height:1.65;background:var(--canvas);color:var(--ink)}a{color:var(--accent);text-underline-offset:.18em}a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}.shell{width:min(70rem,calc(100% - 2rem));margin-inline:auto}.site-header{border-bottom:2px solid var(--ink);background:var(--canvas)}.nav{min-height:4.5rem;display:flex;align-items:center;justify-content:space-between;gap:1.5rem}.brand{display:flex;align-items:center;gap:.75rem;color:var(--ink);font-weight:800;text-decoration:none}.brand-logo{display:block;width:auto;height:2.5rem;max-width:11rem;object-fit:contain}.nav-links{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:.75rem 1.25rem}.hero{padding:${spacing.hero} 0 ${spacing.content};background:var(--ink);color:var(--canvas)}.eyebrow{font-size:.8rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.hero h1{max-width:20ch;margin:.3em 0;font-size:clamp(2.5rem,7vw,5.5rem);line-height:1}.lede{max-width:65ch;font-size:1.15rem}.content{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;padding-block:${spacing.content} 5rem}.section{border:2px solid var(--ink);padding:${spacing.card};background:var(--canvas)}.section h2{margin-top:0;line-height:1.15}.contact{padding:${spacing.content} 0;background:var(--ink);color:var(--canvas)}.contact a{color:var(--canvas)}.site-footer{padding:2rem 0;border-top:2px solid var(--ink)}.empty{grid-column:1/-1}.empty p{font-size:1.1rem}@media(max-width:44rem){.nav{align-items:flex-start;padding-block:1rem}.nav-links{gap:.5rem}.content{grid-template-columns:1fr}.hero{padding-top:3.5rem}}`;
   addTextFile(files, "styles.css", `${style}\n`);
+  addTrustedSiteAssistantAssets({ files, pathPrefix: "", runtimeDesign, build: input.build });
 
   const sharedHead = (inputValue: {
     title: string;
@@ -2365,7 +2439,7 @@ function buildTrustedFallbackDist(input: {
     canonical: string | null;
     jsonLd: Record<string, unknown> | null;
   }) =>
-    `<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${robots}<title>${escapeHtml(inputValue.title)}</title><meta name="description" content="${escapeHtml(inputValue.description)}"><link rel="stylesheet" href="/styles.css"><link rel="icon" href="/favicon.svg">${inputValue.canonical ? `<link rel="canonical" href="${escapeHtml(inputValue.canonical)}"><meta property="og:image" content="${escapeHtml(input.canonicalOrigin!)}/social-card.svg">` : ""}${inputValue.jsonLd ? `<script type="application/ld+json">${safeJsonLdText(inputValue.jsonLd)}</script>` : ""}`;
+    `<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${robots}<title>${escapeHtml(inputValue.title)}</title><meta name="description" content="${escapeHtml(inputValue.description)}"><link rel="stylesheet" href="/styles.css"><link rel="icon" href="/favicon.svg">${TRUSTED_SITE_ASSISTANT_HEAD_MARKUP}${inputValue.canonical ? `<link rel="canonical" href="${escapeHtml(inputValue.canonical)}"><meta property="og:image" content="${escapeHtml(input.canonicalOrigin!)}/social-card.svg">` : ""}${inputValue.jsonLd ? `<script type="application/ld+json">${safeJsonLdText(inputValue.jsonLd)}</script>` : ""}`;
   const sharedHeader = `<header class="site-header"><div class="shell nav"><a class="brand" href="/">${brand}<span>${escapeHtml(input.brief.companyName)}</span></a><nav class="nav-links" aria-label="主导航">${navigation}</nav></div></header>`;
   const sharedFooter = `<footer class="site-footer"><div class="shell"><strong>${escapeHtml(input.brief.companyName)}</strong></div></footer>`;
   const contacts = input.brief.contacts
@@ -3489,7 +3563,10 @@ function hasExecutableScriptTag(html: string) {
     const tag = html.slice(index, end + 1);
     index = end;
     if (!/^<script\b/iu.test(tag)) continue;
-    if (/\bsrc\s*=/iu.test(tag)) return true;
+    if (/\bsrc\s*=/iu.test(tag)) {
+      if (!isTrustedSiteAssistantExternalScriptTag(tag)) return true;
+      continue;
+    }
     if (!/\btype\s*=\s*["']application\/ld\+json["']/iu.test(tag)) {
       return true;
     }
@@ -3497,7 +3574,7 @@ function hasExecutableScriptTag(html: string) {
   return false;
 }
 
-function qaDist(input: {
+export function qaDist(input: {
   files: readonly SourceFile[];
   brief: SiteBrief;
   mode: "preview" | "production";
@@ -3507,6 +3584,7 @@ function qaDist(input: {
   qaPolicyVersion: string;
   sourceDocumentIds: readonly string[];
   expectedHeroFamily?: string;
+  build?: SiteAssistantBuildCoordinate | null;
 }) {
   const files = new Map(input.files.map((file) => [file.path, file.bytes]));
   const routeOutputs = input.brief.routes.map((route) =>
@@ -3621,7 +3699,7 @@ function qaDist(input: {
     requireCheck(
       `no-executable-script:${name}`,
       !hasExecutableScriptTag(html),
-      "no executable or external script is present",
+      "only exact host-owned assistant scripts and inert JSON-LD are present",
     );
     requireCheck(
       `no-sensitive-text:${name}`,
@@ -3738,12 +3816,60 @@ function qaDist(input: {
     htmlFiles.every(([, bytes]) => !/hreflang=/iu.test(bytes.toString("utf8"))),
     "no false hreflang is emitted for the single-language site",
   );
+  const assistantConfigName = trustedAssistantAssetName(
+    SITE_ASSISTANT_CONFIG_ASSET_PATH,
+  );
+  const assistantWidgetName = trustedAssistantAssetName(
+    SITE_ASSISTANT_WIDGET_ASSET_PATH,
+  );
+  const assistantStylesName = trustedAssistantAssetName(
+    SITE_ASSISTANT_STYLES_ASSET_PATH,
+  );
+  const allowedJavaScriptAssets = new Set([
+    assistantConfigName,
+    assistantWidgetName,
+  ]);
+  const runtimeDesign = projectSiteDesignRuntime(input.brief);
   requireCheck(
-    "no-javascript-assets",
-    ![...files.keys()].some(
-      (name) => name.endsWith(".js") || name.endsWith(".mjs"),
-    ),
-    "dist contains no JavaScript asset",
+    "host-owned-assistant-assets",
+    files.get(assistantConfigName)?.equals(
+      Buffer.from(
+        trustedSiteAssistantConfigSource(
+          siteAssistantBootConfig(
+            siteAssistantApiOrigin(),
+            runtimeDesign,
+            input.build ?? null,
+          ),
+        ),
+        "utf8",
+      ),
+    ) === true &&
+      files.get(assistantWidgetName)?.equals(
+        Buffer.from(TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE, "utf8"),
+      ) === true &&
+      files.get(assistantStylesName)?.equals(
+        Buffer.from(`${TRUSTED_SITE_ASSISTANT_WIDGET_CSS}\n`, "utf8"),
+      ) === true,
+    "the frozen config and exact host-owned assistant assets are present",
+  );
+  if (runtimeDesign.siteAccent) {
+    const accentDeclaration = `--frontmind-site-accent:${runtimeDesign.siteAccent}`;
+    requireCheck(
+      "site-design-accent",
+      [...files.entries()].some(
+        ([name, bytes]) =>
+          name.endsWith(".css") &&
+          bytes.toString("utf8").includes(accentDeclaration),
+      ),
+      "the frozen site accent is declared in the shipped CSS design tokens",
+    );
+  }
+  requireCheck(
+    "no-untrusted-javascript-assets",
+    [...files.keys()]
+      .filter((name) => name.endsWith(".js") || name.endsWith(".mjs"))
+      .every((name) => allowedJavaScriptAssets.has(name)),
+    "dist contains no JavaScript outside the exact host-owned assistant files",
   );
   return {
     schemaVersion: 1,
@@ -4171,6 +4297,7 @@ async function materializeSiteWithWorkflow(
             mode: input.mode,
             canonicalOrigin: validated.canonicalOrigin,
             brandAsset: validated.brandAsset,
+            build: input.build,
           }),
       });
       buildLog = jsonBuffer({
@@ -4271,6 +4398,7 @@ async function materializeSiteWithWorkflow(
               designSpec: reactDesign,
               mode: input.mode,
               canonicalOrigin: validated.canonicalOrigin,
+              build: input.build,
               brandAsset: validated.brandAsset,
             }),
         });
@@ -4288,6 +4416,7 @@ async function materializeSiteWithWorkflow(
         qaDist({
           files: distFiles,
           brief: validated.brief,
+          build: input.build,
           mode: input.mode,
           canonicalOrigin: validated.canonicalOrigin,
           assetDecisions: validated.assetDecisions,
