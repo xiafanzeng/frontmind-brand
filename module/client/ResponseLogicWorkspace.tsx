@@ -2170,7 +2170,7 @@ function ResponseLogicQuestionEditor({
         </div>
       )}
       {showDemo && demoView === "evaluation" && (
-        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} judgeErrorCode={judge.state.errorCode} judgeErrorDetails={judge.state.errorDetails} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={retryDemoEvaluation}/>
+        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={retryDemoEvaluation}/>
       )}
       {showDemo && demoView === "optimize" && (
         <ResponseLogicOptimizationWorkflow key={`${questionId}:${currentVersion}:${currentRevision}:${currentFingerprint}`} question={question.question} intent={question.intent ?? ""} logic={currentLogic} judgeTaskId={judge.state.phase === "completed" && judge.state.taskId ? judge.state.taskId : ""} optimization={guardedOptimization} onAdopt={adoptOptimizationPatch} onBack={()=>setDemoView("evaluation")}/>
