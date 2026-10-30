@@ -339,7 +339,8 @@ const defaultDraft = (): WebsiteDraftV2 => ({
   design: {
     siteName: "FrontMind 帮助中心",
     siteGoal: "帮助访客快速找到可信的企业资料、产品与服务答案",
-    featuredPageIds: initialPages.slice(0, 3).map((page) => page.id),
+    // Columns default to fully selected; the draft records explicit opt-outs.
+    featuredPageIds: initialPages.map((page) => page.id),
     siteAccent: "#6f35a5",
     assistant: {
       name: "FrontMind 企业助手",
@@ -439,7 +440,7 @@ export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV2 {
     const featuredPageIds = legacy
       ? Array.from(new Set(rawFeaturedPageIds.filter(
           (id): id is string => typeof id === "string" && pageIds.has(id),
-        ))).slice(0, 3)
+        )))
       : persistedRouteIds(rawFeaturedPageIds);
     const source = legacy ? legacyBrand : design;
     const siteName = typeof source.siteName === "string" ? source.siteName.slice(0, 80) : fallback.design.siteName;
@@ -1147,34 +1148,44 @@ export function SimplifiedWebsiteBuilderPreview({
     () => enabledPages.map((page) => ({ id: page.id, name: page.name })),
     [enabledPages],
   );
-  // Two-stage preview: once a real build with a dist exists and the design
-  // draft has no unsaved edits on top of it, the right panel switches from the
-  // real-data draft to the embedded real build. Editing falls back to the
-  // draft (with the transitional trial widget) until the design is saved and
-  // rebuilt.
+  // Two-stage preview: once a real build with a dist exists it stays embedded
+  // even while the design draft has unsaved edits or a newer build is still
+  // generating — the owner always sees a real site, clearly labeled as not yet
+  // reflecting pending changes. The assistant trial, however, is only credited
+  // against the frozen coordinates of the newest build with the draft synced,
+  // so an edit-and-retry loop can never bank a trial from a stale site.
+  const displayedBuild = liveObservation?.builds.find(
+    (build) => build.previewUrl,
+  ) ?? null;
   const designDraftSynced = latestBuild?.previewUrl
     ? !liveBriefHydrationRef.current
       || designEditSequenceRef.current === liveBriefHydrationRef.current.editSequence
       || designEditSequenceRef.current === savedDesignSequenceRef.current
     : false;
-  const embeddableBuild = designDraftSynced && latestBuild?.previewUrl
+  const embeddableBuild = displayedBuild
     ? {
-        id: latestBuild.id,
-        ordinal: latestBuild.ordinal,
-        status: latestBuild.status,
-        previewUrl: latestBuild.previewUrl,
-        knowledgeSnapshotVersion: latestBuild.knowledgeSnapshot?.version ?? null,
+        id: displayedBuild.id,
+        ordinal: displayedBuild.ordinal,
+        status: displayedBuild.status,
+        previewUrl: displayedBuild.previewUrl,
+        knowledgeSnapshotVersion: displayedBuild.knowledgeSnapshot?.version ?? null,
       }
     : null;
-  const embedRoutes = useMemo(
-    () => (latestBuild?.brief?.routes ?? liveObservation?.brief?.routes ?? [])
-      .map((route) => ({ id: route.id, slug: route.slug, title: route.title })),
-    [latestBuild?.brief?.routes, liveObservation?.brief?.routes],
+  const embedShowsLatestBuild = Boolean(
+    displayedBuild && displayedBuild.id === latestBuild?.id,
   );
-  // Frozen coordinates a legitimate trial report must match. The embed only
-  // renders while the draft is synced, so the current assistant identity is
-  // the frozen one by construction.
+  const embedRoutes = useMemo(
+    () => (displayedBuild?.brief?.routes ?? liveObservation?.brief?.routes ?? [])
+      .map((route) => ({ id: route.id, slug: route.slug, title: route.title })),
+    [displayedBuild?.brief?.routes, liveObservation?.brief?.routes],
+  );
+  // Frozen coordinates a legitimate trial report must match. The trial is only
+  // banked while the embedded site IS the newest build and the draft is synced;
+  // pending edits or an in-flight rebuild keep the preview visible but lock
+  // the trial gate.
   const embedTrialBinding = embeddableBuild
+    && embedShowsLatestBuild
+    && designDraftSynced
     && latestBuild?.designPreferences
     && Boolean(assistantName.trim() && welcome.trim())
     ? {
@@ -1360,6 +1371,14 @@ export function SimplifiedWebsiteBuilderPreview({
           ? draftSeed.design.featuredPageIds
           : current.pages.filter((page) => page.enabled).map((page) => page.id),
       );
+      // Columns default to fully selected. On first hydration the local seed
+      // only wins when it is a non-empty subset of this project's live route
+      // IDs (a returning browser draft). A static demo seed can never be such
+      // a subset, so a fresh session starts with every column enabled.
+      const liveRouteIds = new Set(brief.routes.map((route) => route.id));
+      const localSelectionTargetsLiveRoutes = !firstHydrationForProject
+        || (localFeaturedRouteIds.size > 0
+          && [...localFeaturedRouteIds].every((id) => liveRouteIds.has(id)));
       const nextAssistantName = designPreferences?.assistant.name ?? current.assistantName;
       const nextWelcome = designPreferences?.assistant.welcome ?? current.welcome;
       const assistantIdentityChanged =
@@ -1374,7 +1393,9 @@ export function SimplifiedWebsiteBuilderPreview({
           // from the local unified draft until the user saves them.
           enabled: designPreferences
             ? featuredRouteIds.has(route.id)
-            : localFeaturedRouteIds.has(route.id),
+            : localSelectionTargetsLiveRoutes
+              ? localFeaturedRouteIds.has(route.id)
+              : true,
         })),
         // A saved user edit outranks both the brief fallback and a later
         // recommendation; unedited fields still hydrate from the real brief.
@@ -1590,7 +1611,7 @@ export function SimplifiedWebsiteBuilderPreview({
     } else {
       setNotice(
         response.featuredRouteIds.length > 0
-          ? `已按当前发布知识推荐 ${response.featuredRouteIds.length} 个主栏目；可在完整列表中替换。`
+          ? `已按当前发布知识启用全部 ${response.featuredRouteIds.length} 个栏目；可在列表中按需关闭。`
           : "知识不足以自动选出主栏目，请从真实页面列表中手动选择。",
       );
     }
@@ -2643,7 +2664,7 @@ export function SimplifiedWebsiteBuilderPreview({
               </div>
 
               <div className="sfp-design-section" data-design-section="pages">
-                <header><span>2</span><div><h3>页面与栏目</h3><p>最多选择三个主栏目，其余真实页面仍保留在列表中。</p></div></header>
+                <header><span>2</span><div><h3>页面与栏目</h3><p>全部栏目默认加入导航；可按需关闭个别栏目。</p></div></header>
                 <div className="sfp-knowledge-summary" data-testid="website-design-knowledge-summary">
                   <FileText size={17} />
                   <span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 示例知识范围"}</strong><small>{siteOps ? `项目版本 ${liveObservation?.project.revision ?? "—"} · ${pages.length} 个真实页面` : `${previewKnowledgeCollectionCount} 个知识集合 · ${previewKnowledgeFragmentCount} 个示例片段`}</small></span>
@@ -2673,10 +2694,6 @@ export function SimplifiedWebsiteBuilderPreview({
                         disabled={Boolean(siteOps && !liveConfigurationEditable)}
                         onChange={(event) => {
                           const enabled = event.currentTarget.checked;
-                          if (enabled && enabledPages.length >= 3) {
-                            setNotice("主栏目最多选择 3 个；请先取消一个已选栏目再替换。");
-                            return;
-                          }
                           manuallyEditedRecommendationFieldsRef.current.add("featuredRoutes");
                           invalidateSteps("design");
                           setPages((current) => current.map((item) => item.id === page.id ? { ...item, enabled } : item));
@@ -2739,7 +2756,7 @@ export function SimplifiedWebsiteBuilderPreview({
               </div>
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel" aria-label="网站与助手统一预览" data-testid="website-design-preview">
-              <div className="sfp-preview-heading"><span><strong>{isLiveBuilder ? (embeddableBuild ? "真实构建预览" : "真实数据草稿") : "知识驱动统一预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? (embeddableBuild ? " · 已嵌入真实构建产物" : " · 内容来自当前知识投影，构建完成后以真实构建预览为准") : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+              <div className="sfp-preview-heading"><span><strong>{isLiveBuilder ? (embeddableBuild ? (embedShowsLatestBuild ? (designDraftSynced ? "真实构建预览" : "真实构建预览 · 有未提交修改") : "真实构建预览 · 新版本生成中") : "真实数据草稿") : "知识驱动统一预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? (embeddableBuild ? (embedShowsLatestBuild ? (designDraftSynced ? " · 已嵌入真实构建产物" : " · 预览为最近一次真实构建，提交修改后自动更新") : " · 正在生成新版本，当前显示上一版真实构建") : " · 内容来自当前知识投影，构建完成后以真实构建预览为准") : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
               {isLiveBuilder && embeddableBuild ? (
                 <SiteOpsBuildEmbedPreview
                   build={embeddableBuild}

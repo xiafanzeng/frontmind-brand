@@ -2394,6 +2394,51 @@
   color-scheme: normal;
 }
 
+/* Website design step: reuse the template-card / evaluation-group material and
+   type treatment so all three build steps read as one surface family. */
+.fm-brand-theme[data-brand-page="website"] .sfp-design-section {
+  gap: var(--fm-brand-space-2);
+  padding: var(--fm-brand-space-2);
+  border: 0.5px solid var(--fm-brand-line);
+  border-radius: var(--fm-brand-radius-control);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.fm-brand-theme[data-brand-page="website"] .sfp-design-section > header {
+  gap: var(--fm-brand-space-1);
+  margin-bottom: 0;
+}
+
+.fm-brand-theme[data-brand-page="website"] :where(.sfp-brand-fields, .sfp-knowledge-summary, .sfp-design-color-grid fieldset, .sfp-assistant-trial, .sfp-inline-error, .sfp-recommend-stale) {
+  border: 0.5px solid var(--fm-brand-line);
+  border-radius: var(--fm-brand-radius-small);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+/* One 600 emphasis level for row titles (matching the evaluation checklist
+   and template cards); captions stay small and muted — no 700 body text. */
+.fm-brand-theme[data-brand-page="website"] :where(.sfp-page-list strong, .sfp-knowledge-summary strong, .sfp-assistant-trial strong, .sfp-page-disclosure > summary) {
+  font-weight: var(--sfp-weight-medium);
+  letter-spacing: -0.011em;
+}
+
+.fm-brand-theme[data-brand-page="website"] .sfp-page-disclosure > summary {
+  color: var(--fm-brand-accent-strong);
+}
+
+.fm-brand-theme[data-brand-page="website"] :where(.sfp-brand-fields, .sfp-form-grid) {
+  gap: var(--fm-brand-space-1);
+}
+
+.fm-brand-theme[data-brand-page="website"] .sfp-assistant-trial {
+  color: var(--fm-brand-warning);
+}
+
+.fm-brand-theme[data-brand-page="website"] .sfp-assistant-trial.is-done {
+  border-color: rgba(22, 121, 79, 0.35);
+  color: var(--fm-brand-success);
+}
+
 /* Established SiteOps release surface */
 .fm-brand-theme[data-brand-page="website"] .siteops-panel {
   --siteops-accent: var(--fm-brand-accent);

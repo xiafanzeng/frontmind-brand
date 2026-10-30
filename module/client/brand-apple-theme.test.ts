@@ -358,4 +358,16 @@ describe("Brand Apple theme contract", () => {
     );
     expect(knowledgeFrontendSettings).toContain('data-brand-page="website-settings"');
   });
+
+  it("reuses the template and evaluation card and type treatment inside the design step", () => {
+    expect(css).toContain(
+      '.fm-brand-theme[data-brand-page="website"] .sfp-design-section {',
+    );
+    expect(css).toContain(
+      ".fm-brand-theme[data-brand-page=\"website\"] :where(.sfp-brand-fields, .sfp-knowledge-summary, .sfp-design-color-grid fieldset, .sfp-assistant-trial, .sfp-inline-error, .sfp-recommend-stale) {",
+    );
+    expect(css).toContain(
+      ".fm-brand-theme[data-brand-page=\"website\"] :where(.sfp-page-list strong, .sfp-knowledge-summary strong, .sfp-assistant-trial strong, .sfp-page-disclosure > summary) {",
+    );
+  });
 });
