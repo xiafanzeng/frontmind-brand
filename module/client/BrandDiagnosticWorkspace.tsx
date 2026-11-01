@@ -128,6 +128,7 @@ export default function BrandDiagnosticWorkspace({
   const dirtyRef = useRef(!!savedDraft);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [documents, setDocuments] = useState<KnowledgeBasis["documents"]>([]);
   const [category, setCategory] = useState<DiagnosticCategory | null>(
@@ -183,6 +184,7 @@ export default function BrandDiagnosticWorkspace({
       setRunId(w.runs[0].id);
       locationPatch({ diagnosis: w.runs[0].id });
     }
+    setLoadError("");
   }
   useEffect(() => {
     if (preview) return;
@@ -191,7 +193,7 @@ export default function BrandDiagnosticWorkspace({
       try {
         if (active) await refresh();
       } catch (e) {
-        if (active) setError((e as Error).message);
+        if (active) setLoadError((e as Error).message);
       }
     };
     void poll();
@@ -393,9 +395,9 @@ export default function BrandDiagnosticWorkspace({
           </a>
         ))}
       </nav>
-      {error && (
+      {(error || loadError) && (
         <div className="bd-error" role="alert">
-          {error}
+          {error || loadError}
           <button type="button" onClick={() => void act(refresh)}>
             重新读取
           </button>

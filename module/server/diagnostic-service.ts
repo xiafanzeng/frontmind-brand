@@ -822,6 +822,15 @@ export function createDiagnosticService(
               ...input,
               knowledge: evidence.knowledge,
               samples: evidence.samples,
+              // The frozen baseline also contains derived chart rows that repeat
+              // answers and knowledge. Send the full adjudication, not its UI
+              // projections; keep the persisted input and its hash unchanged.
+              ...(job.kind === "audit"
+                ? { baseline: {
+                    assessment: input.baseline.assessment,
+                    algorithm: input.baseline.algorithm,
+                  } }
+                : {}),
             }
           : input;
         const created = await client.createTask({
