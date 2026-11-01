@@ -643,6 +643,50 @@ describe("redesigned live website builder setup", () => {
     });
   });
 
+  it("shows the real-build progress bar with stage and elapsed time while a build runs", () => {
+    const running = liveBuildObservation("awaiting_visual_selection");
+    const startedAt = new Date(Date.now() - 3 * 60_000).toISOString();
+    running.interactionState = "building";
+    running.builds = [{
+      id: "44444444-4444-4444-8444-444444444444",
+      ordinal: 2,
+      parentBuildId: null,
+      status: "building",
+      previewUrl: null,
+      sourceUrl: null,
+      buildDelivery: null,
+      buildPhase: "compiling",
+      needsHelp: false,
+      createdAt: startedAt,
+      updatedAt: startedAt,
+    }];
+    running.executionSteps = [{
+      id: "step-build-2",
+      operationKind: "build_revision",
+      buildId: "44444444-4444-4444-8444-444444444444",
+      stage: "content_building",
+      label: "生成内容",
+      status: "running",
+      startedAt,
+      completedAt: null,
+    }];
+
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ observation: running, onAction: vi.fn() }}
+        storageScope="live:7:build-progress"
+      />,
+    );
+
+    const bar = screen.getByTestId("siteops-build-progress");
+    expect(Number(bar.getAttribute("aria-valuenow"))).toBeGreaterThan(0);
+    expect(Number(bar.getAttribute("aria-valuenow"))).toBeLessThan(100);
+    // buildPhase 提供的阶段名优先于粗粒度执行步骤。
+    expect(screen.getByText("编译与质检网站")).toBeTruthy();
+    expect(screen.getByText(/已进行/)).toBeTruthy();
+  });
+
   it("does not invent demo routes for an opaque live draft before the real brief arrives", () => {
     const scope = "live:7:opaque-draft-before-brief";
     seedLiveDesignDraft({

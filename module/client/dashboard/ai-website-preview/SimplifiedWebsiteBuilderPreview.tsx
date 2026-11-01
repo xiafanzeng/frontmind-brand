@@ -1330,6 +1330,59 @@ export function SimplifiedWebsiteBuilderPreview({
 
   const liveBuildStatus = latestBuild?.status ?? liveObservation?.interactionState ?? "loading";
   const liveBuildApproved = latestBuild?.status === "approved";
+
+  // Real-build progress strip: elapsed time and the finest stage the server
+  // exposes (buildPhase beats the coarse execution-step stage).
+  const liveBuildInFlight = siteOps
+    && (liveBuildStatus === "preparing"
+      || liveBuildStatus === "building"
+      || liveBuildStatus === "qa_running");
+  const [buildClockNow, setBuildClockNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!liveBuildInFlight) return;
+    const timer = window.setInterval(() => setBuildClockNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [liveBuildInFlight]);
+  const liveBuildProgress = useMemo(() => {
+    if (!liveBuildInFlight || !latestBuild) return null;
+    const runningStep = (liveObservation?.executionSteps ?? [])
+      .filter((step) => step.buildId === latestBuild.id && step.status === "running")
+      .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0];
+    const startedAt = Date.parse(
+      runningStep?.startedAt ?? latestBuild.createdAt,
+    );
+    const elapsedMs = buildClockNow - startedAt;
+    if (!Number.isFinite(startedAt) || elapsedMs < 0) return null;
+    const phaseLabel: Record<string, string> = {
+      source_waiting: "等待 AI 生成源码",
+      source_repairing: "AI 正在修正源码",
+      provider_sync_delayed: "同步 AI 进度",
+      source_validating: "校验源码",
+      compiling: "编译与质检网站",
+      persisting_preview: "保存预览",
+    };
+    const stepLabel: Record<string, string> = {
+      preparing: "准备构建任务",
+      design_compiling: "生成设计方案",
+      content_building: "生成页面内容",
+      qa_running: "质量检查",
+    };
+    const stageText = (latestBuild.buildPhase && phaseLabel[latestBuild.buildPhase])
+      ?? (runningStep && stepLabel[runningStep.stage])
+      ?? (liveBuildStatus === "qa_running" ? "质量检查" : "正在生成网站");
+    const expectedMs = 20 * 60_000;
+    const percent = Math.max(
+      3,
+      Math.min(95, Math.round((elapsedMs / expectedMs) * 100)),
+    );
+    const minutes = Math.floor(elapsedMs / 60_000);
+    const seconds = Math.floor((elapsedMs % 60_000) / 1_000);
+    const elapsedText = minutes > 0
+      ? `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒`
+      : `${seconds} 秒`;
+    return { stageText, percent, elapsedText };
+  }, [liveBuildInFlight, latestBuild, liveObservation?.executionSteps, liveBuildStatus, buildClockNow]);
+
   const liveDnsReady = liveObservation?.domainState?.dnsStatus === "active";
   const currentBuildAlreadyLive = Boolean(
     latestBuild && latestGlobalDeployment?.buildId === latestBuild.id,
@@ -2739,6 +2792,23 @@ export function SimplifiedWebsiteBuilderPreview({
             </section>
             <section className="sfp-preview-panel sfp-builder-preview-panel" aria-label="网站与助手统一预览" data-testid="website-design-preview">
               <div className="sfp-preview-heading"><span><strong>{isLiveBuilder ? (embeddableBuild ? (embedShowsLatestBuild ? (designDraftSynced ? "真实构建预览" : "真实构建预览 · 有未提交修改") : "真实构建预览 · 新版本生成中") : "真实数据草稿") : "知识驱动统一预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? (embeddableBuild ? (embedShowsLatestBuild ? (designDraftSynced ? " · 已嵌入真实构建产物" : " · 预览为最近一次真实构建，提交修改后自动更新") : " · 正在生成新版本，当前显示上一版真实构建") : " · 内容来自当前知识投影，构建完成后以真实构建预览为准") : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
+              {siteOps && liveBuildProgress && (
+                <div
+                  className="sfp-build-progress"
+                  data-testid="siteops-build-progress"
+                  role="progressbar"
+                  aria-label="真实网站构建进度"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={liveBuildProgress.percent}
+                >
+                  <span className="sfp-build-progress__track"><i style={{ width: `${liveBuildProgress.percent}%` }} /></span>
+                  <span className="sfp-build-progress__meta">
+                    <strong>{liveBuildProgress.stageText}</strong>
+                    <small>已进行 {liveBuildProgress.elapsedText} · 预计约 20 分钟，路由越多耗时越长</small>
+                  </span>
+                </div>
+              )}
               {isLiveBuilder && embeddableBuild ? (
                 <SiteOpsBuildEmbedPreview
                   build={embeddableBuild}
