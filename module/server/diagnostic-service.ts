@@ -693,7 +693,21 @@ export function createDiagnosticService(
         "STOPPED",
         "已停止的任务不会自动重启，请新建诊断",
       );
+    const refreshCoverage =
+      !!r.results.product_scenario &&
+      !Array.isArray(
+        (r.results.product_scenario.assessment as any).knowledgeCoverage,
+      );
+    if (refreshCoverage) await addJob(id, "assess", "product_scenario");
     await mutate(id, (r) => {
+      if (refreshCoverage) {
+        delete r.results.product_scenario;
+        event(
+          r,
+          "复用原有回答，按逐要点逐回答合同重新核对产品覆盖指标",
+          "product_scenario",
+        );
+      }
       for (const a of r.attempts)
         if (
           a.status === "failed" &&
@@ -882,7 +896,10 @@ export function createDiagnosticService(
                 generatedAt: now(),
                 model: j.model,
                 fallback,
-                algorithm: DIAGNOSTIC_MODEL_POLICY,
+                algorithm:
+                  job.category === "product_scenario"
+                    ? "brand_diagnostics_v2"
+                    : DIAGNOSTIC_MODEL_POLICY,
               };
             event(
               r,

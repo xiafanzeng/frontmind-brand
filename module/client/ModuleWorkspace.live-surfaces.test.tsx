@@ -2,13 +2,17 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  knowledgeProps: null as null | Record<string, unknown>,
   ragProps: null as null | Record<string, unknown>,
   websiteProps: null as null | Record<string, unknown>,
   websiteSettingsProps: null as null | Record<string, unknown>,
 }));
 
 vi.mock("./components/EmbeddedKnowledgeBasePanel", () => ({
-  default: () => <div data-testid="knowledge-surface" />,
+  default: (props: Record<string, any>) => {
+    mocks.knowledgeProps = props;
+    return <div data-testid="knowledge-surface"><div data-testid="knowledge-conversation" /><aside data-testid="knowledge-right-column"><div data-testid="knowledge-cards" />{props.afterKnowledge}</aside></div>;
+  },
 }));
 vi.mock("./BrandDiagnosticWorkspace", () => ({
   default: ({knowledgePanel}: any) => <div data-testid="diagnostic-surface">{knowledgePanel}</div>,
@@ -50,12 +54,22 @@ const keywordData = { tables: [], revision: null };
 
 afterEach(() => {
   cleanup();
+  mocks.knowledgeProps = null;
   mocks.ragProps = null;
   mocks.websiteProps = null;
   mocks.websiteSettingsProps = null;
 });
 
 describe("ModuleWorkspace redesigned live routes", () => {
+  it("keeps the knowledge conversation and cards as the primary workbench, with diagnostics below the right cards", () => {
+    render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
+    expect(mocks.knowledgeProps).toMatchObject({workbench: true, mode: "workspace", projectId: "workspace-1"});
+    const right = screen.getByTestId("knowledge-right-column");
+    expect(right.children[0]).toBe(screen.getByTestId("knowledge-cards"));
+    expect(right.children[1]).toBe(screen.getByTestId("diagnostic-surface"));
+    expect(screen.getByTestId("knowledge-conversation").parentElement).toBe(screen.getByTestId("knowledge-surface"));
+    expect(screen.getByTestId("diagnostic-surface").querySelector('[data-testid="knowledge-surface"]')).toBeNull();
+  });
   it("scopes every Brand page inside the Apple theme boundary", () => {
     const pages: BrandPage[] = [
       "reports",

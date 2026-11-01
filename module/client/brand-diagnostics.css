@@ -83,7 +83,8 @@
   align-items: center;
   margin-bottom: 24px;
 }
-.bd-header h1 {
+.bd-header h1,
+.bd-header h2 {
   font-size: 28px;
   line-height: 1.3;
   letter-spacing: -0.6px;
@@ -841,5 +842,80 @@
   }
   .bd-count span {
     font-size: 11px;
+  }
+}
+
+/* Add diagnostics to the original knowledge result column; the conversation
+   and knowledge cards remain owned by their existing workbench. */
+.knowledge-workbench-auxiliary--with-diagnostics {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  container-type: inline-size;
+}
+.knowledge-workbench-auxiliary--with-diagnostics > .knowledge-workbench-tree {
+  flex: 0 0 auto;
+}
+.knowledge-workbench-auxiliary--with-diagnostics .knowledge-node-workspace {
+  height: auto;
+  overflow: visible;
+}
+.knowledge-workbench-auxiliary--with-diagnostics
+  .knowledge-node-workspace__tree {
+  overflow: visible;
+  flex: 0 0 auto;
+}
+.bd-workspace--embedded {
+  flex: 0 0 auto;
+  padding: 24px 0 40px;
+  border-top: 1px solid #e2e5eb;
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+.bd-workspace--embedded .bd-header {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.bd-workspace--embedded .bd-header h2 {
+  font-size: 20px;
+}
+.bd-workspace--embedded .bd-section {
+  padding: 16px;
+}
+.bd-workspace--embedded .bd-question-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.bd-workspace--embedded .bd-scope {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.bd-workspace--embedded .bd-scope label {
+  min-width: 0;
+  width: 100%;
+}
+.bd-workspace--embedded .bd-knowledge-build {
+  min-height: 0;
+}
+@container (max-width: 600px) {
+  .bd-workspace--embedded .bd-section-heading {
+    flex-wrap: wrap;
+  }
+  .bd-workspace--embedded .bd-section-heading > div {
+    flex: 1;
+    min-width: 0;
+  }
+  .bd-workspace--embedded .bd-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .bd-workspace--embedded .bd-rank-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .bd-workspace--embedded .bd-rank-track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .bd-workspace--embedded .bd-toolbar {
+    flex-wrap: wrap;
   }
 }

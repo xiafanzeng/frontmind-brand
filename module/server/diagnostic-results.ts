@@ -127,12 +127,34 @@ export function validateAssessment(
         checkQuote(x.sampleId, x.sentimentEvidence);
       for (const r of x.risks) checkQuote(x.sampleId, r.excerpt);
     }
-  if (a.category === "product_scenario")
+  if (a.category === "product_scenario") {
+    const seenPoints = new Set<string>();
+    const seenEvidence = new Set<string>();
+    for (const point of a.knowledgeCoverage) {
+      checkKnowledge(point.docPath, point.kbExcerpt, true);
+      const key = `${point.docPath}:${normalized(point.kbExcerpt)}`;
+      if (seenPoints.has(normalized(point.point)) || seenEvidence.has(key))
+        throw new Error("知识覆盖要点重复，不能按不同回答重复建立同一要点");
+      seenPoints.add(normalized(point.point));
+      seenEvidence.add(key);
+      if (
+        point.answers.length !== samples.length ||
+        new Set(point.answers.map((x) => x.sampleId)).size !== samples.length
+      )
+        throw new Error("每个知识要点必须逐份判读全部回答，不能只给代表性摘录");
+      for (const item of point.answers) {
+        sample(item.sampleId);
+        if (item.covered) checkQuote(item.sampleId, item.excerpt);
+        else if (item.excerpt.trim())
+          throw new Error("未覆盖的回答不能同时提供覆盖摘录");
+      }
+    }
     for (const x of a.answers)
       for (const c of x.claims) {
         checkQuote(x.sampleId, c.excerpt);
         checkKnowledge(c.docPath, c.kbExcerpt, c.verdict !== "unverifiable");
       }
+  }
   return a;
 }
 export function diagnosticMetrics(a: DiagnosticAssessment): DiagnosticMetric[] {
@@ -250,8 +272,10 @@ export function diagnosticMetrics(a: DiagnosticAssessment): DiagnosticMetric[] {
     x.claims.map((c) => ({ ...c, sampleId: x.sampleId })),
   );
   const verified = claims.filter((x) => x.verdict !== "unverifiable");
-  const knowledgeTopics = a.topics.filter((t) => t.docPath && t.kbExcerpt);
-  const coverage = knowledgeTopics.filter((t) => t.answerRefs.length > 0);
+  const knowledgeTopics = a.knowledgeCoverage;
+  const coverage = knowledgeTopics.filter((t) =>
+    t.answers.some((x) => x.covered),
+  );
   return [
     {
       id: "coverage",
@@ -263,7 +287,9 @@ export function diagnosticMetrics(a: DiagnosticAssessment): DiagnosticMetric[] {
       unit: "%",
       sampleIds: [
         ...new Set(
-          coverage.flatMap((t) => t.answerRefs.map((r) => r.sampleId)),
+          coverage.flatMap((t) =>
+            t.answers.filter((x) => x.covered).map((r) => r.sampleId),
+          ),
         ),
       ],
     },
@@ -302,7 +328,10 @@ export function diagnosticMetrics(a: DiagnosticAssessment): DiagnosticMetric[] {
     {
       id: "omitted",
       label: "遗漏知识要点",
-      value: knowledgeTopics.filter((t) => !t.answerRefs.length).length,
+      value: knowledgeTopics.length
+        ? knowledgeTopics.filter((t) => !t.answers.some((x) => x.covered))
+            .length
+        : null,
       unit: "项",
       sampleIds: [],
     },
@@ -339,6 +368,14 @@ export function diagnosticBreakdown(
         ...t,
         answerRefs: t.answerRefs.filter((r) => ids.has(r.sampleId)),
       })),
+      ...(a.category === "product_scenario"
+        ? {
+            knowledgeCoverage: a.knowledgeCoverage.map((t) => ({
+              ...t,
+              answers: t.answers.filter((x) => ids.has(x.sampleId)),
+            })),
+          }
+        : {}),
     } as DiagnosticAssessment;
     const metrics = diagnosticMetrics(subset).map((m) => ({
       ...m,
@@ -413,24 +450,42 @@ export function diagnosticBreakdown(
   }
   for (const [i, topic] of a.topics.entries()) {
     const id = `topic:${i}`;
-    const ids = add(
+    add(
       id,
       `知识对照：${topic.topic}`,
       topic.answerRefs.map((r) => r.sampleId),
     );
-    result.coverage.push({
-      id,
-      topic: topic.topic,
-      verdict: topic.verdict,
-      sampleIds: ids,
-      platforms: result.platforms.map((p) => ({
-        platform: p.id,
-        denominator: p.samples,
-        count: samples.filter((s) => s.platform === p.id && ids.includes(s.id))
-          .length,
-      })),
-    });
   }
+  if (a.category === "product_scenario")
+    for (const [i, point] of a.knowledgeCoverage.entries()) {
+      const id = `coverage:${i}`,
+        missingId = `coverage-missing:${i}`;
+      const ids = add(
+        id,
+        `要点覆盖：${point.point}`,
+        point.answers.filter((x) => x.covered).map((x) => x.sampleId),
+      );
+      const missingSampleIds = add(
+        missingId,
+        `未覆盖要点：${point.point}`,
+        point.answers.filter((x) => !x.covered).map((x) => x.sampleId),
+      );
+      result.coverage.push({
+        id,
+        missingId,
+        missingSampleIds,
+        topic: point.point,
+        verdict: ids.length ? "covered" : "omitted",
+        sampleIds: ids,
+        platforms: result.platforms.map((p) => ({
+          platform: p.id,
+          denominator: p.samples,
+          count: samples.filter(
+            (s) => s.platform === p.id && ids.includes(s.id),
+          ).length,
+        })),
+      });
+    }
   const sources = new Map<
     string,
     {

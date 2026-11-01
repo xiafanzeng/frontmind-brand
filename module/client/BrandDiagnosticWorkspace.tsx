@@ -69,10 +69,14 @@ function locationPatch(values: Record<string, string | null>) {
 }
 export default function BrandDiagnosticWorkspace({
   knowledgePanel,
+  embedded = false,
+  onOpenKnowledge,
   preview = false,
   storageKey = "brand-diagnostic-draft",
 }: {
-  knowledgePanel: ReactNode;
+  knowledgePanel?: ReactNode;
+  embedded?: boolean;
+  onOpenKnowledge?: () => void;
   preview?: boolean;
   storageKey?: string;
 }) {
@@ -168,8 +172,7 @@ export default function BrandDiagnosticWorkspace({
     if (id) {
       adopt(await request<DiagnosticRunView>(`/${id}`));
       if (urlState().id !== id) locationPatch({ diagnosis: id });
-    }
-    else if (
+    } else if (
       !dirtyRef.current &&
       w.runs.length &&
       !new URLSearchParams(window.location.search).has("new")
@@ -331,12 +334,15 @@ export default function BrandDiagnosticWorkspace({
       </div>
     );
   return (
-    <main className="bd-workspace">
+    <section
+      className={`bd-workspace${embedded ? " bd-workspace--embedded" : ""}`}
+      aria-label="AI 语义诊断"
+    >
       <header className="bd-header">
         <div>
           <span className="bd-eyebrow">品牌建设</span>
-          <h1>从企业知识，看清 AI 如何理解你</h1>
-          <p>确认事实，选择问题，查看真实回答中的品牌表现与认知差异。</p>
+          <h2>AI 语义诊断</h2>
+          <p>基于已确认知识，查看四类真实回答中的品牌表现与认知差异。</p>
         </div>
         <span className="bd-status">
           {run ? phases[run.phase] : "知识库 → 四类诊断"}
@@ -402,7 +408,7 @@ export default function BrandDiagnosticWorkspace({
                   className="bd-link"
                   onClick={() => void act(openKnowledge)}
                 >
-                  {knowledgeOpen ? "收起知识内容" : "回看知识内容与确认界面"}
+                  {knowledgeOpen ? "收起本轮知识依据" : "回看本轮知识依据"}
                   <ArrowDown size={16} />
                 </button>
                 {knowledgeOpen && (
@@ -431,7 +437,14 @@ export default function BrandDiagnosticWorkspace({
                 )}
               </>
             ) : (
-              <div className="bd-knowledge-build">{knowledgePanel}</div>
+              <div className="bd-knowledge-build">
+                {onOpenKnowledge && (
+                  <button className="bd-link" onClick={onOpenKnowledge}>
+                    返回上方知识卡片，继续逐项确认
+                  </button>
+                )}
+                {knowledgePanel}
+              </div>
             )}
           </>
         )}
@@ -853,7 +866,12 @@ export default function BrandDiagnosticWorkspace({
           ))}
         </nav>
         {DIAGNOSTIC_CATEGORIES.map((c) => {
-          const result = run?.results[c];
+          const storedResult = run?.results[c];
+          const needsCoverageReview =
+            c === "product_scenario" &&
+            storedResult &&
+            !Array.isArray((storedResult.assessment as any).knowledgeCoverage);
+          const result = needsCoverageReview ? undefined : storedResult;
           return (
             <article
               id={`result-${c}`}
@@ -875,6 +893,21 @@ export default function BrandDiagnosticWorkspace({
                   </button>
                 )}
               </div>
+              {needsCoverageReview && (
+                <p className="bd-note">
+                  产品覆盖指标需要按全部回答重新核对，原始采集已保留。
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      void act(async () =>
+                        adopt(await request(`/${run!.id}/retry`, {})),
+                      )
+                    }
+                  >
+                    复用回答，重新核对覆盖指标
+                  </button>
+                </p>
+              )}
               {!result ? (
                 <p className="bd-empty">
                   {run?.phase === "stopped"
@@ -1125,6 +1158,10 @@ export default function BrandDiagnosticWorkspace({
                       <AnswerEvidence
                         result={selectedResult}
                         sampleId={answer.id}
+                        onKnowledge={(path) => {
+                          closeAnswers();
+                          void act(() => showKnowledge(path));
+                        }}
                       />
                     )}
                     <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]}>
@@ -1148,7 +1185,7 @@ export default function BrandDiagnosticWorkspace({
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-    </main>
+    </section>
   );
 }
 function Sources({
@@ -1341,7 +1378,7 @@ function CategoryMatrix({
             <thead>
               <tr>
                 <th>知识要点</th>
-                <th>判读结果</th>
+                <th>覆盖状态</th>
                 {b.platforms.map((p) => (
                   <th key={p.id}>{p.label}</th>
                 ))}
@@ -1352,7 +1389,9 @@ function CategoryMatrix({
               {b.coverage.map((t) => (
                 <tr key={t.id}>
                   <th>{t.topic}</th>
-                  <td>{verdicts[t.verdict]}</td>
+                  <td>
+                    {t.verdict === "covered" ? "有相关表述" : "全部未提及"}
+                  </td>
                   {t.platforms.map((p) => (
                     <td key={p.platform}>
                       {p.count}/{p.denominator}
@@ -1365,9 +1404,24 @@ function CategoryMatrix({
                     >
                       {t.sampleIds.length ? "查看回答" : "未找到回答依据"}
                     </button>
+                    {!!t.missingSampleIds.length && (
+                      <button
+                        className="bd-link"
+                        onClick={() => onDrilldown(t.missingId)}
+                      >
+                        未覆盖 {t.missingSampleIds.length} 份
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
+              {!b.coverage.length && (
+                <tr>
+                  <td colSpan={3 + b.platforms.length}>
+                    当前知识没有可量化的相关要点；请查看知识对照中的限制说明。
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -1420,16 +1474,108 @@ function CategoryMatrix({
 function AnswerEvidence({
   result,
   sampleId,
+  onKnowledge,
 }: {
   result: DiagnosticResult;
   sampleId: string;
+  onKnowledge: (path: string) => void;
 }) {
+  const a = result.assessment;
+  const records: Array<{
+    label: string;
+    excerpt: string;
+    kb?: string | null;
+    path?: string | null;
+  }> = [];
+  if (a.category === "industry_ranking") {
+    const row = a.answers.find((x) => x.sampleId === sampleId);
+    if (row) {
+      records.push({
+        label: row.mentioned ? "品牌提及依据" : "未识别品牌提及",
+        excerpt: row.mentionEvidence,
+      });
+      records.push({
+        label: row.recommended
+          ? `本主体推荐依据${row.rank === null ? "（位次不可确认）" : ` · 第 ${row.rank} 位`}`
+          : "未计为本主体推荐",
+        excerpt: row.recommendationEvidence,
+      });
+    }
+  } else if (a.category === "competitor_comparison") {
+    const row = a.answers.find((x) => x.sampleId === sampleId);
+    if (row) {
+      records.push({
+        label: {
+          subject: "明确倾向本主体",
+          competitor: "明确倾向比较对象",
+          balanced: "双方各有适用",
+          unspecified: "未明确偏好",
+        }[row.preference],
+        excerpt: row.preferenceEvidence,
+      });
+      records.push(
+        ...row.dimensions.map((d) => ({ label: d.name, excerpt: d.excerpt })),
+      );
+    }
+  } else if (a.category === "reputation") {
+    const row = a.answers.find((x) => x.sampleId === sampleId);
+    if (row) {
+      records.push({
+        label: {
+          positive: "正面",
+          neutral: "中性",
+          negative: "负面",
+          mixed: "混合",
+          unknown: "无法判断",
+        }[row.sentiment],
+        excerpt: row.sentimentEvidence,
+      });
+      records.push(
+        ...row.risks.map((r) => ({ label: r.theme, excerpt: r.excerpt })),
+      );
+    }
+  } else {
+    const row = a.answers.find((x) => x.sampleId === sampleId);
+    if (row)
+      records.push(
+        ...row.claims.map((c) => ({
+          label: `${c.claim} · ${verdicts[c.verdict]}`,
+          excerpt: c.excerpt,
+          kb: c.kbExcerpt,
+          path: c.docPath,
+        })),
+      );
+    for (const point of a.knowledgeCoverage ?? []) {
+      const row = point.answers.find((x) => x.sampleId === sampleId);
+      if (row)
+        records.push({
+          label: `${point.point} · ${row.covered ? "有相关表述" : "本条未覆盖"}`,
+          excerpt: row.excerpt,
+          kb: point.kbExcerpt,
+          path: point.docPath,
+        });
+    }
+  }
   const topics = result.assessment.topics.filter((t) =>
     t.answerRefs.some((r) => r.sampleId === sampleId),
   );
   return (
     <details className="bd-topic">
-      <summary>本条回答的判读依据 · {topics.length} 项</summary>
+      <summary>
+        本条回答的判读依据 · {records.length + topics.length} 项
+      </summary>
+      {records.map((r, i) => (
+        <div key={`record-${i}`}>
+          <strong>{r.label}</strong>
+          {r.excerpt && <blockquote>{r.excerpt}</blockquote>}
+          {r.kb && <p>知识库：{r.kb}</p>}
+          {r.path && (
+            <button className="bd-link" onClick={() => onKnowledge(r.path!)}>
+              回看知识依据
+            </button>
+          )}
+        </div>
+      ))}
       {topics.map((t, i) => (
         <div key={i}>
           <strong>
