@@ -60,6 +60,7 @@ const KnowledgeActionsContext = createContext<{
   download: React.ReactNode;
   titleRef?: React.RefObject<HTMLHeadingElement | null>;
   afterKnowledge?: React.ReactNode;
+  diagnosticAction?: React.ReactNode;
 }>({ workflow: null, download: null });
 const KNOWLEDGE_BASE_NEW_BUILD_EVENT = "frontmind:new-knowledge-base-build";
 export const KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS = 15_000;
@@ -149,6 +150,7 @@ export default function EmbeddedKnowledgeBasePanel({
   workbench = false,
   projectId = "knowledge",
   afterKnowledge,
+  diagnosticAction,
 }: {
   preview?: boolean;
   previewData?: {
@@ -163,6 +165,7 @@ export default function EmbeddedKnowledgeBasePanel({
   projectId?: string;
   /** Additional business content below the existing right-hand knowledge cards. */
   afterKnowledge?: React.ReactNode;
+  diagnosticAction?: React.ReactNode;
 }) {
   const previewMode =
     (import.meta.env.DEV || import.meta.env.MODE === 'preview') &&
@@ -371,6 +374,7 @@ export default function EmbeddedKnowledgeBasePanel({
           download: knowledgeDownload,
           titleRef: workspaceTitleRef,
           afterKnowledge,
+          diagnosticAction,
         }}
       >
         {resetQuery.isError && resetQuery.data && (
@@ -1712,7 +1716,7 @@ function KnowledgeWorkspaceSurfaces({
   projectId?: string;
   resultKey?: string;
 }) {
-  const { afterKnowledge } = useContext(KnowledgeActionsContext);
+  const { afterKnowledge, diagnosticAction } = useContext(KnowledgeActionsContext);
   const [view, setView] = useState<"collaboration" | "knowledge">(
     "collaboration",
   );
@@ -1747,7 +1751,7 @@ function KnowledgeWorkspaceSurfaces({
         projectId={projectId}
         moduleId="knowledge"
         title="智能知识库"
-        topbarActions={topbarActions}
+        topbarActions={<>{diagnosticAction}{topbarActions}</>}
         titleRef={focusTitleRef}
         main={
           <div className="knowledge-conversation-column">{collaboration}</div>

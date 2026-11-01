@@ -847,6 +847,22 @@
 
 /* Add diagnostics to the original knowledge result column; the conversation
    and knowledge cards remain owned by their existing workbench. */
+.fm-brand-theme .agent-workbench-shell__layout.has-outcomes.is-fixed-auxiliary:has(.bd-workspace--reading) {
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr);
+}
+@media (max-width: 899px) {
+  .fm-brand-theme .agent-workbench-shell__layout.has-outcomes.is-fixed-auxiliary:has(.bd-workspace--reading) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .fm-brand-theme .agent-workbench-shell__layout:has(.bd-workspace--reading) > .agent-workbench-shell__main {
+    display: none;
+  }
+  .fm-brand-theme .agent-workbench-shell__layout:has(.bd-workspace--reading) > .agent-workbench-shell__auxiliary {
+    display: flex;
+    max-height: none;
+  }
+}
 .knowledge-workbench-auxiliary--with-diagnostics {
   overflow-y: auto;
   overflow-x: hidden;

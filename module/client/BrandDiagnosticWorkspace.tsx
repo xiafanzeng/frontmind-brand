@@ -71,12 +71,16 @@ function locationPatch(values: Record<string, string | null>) {
 export default function BrandDiagnosticWorkspace({
   knowledgePanel,
   embedded = false,
+  expanded = false,
+  onExpandedChange,
   onOpenKnowledge,
   preview = false,
   storageKey = "brand-diagnostic-draft",
 }: {
   knowledgePanel?: ReactNode;
   embedded?: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
   onOpenKnowledge?: () => void;
   preview?: boolean;
   storageKey?: string;
@@ -109,6 +113,13 @@ export default function BrandDiagnosticWorkspace({
     return value;
   }
   const initial = useRef(urlState());
+  useEffect(() => {
+    if (!expanded) return;
+    const frame = requestAnimationFrame(() =>
+      document.getElementById("brand-diagnostic-workspace")?.scrollIntoView?.({block: "start"}),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [expanded]);
   const [workspace, setWorkspace] = useState<DiagnosticWorkspace | null>(null);
   const [run, setRun] = useState<DiagnosticRunView | null>(null);
   const [runId, setRunId] = useState<string | null>(
@@ -337,7 +348,8 @@ export default function BrandDiagnosticWorkspace({
     );
   return (
     <section
-      className={`bd-workspace${embedded ? " bd-workspace--embedded" : ""}`}
+      id="brand-diagnostic-workspace"
+      className={`bd-workspace${embedded ? " bd-workspace--embedded" : ""}${expanded ? " bd-workspace--reading" : ""}`}
       aria-label="AI 语义诊断"
     >
       <header className="bd-header">
@@ -349,6 +361,11 @@ export default function BrandDiagnosticWorkspace({
         <span className="bd-status">
           {run ? phases[run.phase] : "知识库 → 四类诊断"}
         </span>
+        {embedded && onExpandedChange && (
+          <button type="button" onClick={() => onExpandedChange(!expanded)}>
+            {expanded ? "返回知识卡片" : "展开诊断阅读"}
+          </button>
+        )}
       </header>
       <nav className="bd-steps" aria-label="诊断流程">
         {[
@@ -811,7 +828,7 @@ export default function BrandDiagnosticWorkspace({
         )}
         {!!run?.jobs.length && (
           <div className="bd-model-status">
-            {run.jobs.map((j) => (
+            {latestDiagnosticJobs(run.jobs).map((j) => (
               <div key={j.id}>
                 <span>
                   {j.category
@@ -843,7 +860,7 @@ export default function BrandDiagnosticWorkspace({
                     </span>
                   ))}
                 </small>
-                {j.error && <p className="bd-invalid">{j.error}</p>}
+                {j.error && <details className="bd-invalid"><summary>查看失败原因</summary><p>{j.error}</p></details>}
               </div>
             ))}
           </div>

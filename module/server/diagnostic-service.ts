@@ -1101,6 +1101,7 @@ export function createDiagnosticService(
   async function tick(id: string) {
     const owner = randomUUID();
     let acquired = false;
+    let pollModel = false;
     await mutate(id, (r) => {
       const pendingModel = r.jobs.some((j) =>
         ["queued", "submitting", "running"].includes(j.status),
@@ -1120,6 +1121,23 @@ export function createDiagnosticService(
         (r.lease && r.lease.until > Date.now())
       )
         return;
+      const firstJob = r.phase === "stopped" ? undefined : r.jobs.find((j) =>
+        ["queued", "submitting", "running"].includes(j.status),
+      );
+      const modelDue = firstJob && (firstJob.status !== "running" || firstJob.repairPending || (firstJob.nextPollAt ?? 0) <= Date.now());
+      const collectionDue = r.attempts.some((a) =>
+        a.status === "queued" || a.status === "submitting" ||
+        (a.status === "submitted" && (a.nextPollAt ?? 0) <= Date.now()),
+      );
+      const assessmentReady = r.confirmedAt && r.phase !== "stopped" && DIAGNOSTIC_CATEGORIES.some((category) => {
+        const samples = r.attempts.filter((a) => a.category === category);
+        return samples.length > 0 && samples.every((a) => a.status === "completed") && !r.results[category] && !r.jobs.some((j) => j.kind === "assess" && j.category === category);
+      });
+      // Waiting for the same provider task does not require a new write lease.
+      // Keep finalization eligible after a crash, while honoring persisted poll times.
+      if ((pendingModel || pendingCollection) && !modelDue && !collectionDue && !assessmentReady) return;
+      pollModel = Boolean(modelDue);
+      if (modelDue && firstJob.status === "running") firstJob.nextPollAt = Date.now() + 30_000;
       r.lease = { owner, until: Date.now() + 180_000 };
       acquired = true;
     });
@@ -1127,7 +1145,7 @@ export function createDiagnosticService(
     try {
       let r = state(await owned(id));
       const job =
-        r.phase === "stopped"
+        r.phase === "stopped" || !pollModel
           ? undefined
           : r.jobs.find((j) =>
               ["queued", "submitting", "running"].includes(j.status),

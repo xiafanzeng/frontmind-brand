@@ -1,8 +1,9 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   knowledgeProps: null as null | Record<string, unknown>,
+  diagnosticProps: null as null | Record<string, unknown>,
   ragProps: null as null | Record<string, unknown>,
   websiteProps: null as null | Record<string, unknown>,
   websiteSettingsProps: null as null | Record<string, unknown>,
@@ -11,11 +12,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./components/EmbeddedKnowledgeBasePanel", () => ({
   default: (props: Record<string, any>) => {
     mocks.knowledgeProps = props;
-    return <div data-testid="knowledge-surface"><div data-testid="knowledge-conversation" /><aside data-testid="knowledge-right-column"><div data-testid="knowledge-cards" />{props.afterKnowledge}</aside></div>;
+    return <div data-testid="knowledge-surface">{props.diagnosticAction}<div data-testid="knowledge-conversation" /><aside data-testid="knowledge-right-column"><div data-testid="knowledge-cards" />{props.afterKnowledge}</aside></div>;
   },
 }));
 vi.mock("./BrandDiagnosticWorkspace", () => ({
-  default: ({knowledgePanel}: any) => <div data-testid="diagnostic-surface">{knowledgePanel}</div>,
+  default: (props: any) => { mocks.diagnosticProps=props; return <div data-testid="diagnostic-surface">{props.knowledgePanel}</div>; },
 }));
 vi.mock("./dashboard/IntentWorkbench", () => ({
   default: () => <div data-testid="intent-surface" />,
@@ -54,6 +55,7 @@ const keywordData = { tables: [], revision: null };
 
 afterEach(() => {
   cleanup();
+  history.replaceState({}, "", "/");
   mocks.knowledgeProps = null;
   mocks.ragProps = null;
   mocks.websiteProps = null;
@@ -61,6 +63,28 @@ afterEach(() => {
 });
 
 describe("ModuleWorkspace redesigned live routes", () => {
+  it("opens diagnostics from the visible toolbar without replacing the knowledge conversation or cards", () => {
+    render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
+    const conversation=screen.getByTestId("knowledge-conversation");
+    const cards=screen.getByTestId("knowledge-cards");
+    fireEvent.click(screen.getByRole("button", {name:"AI 语义诊断"}));
+    expect(mocks.diagnosticProps?.expanded).toBe(true);
+    expect(new URLSearchParams(location.search).get("diagnosticView")).toBe("expanded");
+    expect(screen.getByTestId("knowledge-conversation")).toBe(conversation);
+    expect(screen.getByTestId("knowledge-cards")).toBe(cards);
+    fireEvent.click(screen.getByRole("button", {name:"返回知识库"}));
+    expect(mocks.diagnosticProps?.expanded).toBe(false);
+    expect(new URLSearchParams(location.search).get("diagnosticView")).toBe("embedded");
+  });
+  it("opens a diagnostic task link in reading mode and respects an explicit return to knowledge", () => {
+    history.replaceState({}, "", "/?view=knowledge&diagnosis=task");
+    const view=render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
+    expect(mocks.diagnosticProps?.expanded).toBe(true);
+    view.unmount();
+    history.replaceState({}, "", "/?view=knowledge&diagnosis=task&diagnosticView=embedded");
+    render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
+    expect(mocks.diagnosticProps?.expanded).toBe(false);
+  });
   it("keeps the knowledge conversation and cards as the primary workbench, with diagnostics below the right cards", () => {
     render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
     expect(mocks.knowledgeProps).toMatchObject({workbench: true, mode: "workspace", projectId: "workspace-1"});
