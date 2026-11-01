@@ -30,7 +30,7 @@ const makeRun = () => ({
   questions: [],
   platforms: ["doubao", "yuanbao", "qianwen"],
   recommendations: [],
-  jobs: [],
+  activity: { assessments: {}, audits: {} },
   attempts: [],
   results: {},
   events: [],
@@ -86,6 +86,9 @@ beforeEach(() => {
       run.phase = "collecting";
       run.confirmedAt = new Date().toISOString();
     }
+    if (path.endsWith("/semantic-audits"))
+      for (const category of body.categories)
+        run.activity.audits[category] = { status: "running" };
     if (path.includes("/answers/"))
       return {
         ok: true,
@@ -106,29 +109,121 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("single-page diagnostic interaction", () => {
+  function withSavedResult() {
+    run.phase = "completed";
+    run.confirmedAt = new Date().toISOString();
+    run.results.reputation = {
+      assessment: {
+        category: "reputation",
+        summary: "本题口碑表达存在需要核验的边界。",
+        answers: [],
+        topics: [
+          {
+            topic: "科室服务边界",
+            verdict: "supported",
+            docPath: "scope.md",
+            kbExcerpt: "科室提供相关服务",
+            answerRefs: [{ sampleId: "sample1", excerpt: "科室服务相关摘录" }],
+            explanation: "该表述与当前知识一致。",
+          },
+        ],
+      },
+      metrics: [],
+      samples: 15,
+      model: "gpt-6.1-sol",
+      fallback: false,
+      breakdown: {
+        platforms: [],
+        ranks: [],
+        risks: [],
+        coverage: [],
+        sources: [],
+        drilldowns: [],
+      },
+    };
+    run.attempts = [1, 2].map((index) => ({
+      id: `sample${index}`,
+      category: "reputation",
+      platform: "doubao",
+      run: index,
+      status: "completed",
+      hasAnswer: true,
+    }));
+    history.replaceState({}, "", `/?diagnosis=${id}`);
+  }
+
+  it("adds only a semantic audit to saved answers and can stop it after the old task completed", async () => {
+    withSavedResult();
+    render(<BrandDiagnosticWorkspace />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "复用回答，补充语义评估" }),
+    );
+    await screen.findByRole("button", { name: "停止本轮" });
+    expect(
+      mock.fetch.mock.calls.filter(([url]) => url.endsWith("/semantic-audits")),
+    ).toHaveLength(1);
+    const auditRequest = mock.fetch.mock.calls.find(([url]) =>
+      url.endsWith("/semantic-audits"),
+    )!;
+    expect(JSON.parse(auditRequest[1].body)).toEqual({
+      categories: ["reputation"],
+    });
+    expect(
+      mock.fetch.mock.calls.some(([url]) =>
+        /\/(start|recommend|validate)$/.test(url),
+      ),
+    ).toBe(false);
+    expect(
+      document
+        .getElementById("diagnostic-knowledge")!
+        .compareDocumentPosition(
+          document.getElementById("diagnostic-results")!,
+        ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getAllByRole("heading", { name: "知识库对照" })).toHaveLength(
+      1,
+    );
+  });
+
+  it("restores a knowledge-evidence drilldown without loading unrelated full answers", async () => {
+    withSavedResult();
+    history.replaceState(
+      {},
+      "",
+      `/?diagnosis=${id}&question=reputation&metric=topic%3A0`,
+    );
+    render(<BrandDiagnosticWorkspace />);
+    await screen.findByRole("button", { name: /豆包 · 第 1 次/ });
+    expect(screen.queryByRole("button", { name: /豆包 · 第 2 次/ })).toBeNull();
+    expect(
+      mock.fetch.mock.calls.some(([url]) => url.includes("/answers/")),
+    ).toBe(false);
+  });
+
   it("shows the active recovery instead of a superseded failure", async () => {
     run.phase = "analyzing";
     run.confirmedAt = new Date().toISOString();
+    run.activity.assessments.reputation = { status: "running" };
     run.jobs = [
       {
-        id: "old",
-        kind: "assess",
-        category: "reputation",
         status: "failed",
         model: "gpt-6.1-sol",
-      },
-      {
-        id: "retry",
         kind: "assess",
         category: "reputation",
-        status: "running",
-        model: "gpt-6.1-sol",
       },
+    ];
+    run.events = [
+      { at: new Date().toISOString(), message: "不应显示的内部事件" },
     ];
     history.replaceState({}, "", `/?diagnosis=${id}`);
     render(<BrandDiagnosticWorkspace />);
     await screen.findByText("正在分析");
     expect(screen.queryByText("诊断未完成")).toBeNull();
+    expect(
+      screen.queryByText(
+        /查看执行记录|更新时间|gpt-6.1-sol|不应显示的内部事件/,
+      ),
+    ).toBeNull();
     expect(screen.queryByRole("button", { name: "恢复未完成诊断" })).toBeNull();
   });
 
@@ -161,7 +256,7 @@ describe("single-page diagnostic interaction", () => {
   });
   it("blocks question selection until knowledge is confirmed", async () => {
     ready = false;
-    const onOpenKnowledge=vi.fn();
+    const onOpenKnowledge = vi.fn();
     render(<BrandDiagnosticWorkspace onOpenKnowledge={onOpenKnowledge} />);
     await screen.findByText("仍有 2 项待确认");
     expect(screen.queryByLabelText("行业排名问题")).toBeNull();
@@ -169,7 +264,9 @@ describe("single-page diagnostic interaction", () => {
       (screen.getByRole("button", { name: /开始采集/ }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
-    fireEvent.click(screen.getByRole("button", {name:"前往智能知识库，继续逐项确认"}));
+    fireEvent.click(
+      screen.getByRole("button", { name: "前往智能知识库，继续逐项确认" }),
+    );
     expect(onOpenKnowledge).toHaveBeenCalledOnce();
   });
   it("keeps unsaved questions when creating a fresh draft after stopping", async () => {

@@ -6,3 +6,4 @@ await copyFile(new URL("./optimize-intent/SKILL.md", import.meta.url), new URL("
 const diagnosticTarget = new URL("../dist/workflows/brand-diagnostics/", import.meta.url);
 await mkdir(diagnosticTarget, {recursive: true});
 await copyFile(new URL("./brand-diagnostics/SKILL.md", import.meta.url), new URL("SKILL.md", diagnosticTarget));
+await copyFile(new URL("./brand-diagnostics/SEMANTIC_AUDIT.md", import.meta.url), new URL("SEMANTIC_AUDIT.md", diagnosticTarget));

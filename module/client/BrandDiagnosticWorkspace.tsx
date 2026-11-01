@@ -16,7 +16,6 @@ import {
 import { captureWorkspaceRestOperation } from "./host";
 import {
   DIAGNOSTIC_CATEGORIES,
-  latestDiagnosticJobs,
   DIAGNOSTIC_LABELS,
   type DiagnosticCategory,
   type DiagnosticQuestion,
@@ -26,6 +25,12 @@ import {
   type KnowledgeBasis,
   type DiagnosticResult,
 } from "../contracts/diagnostics";
+import {
+  DiagnosticOverview,
+  DiagnosticKnowledgeComparison,
+  DiagnosticSemanticAudit,
+  isDiagnosticPending,
+} from "./BrandDiagnosticResults";
 import "./brand-diagnostics.css";
 const ROOT = "/api/modules/brand/diagnostics";
 
@@ -300,11 +305,20 @@ export default function BrandDiagnosticWorkspace({
   const frozen = !!run?.confirmedAt;
   const stopped = run?.phase === "stopped";
   const running = run && ["collecting", "analyzing"].includes(run.phase);
-  const currentJobs = latestDiagnosticJobs(run?.jobs ?? []);
-  const activeJobs =
-    currentJobs.filter((j) =>
-      ["queued", "submitting", "running"].includes(j.status),
-    ) ?? [];
+  const activity = run?.activity;
+  const recommending = isDiagnosticPending(activity?.recommendation?.status);
+  const validating = isDiagnosticPending(activity?.validation?.status);
+  const activeBusiness =
+    recommending ||
+    validating ||
+    DIAGNOSTIC_CATEGORIES.some(
+      (c) =>
+        isDiagnosticPending(activity?.assessments[c]?.status) ||
+        isDiagnosticPending(activity?.audits[c]?.status),
+    );
+  const failedAssessment = DIAGNOSTIC_CATEGORIES.some(
+    (c) => activity?.assessments[c]?.status === "failed" && !run?.results[c],
+  );
   const canStart =
     questions.length === 4 &&
     !dirty &&
@@ -316,6 +330,18 @@ export default function BrandDiagnosticWorkspace({
   const selectedMetric = [
     ...(selectedResult?.metrics ?? []),
     ...(selectedResult?.breakdown.drilldowns ?? []),
+    ...(selectedResult?.assessment.topics ?? []).map((topic, index) => ({
+      id: `topic:${index}`,
+      label: topic.topic,
+      sampleIds: topic.answerRefs.map((ref) => ref.sampleId),
+    })),
+    ...(category ? (run?.audits?.[category]?.metrics ?? []) : []).map(
+      (item) => ({
+        id: `audit:${item.id}`,
+        label: item.label,
+        sampleIds: item.answerRefs.map((ref) => ref.sampleId),
+      }),
+    ),
   ].find((m) => m.id === metric);
   const answerRecords =
     run?.attempts.filter(
@@ -343,7 +369,14 @@ export default function BrandDiagnosticWorkspace({
           <p>基于已确认知识，查看四类真实回答中的品牌表现与认知差异。</p>
         </div>
         <span className="bd-status">
-          {run ? phases[run.phase] : "知识库 → 四类诊断"}
+          {run
+            ? run.phase === "completed" && activeBusiness
+              ? "语义评估中"
+              : run.phase === "completed" &&
+                  !DIAGNOSTIC_CATEGORIES.every((c) => run.audits?.[c])
+                ? "分类诊断完成"
+                : phases[run.phase]
+            : "知识库 → 四类诊断"}
         </span>
       </header>
       <nav className="bd-steps" aria-label="诊断流程">
@@ -411,26 +444,28 @@ export default function BrandDiagnosticWorkspace({
                 </button>
                 {knowledgeOpen && (
                   <div className="bd-knowledge">
-                    {documents.length
-                      ? documents.map((d) => (
-                          <details
-                            key={d.path}
-                            id={`knowledge-${encodeURIComponent(d.path)}`}
-                          >
-                            <summary>
-                              {d.title}
-                              <small>
-                                {d.evidenceStatus === "needs_verification"
-                                  ? " · 待核实内容"
-                                  : ""}
-                              </small>
-                            </summary>
-                            <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]}>
-                              {d.content}
-                            </ReactMarkdown>
-                          </details>
-                        ))
-                      : <p>当前没有可展示的知识正文。</p>}
+                    {documents.length ? (
+                      documents.map((d) => (
+                        <details
+                          key={d.path}
+                          id={`knowledge-${encodeURIComponent(d.path)}`}
+                        >
+                          <summary>
+                            {d.title}
+                            <small>
+                              {d.evidenceStatus === "needs_verification"
+                                ? " · 待核实内容"
+                                : ""}
+                            </small>
+                          </summary>
+                          <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]}>
+                            {d.content}
+                          </ReactMarkdown>
+                        </details>
+                      ))
+                    ) : (
+                      <p>当前没有可展示的知识正文。</p>
+                    )}
                   </div>
                 )}
               </>
@@ -480,12 +515,7 @@ export default function BrandDiagnosticWorkspace({
             </div>
             <div className="bd-toolbar">
               <button
-                disabled={
-                  busy ||
-                  frozen ||
-                  stopped ||
-                  activeJobs.some((j) => j.kind === "recommend")
-                }
+                disabled={busy || frozen || stopped || recommending}
                 onClick={() =>
                   void act(async () => {
                     const r = await ensureDraft();
@@ -493,7 +523,7 @@ export default function BrandDiagnosticWorkspace({
                   })
                 }
               >
-                {activeJobs.some((j) => j.kind === "recommend") ? (
+                {recommending ? (
                   <Loader2 className="bd-spin" size={16} />
                 ) : (
                   <Search size={16} />
@@ -504,6 +534,12 @@ export default function BrandDiagnosticWorkspace({
               </button>
               <small>也可以直接输入四题，再校验问题。</small>
             </div>
+            {activity?.recommendation?.status === "failed" && (
+              <p className="bd-invalid" role="alert">
+                {activity.recommendation.error ??
+                  "问题推荐暂未完成，可以重试，或直接输入四题。"}
+              </p>
+            )}
             <div className="bd-question-grid">
               {DIAGNOSTIC_CATEGORIES.map((c) => {
                 const q = questions.find((q) => q.category === c);
@@ -592,11 +628,7 @@ export default function BrandDiagnosticWorkspace({
             {!frozen && !stopped && (
               <div className="bd-toolbar">
                 <button
-                  disabled={
-                    busy ||
-                    questions.length !== 4 ||
-                    activeJobs.some((j) => j.kind === "validate")
-                  }
+                  disabled={busy || questions.length !== 4 || validating}
                   onClick={() =>
                     void act(async () => {
                       const r = await persist();
@@ -605,7 +637,7 @@ export default function BrandDiagnosticWorkspace({
                     })
                   }
                 >
-                  {activeJobs.some((j) => j.kind === "validate") ? (
+                  {validating ? (
                     <Loader2 className="bd-spin" size={16} />
                   ) : (
                     <Check size={16} />
@@ -621,6 +653,11 @@ export default function BrandDiagnosticWorkspace({
                 </span>
               </div>
             )}
+            {activity?.validation?.status === "failed" && (
+              <p className="bd-invalid" role="alert">
+                {activity.validation.error ?? "问题校验尚未完成，请重试。"}
+              </p>
+            )}
           </>
         )}
       </section>
@@ -628,7 +665,7 @@ export default function BrandDiagnosticWorkspace({
         <div className="bd-section-heading">
           <span className="bd-number">03</span>
           <div>
-            <h2>{frozen ? "真实采集与执行进展" : "选择采集平台"}</h2>
+            <h2>{frozen ? "采集完成情况" : "选择采集平台"}</h2>
             <p>每道问题在每个平台采集五次；确认后自动完成四类诊断。</p>
           </div>
         </div>
@@ -730,24 +767,26 @@ export default function BrandDiagnosticWorkspace({
                       })}
                       <td>
                         {run.results[c]
-                          ? "已完成"
-                          : currentJobs.some(
-                                (j) =>
-                                  j.category === c && j.status === "running",
-                              )
+                          ? run.audits?.[c]
+                            ? "诊断与语义评估已完成"
+                            : isDiagnosticPending(activity?.audits[c]?.status)
+                              ? "语义评估中"
+                              : "分类诊断已完成"
+                          : activity?.assessments[c]?.status === "running"
                             ? "正在分析"
-                            : currentJobs.some(
-                                  (j) =>
-                                    j.category === c &&
-                                    ["queued", "submitting"].includes(j.status),
+                            : isDiagnosticPending(
+                                  activity?.assessments[c]?.status,
                                 )
                               ? "等待诊断执行"
-                              : currentJobs.some(
-                                    (j) =>
-                                      j.category === c && j.status === "failed",
-                                  )
+                              : activity?.assessments[c]?.status === "failed"
                                 ? "诊断未完成"
                                 : "等待回答齐全"}
+                        {activity?.assessments[c]?.status === "failed" &&
+                          activity.assessments[c]?.error && (
+                            <small className="bd-invalid">
+                              {activity.assessments[c]?.error}
+                            </small>
+                          )}
                       </td>
                     </tr>
                   ))}
@@ -755,7 +794,7 @@ export default function BrandDiagnosticWorkspace({
               </table>
             </div>
             <div className="bd-toolbar">
-              {running && (
+              {!stopped && (running || activeBusiness) && (
                 <button
                   disabled={busy}
                   onClick={() =>
@@ -768,12 +807,7 @@ export default function BrandDiagnosticWorkspace({
                   停止本轮
                 </button>
               )}
-              {(run.phase === "partial" ||
-                currentJobs.some(
-                  (j) =>
-                    j.status === "failed" &&
-                    (!j.category || !run.results[j.category]),
-                )) &&
+              {(run.phase === "partial" || failedAssessment) &&
                 run.phase !== "completed" &&
                 run.phase !== "stopped" && (
                   <button
@@ -787,13 +821,10 @@ export default function BrandDiagnosticWorkspace({
                     恢复未完成诊断
                   </button>
                 )}
-              <small>
-                更新时间 {new Date(run.updatedAt).toLocaleString("zh-CN")}
-              </small>
             </div>
           </>
         )}
-        {run && !frozen && activeJobs.length > 0 && run.phase !== "stopped" && (
+        {run && !frozen && activeBusiness && run.phase !== "stopped" && (
           <button
             disabled={busy}
             onClick={() =>
@@ -804,59 +835,6 @@ export default function BrandDiagnosticWorkspace({
             停止本轮
           </button>
         )}
-        {!!run?.jobs.length && (
-          <div className="bd-model-status">
-            {latestDiagnosticJobs(run.jobs).map((j) => (
-              <div key={j.id}>
-                <span>
-                  {j.category
-                    ? DIAGNOSTIC_LABELS[j.category]
-                    : j.kind === "recommend"
-                      ? "问题推荐"
-                      : "问题校验"}
-                </span>
-                <span>
-                  {
-                    {
-                      queued: "排队中",
-                      submitting: "正在提交",
-                      running: "执行中",
-                      completed: "完成",
-                      failed: "未完成",
-                      cancelled: "已停止",
-                    }[j.status]
-                  }
-                </span>
-                <small>
-                  {j.model}
-                  {j.fallback ? " · 故障备用" : ""}
-                  {j.modelFallbacks?.map((f, i) => (
-                    <span key={i}>
-                      {" "}
-                      · {new Date(f.at).toLocaleTimeString("zh-CN")} 接续{" "}
-                      {f.model} / {f.effort}
-                    </span>
-                  ))}
-                </small>
-                {j.error && <details className="bd-invalid"><summary>查看失败原因</summary><p>{j.error}</p></details>}
-              </div>
-            ))}
-          </div>
-        )}
-        {!!run?.events.length && (
-          <details className="bd-events">
-            <summary>查看执行记录 · {run.events.length} 条</summary>
-            <ol>
-              {run.events.map((e) => (
-                <li key={e.id}>
-                  <time>{new Date(e.at).toLocaleTimeString("zh-CN")}</time>
-                  {e.category && <b>{DIAGNOSTIC_LABELS[e.category]}</b>}
-                  {e.message}
-                </li>
-              ))}
-            </ol>
-          </details>
-        )}
       </section>
       <section id="diagnostic-results" className="bd-section">
         <div className="bd-section-heading">
@@ -866,7 +844,8 @@ export default function BrandDiagnosticWorkspace({
             <p>基于本轮真实回答的分类指标、知识差异与证据。</p>
           </div>
         </div>
-        <nav className="bd-category-nav">
+        {run && <DiagnosticOverview run={run} onAnswers={openAnswers} />}
+        <nav className="bd-category-nav" aria-label="诊断结果导航">
           {DIAGNOSTIC_CATEGORIES.map((c) => (
             <a key={c} href={`#result-${c}`}>
               {DIAGNOSTIC_LABELS[c]}
@@ -924,15 +903,21 @@ export default function BrandDiagnosticWorkspace({
                 </p>
               ) : (
                 <>
+                  <nav
+                    className="bd-result-nav"
+                    aria-label={`${DIAGNOSTIC_LABELS[c]}结果分区`}
+                  >
+                    <a href={`#diagnostic-metrics-${c}`}>分类指标</a>
+                    <a href={`#diagnostic-audit-${c}`}>五维审计</a>
+                    <a href={`#diagnostic-comparison-${c}`}>知识库对照</a>
+                  </nav>
                   <p className="bd-finding">{result.assessment.summary}</p>
                   <small className="bd-measurement">
                     有效／计划回答 {result.samples} /{" "}
                     {run!.platforms.length * 5} 份 · {run?.platforms.length}{" "}
-                    个平台 · 模型判读：{result.model}
-                    {result.fallback ? "（故障备用）" : ""} ·
-                    指标由服务端据明细计算
+                    个平台 · 指标由回答判读明细计算，点击数字查看原始依据
                   </small>
-                  <div className="bd-metrics">
+                  <div className="bd-metrics" id={`diagnostic-metrics-${c}`}>
                     {result.metrics.map((m) => (
                       <button key={m.id} onClick={() => openAnswers(c, m.id)}>
                         <span>{m.label}</span>
@@ -960,57 +945,48 @@ export default function BrandDiagnosticWorkspace({
                       locationPatch({ answer: id });
                     }}
                   />
-                  <details className="bd-topics">
-                    <summary>
-                      知识事实与 AI 回答对照 · {result.assessment.topics.length}{" "}
-                      个要点
-                    </summary>
-                    {result.assessment.topics.map((t, i) => (
-                      <div key={i} className="bd-topic">
-                        <header>
-                          <h4>{t.topic}</h4>
-                          <span
-                            className={`bd-verdict bd-verdict--${t.verdict}`}
-                          >
-                            {verdicts[t.verdict]}
-                          </span>
-                        </header>
-                        <p>{t.explanation}</p>
-                        {t.kbExcerpt && (
-                          <blockquote>
-                            <small>当前知识库</small>
-                            {t.kbExcerpt}
-                            <button
-                              className="bd-link"
-                              onClick={() =>
-                                void act(async () => {
-                                  await showKnowledge(t.docPath ?? undefined);
-                                })
-                              }
-                            >
-                              查看知识依据
-                            </button>
-                          </blockquote>
-                        )}
-                        <div>
-                          {t.answerRefs.map((ref, j) => (
-                            <button
-                              className="bd-evidence-link"
-                              key={j}
-                              onClick={() => {
-                                openAnswers(c);
-                                setAnswerId(ref.sampleId);
-                                locationPatch({ answer: ref.sampleId });
-                              }}
-                            >
-                              查看回答证据 {j + 1}
-                              <ChevronRight size={13} />
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </details>
+                  <div id={`diagnostic-audit-${c}`}>
+                    <DiagnosticSemanticAudit
+                      audit={run?.audits?.[c]}
+                      status={activity?.audits[c]?.status}
+                      error={activity?.audits[c]?.error}
+                      allowRequest={
+                        !run?.requiredAuditVersion ||
+                        activity?.audits[c]?.status === "failed"
+                      }
+                      disabled={busy || stopped}
+                      onRequest={() =>
+                        void act(async () =>
+                          adopt(
+                            await request(`/${run!.id}/semantic-audits`, {
+                              categories: [c],
+                            }),
+                          ),
+                        )
+                      }
+                      onKnowledge={(path) =>
+                        void act(() => showKnowledge(path))
+                      }
+                      onAnswers={(id) => openAnswers(c, id)}
+                      onAnswer={(id) => {
+                        openAnswers(c);
+                        setAnswerId(id);
+                        locationPatch({ answer: id });
+                      }}
+                    />
+                  </div>
+                  <DiagnosticKnowledgeComparison
+                    key={`${run!.id}:${c}`}
+                    run={run!}
+                    categoryScope={c}
+                    onKnowledge={(path) => void act(() => showKnowledge(path))}
+                    onAnswers={openAnswers}
+                    onAnswer={(category, id) => {
+                      openAnswers(category);
+                      setAnswerId(id);
+                      locationPatch({ answer: id });
+                    }}
+                  />
                   <details className="bd-method">
                     <summary>指标说明与适用边界</summary>
                     <p>
@@ -1025,6 +1001,20 @@ export default function BrandDiagnosticWorkspace({
                     <p>
                       结果只描述本题、本轮样本。与知识库相符不代表完成独立事实核查；四类不合成为企业总分。
                     </p>
+                    <p>
+                      分类判读实际模型：{result.model}
+                      {result.fallback ? "（使用故障备用模型）" : "（主模型）"}
+                      。
+                    </p>
+                    {run?.audits?.[c] && (
+                      <p>
+                        五维评估实际模型：{run.audits[c]!.model}
+                        {run.audits[c]!.fallback
+                          ? "（使用故障备用模型）"
+                          : "（主模型）"}
+                        。
+                      </p>
+                    )}
                   </details>
                 </>
               )}
@@ -1035,7 +1025,7 @@ export default function BrandDiagnosticWorkspace({
       <footer className="bd-footer">
         {workspace && workspace.runs.length > 0 && (
           <label>
-            本功能的新诊断记录
+            切换诊断任务
             <select
               value={runId ?? ""}
               disabled={busy || dirty}
@@ -1065,7 +1055,7 @@ export default function BrandDiagnosticWorkspace({
         )}
         {run && (
           <button
-            disabled={busy || (dirty && !stopped) || !!running}
+            disabled={busy || (dirty && !stopped) || !!running || (!stopped && activeBusiness)}
             onClick={() => {
               setRun(null);
               setRunId(null);
@@ -1102,7 +1092,7 @@ export default function BrandDiagnosticWorkspace({
       >
         <Dialog.Portal>
           <Dialog.Overlay className="bd-overlay" />
-          <Dialog.Content className="bd-drawer">
+          <Dialog.Content className="bd-drawer fm-brand-portal-theme">
             <header>
               <div>
                 <Dialog.Title>
@@ -1175,10 +1165,15 @@ export default function BrandDiagnosticWorkspace({
                     <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]}>
                       {answer.answer}
                     </ReactMarkdown>
-                    <Sources title="回答实际引用" sources={answer.citations} />
+                    <Sources
+                      title="回答实际引用"
+                      sources={answer.citations}
+                      observation={answer.sourceObservability?.citations}
+                    />
                     <Sources
                       title="检索参考（不等于实际引用）"
                       sources={answer.references ?? []}
+                      observation={answer.sourceObservability?.references}
                     />
                   </>
                 ) : (
@@ -1199,14 +1194,19 @@ export default function BrandDiagnosticWorkspace({
 function Sources({
   title,
   sources,
+  observation,
 }: {
   title: string;
   sources: DiagnosticSample["citations"];
+  observation?: "returned" | "not_returned" | "unknown";
 }) {
   return (
     <section className="bd-sources">
       <h4>
-        {title} · {sources.length}
+        {title}
+        {sources.length || observation === "returned"
+          ? ` · ${sources.length}`
+          : ""}
       </h4>
       {sources.length ? (
         <ol>
@@ -1220,7 +1220,11 @@ function Sources({
           ))}
         </ol>
       ) : (
-        <p>采集服务未返回此类来源。</p>
+        <p>
+          {observation === "returned"
+            ? "采集服务返回了来源字段，本次没有此类来源。"
+            : "当前没有可核验的此类来源记录，不能据此认定回答没有引用或缺乏权威依据。"}
+        </p>
       )}
     </section>
   );

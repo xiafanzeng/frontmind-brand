@@ -9,6 +9,10 @@ export type CollectedSample = {
   rank: number | null;
   citations: Array<{ title: string; url: string; site?: string }>;
   references?: Array<{ title: string; url: string; site?: string }>;
+  sourceObservability?: {
+    citations: "returned" | "not_returned" | "unknown";
+    references: "returned" | "not_returned" | "unknown";
+  };
   sentiment?: "positive" | "neutral" | "negative" | "unknown";
   sentimentEvidence?: string[];
   collectedAt?: string;
@@ -184,6 +188,10 @@ export function diagnosticSampleFromResult(
     rank,
     citations,
     references,
+    sourceObservability: {
+      citations: Array.isArray(v.citationList ?? v.citations) && citations.length === (v.citationList ?? v.citations).length ? "returned" : (v.citationList ?? v.citations) == null ? "not_returned" : "unknown",
+      references: Array.isArray(v.referenceList ?? v.references) && references.length === (v.referenceList ?? v.references).length ? "returned" : (v.referenceList ?? v.references) == null ? "not_returned" : "unknown",
+    },
     sentiment,
     sentimentEvidence: evaluations
       .map((entry) => String(entry.context ?? "").trim())

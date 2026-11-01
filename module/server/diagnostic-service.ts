@@ -6,6 +6,8 @@ import type { ModuleHttpCore } from "./http-api.js";
 import { intentHash, intentSkillPorts } from "./intent-skill-runtime.js";
 import { assertKnowledgeBaseReadyForUpdate } from "./knowledge-base-progress-service.js";
 import { diagnosticEvidenceCatalog } from "./diagnostic-evidence.js";
+import { SEMANTIC_AUDIT_VERSION, semanticAuditOutputSchema } from "../contracts/semantic-audit.js";
+import { validateSemanticAudit } from "./semantic-audit.js";
 import {
   diagnosticMonitorClient,
   DiagnosticMonitorError,
@@ -54,18 +56,24 @@ export class DiagnosticError extends Error {
     super(message);
   }
 }
-function event(
-  r: DiagnosticRun,
-  message: string,
-  category?: DiagnosticCategory,
-) {
-  r.events.push({ id: randomUUID(), at: now(), message, category });
-}
+const activeJob = (j: DiagnosticJob) => ["queued", "submitting", "running"].includes(j.status);
+const auditWanted = (r: DiagnosticRun, category: DiagnosticCategory) =>
+  Boolean(r.requiredAuditVersion || r.requestedAudits?.includes(category));
+const auditReady = (r: DiagnosticRun, category: DiagnosticCategory) =>
+  auditWanted(r, category) && !!r.results[category] && !r.audits?.[category] &&
+  !r.jobs.some((j) => j.kind === "audit" && j.category === category);
 const qHash = (r: DiagnosticRun, q: { category: string; text: string }) =>
   intentHash([r.basis.contentHash, r.subject, q.category, q.text]);
 export function diagnosticView(r: DiagnosticRun): DiagnosticRunView {
-  const { basis, attempts, jobs, lease: _, ...rest } = r;
+  const { basis, attempts, jobs, lease: _, events: _events, updatedAt: _updatedAt, ...rest } = r;
   const { documents: __, ...basisMeta } = basis;
+  const activity: DiagnosticRunView["activity"] = { assessments: {}, audits: {} };
+  for (const j of latestDiagnosticJobs(jobs)) {
+    const value = { status: j.status, ...(j.error ? { error: j.error } : {}) };
+    if (j.kind === "recommend") activity.recommendation = value;
+    else if (j.kind === "validate") activity.validation = value;
+    else if (j.category) activity[j.kind === "audit" ? "audits" : "assessments"][j.category] = value;
+  }
   return {
     ...rest,
     basis: basisMeta,
@@ -73,17 +81,7 @@ export function diagnosticView(r: DiagnosticRun): DiagnosticRunView {
       ...a,
       hasAnswer: !!sample,
     })),
-    jobs: jobs.map(
-      ({
-        input,
-        lease,
-        providerTaskId,
-        baselineEventIds,
-        repairPrompt,
-        repairPending,
-        ...j
-      }) => j,
-    ),
+    activity,
     expectedSamples: attempts.length || r.platforms.length * 20,
     completedSamples: attempts.filter((a) => a.status === "completed").length,
   };
@@ -161,7 +159,9 @@ export function createDiagnosticService(
         .update(model.agentOperations)
         .set({
           status:
-            r.phase === "completed"
+            r.jobs.some(activeJob) || DIAGNOSTIC_CATEGORIES.some((c) => auditReady(r, c)) ? "running"
+            : latestDiagnosticJobs(r.jobs).some((j) => j.kind === "audit" && j.status === "failed") ? "attention_required"
+            : r.phase === "completed"
               ? "succeeded"
               : r.phase === "stopped"
                 ? "cancelled"
@@ -364,11 +364,13 @@ export function createDiagnosticService(
       jobs: [],
       attempts: [],
       results: {},
+      requiredAuditVersion: SEMANTIC_AUDIT_VERSION,
+      audits: {},
       events: [],
       createdAt: now(),
       updatedAt: now(),
     };
-    event(r, `已绑定逐项确认后的知识库版本 ${r.basis.version}`);
+
     const db = await core.database();
     await db.transaction(async (tx: any) => {
       await model.lockAccountRecord(tx, context.accountUserId);
@@ -490,12 +492,15 @@ export function createDiagnosticService(
   ) {
     const c = await credential();
     const skill = await readFile(
-      new URL("../workflows/brand-diagnostics/SKILL.md", import.meta.url),
+      new URL(`../workflows/brand-diagnostics/${kind === "audit" ? "SEMANTIC_AUDIT.md" : "SKILL.md"}`, import.meta.url),
       "utf8",
     );
     return mutate(id, async (r, tx) => {
       if (r.phase === "stopped")
         throw new DiagnosticError("STOPPED", "本轮已停止");
+      if (kind === "audit" && (!category || !r.results[category]))
+        throw new DiagnosticError("ASSESSMENT_NOT_READY", "请等待本题分类诊断完成");
+      if (kind === "audit" && r.audits?.[category!]) return undefined;
       const selected =
         kind === "recommend"
           ? []
@@ -508,6 +513,8 @@ export function createDiagnosticService(
             .filter((a) => a.category === category)
             .flatMap((a) => (a.sample ? [a.sample] : []))
         : [];
+      if (kind === "audit" && (!samples.length || r.attempts.some((a) => a.category === category && (a.status !== "completed" || !a.sample))))
+        throw new DiagnosticError("SAMPLES_NOT_READY", "本题回答未齐全，不能开始语义审计");
       const input = {
         kind,
         diagnosisId: id,
@@ -517,8 +524,18 @@ export function createDiagnosticService(
         questions: selected,
         samples,
         skill,
+        ...(kind === "audit" ? {
+          category,
+          scoringVersion: SEMANTIC_AUDIT_VERSION,
+          plannedSamples: r.attempts.filter((a) => a.category === category).length,
+          baseline: r.results[category!],
+        } : {}),
       };
-      const inputHash = intentHash(input);
+      // A retry uses exactly the frozen prior audit input, including the skill.
+      const frozenInput = kind === "audit"
+        ? [...r.jobs].reverse().find((j) => j.kind === kind && j.category === category)?.input ?? input
+        : input;
+      const inputHash = intentHash(frozenInput);
       const prior = r.jobs.find(
         (j) =>
           j.kind === kind &&
@@ -534,7 +551,7 @@ export function createDiagnosticService(
         category,
         inputHash,
         status: "queued",
-        input,
+        input: structuredClone(frozenInput),
         model: "gpt-6.1-sol",
         fallback: false,
         repairCount: 0,
@@ -569,15 +586,7 @@ export function createDiagnosticService(
         providerState: "queued",
         providerRuntime: { diagnosticJob: { parentId: id, inputHash } },
       });
-      event(
-        r,
-        kind === "recommend"
-          ? "正在根据已确认知识推荐四类问题"
-          : kind === "validate"
-            ? "正在校验所选问题"
-            : "开始结构化诊断",
-        category,
-      );
+
       return job.id;
     });
   }
@@ -651,7 +660,7 @@ export function createDiagnosticService(
           })),
         ),
       );
-      event(r, `诊断范围已确认，开始采集 ${r.attempts.length} 份真实回答`);
+
     });
     return observe(id);
   }
@@ -668,12 +677,30 @@ export function createDiagnosticService(
   async function documents(id: string) {
     return state(await owned(id)).basis.documents;
   }
+  async function semanticAudits(id: string, value: unknown) {
+    allowWrite();
+    const { categories } = z.object({ categories: z.array(z.enum(DIAGNOSTIC_CATEGORIES)).min(1).max(4).optional() }).strict().parse(value ?? {});
+    const selected = [...new Set(categories ?? DIAGNOSTIC_CATEGORIES)];
+    const before = state(await owned(id));
+    if (before.phase === "stopped") throw new DiagnosticError("STOPPED", "本轮已停止");
+    if (selected.some((c) => !before.results[c])) throw new DiagnosticError("ASSESSMENT_NOT_READY", "请等待所选分类诊断完成");
+    await mutate(id, (r) => {
+      r.requestedAudits = [...new Set([...(r.requestedAudits ?? []), ...selected])];
+    });
+    for (const category of selected) await addJob(id, "audit", category);
+    return observe(id);
+  }
+  async function semanticAudit(id: string, category: string) {
+    const parsed = z.enum(DIAGNOSTIC_CATEGORIES).parse(category);
+    const r = state(await owned(id));
+    return { result: r.audits?.[parsed] ?? null, activity: diagnosticView(r).activity.audits[parsed] ?? null };
+  }
   async function stop(id: string) {
     allowWrite();
     await mutate(id, (r) => {
-      if (r.phase === "completed") return;
+      if (r.phase === "completed" && !r.jobs.some(activeJob)) return;
       r.phase = "stopped";
-      event(r, "已停止提交后续任务，保留已取得的回答与诊断");
+
     });
     const r = state(await owned(id));
     for (const j of r.jobs.filter((j) =>
@@ -703,16 +730,16 @@ export function createDiagnosticService(
       !Array.isArray(
         (r.results.product_scenario.assessment as any).knowledgeCoverage,
       );
-    if (r.phase === "completed" && !refreshCoverage) return observe(id);
+    const failedAudits = latestDiagnosticJobs(r.jobs).filter((j) => j.kind === "audit" && j.status === "failed" && !r.audits?.[j.category!]);
+    if (r.phase === "completed" && !refreshCoverage) {
+      for (const j of failedAudits) await addJob(id, "audit", j.category);
+      return observe(id);
+    }
     if (refreshCoverage) await addJob(id, "assess", "product_scenario");
     await mutate(id, (r) => {
       if (refreshCoverage) {
         delete r.results.product_scenario;
-        event(
-          r,
-          "复用原有回答，按逐要点逐回答合同重新核对产品覆盖指标",
-          "product_scenario",
-        );
+
       }
       for (const a of r.attempts)
         if (
@@ -724,13 +751,14 @@ export function createDiagnosticService(
           delete a.error;
         }
       if (r.confirmedAt) r.phase = "collecting";
-      event(r, "恢复未完成诊断，已取得的采集回答继续复用");
+
     });
     for (const j of latestDiagnosticJobs(r.jobs).filter(
       (j) => j.status === "failed",
     )) {
       const satisfied =
-        j.kind === "assess"
+        j.kind === "audit" ? !!r.audits?.[j.category!]
+        : j.kind === "assess"
           ? !!r.results[j.category!]
           : j.kind === "recommend"
             ? r.recommendations.length > 0
@@ -746,7 +774,7 @@ export function createDiagnosticService(
         ? recommendationSchema
         : kind === "validate"
           ? validationSchema
-          : assessmentSchema,
+          : kind === "audit" ? semanticAuditOutputSchema : assessmentSchema,
       { target: "draft-7" },
     );
   }
@@ -786,7 +814,7 @@ export function createDiagnosticService(
         });
         const input = job.input as any;
         const evidence =
-          job.kind === "assess"
+          job.kind === "assess" || job.kind === "audit"
             ? diagnosticEvidenceCatalog(input.samples, input.knowledge)
             : null;
         const promptInput = evidence
@@ -862,11 +890,7 @@ export function createDiagnosticService(
           j.modelFallbacks = runtime.modelFallbacks
             .filter((f: any) => f.model === "gpt-5.6-sol")
             .map((f: any) => ({ model: f.model, effort: f.effort, at: f.at }));
-          event(
-            r,
-            "本环节已接续备用 5.6 Sol，原有采集与已完成操作继续复用",
-            job.category,
-          );
+
         });
       }
       if (output) {
@@ -887,6 +911,11 @@ export function createDiagnosticService(
               frozen.questions,
               current.basis,
             );
+          else if (job.kind === "audit")
+            result = validateSemanticAudit(envelope.value, frozen, {
+              inputHash: job.inputHash, skillVersion: intentHash(frozen.skill), generatedAt: now(),
+              model: fallback ? "gpt-5.6-sol" : "gpt-6.1-sol", fallback,
+            });
           else
             result = validateAssessment(
               envelope.value,
@@ -911,6 +940,7 @@ export function createDiagnosticService(
                     inputHash: qHash(r, q),
                   };
               }
+            else if (job.kind === "audit") (r.audits ??= {})[job.category!] = result;
             else
               r.results[job.category!] = {
                 assessment: result,
@@ -929,11 +959,7 @@ export function createDiagnosticService(
                     ? "brand_diagnostics_v2"
                     : DIAGNOSTIC_MODEL_POLICY,
               };
-            event(
-              r,
-              `${job.kind === "recommend" ? "问题推荐" : job.kind === "validate" ? "问题校验" : "结构化诊断"}已完成${fallback ? "，本环节使用备用 5.6 Sol" : ""}`,
-              job.category,
-            );
+
           });
           await db
             .update(model.agentOperations)
@@ -948,11 +974,7 @@ export function createDiagnosticService(
             j.baselineEventIds = all.map((e: any) => e.id);
             j.repairPending = true;
             j.repairPrompt = `原输入保持不变。上次输出未通过服务端校验：${reason.slice(0, 6000)}。请修正并直接返回完整 JSON，禁止生成文件。`;
-            event(
-              r,
-              "诊断结果需要修正证据或字段，正在使用原输入修订",
-              job.category,
-            );
+
           });
           return;
         }
@@ -987,11 +1009,7 @@ export function createDiagnosticService(
         j.status = "failed";
         j.error =
           e instanceof Error ? e.message.slice(0, 1800) : "模型服务暂不可用";
-        event(
-          r,
-          `${job.kind === "assess" ? "诊断" : "问题处理"}未完成：${j.error}`,
-          job.category,
-        );
+
       });
     }
   }
@@ -1027,7 +1045,7 @@ export function createDiagnosticService(
             throw new DiagnosticError("STOPPED", "本轮已停止");
           a.status = "submitting";
           a.submittedAt = now();
-          event(r, `${a.platform} · 第 ${a.run}/5 次采集已提交`, a.category);
+
         });
         const taskId = await monitor.submit(
           attempt,
@@ -1067,14 +1085,11 @@ export function createDiagnosticService(
           answer: result.answer,
           citations: result.citations,
           references: result.references,
+          sourceObservability: result.sourceObservability,
           collectedAt: result.collectedAt,
         };
         delete a.error;
-        event(
-          r,
-          `${a.platform} · 第 ${a.run}/5 次回答与来源已保存`,
-          a.category,
-        );
+
       });
     } catch (e) {
       if (e instanceof DiagnosticError) return;
@@ -1094,7 +1109,7 @@ export function createDiagnosticService(
           a.status = "failed";
           a.error = e instanceof Error ? e.message : "采集未完成";
         }
-        event(r, a.error!, a.category);
+
       });
     }
   }
@@ -1110,10 +1125,10 @@ export function createDiagnosticService(
         ["queued", "submitting", "submitted"].includes(a.status),
       );
       if (
-        r.phase === "completed" ||
+        (r.phase === "completed" && !pendingModel && !DIAGNOSTIC_CATEGORIES.some((c) => auditReady(r, c))) ||
         (["draft", "partial"].includes(r.phase) &&
           !pendingModel &&
-          !pendingCollection) ||
+          !pendingCollection && !DIAGNOSTIC_CATEGORIES.some((c) => auditReady(r, c))) ||
         (r.phase === "stopped" &&
           !r.attempts.some(
             (a) => a.status === "submitted" || a.status === "submitting",
@@ -1135,7 +1150,7 @@ export function createDiagnosticService(
       });
       // Waiting for the same provider task does not require a new write lease.
       // Keep finalization eligible after a crash, while honoring persisted poll times.
-      if ((pendingModel || pendingCollection) && !modelDue && !collectionDue && !assessmentReady) return;
+      if ((pendingModel || pendingCollection) && !modelDue && !collectionDue && !assessmentReady && !DIAGNOSTIC_CATEGORIES.some((c) => auditReady(r, c))) return;
       pollModel = Boolean(modelDue);
       if (modelDue && firstJob.status === "running") firstJob.nextPollAt = Date.now() + 30_000;
       r.lease = { owner, until: Date.now() + 180_000 };
@@ -1183,18 +1198,19 @@ export function createDiagnosticService(
             !r.jobs.some((j) => j.kind === "assess" && j.category === category)
           )
             await addJob(id, "assess", category);
+          if (auditReady(r, category)) await addJob(id, "audit", category);
         }
         await mutate(
           id,
           (r) => {
             if (r.phase === "stopped") return;
-            if (DIAGNOSTIC_CATEGORIES.every((c) => r.results[c])) {
+            if (DIAGNOSTIC_CATEGORIES.every((c) => r.results[c]) && (!r.requiredAuditVersion || DIAGNOSTIC_CATEGORIES.every((c) => r.audits?.[c]))) {
               r.phase = "completed";
-              event(r, "四类诊断已完成，全部指标可追溯到本轮回答");
+
             } else if (
               r.jobs.some(
                 (j) =>
-                  j.kind === "assess" &&
+                  ["assess", "audit"].includes(j.kind) &&
                   ["queued", "running", "submitting"].includes(j.status),
               )
             )
@@ -1227,6 +1243,8 @@ export function createDiagnosticService(
     observe,
     answer,
     documents,
+    semanticAudits,
+    semanticAudit,
     stop,
     retry,
     tick,
