@@ -80,6 +80,14 @@ export function createDiagnosticRouter(core: ModuleHttpCore): Router {
     "/:id/retry",
     handle((req) => service(req).retry(req.params.id)),
   );
+  router.post(
+    "/:id/semantic-audits",
+    handle((req) => service(req).semanticAudits(req.params.id, req.body)),
+  );
+  router.get(
+    "/:id/semantic-audits/:category",
+    handle((req) => service(req).semanticAudit(req.params.id, req.params.category)),
+  );
   router.get(
     "/:id/answers/:sampleId",
     handle((req) => service(req).answer(req.params.id, req.params.sampleId)),

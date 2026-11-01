@@ -72,6 +72,7 @@ import {
 import { DiagnosticMonitorError } from "../server/diagnostic-monitor.js";
 import { intentHash } from "../server/intent-skill-runtime.js";
 import { DIAGNOSTIC_CATEGORIES } from "../contracts/diagnostics.js";
+import { SEMANTIC_AUDIT_METRICS, SEMANTIC_AUDIT_DIMENSIONS } from "../contracts/semantic-audit.js";
 const table = (name: string) =>
   new Proxy({ name } as any, {
     get: (target, key) => (key === "name" ? name : `${name}.${String(key)}`),
@@ -297,6 +298,100 @@ async function start() {
   return { s, id };
 }
 describe("durable Brand diagnostic lifecycle", () => {
+  async function collected(legacy = true) {
+    const { s, id } = await start();
+    const r = state(id);
+    if (legacy) delete r.requiredAuditVersion;
+    r.phase = "completed";
+    for (const a of r.attempts) {
+      a.status = "completed";
+      a.taskId = "supplier-" + a.id;
+      a.sample = { id: a.id, category: a.category, question: a.question, platform: a.platform, run: a.run, answer: "医学美容科提供皮肤咨询。", citations: [] };
+    }
+    for (const c of DIAGNOSTIC_CATEGORIES) r.results[c] = { assessment: { category: c, topics: [], answers: [], ...(c === "product_scenario" ? { knowledgeCoverage: [] } : {}) }, algorithm: "brand_diagnostics_v2" };
+    return { s, id };
+  }
+  it("removes internal execution details without losing business activity", async () => {
+    const { s, id } = await draft();
+    await s.recommend(id);
+    const view = await s.observe(id);
+    expect(view.activity.recommendation?.status).toBe("queued");
+    expect(view).not.toHaveProperty("jobs");
+    expect(view).not.toHaveProperty("events");
+    expect(view).not.toHaveProperty("updatedAt");
+    expect(state(id).events).toEqual([]);
+  });
+  it("only explicitly upgrades old results and reuses all sixty supplier tasks", async () => {
+    const { s, id } = await collected();
+    const original = JSON.stringify(state(id).attempts);
+    await s.observe(id); await s.tick(id);
+    expect(state(id).jobs).toHaveLength(0);
+    await Promise.all([s.semanticAudits(id, {}), s.semanticAudits(id, {})]);
+    expect(state(id).jobs).toHaveLength(4);
+    expect(state(id).jobs.every((j: any) => j.kind === "audit" && j.input.samples.length === 15)).toBe(true);
+    await service().tick(id);
+    expect(state(id).jobs[0].status).toBe("running");
+    expect(JSON.stringify(state(id).attempts)).toBe(original);
+    expect(mock.submits).toHaveLength(0);
+    expect(state(id).phase).toBe("completed");
+    await expect(service({ enterpriseProjectId: "other" }).semanticAudits(id, {})).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+  it("automatically schedules audits for new tasks and does not mark them complete early", async () => {
+    const { s, id } = await collected(false);
+    state(id).phase = "analyzing";
+    await s.tick(id);
+    expect(state(id).jobs).toHaveLength(4);
+    expect(state(id).phase).toBe("analyzing");
+    expect(mock.submits).toHaveLength(0);
+  });
+  it("completes all four validated audits through the worker while preserving original classifications", async () => {
+    const { s, id } = await collected(false);
+    state(id).phase = "analyzing";
+    const originalResults = JSON.stringify(state(id).results);
+    const originalAnswers = JSON.stringify(state(id).attempts);
+    mock.ports.orderManusV2EventsByProviderRank = (events: any[]) => events;
+    mock.ports.classifyManusV2StructuredResultEnvelope = (value: unknown) => ({ kind: "accepted", value });
+    mock.ports.createCredentialAgentClient = (_credential: unknown, options: any) => ({
+      createTask: async () => {
+        expect(options.modelPolicy).toBe("brand_diagnostics_v1");
+        db.data.tasks.find((t) => t.id === options.localTaskId).providerRuntime.xtyCodex = { model: "gpt-6.1-sol", modelPolicy: options.modelPolicy };
+        return { taskId: options.localTaskId };
+      },
+      listAllMessages: async () => {
+        const job = state(id).jobs.find((j: any) => j.id === options.operationId);
+        return [{ id: "output", type: "structured_output_result", structured_output_result: {
+          category: job.category,
+          checkedSampleIds: job.input.samples.map((_: unknown, i: number) => `A${i}`),
+          metrics: SEMANTIC_AUDIT_METRICS.filter((m) => m.id !== "sample_coverage").map((m) => ({ id: m.id, status: "insufficient", value: null, explanation: "已有证据不足", satisfied: "", limitations: "未有相关基准", knowledgeRefs: [], answerRefs: [] })),
+          findings: SEMANTIC_AUDIT_DIMENSIONS.map((d) => ({ dimension: d.id, text: "当前证据不足，未生成数值判断" })),
+        } }];
+      },
+    });
+    for (let step = 0; step < 10; step++) await service().tick(id);
+    expect(state(id).phase).toBe("completed");
+    expect(Object.keys(state(id).audits)).toHaveLength(4);
+    expect(state(id).jobs.every((j: any) => j.status === "completed")).toBe(true);
+    expect(JSON.stringify(state(id).results)).toBe(originalResults);
+    expect(JSON.stringify(state(id).attempts)).toBe(originalAnswers);
+    expect(mock.submits).toHaveLength(0);
+  });
+  it("retries only a failed audit using its frozen input and can stop a legacy upgrade", async () => {
+    const { s, id } = await collected();
+    await s.semanticAudits(id, { categories: ["reputation"] });
+    const job = state(id).jobs[0];
+    const frozen = JSON.stringify(job.input);
+    job.status = "failed";
+    state(id).results.reputation.assessment.topics.push({ topic: "later value must not change frozen retry" });
+    await s.retry(id);
+    expect(state(id).jobs).toHaveLength(2);
+    expect(JSON.stringify(state(id).jobs[1].input)).toBe(frozen);
+    expect(state(id).jobs[1].inputHash).toBe(job.inputHash);
+    await s.stop(id);
+    expect(state(id).phase).toBe("stopped");
+    expect(state(id).jobs[1].status).toBe("cancelled");
+    await service().tick(id);
+    expect(mock.submits).toHaveLength(0);
+  });
   it("starts the model timeout when execution begins, excluding time spent queued", async () => {
     const { s, id } = await draft();
     await s.recommend(id);

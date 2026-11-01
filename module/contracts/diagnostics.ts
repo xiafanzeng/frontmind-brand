@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { SemanticAuditResult } from "./semantic-audit.js";
 
 export const DIAGNOSTIC_CATEGORIES = [
   "industry_ranking",
@@ -242,6 +243,10 @@ export type DiagnosticSample = {
   answer: string;
   citations: Array<{ title: string; url: string; site?: string }>;
   references?: Array<{ title: string; url: string; site?: string }>;
+  sourceObservability?: {
+    citations: "returned" | "not_returned" | "unknown";
+    references: "returned" | "not_returned" | "unknown";
+  };
   collectedAt?: string;
 };
 export type DiagnosticMetric = {
@@ -307,7 +312,7 @@ export type DiagnosticBreakdown = {
 export type DiagnosticJob = {
   id: string;
   taskId: string;
-  kind: "recommend" | "validate" | "assess";
+  kind: "recommend" | "validate" | "assess" | "audit";
   category?: DiagnosticCategory;
   inputHash: string;
   status:
@@ -375,6 +380,9 @@ export type DiagnosticRun = {
   jobs: DiagnosticJob[];
   attempts: DiagnosticAttempt[];
   results: Partial<Record<DiagnosticCategory, DiagnosticResult>>;
+  requiredAuditVersion?: string;
+  audits?: Partial<Record<DiagnosticCategory, SemanticAuditResult>>;
+  requestedAudits?: DiagnosticCategory[];
   confirmedAt?: string;
   events: Array<{
     id: string;
@@ -386,26 +394,22 @@ export type DiagnosticRun = {
 };
 export type DiagnosticRunView = Omit<
   DiagnosticRun,
-  "basis" | "attempts" | "jobs" | "lease"
+  "basis" | "attempts" | "jobs" | "lease" | "events" | "updatedAt"
 > & {
   basis: Omit<KnowledgeBasis, "documents">;
   attempts: Array<
     Omit<DiagnosticAttempt, "sample" | "taskId"> & { hasAnswer: boolean }
   >;
-  jobs: Array<
-    Omit<
-      DiagnosticJob,
-      | "input"
-      | "lease"
-      | "providerTaskId"
-      | "baselineEventIds"
-      | "repairPending"
-      | "repairPrompt"
-    >
-  >;
+  activity: {
+    recommendation?: DiagnosticActivity;
+    validation?: DiagnosticActivity;
+    assessments: Partial<Record<DiagnosticCategory, DiagnosticActivity>>;
+    audits: Partial<Record<DiagnosticCategory, DiagnosticActivity>>;
+  };
   expectedSamples: number;
   completedSamples: number;
 };
+export type DiagnosticActivity = { status: DiagnosticJob["status"]; error?: string };
 export type DiagnosticWorkspace = {
   knowledge: KnowledgeReadiness;
   platforms: typeof DIAGNOSTIC_PLATFORMS;
