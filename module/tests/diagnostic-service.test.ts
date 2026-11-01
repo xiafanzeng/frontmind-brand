@@ -333,6 +333,26 @@ describe("durable Brand diagnostic lifecycle", () => {
     await s.tick(id);
     expect(writes).not.toHaveBeenCalled();
   });
+  it("does not rewrite a waiting model ledger or poll it again after a service restart until due", async () => {
+    const { s, id } = await draft();
+    await s.recommend(id);
+    await s.tick(id);
+    const job = state(id).jobs[0];
+    db.data.tasks.find((t) => t.id === job.taskId).providerRuntime.xtyCodex = {
+      model: "gpt-6.1-sol", modelPolicy: "brand_diagnostics_v1",
+    };
+    mock.ports.orderManusV2EventsByProviderRank = (events: unknown[]) => events;
+    mock.ports.latestManusV2TaskState = () => "running";
+    await s.tick(id);
+    expect(state(id).jobs[0].nextPollAt).toBeGreaterThan(Date.now());
+    const writes = vi.spyOn(db, "update");
+    await service().tick(id);
+    expect(writes).not.toHaveBeenCalled();
+    state(id).jobs[0].nextPollAt = 0;
+    await service().tick(id);
+    expect(writes).toHaveBeenCalled();
+    expect(state(id).jobs[0].status).toBe("running");
+  });
   it("does not repeat a completed model step when earlier attempts failed or the skill changed", async () => {
     const { s, id } = await start();
     const r = state(id);

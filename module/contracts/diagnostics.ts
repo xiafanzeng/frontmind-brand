@@ -329,6 +329,8 @@ export type DiagnosticJob = {
   repairPrompt?: string;
   modelFallbacks?: Array<{ model: string; effort: string; at: number }>;
   baselineEventIds?: string[];
+  /** Persist model polling cadence across API restarts without rewriting idle ledgers. */
+  nextPollAt?: number;
   input: unknown;
   lease?: { owner: string; until: number };
 };

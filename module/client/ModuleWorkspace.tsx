@@ -22,9 +22,20 @@ export default function ModuleWorkspace({context,page='knowledge',keywordData,pr
  responseLogicToast?:{success(message:string):void;error(message:string):void};
  onResponseLogicBack?:()=>void}){
  const [knowledgePage,setKnowledgePage]=useState<'build'|'display'>('build');
+ const [diagnosticExpanded,setDiagnosticExpanded]=useState(()=>{
+  const query=new URLSearchParams(window.location.search);
+  return query.get('diagnosticView')==='expanded'||(query.has('diagnosis')&&query.get('diagnosticView')!=='embedded');
+ });
+ const showDiagnostic=(expanded:boolean)=>{
+  setDiagnosticExpanded(expanded);
+  const url=new URL(window.location.href);
+  url.searchParams.set('diagnosticView',expanded?'expanded':'embedded');
+  window.history.replaceState(window.history.state,'',url);
+  requestAnimationFrame(()=>document.getElementById(expanded?'brand-diagnostic-workspace':`knowledge-cards-${context.workspace.id}`)?.scrollIntoView({behavior:'smooth',block:'start'}));
+ };
  const [responseLogicQuestion,setResponseLogicQuestion]=useState<BrandIntentQuestion|null>(null);
  let content:ReactNode;
- if(page==='reports'||page==='knowledge')content=<EmbeddedKnowledgeBasePanel key={context.workspace.id} page={knowledgePage} onPageChange={setKnowledgePage} mode="workspace" workbench projectId={context.workspace.id} preview={preview} previewData={previewKnowledge} afterKnowledge={<BrandDiagnosticWorkspace embedded storageKey={`brand-diagnostics:${context.workspace.ownerUserId}:${context.workspace.id}`} preview={preview} onOpenKnowledge={()=>document.getElementById(`knowledge-cards-${context.workspace.id}`)?.scrollIntoView({behavior:'smooth',block:'start'})}/>}/>;
+ if(page==='reports'||page==='knowledge')content=<EmbeddedKnowledgeBasePanel key={context.workspace.id} page={knowledgePage} onPageChange={setKnowledgePage} mode="workspace" workbench projectId={context.workspace.id} preview={preview} previewData={previewKnowledge} diagnosticAction={<button type="button" className="fm-brand-button fm-brand-button--secondary" onClick={()=>showDiagnostic(!diagnosticExpanded)}>{diagnosticExpanded?'返回知识库':'AI 语义诊断'}</button>} afterKnowledge={<BrandDiagnosticWorkspace embedded expanded={diagnosticExpanded} onExpandedChange={showDiagnostic} storageKey={`brand-diagnostics:${context.workspace.ownerUserId}:${context.workspace.id}`} preview={preview} onOpenKnowledge={()=>showDiagnostic(false)}/>}/>;
  else if(page==='response-logic'&&responseLogicQuestion)content=<BrandResponseLogicEntry question={responseLogicQuestion} onBack={()=>{setResponseLogicQuestion(null);onResponseLogicBack?.();}} visual={responseLogicVisual??{Button:({children,disabled,onClick,className,...rest}:any)=><button type='button' disabled={disabled} onClick={onClick} className={['fm-brand-button','fm-brand-button--secondary',className].filter(Boolean).join(' ')} {...rest}>{children}</button>}} toast={responseLogicToast??{success:console.log,error:console.error}}/>;
  else if(page==='response-logic')content=<section role="status" className="iw-empty fm-brand-empty-state">
   <p>请从「优化问题」列表中选择问题并点击「进入应答逻辑」。</p>
