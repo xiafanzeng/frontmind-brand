@@ -11,6 +11,10 @@ import {
   type DiagnosticBreakdown,
   DIAGNOSTIC_PLATFORMS,
 } from "../contracts/diagnostics.js";
+import {
+  diagnosticEvidenceCatalog,
+  resolveDiagnosticQuote,
+} from "./diagnostic-evidence.js";
 const normalized = (v: string) =>
   v.normalize("NFKC").replace(/\s+/g, " ").trim();
 const quoted = (source: string, value: string) =>
@@ -59,6 +63,7 @@ export function validateAssessment(
   basis: KnowledgeBasis,
 ): DiagnosticAssessment {
   const a = assessmentSchema.parse(value);
+  const { catalog } = diagnosticEvidenceCatalog(samples, basis);
   if (
     a.category !== category ||
     a.answers.length !== samples.length ||
@@ -72,10 +77,12 @@ export function validateAssessment(
   };
   const evidenceErrors: string[] = [];
   const checkQuote = (id: string, quote: string) => {
+    quote = resolveDiagnosticQuote(quote, { sampleId: id }, catalog);
     if (!quoted(sample(id).answer, quote))
       evidenceErrors.push(
         `回答证据不是采集原文：sampleId=${id}，摘录=${JSON.stringify(quote.slice(0, 100))}`,
       );
+    return quote;
   };
   const checkKnowledge = (
     docPath: string | null,
@@ -84,19 +91,25 @@ export function validateAssessment(
   ) => {
     if (!docPath || !kbExcerpt) {
       if (required || docPath || kbExcerpt) throw new Error("缺少成对知识依据");
-      return;
+      return null;
     }
+    kbExcerpt = resolveDiagnosticQuote(kbExcerpt, { docPath }, catalog);
     const d = basis.documents.find((d) => d.path === docPath);
     if (!d || !quoted(d.content, kbExcerpt))
       evidenceErrors.push(
         `知识依据不是冻结版本原文：docPath=${docPath}，摘录=${JSON.stringify(kbExcerpt.slice(0, 100))}`,
       );
+    return kbExcerpt;
   };
   for (const t of a.topics) {
-    checkKnowledge(t.docPath, t.kbExcerpt, t.verdict !== "unverifiable");
+    t.kbExcerpt = checkKnowledge(
+      t.docPath,
+      t.kbExcerpt,
+      t.verdict !== "unverifiable",
+    );
     if (t.verdict !== "omitted" && !t.answerRefs.length)
       throw new Error("判断缺少回答依据");
-    for (const r of t.answerRefs) checkQuote(r.sampleId, r.excerpt);
+    for (const r of t.answerRefs) r.excerpt = checkQuote(r.sampleId, r.excerpt);
   }
   if (
     new Set(a.topics.map((t) => normalized(t.topic))).size !== a.topics.length
@@ -107,16 +120,20 @@ export function validateAssessment(
   }
   if (a.category === "industry_ranking")
     for (const x of a.answers) {
-      if (x.mentioned) checkQuote(x.sampleId, x.mentionEvidence);
+      if (x.mentioned)
+        x.mentionEvidence = checkQuote(x.sampleId, x.mentionEvidence);
       if (x.recommended) {
         if (!x.mentioned || x.attribution !== "subject")
           throw new Error("非本主体不能计为推荐");
-        checkQuote(x.sampleId, x.recommendationEvidence);
+        x.recommendationEvidence = checkQuote(
+          x.sampleId,
+          x.recommendationEvidence,
+        );
       }
       if (x.rank !== null && !x.recommended)
         throw new Error("未推荐样本不能有排名");
       for (const c of x.competitors) {
-        checkQuote(x.sampleId, c.excerpt);
+        c.excerpt = checkQuote(x.sampleId, c.excerpt);
         if (!quoted(c.excerpt, c.name))
           evidenceErrors.push(
             `竞品名称缺少原文支持：sampleId=${x.sampleId}，name=${c.name}`,
@@ -126,20 +143,21 @@ export function validateAssessment(
   if (a.category === "competitor_comparison")
     for (const x of a.answers) {
       if (x.preference !== "unspecified")
-        checkQuote(x.sampleId, x.preferenceEvidence);
-      for (const d of x.dimensions) checkQuote(x.sampleId, d.excerpt);
+        x.preferenceEvidence = checkQuote(x.sampleId, x.preferenceEvidence);
+      for (const d of x.dimensions)
+        d.excerpt = checkQuote(x.sampleId, d.excerpt);
     }
   if (a.category === "reputation")
     for (const x of a.answers) {
       if (x.sentiment !== "unknown")
-        checkQuote(x.sampleId, x.sentimentEvidence);
-      for (const r of x.risks) checkQuote(x.sampleId, r.excerpt);
+        x.sentimentEvidence = checkQuote(x.sampleId, x.sentimentEvidence);
+      for (const r of x.risks) r.excerpt = checkQuote(x.sampleId, r.excerpt);
     }
   if (a.category === "product_scenario") {
     const seenPoints = new Set<string>();
     const seenEvidence = new Set<string>();
     for (const point of a.knowledgeCoverage) {
-      checkKnowledge(point.docPath, point.kbExcerpt, true);
+      point.kbExcerpt = checkKnowledge(point.docPath, point.kbExcerpt, true)!;
       const key = `${point.docPath}:${normalized(point.kbExcerpt)}`;
       if (seenPoints.has(normalized(point.point)) || seenEvidence.has(key))
         throw new Error("知识覆盖要点重复，不能按不同回答重复建立同一要点");
@@ -152,15 +170,20 @@ export function validateAssessment(
         throw new Error("每个知识要点必须逐份判读全部回答，不能只给代表性摘录");
       for (const item of point.answers) {
         sample(item.sampleId);
-        if (item.covered) checkQuote(item.sampleId, item.excerpt);
+        if (item.covered)
+          item.excerpt = checkQuote(item.sampleId, item.excerpt);
         else if (item.excerpt.trim())
           throw new Error("未覆盖的回答不能同时提供覆盖摘录");
       }
     }
     for (const x of a.answers)
       for (const c of x.claims) {
-        checkQuote(x.sampleId, c.excerpt);
-        checkKnowledge(c.docPath, c.kbExcerpt, c.verdict !== "unverifiable");
+        c.excerpt = checkQuote(x.sampleId, c.excerpt);
+        c.kbExcerpt = checkKnowledge(
+          c.docPath,
+          c.kbExcerpt,
+          c.verdict !== "unverifiable",
+        );
       }
   }
   if (evidenceErrors.length)

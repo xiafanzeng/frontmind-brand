@@ -1605,6 +1605,11 @@ function AnswerEvidence({
               知识库：{t.kbExcerpt}（{t.docPath}）
             </p>
           )}
+          {t.docPath && (
+            <button className="bd-link" onClick={() => onKnowledge(t.docPath!)}>
+              回看知识依据
+            </button>
+          )}
         </div>
       ))}
     </details>
