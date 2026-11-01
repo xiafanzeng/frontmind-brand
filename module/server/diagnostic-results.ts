@@ -64,6 +64,15 @@ export function validateAssessment(
 ): DiagnosticAssessment {
   const a = assessmentSchema.parse(value);
   const { catalog } = diagnosticEvidenceCatalog(samples, basis);
+  const sourceIds = new Map(samples.map((s, i) => [`A${i}`, s.id]));
+  const canonicalId = (id: string) => sourceIds.get(id) ?? id;
+  for (const answer of a.answers) answer.sampleId = canonicalId(answer.sampleId);
+  for (const topic of a.topics)
+    for (const ref of topic.answerRefs) ref.sampleId = canonicalId(ref.sampleId);
+  if (a.category === "product_scenario")
+    for (const point of a.knowledgeCoverage)
+      for (const answer of point.answers)
+        answer.sampleId = canonicalId(answer.sampleId);
   if (
     a.category !== category ||
     a.answers.length !== samples.length ||
@@ -76,8 +85,20 @@ export function validateAssessment(
     return s;
   };
   const evidenceErrors: string[] = [];
+  const resolveQuote = (
+    value: string,
+    source: { sampleId?: string; docPath?: string },
+  ) => {
+    try {
+      return resolveDiagnosticQuote(value, source, catalog);
+    } catch (error) {
+      evidenceErrors.push(error instanceof Error ? error.message : String(error));
+      return value;
+    }
+  };
   const checkQuote = (id: string, quote: string) => {
-    quote = resolveDiagnosticQuote(quote, { sampleId: id }, catalog);
+    quote = resolveQuote(quote, { sampleId: id });
+    if (quote.startsWith("@quote:")) return quote;
     if (!quoted(sample(id).answer, quote))
       evidenceErrors.push(
         `回答证据不是采集原文：sampleId=${id}，摘录=${JSON.stringify(quote.slice(0, 100))}`,
@@ -93,7 +114,8 @@ export function validateAssessment(
       if (required || docPath || kbExcerpt) throw new Error("缺少成对知识依据");
       return null;
     }
-    kbExcerpt = resolveDiagnosticQuote(kbExcerpt, { docPath }, catalog);
+    kbExcerpt = resolveQuote(kbExcerpt, { docPath });
+    if (kbExcerpt.startsWith("@quote:")) return kbExcerpt;
     const d = basis.documents.find((d) => d.path === docPath);
     if (!d || !quoted(d.content, kbExcerpt))
       evidenceErrors.push(

@@ -43,6 +43,9 @@ export function diagnosticEvidenceCatalog(
     },
     samples: samples.map(({ answer, ...s }, i) => ({
       ...s,
+      // A source-local alias avoids repeatedly copying opaque supplier hashes.
+      // The persisted sample ID remains the authority in the catalog.
+      id: `A${i}`,
       excerpts: fragments(answer, `A${i}`, { sampleId: s.id }),
     })),
   };
@@ -59,9 +62,14 @@ export function resolveDiagnosticQuote(
     !evidence ||
     evidence.sampleId !== source.sampleId ||
     evidence.docPath !== source.docPath
-  )
-    throw new Error(
-      `证据编号不属于当前来源：${JSON.stringify(source)}，id=${value}`,
+  ) {
+    const allowed = [...catalog].filter(
+      ([, item]) =>
+        item.sampleId === source.sampleId && item.docPath === source.docPath,
     );
+    throw new Error(
+      `证据编号不属于当前来源：${JSON.stringify(source)}，id=${value}；本来源可选编号范围=${allowed[0]?.[0] ?? "无"}…${allowed.at(-1)?.[0] ?? "无"}`,
+    );
+  }
   return evidence.text;
 }

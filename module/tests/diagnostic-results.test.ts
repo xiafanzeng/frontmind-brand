@@ -80,6 +80,36 @@ const assessment: DiagnosticAssessment = {
   ],
 };
 describe("四类诊断证据与指标", () => {
+  it("restores source-local answer references before computing persisted metrics", () => {
+    const indexed = diagnosticEvidenceCatalog(samples, basis);
+    expect(indexed.samples.map((s) => s.id)).toEqual(["A0", "A1"]);
+    const a = structuredClone(assessment);
+    a.answers[0].sampleId = "A0";
+    a.answers[1].sampleId = "A1";
+    a.answers[0].mentionEvidence = "@quote:A0.0";
+    a.answers[1].mentionEvidence = "@quote:A1.0";
+    a.topics[0].verdict = "unverifiable";
+    a.topics[0].answerRefs = [{ sampleId: "A0", excerpt: "@quote:A0.0" }];
+    const result = validateAssessment(a, "industry_ranking", samples, basis);
+    expect(result.answers.map((s) => s.sampleId)).toEqual(["1", "2"]);
+    expect(result.topics[0].answerRefs[0]).toEqual({
+      sampleId: "1", excerpt: samples[0].answer,
+    });
+    expect(diagnosticMetrics(result).find((m) => m.id === "mention")?.sampleIds).toEqual(["1"]);
+    a.answers[1].sampleId = "1";
+    expect(() => validateAssessment(a, "industry_ranking", samples, basis)).toThrow(/未完整对应/);
+    a.answers[1].sampleId = "A99";
+    expect(() => validateAssessment(a, "industry_ranking", samples, basis)).toThrow(/其他样本/);
+  });
+  it("reports all cross-source quote failures and their allowed source ranges in one repair", () => {
+    const a = structuredClone(assessment);
+    a.answers[0].mentionEvidence = "@quote:A1.0";
+    a.answers[1].mentionEvidence = "@quote:A0.0";
+    a.topics[0].kbExcerpt = "@quote:A0.0";
+    expect(() => validateAssessment(a, "industry_ranking", samples, basis)).toThrow(
+      /docPath[\s\S]*@quote:K0\.0[\s\S]*sampleId.*1[\s\S]*范围=@quote:A0\.0[\s\S]*sampleId.*2[\s\S]*范围=@quote:A1\.0/,
+    );
+  });
   it("resolves model-selected evidence to exact source text and rejects cross-source IDs", () => {
     const a = structuredClone(assessment);
     a.topics[0].kbExcerpt = "@quote:K0.0";
@@ -158,6 +188,11 @@ describe("四类诊断证据与指标", () => {
       ],
     };
     validateAssessment(a, "product_scenario", source, basis);
+    const aliased = structuredClone(a);
+    aliased.answers.forEach((answer, i) => { answer.sampleId = `A${i}`; });
+    aliased.knowledgeCoverage[0].answers.forEach((answer, i) => { answer.sampleId = `A${i}`; });
+    aliased.knowledgeCoverage[0].answers[0].excerpt = "@quote:A0.0";
+    expect(validateAssessment(aliased, "product_scenario", source, basis)).toEqual(a);
     expect(diagnosticMetrics(a).find((m) => m.id === "coverage")).toMatchObject(
       { value: 100, denominator: 1 },
     );
