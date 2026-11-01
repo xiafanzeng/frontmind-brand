@@ -898,6 +898,18 @@
   min-height: 0;
 }
 @container (max-width: 600px) {
+  .bd-workspace--embedded .bd-result-heading,
+  .bd-workspace--embedded .bd-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .bd-workspace--embedded .bd-result-heading > button {
+    align-self: flex-start;
+  }
+  .bd-workspace--embedded .bd-footer label {
+    min-width: 0;
+  }
   .bd-workspace--embedded .bd-section-heading {
     flex-wrap: wrap;
   }
