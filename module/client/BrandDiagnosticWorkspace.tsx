@@ -298,6 +298,7 @@ export default function BrandDiagnosticWorkspace({
       setDocuments(await request(`/${run.id}/knowledge`));
   }
   const frozen = !!run?.confirmedAt;
+  const stopped = run?.phase === "stopped";
   const running = run && ["collecting", "analyzing"].includes(run.phase);
   const activeJobs =
     run?.jobs.filter((j) =>
@@ -472,6 +473,7 @@ export default function BrandDiagnosticWorkspace({
                 disabled={
                   busy ||
                   frozen ||
+                  stopped ||
                   activeJobs.some((j) => j.kind === "recommend")
                 }
                 onClick={() =>
@@ -509,7 +511,7 @@ export default function BrandDiagnosticWorkspace({
                           <button
                             key={i}
                             aria-pressed={q?.text === candidate.text}
-                            disabled={frozen || busy}
+                            disabled={frozen || stopped || busy}
                             onClick={() =>
                               editQuestion(c, candidate.text, "recommended")
                             }
@@ -533,7 +535,7 @@ export default function BrandDiagnosticWorkspace({
                       <textarea
                         aria-label={`${DIAGNOSTIC_LABELS[c]}问题`}
                         value={q?.text ?? ""}
-                        disabled={frozen || busy}
+                        disabled={frozen || stopped || busy}
                         rows={3}
                         maxLength={500}
                         onChange={(e) =>
@@ -577,7 +579,7 @@ export default function BrandDiagnosticWorkspace({
                 );
               })}
             </div>
-            {!frozen && (
+            {!frozen && !stopped && (
               <div className="bd-toolbar">
                 <button
                   disabled={
@@ -624,7 +626,7 @@ export default function BrandDiagnosticWorkspace({
           {workspace?.platforms.map((p) => (
             <button
               key={p.id}
-              disabled={frozen || busy || !workspace.knowledge.ready}
+              disabled={frozen || stopped || busy || !workspace.knowledge.ready}
               aria-pressed={platforms.includes(p.id)}
               onClick={() => {
                 setPlatforms((ps) =>
@@ -1022,15 +1024,21 @@ export default function BrandDiagnosticWorkspace({
         )}
         {run && (
           <button
-            disabled={busy || dirty || !!running}
+            disabled={busy || (dirty && !stopped) || !!running}
             onClick={() => {
               setRun(null);
               setRunId(null);
               currentId.current = null;
               draftRequestId.current = crypto.randomUUID();
-              setQuestions([]);
-              setPlatforms(["doubao", "yuanbao", "qianwen"]);
-              setSubjectScope("");
+              if (stopped) {
+                setQuestions((items) => items.map(({ validation, ...q }) => q));
+                setDirty(true);
+                dirtyRef.current = true;
+              } else {
+                setQuestions([]);
+                setPlatforms(["doubao", "yuanbao", "qianwen"]);
+                setSubjectScope("");
+              }
               setDocuments([]);
               locationPatch({
                 diagnosis: null,
@@ -1041,7 +1049,7 @@ export default function BrandDiagnosticWorkspace({
               });
             }}
           >
-            新建诊断
+            {stopped ? "保留选题，新建诊断" : "新建诊断"}
           </button>
         )}
       </footer>
