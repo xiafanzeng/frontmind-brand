@@ -56,11 +56,19 @@ vi.mock("drizzle-orm", () => {
       if (pattern.trim() === "? <=> ?")
         return (r: any) =>
           (get(r, values[0]) ?? null) === (get(r, values[1]) ?? null);
+      if (pattern.includes(" IN ("))
+        return (r: any) =>
+          ["queued", "running", "attention_required", "cancelled"].includes(
+            get(r, values[0]),
+          );
       return { strings, values };
     },
   };
 });
-import { createDiagnosticService } from "../server/diagnostic-service.js";
+import {
+  createDiagnosticService,
+  startDiagnosticWorker,
+} from "../server/diagnostic-service.js";
 import { DiagnosticMonitorError } from "../server/diagnostic-monitor.js";
 import { intentHash } from "../server/intent-skill-runtime.js";
 import { DIAGNOSTIC_CATEGORIES } from "../contracts/diagnostics.js";
@@ -289,6 +297,59 @@ async function start() {
   return { s, id };
 }
 describe("durable Brand diagnostic lifecycle", () => {
+  it("background polling restores ownership using the actual three-argument Core contract", async () => {
+    const { s, id } = await draft();
+    await s.recommend(id);
+    const restore = vi.fn(
+      async (
+        owner: number,
+        project: string | null,
+        action: () => Promise<void>,
+      ) => {
+        expect(owner).toBe(context.accountUserId);
+        expect(project).toBe(context.enterpriseProjectId);
+        await action();
+      },
+    );
+    mock.ports.runWithStoredEnterpriseProjectScope = restore;
+    vi.useFakeTimers();
+    try {
+      startDiagnosticWorker({
+        database: async () => db as any,
+        context: () => context,
+        environment: { MOLI_API_TOKEN: "test" },
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(restore).toHaveBeenCalledTimes(1);
+      expect(state(id).jobs[0].status).toBe("running");
+      expect(state(id).jobs[0].providerTaskId).toBe("model-task");
+      expect(mock.submits).toHaveLength(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+  it("records an observed fallback even if that model request later fails", async () => {
+    const { s, id } = await draft();
+    await s.recommend(id);
+    await s.tick(id);
+    const job = state(id).jobs[0];
+    db.data.tasks.find((t) => t.id === job.taskId).providerRuntime.xtyCodex = {
+      model: "gpt-6.1-sol",
+      modelPolicy: "brand_diagnostics_v1",
+      modelFallbacks: [{ model: "gpt-5.6-sol", effort: "high", at: 1234 }],
+    };
+    mock.ports.orderManusV2EventsByProviderRank = () => [];
+    mock.ports.latestManusV2TaskState = () => "failed";
+    await s.tick(id);
+    expect(state(id).jobs[0]).toMatchObject({
+      status: "failed",
+      model: "gpt-5.6-sol",
+      fallback: true,
+      modelFallbacks: [{ model: "gpt-5.6-sol", effort: "high", at: 1234 }],
+    });
+    expect(mock.submits).toHaveLength(0);
+  });
   it("requires node confirmation and preserves unverified facts and enterprise isolation", async () => {
     mock.ready = false;
     await expect(draft()).rejects.toMatchObject({
