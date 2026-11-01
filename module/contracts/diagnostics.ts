@@ -416,3 +416,12 @@ export type DiagnosticWorkspace = {
     phase: DiagnosticRun["phase"];
   }>;
 };
+
+/** Keep history for auditing, but use only the latest attempt for each model step. */
+export function latestDiagnosticJobs<
+  T extends Pick<DiagnosticJob, "kind" | "category">,
+>(jobs: readonly T[]): T[] {
+  const steps = new Map<string, T>();
+  for (const job of jobs) steps.set(`${job.kind}:${job.category ?? ""}`, job);
+  return [...steps.values()];
+}

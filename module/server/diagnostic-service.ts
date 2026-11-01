@@ -18,6 +18,7 @@ import {
 } from "./diagnostic-results.js";
 import {
   DIAGNOSTIC_CATEGORIES,
+  latestDiagnosticJobs,
   DIAGNOSTIC_LABELS,
   DIAGNOSTIC_PLATFORMS,
   DIAGNOSTIC_MODEL_POLICY,
@@ -698,6 +699,7 @@ export function createDiagnosticService(
       !Array.isArray(
         (r.results.product_scenario.assessment as any).knowledgeCoverage,
       );
+    if (r.phase === "completed" && !refreshCoverage) return observe(id);
     if (refreshCoverage) await addJob(id, "assess", "product_scenario");
     await mutate(id, (r) => {
       if (refreshCoverage) {
@@ -720,8 +722,18 @@ export function createDiagnosticService(
       if (r.confirmedAt) r.phase = "collecting";
       event(r, "恢复未完成诊断，已取得的采集回答继续复用");
     });
-    for (const j of r.jobs.filter((j) => j.status === "failed"))
-      await addJob(id, j.kind, j.category);
+    for (const j of latestDiagnosticJobs(r.jobs).filter(
+      (j) => j.status === "failed",
+    )) {
+      const satisfied =
+        j.kind === "assess"
+          ? !!r.results[j.category!]
+          : j.kind === "recommend"
+            ? r.recommendations.length > 0
+            : r.questions.length === 4 &&
+              r.questions.every((q) => q.validation?.inputHash === qHash(r, q));
+      if (!satisfied) await addJob(id, j.kind, j.category);
+    }
     return observe(id);
   }
   function schemaFor(kind: DiagnosticJob["kind"]) {
@@ -919,7 +931,7 @@ export function createDiagnosticService(
             j.repairCount = 1;
             j.baselineEventIds = all.map((e: any) => e.id);
             j.repairPending = true;
-            j.repairPrompt = `原输入保持不变。上次输出未通过服务端校验：${reason.slice(0, 1600)}。请修正并直接返回完整 JSON，禁止生成文件。`;
+            j.repairPrompt = `原输入保持不变。上次输出未通过服务端校验：${reason.slice(0, 6000)}。请修正并直接返回完整 JSON，禁止生成文件。`;
             event(
               r,
               "诊断结果需要修正证据或字段，正在使用原输入修订",

@@ -79,6 +79,15 @@ const assessment: DiagnosticAssessment = {
   ],
 };
 describe("四类诊断证据与指标", () => {
+  it("returns sample-specific evidence failures together so one repair can correct all invalid quotes", () => {
+    const invalid = structuredClone(assessment);
+    invalid.answers[0].mentionEvidence = "不存在的第一段证据";
+    invalid.answers[1].mentionEvidence = "不存在的第二段证据";
+    expect(() =>
+      validateAssessment(invalid, "industry_ranking", samples, basis),
+    ).toThrow(/sampleId=1[\s\S]*sampleId=2/);
+  });
+
   it("产品覆盖要求逐回答判读，部分遗漏不计为整体遗漏", () => {
     const source = samples.map((s, i) => ({
       ...s,
@@ -122,6 +131,15 @@ describe("四类诊断证据与指标", () => {
     expect(() =>
       validateAssessment(partial, "product_scenario", source, basis),
     ).toThrow(/全部回答/);
+    const noPoints = structuredClone(a);
+    noPoints.knowledgeCoverage = [];
+    validateAssessment(noPoints, "product_scenario", source, basis);
+    expect(
+      diagnosticMetrics(noPoints).find((m) => m.id === "coverage")?.value,
+    ).toBeNull();
+    expect(
+      diagnosticMetrics(noPoints).find((m) => m.id === "omitted")?.value,
+    ).toBeNull();
     const duplicate = structuredClone(a);
     duplicate.knowledgeCoverage.push({
       ...duplicate.knowledgeCoverage[0]!,

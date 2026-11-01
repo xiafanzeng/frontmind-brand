@@ -106,17 +106,58 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("single-page diagnostic interaction", () => {
+  it("shows the active recovery instead of a superseded failure", async () => {
+    run.phase = "analyzing";
+    run.confirmedAt = new Date().toISOString();
+    run.jobs = [
+      {
+        id: "old",
+        kind: "assess",
+        category: "reputation",
+        status: "failed",
+        model: "gpt-6.1-sol",
+      },
+      {
+        id: "retry",
+        kind: "assess",
+        category: "reputation",
+        status: "running",
+        model: "gpt-6.1-sol",
+      },
+    ];
+    history.replaceState({}, "", `/?diagnosis=${id}`);
+    render(<BrandDiagnosticWorkspace />);
+    await screen.findByText("正在分析");
+    expect(screen.queryByText("诊断未完成")).toBeNull();
+    expect(screen.queryByRole("button", { name: "恢复未完成诊断" })).toBeNull();
+  });
+
   it("restores the task URL when returning to an unsaved local question draft", async () => {
-    localStorage.setItem("brand-diagnostic-draft", JSON.stringify({
-      runId: id,
-      subjectScope: "医学美容科",
-      platforms: ["doubao", "yuanbao", "qianwen"],
-      questions: [{ category: "product_scenario", text: "我的未保存问题", source: "custom" }],
-    }));
+    localStorage.setItem(
+      "brand-diagnostic-draft",
+      JSON.stringify({
+        runId: id,
+        subjectScope: "医学美容科",
+        platforms: ["doubao", "yuanbao", "qianwen"],
+        questions: [
+          {
+            category: "product_scenario",
+            text: "我的未保存问题",
+            source: "custom",
+          },
+        ],
+      }),
+    );
     render(<BrandDiagnosticWorkspace knowledgePanel={<div />} />);
-    await waitFor(() => expect(new URLSearchParams(location.search).get("diagnosis")).toBe(id));
-    expect((screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).value).toBe("我的未保存问题");
-    expect(mock.fetch.mock.calls.some(([url]) => url.endsWith("/drafts"))).toBe(false);
+    await waitFor(() =>
+      expect(new URLSearchParams(location.search).get("diagnosis")).toBe(id),
+    );
+    expect(
+      (screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).value,
+    ).toBe("我的未保存问题");
+    expect(mock.fetch.mock.calls.some(([url]) => url.endsWith("/drafts"))).toBe(
+      false,
+    );
   });
   it("blocks question selection until knowledge is confirmed", async () => {
     ready = false;
@@ -133,19 +174,39 @@ describe("single-page diagnostic interaction", () => {
   });
   it("keeps unsaved questions when creating a fresh draft after stopping", async () => {
     run.phase = "stopped";
-    localStorage.setItem("brand-diagnostic-draft", JSON.stringify({
-      runId: id, subjectScope: "医学美容科",
-      platforms: ["doubao", "yuanbao", "qianwen"],
-      questions: [{ category: "product_scenario", text: "保留这道自定义问题", source: "custom" }],
-    }));
+    localStorage.setItem(
+      "brand-diagnostic-draft",
+      JSON.stringify({
+        runId: id,
+        subjectScope: "医学美容科",
+        platforms: ["doubao", "yuanbao", "qianwen"],
+        questions: [
+          {
+            category: "product_scenario",
+            text: "保留这道自定义问题",
+            source: "custom",
+          },
+        ],
+      }),
+    );
     render(<BrandDiagnosticWorkspace knowledgePanel={<div />} />);
-    const button = await screen.findByRole("button", { name: "保留选题，新建诊断" });
-    expect((screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).disabled).toBe(true);
+    const button = await screen.findByRole("button", {
+      name: "保留选题，新建诊断",
+    });
+    expect(
+      (screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).disabled,
+    ).toBe(true);
     fireEvent.click(button);
-    expect((screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).value).toBe("保留这道自定义问题");
-    expect((screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).disabled).toBe(false);
+    expect(
+      (screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).value,
+    ).toBe("保留这道自定义问题");
+    expect(
+      (screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).disabled,
+    ).toBe(false);
     expect(new URLSearchParams(location.search).get("diagnosis")).toBeNull();
-    expect(mock.fetch.mock.calls.some(([url]) => url.endsWith("/start"))).toBe(false);
+    expect(mock.fetch.mock.calls.some(([url]) => url.endsWith("/start"))).toBe(
+      false,
+    );
   });
   it("supports all four custom questions, freezes 60 slots at one start action, and invalidates edits", async () => {
     render(<BrandDiagnosticWorkspace knowledgePanel={<div />} />);
