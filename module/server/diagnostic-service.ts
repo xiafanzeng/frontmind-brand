@@ -782,6 +782,7 @@ export function createDiagnosticService(
         // Stable local task + intent IDs make a create replay safe in the existing XTY transport.
         await update((j) => {
           j.status = "submitting";
+          j.startedAt ??= now();
         });
         const input = job.input as any;
         const evidence =
@@ -963,7 +964,7 @@ export function createDiagnosticService(
         throw new Error("模型任务未完成，可恢复本环节");
       if (["completed", "succeeded", "done"].includes(status))
         throw new Error("模型已结束但没有有效结构化结果");
-      if (Date.now() - Date.parse(job.createdAt) > 30 * 60_000)
+      if (Date.now() - Date.parse(job.startedAt ?? job.updatedAt) > 30 * 60_000)
         throw new Error("模型任务超过处理时限，已有采集已保留");
     } catch (e) {
       if (

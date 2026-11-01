@@ -297,6 +297,24 @@ async function start() {
   return { s, id };
 }
 describe("durable Brand diagnostic lifecycle", () => {
+  it("starts the model timeout when execution begins, excluding time spent queued", async () => {
+    const { s, id } = await draft();
+    await s.recommend(id);
+    state(id).jobs[0].createdAt = new Date(
+      Date.now() - 2 * 60 * 60_000,
+    ).toISOString();
+    await s.tick(id);
+    const job = state(id).jobs[0];
+    expect(Date.now() - Date.parse(job.startedAt)).toBeLessThan(10_000);
+    db.data.tasks.find((t) => t.id === job.taskId).providerRuntime.xtyCodex = {
+      model: "gpt-6.1-sol",
+      modelPolicy: "brand_diagnostics_v1",
+    };
+    mock.ports.orderManusV2EventsByProviderRank = (events: unknown[]) => events;
+    mock.ports.latestManusV2TaskState = () => "running";
+    await s.tick(id);
+    expect(state(id).jobs[0].status).toBe("running");
+  });
   it("does not rewrite an idle ledger and still executes a newly requested model task", async () => {
     const { s, id } = await draft();
     const writes = vi.spyOn(db, "update");

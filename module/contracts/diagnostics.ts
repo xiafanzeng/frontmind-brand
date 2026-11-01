@@ -319,6 +319,7 @@ export type DiagnosticJob = {
     | "cancelled";
   createdAt: string;
   updatedAt: string;
+  startedAt?: string;
   providerTaskId?: string;
   error?: string;
   model: string;
