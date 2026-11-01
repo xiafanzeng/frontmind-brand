@@ -165,7 +165,10 @@ export default function BrandDiagnosticWorkspace({
     const w = await request<DiagnosticWorkspace>("");
     setWorkspace(w);
     const id = currentId.current;
-    if (id) adopt(await request<DiagnosticRunView>(`/${id}`));
+    if (id) {
+      adopt(await request<DiagnosticRunView>(`/${id}`));
+      if (urlState().id !== id) locationPatch({ diagnosis: id });
+    }
     else if (
       !dirtyRef.current &&
       w.runs.length &&

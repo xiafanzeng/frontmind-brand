@@ -106,6 +106,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("single-page diagnostic interaction", () => {
+  it("restores the task URL when returning to an unsaved local question draft", async () => {
+    localStorage.setItem("brand-diagnostic-draft", JSON.stringify({
+      runId: id,
+      subjectScope: "医学美容科",
+      platforms: ["doubao", "yuanbao", "qianwen"],
+      questions: [{ category: "product_scenario", text: "我的未保存问题", source: "custom" }],
+    }));
+    render(<BrandDiagnosticWorkspace knowledgePanel={<div />} />);
+    await waitFor(() => expect(new URLSearchParams(location.search).get("diagnosis")).toBe(id));
+    expect((screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).value).toBe("我的未保存问题");
+    expect(mock.fetch.mock.calls.some(([url]) => url.endsWith("/drafts"))).toBe(false);
+  });
   it("blocks question selection until knowledge is confirmed", async () => {
     ready = false;
     render(
