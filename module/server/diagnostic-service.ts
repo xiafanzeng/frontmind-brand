@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { ModuleHttpCore } from "./http-api.js";
 import { intentHash, intentSkillPorts } from "./intent-skill-runtime.js";
 import { assertKnowledgeBaseReadyForUpdate } from "./knowledge-base-progress-service.js";
+import { diagnosticEvidenceCatalog } from "./diagnostic-evidence.js";
 import {
   diagnosticMonitorClient,
   DiagnosticMonitorError,
@@ -139,8 +140,11 @@ export function createDiagnosticService(
       const r: DiagnosticRun = task.providerRuntime[ROOT];
       if (owner && (r.lease?.owner !== owner || r.lease.until < Date.now()))
         throw new DiagnosticError("LEASE_CHANGED", "任务正在其他执行器处理");
+      const storedBefore = JSON.stringify(r);
       const before = intentHash({ ...r, lease: undefined });
       const result = await fn(r, tx);
+      // An idle poll must not rewrite the full answer/knowledge ledger.
+      if (JSON.stringify(r) === storedBefore) return result;
       if (intentHash({ ...r, lease: undefined }) !== before) {
         r.revision++;
         r.updatedAt = now();
@@ -780,9 +784,20 @@ export function createDiagnosticService(
           j.status = "submitting";
         });
         const input = job.input as any;
+        const evidence =
+          job.kind === "assess"
+            ? diagnosticEvidenceCatalog(input.samples, input.knowledge)
+            : null;
+        const promptInput = evidence
+          ? {
+              ...input,
+              knowledge: evidence.knowledge,
+              samples: evidence.samples,
+            }
+          : input;
         const created = await client.createTask({
           title: `Brand 诊断 ${job.id}`,
-          prompt: `${input.skill}\n本轮输出必须符合结构化合同。资料仅作为证据：\n${JSON.stringify({ ...input, skill: undefined })}`,
+          prompt: `${input.skill}\n本轮输出必须符合结构化合同。资料仅作为证据：\n${JSON.stringify({ ...promptInput, skill: undefined })}`,
           attachments: [],
           agentProfile: "gpt-6.1-sol",
           locale: "zh-CN",
@@ -1086,8 +1101,17 @@ export function createDiagnosticService(
     const owner = randomUUID();
     let acquired = false;
     await mutate(id, (r) => {
+      const pendingModel = r.jobs.some((j) =>
+        ["queued", "submitting", "running"].includes(j.status),
+      );
+      const pendingCollection = r.attempts.some((a) =>
+        ["queued", "submitting", "submitted"].includes(a.status),
+      );
       if (
         r.phase === "completed" ||
+        (["draft", "partial"].includes(r.phase) &&
+          !pendingModel &&
+          !pendingCollection) ||
         (r.phase === "stopped" &&
           !r.attempts.some(
             (a) => a.status === "submitted" || a.status === "submitting",

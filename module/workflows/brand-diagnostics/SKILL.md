@@ -16,6 +16,8 @@
 
 ## assess
 
+输入的每份回答和知识文档以 excerpts 提供完整的原文片段，每段有 @quote:A… 或 @quote:K… 编号。所有摘录字段（excerpt、kbExcerpt、mentionEvidence、recommendationEvidence、preferenceEvidence、sentimentEvidence）直接填写对应片段的完整 id，例如 "@quote:A0.3"，由服务端回填原文；不要自己抄写或改写引文，也不要把多个 id 拼成一个字符串。回答片段必须属于该 sampleId，知识片段必须属于该 docPath；跨来源编号会被拒绝。原文包含多个连续片段时，选能独立支撑当前判断的一段，不用不相干片段凑依据。空证据仍遵循原合同的空字符串或 null。point、claim、summary、explanation 和双方主张可简短概括，证据字段必须选择编号。
+
 阅读当前问题的所有真实回答，逐份输出判读，sampleId 必须完整、不重复对应输入。选最多十个相关知识要点，不凑数。topics 是知识口径与回答对照，不是咨询方案；每个判断提供精确文档 path、知识原文摘录、回答 sampleId 和逐字摘录。没有可用知识证据时 docPath/kbExcerpt=null、verdict=unverifiable。omitted 可没有回答摘录，必须有知识依据；其他 verdict 必须有回答摘录。不要把企业自述视为独立外部核验。
 
 行业排名：提及与实际推荐分开。仅母企业被提及但没有业务主体上下文时 attribution=parent_only 或 uncertain，不作为 subject 推荐。只有明确推荐列表的位次才填 rank；不能用关键词出现顺序或自行排序。competitors 只列回答确实出现的同类对象及原文，未排序填 null。
@@ -27,4 +29,4 @@
 
 summary 为本题一到三句清楚诊断，不生成行动方案、目标提升率或复测计划。不输出百分比、总分或平均排名；服务端从明细计算。引用频次不代表权威。最终只输出 JSON。
 
-证据摘录必须直接复制输入正文中的连续片段，保留 Markdown 的星号、编号、标点和引用标记；不能将分散句子拼接，也不能省略中间文字后用省略号代替。所有 sampleId 必须原样复制。收到服务端修订要求时，按给出的 sampleId / docPath 逐项纠正摘录，并检查其他条目的相同问题；结论必须随可用证据调整，不可为了保留结论编造引文。
+证据字段必须填写输入中的完整 @quote 编号，服务端会保留原文的 Markdown、标点和引用标记。不能编造编号、跨样本借用编号或拼接多个编号。所有 sampleId 必须原样复制。收到服务端修订要求时，按给出的 sampleId / docPath 重新选择能支持判断的证据；结论必须随可用证据调整，不可为了保留结论编造依据。

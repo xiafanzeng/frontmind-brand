@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
+import { diagnosticEvidenceCatalog } from "../server/diagnostic-evidence.js";
 import {
   validateAssessment,
   diagnosticMetrics,
@@ -79,6 +80,47 @@ const assessment: DiagnosticAssessment = {
   ],
 };
 describe("四类诊断证据与指标", () => {
+  it("resolves model-selected evidence to exact source text and rejects cross-source IDs", () => {
+    const a = structuredClone(assessment);
+    a.topics[0].kbExcerpt = "@quote:K0.0";
+    a.answers[0].mentionEvidence = "@quote:A0.0";
+    a.answers[0].recommendationEvidence = "@quote:A0.0";
+    a.answers[0].competitors[0].excerpt = "@quote:A0.0";
+    a.answers[1].mentionEvidence = "@quote:A1.0";
+    const result = validateAssessment(a, "industry_ranking", samples, basis);
+    expect(result.topics[0].kbExcerpt).toBe(basis.documents[0].content);
+    expect(result.answers[0]).toMatchObject({
+      mentionEvidence: samples[0].answer,
+    });
+    a.answers[1].mentionEvidence = "@quote:A0.0";
+    expect(() =>
+      validateAssessment(a, "industry_ranking", samples, basis),
+    ).toThrow(/不属于当前来源/);
+    a.answers[1].mentionEvidence = "@quote:A1.9999";
+    expect(() =>
+      validateAssessment(a, "industry_ranking", samples, basis),
+    ).toThrow(/不属于当前来源/);
+    a.answers[1].mentionEvidence = "@quote:A1.0";
+    a.topics[0].kbExcerpt = "@quote:A1.0";
+    expect(() =>
+      validateAssessment(a, "industry_ranking", samples, basis),
+    ).toThrow(/不属于当前来源/);
+  });
+  it("indexes long Unicode evidence without changing text or silently truncating it", () => {
+    const answer = "甲".repeat(799) + "😀" + "乙".repeat(805);
+    const indexed = diagnosticEvidenceCatalog(
+      [{ ...samples[0], answer }],
+      basis,
+    );
+    expect(indexed.samples[0].excerpts.map((x) => x.text).join("")).toBe(
+      answer,
+    );
+    expect(
+      indexed.samples[0].excerpts.every(
+        (x) => x.text.length <= 800 && answer.includes(x.text),
+      ),
+    ).toBe(true);
+  });
   it("returns sample-specific evidence failures together so one repair can correct all invalid quotes", () => {
     const invalid = structuredClone(assessment);
     invalid.answers[0].mentionEvidence = "不存在的第一段证据";

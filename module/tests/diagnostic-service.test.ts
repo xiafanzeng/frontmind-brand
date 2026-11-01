@@ -297,6 +297,24 @@ async function start() {
   return { s, id };
 }
 describe("durable Brand diagnostic lifecycle", () => {
+  it("does not rewrite an idle ledger and still executes a newly requested model task", async () => {
+    const { s, id } = await draft();
+    const writes = vi.spyOn(db, "update");
+    await s.tick(id);
+    expect(writes).not.toHaveBeenCalled();
+    state(id).phase = "partial";
+    await s.tick(id);
+    expect(writes).not.toHaveBeenCalled();
+    await s.recommend(id);
+    writes.mockClear();
+    await s.tick(id);
+    expect(writes).toHaveBeenCalled();
+    expect(state(id).jobs[0].status).toBe("running");
+    await s.stop(id);
+    writes.mockClear();
+    await s.tick(id);
+    expect(writes).not.toHaveBeenCalled();
+  });
   it("does not repeat a completed model step when earlier attempts failed or the skill changed", async () => {
     const { s, id } = await start();
     const r = state(id);
