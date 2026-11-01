@@ -44,7 +44,7 @@ beforeEach(() => {
   ready = true;
   run = makeRun();
   localStorage.clear();
-  history.replaceState({}, "", "/?view=knowledge");
+  history.replaceState({}, "", "/?view=diagnostics");
   mock.fetch.mockReset();
   mock.fetch.mockImplementation(async (path: string, init: any) => {
     const body = init.body ? JSON.parse(init.body) : undefined;
@@ -148,7 +148,7 @@ describe("single-page diagnostic interaction", () => {
         ],
       }),
     );
-    render(<BrandDiagnosticWorkspace knowledgePanel={<div />} />);
+    render(<BrandDiagnosticWorkspace />);
     await waitFor(() =>
       expect(new URLSearchParams(location.search).get("diagnosis")).toBe(id),
     );
@@ -161,16 +161,16 @@ describe("single-page diagnostic interaction", () => {
   });
   it("blocks question selection until knowledge is confirmed", async () => {
     ready = false;
-    render(
-      <BrandDiagnosticWorkspace knowledgePanel={<div>知识确认节点</div>} />,
-    );
+    const onOpenKnowledge=vi.fn();
+    render(<BrandDiagnosticWorkspace onOpenKnowledge={onOpenKnowledge} />);
     await screen.findByText("仍有 2 项待确认");
     expect(screen.queryByLabelText("行业排名问题")).toBeNull();
     expect(
       (screen.getByRole("button", { name: /开始采集/ }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
-    expect(screen.getByText("知识确认节点")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name:"前往智能知识库，继续逐项确认"}));
+    expect(onOpenKnowledge).toHaveBeenCalledOnce();
   });
   it("keeps unsaved questions when creating a fresh draft after stopping", async () => {
     run.phase = "stopped";
@@ -189,7 +189,7 @@ describe("single-page diagnostic interaction", () => {
         ],
       }),
     );
-    render(<BrandDiagnosticWorkspace knowledgePanel={<div />} />);
+    render(<BrandDiagnosticWorkspace />);
     const button = await screen.findByRole("button", {
       name: "保留选题，新建诊断",
     });
@@ -209,7 +209,7 @@ describe("single-page diagnostic interaction", () => {
     );
   });
   it("supports all four custom questions, freezes 60 slots at one start action, and invalidates edits", async () => {
-    render(<BrandDiagnosticWorkspace knowledgePanel={<div />} />);
+    render(<BrandDiagnosticWorkspace />);
     await screen.findByLabelText("行业排名问题");
     for (const c of DIAGNOSTIC_CATEGORIES)
       fireEvent.change(screen.getByLabelText(`${DIAGNOSTIC_LABELS[c]}问题`), {
@@ -264,7 +264,7 @@ describe("single-page diagnostic interaction", () => {
       },
     ];
     history.replaceState({}, "", `/?diagnosis=${id}&question=industry_ranking`);
-    render(<BrandDiagnosticWorkspace knowledgePanel={<div />} />);
+    render(<BrandDiagnosticWorkspace />);
     await screen.findByRole("button", { name: /豆包 · 第 1 次/ });
     expect(
       mock.fetch.mock.calls.some(([url]) => url.includes("/answers/")),
@@ -273,7 +273,7 @@ describe("single-page diagnostic interaction", () => {
     await screen.findByText("这里只在展开后出现的原始回答");
     expect(new URLSearchParams(location.search).get("answer")).toBe("sample1");
     cleanup();
-    render(<BrandDiagnosticWorkspace knowledgePanel={<div />} />);
+    render(<BrandDiagnosticWorkspace />);
     await screen.findByText("这里只在展开后出现的原始回答");
     fireEvent.click(screen.getByRole("button", { name: "关闭回答详情" }));
     expect(screen.queryByText("这里只在展开后出现的原始回答")).toBeNull();

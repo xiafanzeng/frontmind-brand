@@ -14,28 +14,18 @@ import BrandResponseLogicEntry from './BrandResponseLogicEntry';
 import BrandDiagnosticWorkspace from './BrandDiagnosticWorkspace';
 import type {IntentQuestion as BrandIntentQuestion} from '../contracts/intent-workbench';
 import './brand-apple-theme.css';
-export type BrandPage='reports'|'knowledge'|'keywords'|'intent'|'response-logic'|'enterprise-qa'|'website'|'website-settings';
+export type BrandPage='reports'|'knowledge'|'diagnostics'|'keywords'|'intent'|'response-logic'|'enterprise-qa'|'website'|'website-settings';
 export interface ModuleContext {module:'brand';workspace:{id:string;ownerUserId:number};capabilities:string[];marketEdition?:'cn'|'international'}
 /** Actual business surfaces shared by the standalone runtime and the main host. */
-export default function ModuleWorkspace({context,page='knowledge',keywordData,preview=false,previewKnowledge,previewQa,previewSiteOps,enterpriseRagNavigation,websiteBuilderNavigation,intentApi,onIntentSectionChange,intentCatalogIntegration,onEnterResponseLogic,responseLogicVisual,responseLogicToast,onResponseLogicBack}:{context:ModuleContext;page?:BrandPage;keywordData:{tables:ManagedKeywordTable[];revision:number|null;loading?:boolean;error?:unknown;knowledgePublished?:boolean};preview?:boolean;previewKnowledge?:{progress:KnowledgeBaseProgressDto;snapshot:KnowledgeSnapshotView};previewQa?:ReactNode;previewSiteOps?:ReactNode;enterpriseRagNavigation?:{onOpenWebsite?:()=>void;onOpenWebsiteAssistant?:()=>void;websiteEntryLabel?:string};websiteBuilderNavigation?:{initialStep?:BuildStep;initialSection?:import("./dashboard/ai-website-preview/SimplifiedWebsiteBuilderPreview.js").WebsiteDesignSection|null;onOpenRag?:()=>void;onStepChange?:(step:BuildStep)=>void};intentApi?:IntentWorkbenchApi;onIntentSectionChange?:(section:'universe'|'list')=>void;intentCatalogIntegration?:IntentCatalogIntegration;onEnterResponseLogic?:()=>void;
+export default function ModuleWorkspace({context,page='knowledge',keywordData,preview=false,previewKnowledge,previewQa,previewSiteOps,onOpenKnowledge,enterpriseRagNavigation,websiteBuilderNavigation,intentApi,onIntentSectionChange,intentCatalogIntegration,onEnterResponseLogic,responseLogicVisual,responseLogicToast,onResponseLogicBack}:{context:ModuleContext;page?:BrandPage;keywordData:{tables:ManagedKeywordTable[];revision:number|null;loading?:boolean;error?:unknown;knowledgePublished?:boolean};preview?:boolean;previewKnowledge?:{progress:KnowledgeBaseProgressDto;snapshot:KnowledgeSnapshotView};previewQa?:ReactNode;previewSiteOps?:ReactNode;onOpenKnowledge?:()=>void;enterpriseRagNavigation?:{onOpenWebsite?:()=>void;onOpenWebsiteAssistant?:()=>void;websiteEntryLabel?:string};websiteBuilderNavigation?:{initialStep?:BuildStep;initialSection?:import("./dashboard/ai-website-preview/SimplifiedWebsiteBuilderPreview.js").WebsiteDesignSection|null;onOpenRag?:()=>void;onStepChange?:(step:BuildStep)=>void};intentApi?:IntentWorkbenchApi;onIntentSectionChange?:(section:'universe'|'list')=>void;intentCatalogIntegration?:IntentCatalogIntegration;onEnterResponseLogic?:()=>void;
  responseLogicVisual?:{Button:React.ComponentType<React.HTMLAttributes<HTMLButtonElement>&{disabled?:boolean}>;FilePreview?:React.ComponentType<React.HTMLAttributes<HTMLDivElement>>;ImagePreview?:React.ComponentType<React.HTMLAttributes<HTMLDivElement>>;BusinessExecutionActivity?:React.ComponentType<React.HTMLAttributes<HTMLDivElement>>};
  responseLogicToast?:{success(message:string):void;error(message:string):void};
  onResponseLogicBack?:()=>void}){
  const [knowledgePage,setKnowledgePage]=useState<'build'|'display'>('build');
- const [diagnosticExpanded,setDiagnosticExpanded]=useState(()=>{
-  const query=new URLSearchParams(window.location.search);
-  return query.get('diagnosticView')==='expanded';
- });
- const showDiagnostic=(expanded:boolean)=>{
-  setDiagnosticExpanded(expanded);
-  const url=new URL(window.location.href);
-  url.searchParams.set('diagnosticView',expanded?'expanded':'embedded');
-  window.history.replaceState(window.history.state,'',url);
-  requestAnimationFrame(()=>document.getElementById(expanded?'brand-diagnostic-workspace':`knowledge-cards-${context.workspace.id}`)?.scrollIntoView({behavior:'smooth',block:'start'}));
- };
  const [responseLogicQuestion,setResponseLogicQuestion]=useState<BrandIntentQuestion|null>(null);
  let content:ReactNode;
- if(page==='reports'||page==='knowledge')content=<EmbeddedKnowledgeBasePanel key={context.workspace.id} page={knowledgePage} onPageChange={setKnowledgePage} mode="workspace" workbench projectId={context.workspace.id} preview={preview} previewData={previewKnowledge} diagnosticAction={<button type="button" className="fm-brand-button fm-brand-button--secondary" onClick={()=>showDiagnostic(!diagnosticExpanded)}>{diagnosticExpanded?'返回知识库':'AI 语义诊断'}</button>} afterKnowledge={<BrandDiagnosticWorkspace embedded expanded={diagnosticExpanded} onExpandedChange={showDiagnostic} storageKey={`brand-diagnostics:${context.workspace.ownerUserId}:${context.workspace.id}`} preview={preview} onOpenKnowledge={()=>showDiagnostic(false)}/>}/>;
+ if(page==='knowledge')content=<EmbeddedKnowledgeBasePanel key={context.workspace.id} page={knowledgePage} onPageChange={setKnowledgePage} mode="workspace" workbench projectId={context.workspace.id} preview={preview} previewData={previewKnowledge}/>;
+ else if(page==='diagnostics'||page==='reports')content=<BrandDiagnosticWorkspace key={context.workspace.id} storageKey={`brand-diagnostics:${context.workspace.ownerUserId}:${context.workspace.id}`} preview={preview} onOpenKnowledge={onOpenKnowledge}/>;
  else if(page==='response-logic'&&responseLogicQuestion)content=<BrandResponseLogicEntry question={responseLogicQuestion} onBack={()=>{setResponseLogicQuestion(null);onResponseLogicBack?.();}} visual={responseLogicVisual??{Button:({children,disabled,onClick,className,...rest}:any)=><button type='button' disabled={disabled} onClick={onClick} className={['fm-brand-button','fm-brand-button--secondary',className].filter(Boolean).join(' ')} {...rest}>{children}</button>}} toast={responseLogicToast??{success:console.log,error:console.error}}/>;
  else if(page==='response-logic')content=<section role="status" className="iw-empty fm-brand-empty-state">
   <p>请从「优化问题」列表中选择问题并点击「进入应答逻辑」。</p>
