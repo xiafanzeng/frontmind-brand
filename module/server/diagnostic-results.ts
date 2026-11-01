@@ -70,9 +70,12 @@ export function validateAssessment(
     if (!s) throw new Error("诊断引用了其他样本");
     return s;
   };
+  const evidenceErrors: string[] = [];
   const checkQuote = (id: string, quote: string) => {
     if (!quoted(sample(id).answer, quote))
-      throw new Error("回答证据不是采集原文");
+      evidenceErrors.push(
+        `回答证据不是采集原文：sampleId=${id}，摘录=${JSON.stringify(quote.slice(0, 100))}`,
+      );
   };
   const checkKnowledge = (
     docPath: string | null,
@@ -85,7 +88,9 @@ export function validateAssessment(
     }
     const d = basis.documents.find((d) => d.path === docPath);
     if (!d || !quoted(d.content, kbExcerpt))
-      throw new Error("知识依据不是冻结版本原文");
+      evidenceErrors.push(
+        `知识依据不是冻结版本原文：docPath=${docPath}，摘录=${JSON.stringify(kbExcerpt.slice(0, 100))}`,
+      );
   };
   for (const t of a.topics) {
     checkKnowledge(t.docPath, t.kbExcerpt, t.verdict !== "unverifiable");
@@ -112,7 +117,10 @@ export function validateAssessment(
         throw new Error("未推荐样本不能有排名");
       for (const c of x.competitors) {
         checkQuote(x.sampleId, c.excerpt);
-        if (!quoted(c.excerpt, c.name)) throw new Error("竞品名称缺少原文支持");
+        if (!quoted(c.excerpt, c.name))
+          evidenceErrors.push(
+            `竞品名称缺少原文支持：sampleId=${x.sampleId}，name=${c.name}`,
+          );
       }
     }
   if (a.category === "competitor_comparison")
@@ -155,6 +163,8 @@ export function validateAssessment(
         checkKnowledge(c.docPath, c.kbExcerpt, c.verdict !== "unverifiable");
       }
   }
+  if (evidenceErrors.length)
+    throw new Error([...new Set(evidenceErrors)].slice(0, 24).join("\n"));
   return a;
 }
 export function diagnosticMetrics(a: DiagnosticAssessment): DiagnosticMetric[] {

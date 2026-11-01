@@ -3,7 +3,7 @@ import type { BrandPage } from "../module/client/ModuleWorkspace";
 export type StandaloneBrandPage = BrandPage;
 
 export const standaloneBrandPages: Array<[StandaloneBrandPage, string]> = [
-  ["knowledge", "知识库与 AI 诊断"],
+  ["knowledge", "智能知识库"],
   ["keywords", "词条生成"],
   ["intent", "优化问题"],
   ["response-logic", "应答逻辑"],

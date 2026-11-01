@@ -16,6 +16,7 @@ import {
 import { captureWorkspaceRestOperation } from "./host";
 import {
   DIAGNOSTIC_CATEGORIES,
+  latestDiagnosticJobs,
   DIAGNOSTIC_LABELS,
   type DiagnosticCategory,
   type DiagnosticQuestion,
@@ -303,8 +304,9 @@ export default function BrandDiagnosticWorkspace({
   const frozen = !!run?.confirmedAt;
   const stopped = run?.phase === "stopped";
   const running = run && ["collecting", "analyzing"].includes(run.phase);
+  const currentJobs = latestDiagnosticJobs(run?.jobs ?? []);
   const activeJobs =
-    run?.jobs.filter((j) =>
+    currentJobs.filter((j) =>
       ["queued", "submitting", "running"].includes(j.status),
     ) ?? [];
   const canStart =
@@ -734,17 +736,23 @@ export default function BrandDiagnosticWorkspace({
                       <td>
                         {run.results[c]
                           ? "已完成"
-                          : run.jobs.some(
+                          : currentJobs.some(
                                 (j) =>
-                                  j.category === c && j.status === "failed",
+                                  j.category === c && j.status === "running",
                               )
-                            ? "诊断未完成"
-                            : run.jobs.some(
+                            ? "正在分析"
+                            : currentJobs.some(
                                   (j) =>
-                                    j.category === c && j.status === "running",
+                                    j.category === c &&
+                                    ["queued", "submitting"].includes(j.status),
                                 )
-                              ? "正在分析"
-                              : "等待回答齐全"}
+                              ? "等待诊断执行"
+                              : currentJobs.some(
+                                    (j) =>
+                                      j.category === c && j.status === "failed",
+                                  )
+                                ? "诊断未完成"
+                                : "等待回答齐全"}
                       </td>
                     </tr>
                   ))}
@@ -766,7 +774,12 @@ export default function BrandDiagnosticWorkspace({
                 </button>
               )}
               {(run.phase === "partial" ||
-                run.jobs.some((j) => j.status === "failed")) &&
+                currentJobs.some(
+                  (j) =>
+                    j.status === "failed" &&
+                    (!j.category || !run.results[j.category]),
+                )) &&
+                run.phase !== "completed" &&
                 run.phase !== "stopped" && (
                   <button
                     disabled={busy}

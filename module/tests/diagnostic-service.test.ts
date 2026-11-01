@@ -297,6 +297,36 @@ async function start() {
   return { s, id };
 }
 describe("durable Brand diagnostic lifecycle", () => {
+  it("does not repeat a completed model step when earlier attempts failed or the skill changed", async () => {
+    const { s, id } = await start();
+    const r = state(id);
+    r.jobs = [
+      {
+        id: "failed-old",
+        kind: "assess",
+        category: "reputation",
+        status: "failed",
+        inputHash: "older-skill",
+      },
+      {
+        id: "completed-new",
+        kind: "assess",
+        category: "reputation",
+        status: "completed",
+        inputHash: "previous-skill",
+      },
+    ];
+    r.results.reputation = { assessment: { category: "reputation" } };
+    await s.retry(id);
+    expect(state(id).jobs).toHaveLength(2);
+    state(id).phase = "completed";
+    const before = state(id).revision;
+    await s.retry(id);
+    expect(state(id).jobs).toHaveLength(2);
+    expect(state(id).revision).toBe(before);
+    expect(mock.submits).toHaveLength(0);
+  });
+
   it("reassesses an incomplete coverage contract using saved answers without another collection", async () => {
     const { s, id } = await start();
     const r = state(id);
