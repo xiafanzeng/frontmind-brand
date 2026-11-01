@@ -9,7 +9,7 @@ import {assembleResponseLogicCore} from "@frontmind/module-brand/server/response
 import {createResponseLogicApi} from "@frontmind/module-brand/server/response-logic-api";
 import {createResponseLogicRecordRouter} from "@frontmind/module-brand/server/response-logic-record-api";
 import {createResponseLogicCredentialMiddleware} from "@frontmind/module-brand/server/response-logic-credential-middleware";
-import {createBrandReportRouter} from "@frontmind/module-brand/server/report-api";
+import {createDiagnosticRouter} from "@frontmind/module-brand/server/diagnostic-api";
 import {
  createEnterpriseRagEvaluationService,
  EnterpriseRagEvaluationError,
@@ -26,7 +26,7 @@ export interface ModuleHttpCore {
 /** Add new module-owned APIs here. Mounted in both Dashboard and the development subdomain. */
 export function createModuleHttpApi(core:ModuleHttpCore):Router {
  const router=Router();
- router.use('/reports',createBrandReportRouter(core));
+ router.use('/diagnostics',createDiagnosticRouter(core));
  const ragEvaluationCoordinate=z.object({
   sourceQaTaskId:z.string().uuid(),
   turnId:z.string().uuid(),

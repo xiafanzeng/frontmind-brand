@@ -3,8 +3,7 @@ import type { BrandPage } from "../module/client/ModuleWorkspace";
 export type StandaloneBrandPage = BrandPage;
 
 export const standaloneBrandPages: Array<[StandaloneBrandPage, string]> = [
-  ["reports", "品牌诊断报告"],
-  ["knowledge", "智能知识库"],
+  ["knowledge", "知识库与 AI 诊断"],
   ["keywords", "词条生成"],
   ["intent", "优化问题"],
   ["response-logic", "应答逻辑"],
@@ -18,7 +17,7 @@ const legacyPageAliases: Record<string, StandaloneBrandPage> = {
 };
 
 export function resolveStandaloneBrandPage(value: string) {
-  const canonical = legacyPageAliases[value] ?? value;
+  const canonical = value === "reports" ? "knowledge" : legacyPageAliases[value] ?? value;
   return standaloneBrandPages.some(([id]) => id === canonical)
     ? (canonical as StandaloneBrandPage)
     : null;

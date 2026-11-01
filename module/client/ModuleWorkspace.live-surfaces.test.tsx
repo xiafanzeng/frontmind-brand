@@ -10,8 +10,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./components/EmbeddedKnowledgeBasePanel", () => ({
   default: () => <div data-testid="knowledge-surface" />,
 }));
-vi.mock("./BrandReportWorkspace", () => ({
-  default: () => <div data-testid="reports-surface" />,
+vi.mock("./BrandDiagnosticWorkspace", () => ({
+  default: ({knowledgePanel}: any) => <div data-testid="diagnostic-surface">{knowledgePanel}</div>,
 }));
 vi.mock("./dashboard/IntentWorkbench", () => ({
   default: () => <div data-testid="intent-surface" />,
