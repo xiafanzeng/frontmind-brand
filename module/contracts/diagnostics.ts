@@ -202,6 +202,29 @@ export const assessmentSchema = z.discriminatedUnion("category", [
     .object({
       category: z.literal("product_scenario"),
       ...assessmentBase,
+      knowledgeCoverage: z
+        .array(
+          z
+            .object({
+              point: short,
+              docPath: short,
+              kbExcerpt: z.string().min(1).max(1600),
+              answers: z
+                .array(
+                  z
+                    .object({
+                      sampleId: short,
+                      covered: z.boolean(),
+                      excerpt: z.string().max(1600),
+                    })
+                    .strict(),
+                )
+                .min(1)
+                .max(30),
+            })
+            .strict(),
+        )
+        .max(8),
       answers: z.array(productAnswer).min(1).max(30),
     })
     .strict(),
@@ -235,7 +258,7 @@ export type DiagnosticResult = {
   generatedAt: string;
   model: string;
   fallback: boolean;
-  algorithm: "brand_diagnostics_v1";
+  algorithm: "brand_diagnostics_v1" | "brand_diagnostics_v2";
   samples: number;
   breakdown: DiagnosticBreakdown;
 };
@@ -265,7 +288,9 @@ export type DiagnosticBreakdown = {
   coverage: Array<{
     id: string;
     topic: string;
-    verdict: DiagnosticAssessment["topics"][number]["verdict"];
+    verdict: "covered" | "omitted";
+    missingId: string;
+    missingSampleIds: string[];
     platforms: Array<{ platform: string; count: number; denominator: number }>;
     sampleIds: string[];
   }>;

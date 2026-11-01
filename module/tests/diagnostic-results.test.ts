@@ -79,6 +79,58 @@ const assessment: DiagnosticAssessment = {
   ],
 };
 describe("四类诊断证据与指标", () => {
+  it("产品覆盖要求逐回答判读，部分遗漏不计为整体遗漏", () => {
+    const source = samples.map((s, i) => ({
+      ...s,
+      category: "product_scenario" as const,
+      answer: i ? "请到院咨询" : "医学美容科提供激光服务。",
+    }));
+    const a: DiagnosticAssessment = {
+      category: "product_scenario",
+      summary: "一份回答提到服务，另一份未覆盖。",
+      topics: assessment.topics,
+      answers: source.map((s) => ({ sampleId: s.id, claims: [] })),
+      knowledgeCoverage: [
+        {
+          point: "激光服务",
+          docPath: "service.md",
+          kbExcerpt: "医学美容科提供激光服务。",
+          answers: [
+            {
+              sampleId: "1",
+              covered: true,
+              excerpt: "医学美容科提供激光服务。",
+            },
+            { sampleId: "2", covered: false, excerpt: "" },
+          ],
+        },
+      ],
+    };
+    validateAssessment(a, "product_scenario", source, basis);
+    expect(diagnosticMetrics(a).find((m) => m.id === "coverage")).toMatchObject(
+      { value: 100, denominator: 1 },
+    );
+    expect(diagnosticMetrics(a).find((m) => m.id === "omitted")?.value).toBe(0);
+    const b = diagnosticBreakdown(a, source, "甲医院");
+    expect(b.coverage[0]).toMatchObject({
+      sampleIds: ["1"],
+      missingSampleIds: ["2"],
+      platforms: [{ count: 1, denominator: 2 }],
+    });
+    const partial = structuredClone(a);
+    partial.knowledgeCoverage[0]!.answers.pop();
+    expect(() =>
+      validateAssessment(partial, "product_scenario", source, basis),
+    ).toThrow(/全部回答/);
+    const duplicate = structuredClone(a);
+    duplicate.knowledgeCoverage.push({
+      ...duplicate.knowledgeCoverage[0]!,
+      point: "第二份回答遗漏激光服务",
+    });
+    expect(() =>
+      validateAssessment(duplicate, "product_scenario", source, basis),
+    ).toThrow(/重复/);
+  });
   it("平台、位次、信源和钻取都基于相同样本，重复引用不重复计数", () => {
     const source = { url: "https://example.com/evidence", title: "公开资料" };
     const b = diagnosticBreakdown(
@@ -172,6 +224,14 @@ describe("四类诊断证据与指标", () => {
       category: "product_scenario",
       summary: "产品主张部分与当前资料一致。",
       topics: assessment.topics,
+      knowledgeCoverage: [
+        {
+          point: "服务",
+          docPath: "service.md",
+          kbExcerpt: "服务",
+          answers: [{ sampleId: "1", covered: true, excerpt: "一" }],
+        },
+      ],
       answers: [
         {
           sampleId: "1",

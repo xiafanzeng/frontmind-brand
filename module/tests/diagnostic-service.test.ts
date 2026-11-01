@@ -297,6 +297,36 @@ async function start() {
   return { s, id };
 }
 describe("durable Brand diagnostic lifecycle", () => {
+  it("reassesses an incomplete coverage contract using saved answers without another collection", async () => {
+    const { s, id } = await start();
+    const r = state(id);
+    for (const a of r.attempts) {
+      a.status = "completed";
+      a.taskId = "supplier-" + a.id;
+      a.sample = {
+        id: a.id,
+        category: a.category,
+        platform: a.platform,
+        run: a.run,
+        question: a.question,
+        answer: "已保存原始回答",
+        citations: [],
+        references: [],
+      };
+    }
+    r.results.product_scenario = {
+      assessment: { category: "product_scenario", topics: [], answers: [] },
+    };
+    const ids = r.attempts.map((a: any) => a.taskId);
+    await s.retry(id);
+    expect(state(id).results.product_scenario).toBeUndefined();
+    const job = state(id).jobs.find(
+      (j: any) => j.kind === "assess" && j.category === "product_scenario",
+    );
+    expect(job.input.samples).toHaveLength(15);
+    expect(state(id).attempts.map((a: any) => a.taskId)).toEqual(ids);
+    expect(mock.submits).toHaveLength(0);
+  });
   it("background polling restores ownership using the actual three-argument Core contract", async () => {
     const { s, id } = await draft();
     await s.recommend(id);

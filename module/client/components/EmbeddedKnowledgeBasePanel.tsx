@@ -59,6 +59,7 @@ const KnowledgeActionsContext = createContext<{
   workflow: React.ReactNode;
   download: React.ReactNode;
   titleRef?: React.RefObject<HTMLHeadingElement | null>;
+  afterKnowledge?: React.ReactNode;
 }>({ workflow: null, download: null });
 const KNOWLEDGE_BASE_NEW_BUILD_EVENT = "frontmind:new-knowledge-base-build";
 export const KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS = 15_000;
@@ -147,6 +148,7 @@ export default function EmbeddedKnowledgeBasePanel({
   mode = "standard",
   workbench = false,
   projectId = "knowledge",
+  afterKnowledge,
 }: {
   preview?: boolean;
   previewData?: {
@@ -159,6 +161,8 @@ export default function EmbeddedKnowledgeBasePanel({
   /** Opt in to the conversation + knowledge result workbench shell. */
   workbench?: boolean;
   projectId?: string;
+  /** Additional business content below the existing right-hand knowledge cards. */
+  afterKnowledge?: React.ReactNode;
 }) {
   const previewMode =
     (import.meta.env.DEV || import.meta.env.MODE === 'preview') &&
@@ -366,6 +370,7 @@ export default function EmbeddedKnowledgeBasePanel({
           workflow: knowledgeActions,
           download: knowledgeDownload,
           titleRef: workspaceTitleRef,
+          afterKnowledge,
         }}
       >
         {resetQuery.isError && resetQuery.data && (
@@ -1707,6 +1712,7 @@ function KnowledgeWorkspaceSurfaces({
   projectId?: string;
   resultKey?: string;
 }) {
+  const { afterKnowledge } = useContext(KnowledgeActionsContext);
   const [view, setView] = useState<"collaboration" | "knowledge">(
     "collaboration",
   );
@@ -1750,9 +1756,10 @@ function KnowledgeWorkspaceSurfaces({
         auxiliaryScroll={false}
         conversationFocusRequest={mainFocusRequest}
         auxiliary={
-          <div className="knowledge-workbench-auxiliary">
+          <div className={`knowledge-workbench-auxiliary${afterKnowledge ? " knowledge-workbench-auxiliary--with-diagnostics" : ""}`}>
             {resourceActions}
-            <div className="knowledge-workbench-tree">{knowledge}</div>
+            <div id={`knowledge-cards-${projectId}`} className="knowledge-workbench-tree">{knowledge}</div>
+            {afterKnowledge}
           </div>
         }
         resultTitle="知识内容"
