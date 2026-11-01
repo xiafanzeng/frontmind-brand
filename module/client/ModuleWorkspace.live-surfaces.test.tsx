@@ -76,11 +76,16 @@ describe("ModuleWorkspace redesigned live routes", () => {
     expect(mocks.diagnosticProps?.expanded).toBe(false);
     expect(new URLSearchParams(location.search).get("diagnosticView")).toBe("embedded");
   });
-  it("opens a diagnostic task link in reading mode and respects an explicit return to knowledge", () => {
+  it("keeps remembered tasks below knowledge cards on reload and restores explicit reading mode", () => {
     history.replaceState({}, "", "/?view=knowledge&diagnosis=task");
     const view=render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
-    expect(mocks.diagnosticProps?.expanded).toBe(true);
+    expect(mocks.diagnosticProps?.expanded).toBe(false);
+    expect(screen.getByRole("button", {name:"AI 语义诊断"})).toBeTruthy();
     view.unmount();
+    history.replaceState({}, "", "/?view=knowledge&diagnosis=task&diagnosticView=expanded");
+    const reading=render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
+    expect(mocks.diagnosticProps?.expanded).toBe(true);
+    reading.unmount();
     history.replaceState({}, "", "/?view=knowledge&diagnosis=task&diagnosticView=embedded");
     render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
     expect(mocks.diagnosticProps?.expanded).toBe(false);

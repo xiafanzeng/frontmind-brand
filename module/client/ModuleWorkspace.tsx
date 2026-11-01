@@ -24,7 +24,7 @@ export default function ModuleWorkspace({context,page='knowledge',keywordData,pr
  const [knowledgePage,setKnowledgePage]=useState<'build'|'display'>('build');
  const [diagnosticExpanded,setDiagnosticExpanded]=useState(()=>{
   const query=new URLSearchParams(window.location.search);
-  return query.get('diagnosticView')==='expanded'||(query.has('diagnosis')&&query.get('diagnosticView')!=='embedded');
+  return query.get('diagnosticView')==='expanded';
  });
  const showDiagnostic=(expanded:boolean)=>{
   setDiagnosticExpanded(expanded);
