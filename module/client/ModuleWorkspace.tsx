@@ -11,7 +11,7 @@ import IntentWorkbench from './dashboard/IntentWorkbench';
 import type {IntentWorkbenchApi} from './dashboard/intent-workbench-api';
 import type {IntentCatalogIntegration} from './dashboard/IntentQuestionCatalog';
 import BrandResponseLogicEntry from './BrandResponseLogicEntry';
-import BrandReportWorkspace from './BrandReportWorkspace';
+import BrandDiagnosticWorkspace from './BrandDiagnosticWorkspace';
 import type {IntentQuestion as BrandIntentQuestion} from '../contracts/intent-workbench';
 import './brand-apple-theme.css';
 export type BrandPage='reports'|'knowledge'|'keywords'|'intent'|'response-logic'|'enterprise-qa'|'website'|'website-settings';
@@ -24,7 +24,7 @@ export default function ModuleWorkspace({context,page='knowledge',keywordData,pr
  const [knowledgePage,setKnowledgePage]=useState<'build'|'display'>('build');
  const [responseLogicQuestion,setResponseLogicQuestion]=useState<BrandIntentQuestion|null>(null);
  let content:ReactNode;
- if(page==='reports')content=<BrandReportWorkspace key={context.workspace.id} projectId={context.workspace.id} preview={preview}/>;
+ if(page==='reports'||page==='knowledge')content=<BrandDiagnosticWorkspace key={context.workspace.id} storageKey={`brand-diagnostics:${context.workspace.ownerUserId}:${context.workspace.id}`} preview={preview} knowledgePanel={<EmbeddedKnowledgeBasePanel page={knowledgePage} onPageChange={setKnowledgePage} mode="workspace" workbench projectId={context.workspace.id} preview={preview} previewData={previewKnowledge}/>}/>;
  else if(page==='response-logic'&&responseLogicQuestion)content=<BrandResponseLogicEntry question={responseLogicQuestion} onBack={()=>{setResponseLogicQuestion(null);onResponseLogicBack?.();}} visual={responseLogicVisual??{Button:({children,disabled,onClick,className,...rest}:any)=><button type='button' disabled={disabled} onClick={onClick} className={['fm-brand-button','fm-brand-button--secondary',className].filter(Boolean).join(' ')} {...rest}>{children}</button>}} toast={responseLogicToast??{success:console.log,error:console.error}}/>;
  else if(page==='response-logic')content=<section role="status" className="iw-empty fm-brand-empty-state">
   <p>请从「优化问题」列表中选择问题并点击「进入应答逻辑」。</p>

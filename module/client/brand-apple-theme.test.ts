@@ -66,8 +66,7 @@ describe("Brand Apple theme contract", () => {
     expect(moduleWorkspace).not.toContain("style={{");
   });
 
-  it("adapts report and knowledge surfaces inside their page boundaries", () => {
-    expect(css).toContain('.fm-brand-theme[data-brand-page="reports"] .brand-report');
+  it("adapts knowledge surfaces inside their page boundaries", () => {
     expect(css).toContain('.fm-brand-theme[data-brand-page="knowledge"] .knowledge-workspace');
     expect(css).toContain('input:not([type="checkbox"]):not([type="radio"])');
     expect(css).toContain(".knowledge-workbench-stage--resource");
@@ -255,7 +254,6 @@ describe("Brand Apple theme contract", () => {
     const contract = css.slice(start, end);
 
     for (const selector of [
-      ".brand-report__option",
       ".knowledge-node-workspace__error",
       ".iw-task",
       ".iw-intake-list > div",
