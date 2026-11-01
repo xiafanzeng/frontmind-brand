@@ -1,6 +1,8 @@
 .bd-workspace {
   --bd-green: #17684c;
   --bd-ink: #1b3029;
+  width: 100%;
+  min-width: 0;
   max-width: 1200px;
   margin: 0 auto;
   padding: 32px 28px 70px;
