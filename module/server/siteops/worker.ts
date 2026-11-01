@@ -36,8 +36,12 @@ const DEFAULT_LEASE_MS = 2 * 60_000;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const VISUAL_SEARCH_LEASE_MS = 15 * 60_000;
 const VISUAL_SEARCH_TIMEOUT_MS = 12 * 60_000;
-const BUILD_LEASE_MS = 12 * 60_000;
-const BUILD_TIMEOUT_MS = 10 * 60_000;
+const BUILD_LEASE_MS = 35 * 60_000;
+// One handler invocation must fit the longest single poll step: the preview
+// materialization runs vite, per-route prerender and browser/lighthouse QA,
+// which scales with the route count (default-all columns ship ~10 routes)
+// and can legitimately exceed ten minutes on a loaded host.
+const BUILD_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_BATCH = 4;
 
 type Claimed = typeof siteOperations.$inferSelect & { leaseOwner: string };
@@ -646,6 +650,15 @@ async function invokeProvider(db: any, operation: Claimed) {
     });
   } catch (error) {
     if (controller.signal.aborted) {
+      // Timeout aborts previously returned silently; the resulting
+      // outcome_unknown reconciliation loop was invisible in worker logs.
+      console.error("[SiteOpsWorker] provider_timeout", {
+        operationId: operation.id,
+        projectId: operation.projectId,
+        provider: operation.provider,
+        kind: operation.kind,
+        timeoutMs: executionPolicy.timeoutMs,
+      });
       if (operation.kind === "visual_search") {
         return failureResult(
           "failed",
