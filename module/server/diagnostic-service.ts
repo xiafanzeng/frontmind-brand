@@ -813,6 +813,20 @@ export function createDiagnosticService(
       const fallback =
         runtime?.modelFallbacks?.some((f: any) => f.model === "gpt-5.6-sol") ??
         false;
+      if (fallback && !job.fallback) {
+        await update((j, r) => {
+          j.fallback = true;
+          j.model = "gpt-5.6-sol";
+          j.modelFallbacks = runtime.modelFallbacks
+            .filter((f: any) => f.model === "gpt-5.6-sol")
+            .map((f: any) => ({ model: f.model, effort: f.effort, at: f.at }));
+          event(
+            r,
+            "本环节已接续备用 5.6 Sol，原有采集与已完成操作继续复用",
+            job.category,
+          );
+        });
+      }
       if (output) {
         try {
           const envelope = model.classifyManusV2StructuredResultEnvelope(
@@ -1179,18 +1193,28 @@ export function startDiagnosticWorker(core: ModuleHttpCore) {
         const p = task.providerRuntime as any;
         if (!p?.[ROOT] || !p.diagnosticContext) continue;
         await model
-          .runWithStoredEnterpriseProjectScope(p.executionScope, () =>
-            createDiagnosticService(
-              core,
-              p.diagnosticContext,
-              p.diagnosticActor,
-            ).tick(p[ROOT].id),
+          .runWithStoredEnterpriseProjectScope(
+            p.diagnosticContext.accountUserId,
+            p.diagnosticContext.enterpriseProjectId,
+            () =>
+              createDiagnosticService(
+                core,
+                p.diagnosticContext,
+                p.diagnosticActor,
+              ).tick(p[ROOT].id),
           )
           .catch((e: unknown) =>
             console.error(
               "[Brand diagnostics]",
               p[ROOT].id,
-              e instanceof DiagnosticError ? e.code : "WORKER_ERROR",
+              e instanceof DiagnosticError
+                ? e.code
+                : e instanceof Error &&
+                    /^[A-Z][A-Z0-9_]{2,100}$/.test(e.message)
+                  ? e.message
+                  : e instanceof Error
+                    ? e.name
+                    : "WORKER_ERROR",
             ),
           );
       }

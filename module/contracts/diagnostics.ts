@@ -301,6 +301,7 @@ export type DiagnosticJob = {
   repairCount: number;
   repairPending?: boolean;
   repairPrompt?: string;
+  modelFallbacks?: Array<{ model: string; effort: string; at: number }>;
   baselineEventIds?: string[];
   input: unknown;
   lease?: { owner: string; until: number };

@@ -804,6 +804,13 @@ export default function BrandDiagnosticWorkspace({
                 <small>
                   {j.model}
                   {j.fallback ? " · 故障备用" : ""}
+                  {j.modelFallbacks?.map((f, i) => (
+                    <span key={i}>
+                      {" "}
+                      · {new Date(f.at).toLocaleTimeString("zh-CN")} 接续{" "}
+                      {f.model} / {f.effort}
+                    </span>
+                  ))}
                 </small>
                 {j.error && <p className="bd-invalid">{j.error}</p>}
               </div>
