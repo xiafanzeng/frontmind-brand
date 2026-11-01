@@ -1,5 +1,6 @@
 import {
   cleanup,
+  act,
   fireEvent,
   render,
   screen,
@@ -109,6 +110,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("single-page diagnostic interaction", () => {
+  it("clears a transient read failure after a successful poll without hiding action errors", async () => {
+    let poll: (() => void) | undefined;
+    const interval = globalThis.setInterval;
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((fn: () => void, delay: number) => {
+      if (delay === 4000) poll = fn;
+      return interval(fn, delay);
+    }) as any);
+    mock.fetch.mockRejectedValueOnce(new Error("暂时读取失败"));
+    render(<BrandDiagnosticWorkspace />);
+    expect((await screen.findByRole("alert")).textContent).toContain("暂时读取失败");
+    await act(async () => { poll!(); });
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    mock.fetch.mockRejectedValueOnce(new Error("提交被拒绝"));
+    fireEvent.click(screen.getByRole("button", { name: /推荐/ }));
+    expect((await screen.findByRole("alert")).textContent).toContain("提交被拒绝");
+    await act(async () => { poll!(); });
+    expect(screen.getByRole("alert").textContent).toContain("提交被拒绝");
+  });
   function withSavedResult() {
     run.phase = "completed";
     run.confirmedAt = new Date().toISOString();

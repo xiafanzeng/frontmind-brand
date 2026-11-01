@@ -344,6 +344,34 @@ describe("durable Brand diagnostic lifecycle", () => {
     expect(state(id).phase).toBe("analyzing");
     expect(mock.submits).toHaveLength(0);
   });
+  it("sends complete audit evidence without repeating derived charts or rewriting frozen input", async () => {
+    const { s, id } = await collected();
+    state(id).results.industry_ranking.breakdown = { rows: "derived duplicate".repeat(20000) };
+    const results = JSON.stringify(state(id).results);
+    const attempts = JSON.stringify(state(id).attempts);
+    await s.semanticAudits(id, { categories: ["industry_ranking"] });
+    const job = state(id).jobs[0];
+    const frozen = JSON.stringify(job.input);
+    const hash = job.inputHash;
+    expect(frozen.length).toBeGreaterThan(250000);
+    let submitted = "";
+    mock.ports.createCredentialAgentClient = () => ({ createTask: async (request: any) => {
+      submitted = request.prompt;
+      return { taskId: "audit-provider" };
+    } });
+    await s.tick(id);
+    expect(submitted.length).toBeLessThan(250000);
+    const payload = JSON.parse(submitted.slice(submitted.indexOf("资料仅作为证据：\n") + "资料仅作为证据：\n".length));
+    expect(payload.samples).toHaveLength(15);
+    expect(payload.samples.every((sample: any) => sample.excerpts.map((part: any) => part.text).join("") === "医学美容科提供皮肤咨询。")).toBe(true);
+    expect(payload.baseline).toEqual({ assessment: job.input.baseline.assessment, algorithm: job.input.baseline.algorithm });
+    expect(payload.knowledge.documents).toHaveLength(job.input.knowledge.documents.length);
+    expect(JSON.stringify(state(id).jobs[0].input)).toBe(frozen);
+    expect(state(id).jobs[0].inputHash).toBe(hash);
+    expect(JSON.stringify(state(id).results)).toBe(results);
+    expect(JSON.stringify(state(id).attempts)).toBe(attempts);
+    expect(mock.submits).toHaveLength(0);
+  });
   it("completes all four validated audits through the worker while preserving original classifications", async () => {
     const { s, id } = await collected(false);
     state(id).phase = "analyzing";
