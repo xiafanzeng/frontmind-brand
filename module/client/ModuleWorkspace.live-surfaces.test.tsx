@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./components/EmbeddedKnowledgeBasePanel", () => ({
   default: (props: Record<string, any>) => {
     mocks.knowledgeProps = props;
-    return <div data-testid="knowledge-surface">{props.diagnosticAction}<div data-testid="knowledge-conversation" /><aside data-testid="knowledge-right-column"><div data-testid="knowledge-cards" />{props.afterKnowledge}</aside></div>;
+    return <div data-testid="knowledge-surface"><div data-testid="knowledge-conversation" /><aside data-testid="knowledge-right-column"><div data-testid="knowledge-cards" /></aside></div>;
   },
 }));
 vi.mock("./BrandDiagnosticWorkspace", () => ({
@@ -57,52 +57,35 @@ afterEach(() => {
   cleanup();
   history.replaceState({}, "", "/");
   mocks.knowledgeProps = null;
+  mocks.diagnosticProps = null;
   mocks.ragProps = null;
   mocks.websiteProps = null;
   mocks.websiteSettingsProps = null;
 });
 
 describe("ModuleWorkspace redesigned live routes", () => {
-  it("opens diagnostics from the visible toolbar without replacing the knowledge conversation or cards", () => {
-    render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
-    const conversation=screen.getByTestId("knowledge-conversation");
-    const cards=screen.getByTestId("knowledge-cards");
-    fireEvent.click(screen.getByRole("button", {name:"AI 语义诊断"}));
-    expect(mocks.diagnosticProps?.expanded).toBe(true);
-    expect(new URLSearchParams(location.search).get("diagnosticView")).toBe("expanded");
-    expect(screen.getByTestId("knowledge-conversation")).toBe(conversation);
-    expect(screen.getByTestId("knowledge-cards")).toBe(cards);
-    fireEvent.click(screen.getByRole("button", {name:"返回知识库"}));
-    expect(mocks.diagnosticProps?.expanded).toBe(false);
-    expect(new URLSearchParams(location.search).get("diagnosticView")).toBe("embedded");
-  });
-  it("keeps remembered tasks below knowledge cards on reload and restores explicit reading mode", () => {
-    history.replaceState({}, "", "/?view=knowledge&diagnosis=task");
-    const view=render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
-    expect(mocks.diagnosticProps?.expanded).toBe(false);
-    expect(screen.getByRole("button", {name:"AI 语义诊断"})).toBeTruthy();
-    view.unmount();
+  it("keeps the original knowledge conversation and cards separate from diagnostics", () => {
     history.replaceState({}, "", "/?view=knowledge&diagnosis=task&diagnosticView=expanded");
-    const reading=render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
-    expect(mocks.diagnosticProps?.expanded).toBe(true);
-    reading.unmount();
-    history.replaceState({}, "", "/?view=knowledge&diagnosis=task&diagnosticView=embedded");
-    render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
-    expect(mocks.diagnosticProps?.expanded).toBe(false);
-  });
-  it("keeps the knowledge conversation and cards as the primary workbench, with diagnostics below the right cards", () => {
     render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
     expect(mocks.knowledgeProps).toMatchObject({workbench: true, mode: "workspace", projectId: "workspace-1"});
-    const right = screen.getByTestId("knowledge-right-column");
-    expect(right.children[0]).toBe(screen.getByTestId("knowledge-cards"));
-    expect(right.children[1]).toBe(screen.getByTestId("diagnostic-surface"));
-    expect(screen.getByTestId("knowledge-conversation").parentElement).toBe(screen.getByTestId("knowledge-surface"));
-    expect(screen.getByTestId("diagnostic-surface").querySelector('[data-testid="knowledge-surface"]')).toBeNull();
+    expect(screen.getByTestId("knowledge-conversation")).toBeTruthy();
+    expect(screen.getByTestId("knowledge-right-column").children[0]).toBe(screen.getByTestId("knowledge-cards"));
+    expect(screen.queryByTestId("diagnostic-surface")).toBeNull();
+    expect(mocks.knowledgeProps).not.toHaveProperty("afterKnowledge");
+  });
+  it("opens a separate diagnostic page and can navigate back to knowledge confirmation", () => {
+    const onOpenKnowledge=vi.fn();
+    render(<ModuleWorkspace context={context} page="diagnostics" keywordData={keywordData} onOpenKnowledge={onOpenKnowledge} />);
+    expect(screen.getByTestId("diagnostic-surface")).toBeTruthy();
+    expect(screen.queryByTestId("knowledge-surface")).toBeNull();
+    expect(mocks.diagnosticProps?.onOpenKnowledge).toBe(onOpenKnowledge);
+    expect(mocks.diagnosticProps).not.toHaveProperty("embedded");
   });
   it("scopes every Brand page inside the Apple theme boundary", () => {
     const pages: BrandPage[] = [
       "reports",
       "knowledge",
+      "diagnostics",
       "keywords",
       "intent",
       "response-logic",

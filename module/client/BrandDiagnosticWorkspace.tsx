@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -69,18 +69,10 @@ function locationPatch(values: Record<string, string | null>) {
   window.history.replaceState(window.history.state, "", u);
 }
 export default function BrandDiagnosticWorkspace({
-  knowledgePanel,
-  embedded = false,
-  expanded = false,
-  onExpandedChange,
   onOpenKnowledge,
   preview = false,
   storageKey = "brand-diagnostic-draft",
 }: {
-  knowledgePanel?: ReactNode;
-  embedded?: boolean;
-  expanded?: boolean;
-  onExpandedChange?: (expanded: boolean) => void;
   onOpenKnowledge?: () => void;
   preview?: boolean;
   storageKey?: string;
@@ -113,13 +105,6 @@ export default function BrandDiagnosticWorkspace({
     return value;
   }
   const initial = useRef(urlState());
-  useEffect(() => {
-    if (!expanded) return;
-    const frame = requestAnimationFrame(() =>
-      document.getElementById("brand-diagnostic-workspace")?.scrollIntoView?.({block: "start"}),
-    );
-    return () => cancelAnimationFrame(frame);
-  }, [expanded]);
   const [workspace, setWorkspace] = useState<DiagnosticWorkspace | null>(null);
   const [run, setRun] = useState<DiagnosticRunView | null>(null);
   const [runId, setRunId] = useState<string | null>(
@@ -343,13 +328,12 @@ export default function BrandDiagnosticWorkspace({
       <div className="bd-workspace">
         <h1>AI 语义诊断</h1>
         <p>连接企业工作区后，使用逐项确认的知识库开始四类诊断。</p>
-        {knowledgePanel}
       </div>
     );
   return (
     <section
       id="brand-diagnostic-workspace"
-      className={`bd-workspace${embedded ? " bd-workspace--embedded" : ""}${expanded ? " bd-workspace--reading" : ""}`}
+      className="bd-workspace"
       aria-label="AI 语义诊断"
     >
       <header className="bd-header">
@@ -361,11 +345,6 @@ export default function BrandDiagnosticWorkspace({
         <span className="bd-status">
           {run ? phases[run.phase] : "知识库 → 四类诊断"}
         </span>
-        {embedded && onExpandedChange && (
-          <button type="button" onClick={() => onExpandedChange(!expanded)}>
-            {expanded ? "返回知识卡片" : "展开诊断阅读"}
-          </button>
-        )}
       </header>
       <nav className="bd-steps" aria-label="诊断流程">
         {[
@@ -451,7 +430,7 @@ export default function BrandDiagnosticWorkspace({
                             </ReactMarkdown>
                           </details>
                         ))
-                      : knowledgePanel}
+                      : <p>当前没有可展示的知识正文。</p>}
                   </div>
                 )}
               </>
@@ -459,10 +438,9 @@ export default function BrandDiagnosticWorkspace({
               <div className="bd-knowledge-build">
                 {onOpenKnowledge && (
                   <button className="bd-link" onClick={onOpenKnowledge}>
-                    返回上方知识卡片，继续逐项确认
+                    前往智能知识库，继续逐项确认
                   </button>
                 )}
-                {knowledgePanel}
               </div>
             )}
           </>
