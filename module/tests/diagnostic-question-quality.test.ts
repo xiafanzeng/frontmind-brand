@@ -36,6 +36,23 @@ const candidate = (
   ...input,
 });
 describe("Brand short question contract", () => {
+  it("uses frozen enterprise identity when a cited node uses a local subject pronoun", () => {
+    const localBasis = {
+      ...basis,
+      documents: [{path: "service.md", title: "服务范围", content: "本科室提供激光祛斑，适用条件需由医师判断。"}],
+    };
+    expect(() => assertDiagnosticQuestionPortfolio([
+      candidate({}),
+      candidate({category: "reputation", text: "甲医院口碑怎么样？", enterpriseAnchor: "甲医院", rationale: "核对患者评价依据"}),
+      candidate({category: "product_scenario", text: "甲医院激光祛斑适合哪些情况？", enterpriseAnchor: "甲医院", offeringAnchor: "激光祛斑", rationale: "核对服务适用条件"}),
+    ], localBasis)).not.toThrow();
+    expect(() => assertDiagnosticQuestionPortfolio([
+      candidate({category: "reputation", text: "丙医院口碑怎么样？", enterpriseAnchor: "丙医院"}),
+    ], localBasis)).toThrow(/诊断主体/);
+    expect(() => assertDiagnosticQuestionPortfolio([
+      candidate({category: "product_scenario", text: "甲医院超声炮适合哪些情况？", enterpriseAnchor: "甲医院", offeringAnchor: "超声炮"}),
+    ], localBasis)).toThrow(/实际存在/);
+  });
   it("accepts all four source-supported intents", () => {
     expect(() =>
       assertDiagnosticQuestionPortfolio(

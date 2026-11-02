@@ -3,7 +3,11 @@ import { useEffect, useRef } from "react";
 import BrandConversationMessage from "./BrandConversationMessage";
 import { EmptyConversationHint } from "./KnowledgeStarter";
 import { useKnowledgeBaseStarter } from "../lib/useKnowledgeBaseStarter";
-import { useKnowledgeBaseUploadBatch } from "../lib/knowledge-base-upload-manager";
+import {
+  useKnowledgeBaseUploadBatch,
+  useKnowledgeBaseUploadField,
+} from "../lib/knowledge-base-upload-manager";
+import KnowledgeBaseManagedUploadRecovery from "./KnowledgeBaseManagedUploadRecovery";
 import { sanitizeKnowledgeBaseOutputMessages } from "../knowledge-conversation-state";
 import {
   ChatInput,
@@ -32,6 +36,12 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
   const batch = useKnowledgeBaseUploadBatch(
     `${scope}:${props.knowledgeBaseResetRevision ?? 0}`,
     `${scope}:`,
+  );
+  const [locallyStarting] = useKnowledgeBaseUploadField(batch, "isStarting", false);
+  const [localBatchStartedAt] = useKnowledgeBaseUploadField<number | null>(
+    batch,
+    "batchStartedAt",
+    null,
   );
   const start = useKnowledgeBaseStarter(batch);
   const messages = sanitizeKnowledgeBaseOutputMessages(
@@ -160,13 +170,30 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
     conversation?.knowledgeBase?.initialized ||
     running ||
     messages.some((message) => message.knowledgeBase?.kind === "pending_user");
+  const knowledge = conversation?.knowledgeBase;
+  const keepLocalStarter = locallyStarting || (
+    localBatchStartedAt !== null &&
+    knowledge?.activeTurnOperationType === "start" &&
+    knowledge.activeTurnAwaitingClientAttachments
+  );
+  const recoverStart =
+    !keepLocalStarter &&
+    knowledge?.activeTurnOperationType === "start" &&
+    knowledge.activeTurnAwaitingClientAttachments &&
+    knowledge.activeTurnId && knowledge.activeClientRequestId
+      ? {
+          turnId: knowledge.activeTurnId,
+          clientRequestId: knowledge.activeClientRequestId,
+          resetRevision: props.knowledgeBaseResetRevision ?? knowledge.activeTurnResetRevision ?? 0,
+        }
+      : null;
   return (
     <section
       className="brand-knowledge-conversation"
       aria-label="知识库构建与恢复"
     >
       {context.syncError && <p role="alert">{context.syncError}</p>}
-      {!hasStarted && !props.knowledgeBaseProgress ? (
+      {keepLocalStarter || (!hasStarted && !props.knowledgeBaseProgress) ? (
         <EmptyConversationHint
           uploadScopeKey={scope}
           resetRevision={props.knowledgeBaseResetRevision ?? 0}
@@ -204,7 +231,21 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
           {props.knowledgeBaseProgress && (
             <KnowledgeWorkspaceStatus progress={props.knowledgeBaseProgress} />
           )}
-          <ChatInput {...props} operatorWorkspace syncKnowledgeBaseSnapshot />
+          {recoverStart && conversation ? (
+            <KnowledgeBaseManagedUploadRecovery
+              operationType="start"
+              conversationId={conversation.id}
+              turnId={recoverStart.turnId}
+              clientRequestId={recoverStart.clientRequestId}
+              expectedResetRevision={recoverStart.resetRevision}
+              onObservation={observation =>
+                context.commitKnowledgeBaseObservation(conversation.id, observation)
+              }
+              onRecovered={() => context.wakeKnowledgeBaseConversation(conversation.id)}
+            />
+          ) : (
+            <ChatInput {...props} operatorWorkspace syncKnowledgeBaseSnapshot />
+          )}
         </>
       )}
     </section>

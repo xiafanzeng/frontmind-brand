@@ -112,6 +112,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("single-page diagnostic interaction", () => {
+  it("labels pending recommendation and validation without exposing execution logs", async () => {
+    history.replaceState({}, "", `/?view=diagnostics&diagnosis=${id}`);
+    run.activity.recommendation = { status: "running" };
+    run.activity.validation = { status: "queued" };
+    render(<BrandDiagnosticWorkspace />);
+    expect((await screen.findByRole("button", { name: "正在生成推荐问题…" })).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "正在校验四题…" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText(/查看执行记录/)).toBeNull();
+  });
   it("clears a transient read failure after a successful poll without hiding action errors", async () => {
     let poll: (() => void) | undefined;
     const interval = globalThis.setInterval;

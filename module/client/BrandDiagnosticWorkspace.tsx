@@ -582,9 +582,11 @@ export default function BrandDiagnosticWorkspace({
                 ) : (
                   <Search size={16} />
                 )}{" "}
-                {run?.recommendations.length
-                  ? "刷新推荐问题"
-                  : "根据知识库推荐问题"}
+                {recommending
+                  ? "正在生成推荐问题…"
+                  : run?.recommendations.length
+                    ? "刷新推荐问题"
+                    : "根据知识库推荐问题"}
               </button>
               <small>也可以直接输入四题，再校验问题。</small>
             </div>
@@ -718,7 +720,7 @@ export default function BrandDiagnosticWorkspace({
                   ) : (
                     <Check size={16} />
                   )}
-                  保存并校验四题
+                  {validating ? "正在校验四题…" : "保存并校验四题"}
                 </button>
                 <span>
                   {dirty
