@@ -93,6 +93,8 @@ describe('knowledge workbench recovery', () => {
   it('does not turn complete progress observations into a reset-status polling loop', async () => {
     render(panel());
     await screen.findByRole('textbox');
+    m.refetchProgress.mockClear();
+    m.refresh.mockClear();
     act(() => {
       for (let n = 0; n < 10; n++) window.dispatchEvent(new CustomEvent('frontmind:knowledge-progress-updated', {
         detail: { progress: m.progress, generation: 3, stateEpoch: 4 },
@@ -102,5 +104,16 @@ describe('knowledge workbench recovery', () => {
     expect(m.refetchProgress).not.toHaveBeenCalled();
     act(() => window.dispatchEvent(new CustomEvent('frontmind:knowledge-progress-updated')));
     expect(m.refetchReset).toHaveBeenCalledTimes(1);
+  });
+  it('restores an acknowledged running build when the latest-build cache is still empty', async () => {
+    m.progress = null;
+    m.conversation = { ...m.conversation, status: 'running', workbenchAgentId: 'knowledge',
+      knowledgeBase: { initialized: true, generation: 1, stateEpoch: 1 },
+      messages: [{ id: 'start', role: 'user', content: '开始构建', timestamp: 1,
+        knowledgeBase: { kind: 'pending_user', serverOwned: true, turnId: 'turn' } }] };
+    render(panel());
+    await screen.findByRole('textbox');
+    expect(m.create).not.toHaveBeenCalled();
+    expect(m.refresh).toHaveBeenCalled();
   });
 });

@@ -26,7 +26,7 @@ function currentKnowledgeWorkflowHash(): string {
     let manifest;
     try { manifest = JSON.parse(readFileSync(candidate, "utf8")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
-    if (manifest.formatVersion !== 1 || manifest.version !== "5" || !isKnowledgeBaseSkillContentHash(manifest.contentHash)) throw new Error("KNOWLEDGE_WORKFLOW_MANIFEST_INVALID");
+    if (manifest.formatVersion !== 1 || manifest.version !== "6" || !isKnowledgeBaseSkillContentHash(manifest.contentHash)) throw new Error("KNOWLEDGE_WORKFLOW_MANIFEST_INVALID");
     return manifest.contentHash;
   }
   throw new Error("KNOWLEDGE_WORKFLOW_BUILD_REQUIRED");
@@ -34,7 +34,8 @@ function currentKnowledgeWorkflowHash(): string {
 export function isKnowledgeBaseSkillContentHash(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
-export const KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH = currentKnowledgeWorkflowHash();
+export const KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH = "f5562c0ca1d570a0714727453d44c7e85ed3020f73230dbf880bace94241ed7e";
+export const KNOWLEDGE_BASE_MATERIALIZED_V6_SKILL_CONTENT_HASH = currentKnowledgeWorkflowHash();
 
 export function knowledgeBaseSkillContentHashForTreePolicy(
   treePolicyVersion: KnowledgeBaseTreePolicyVersion,
@@ -88,14 +89,14 @@ export function knowledgeBaseNewBuildPolicyBinding(
   return {
     treePolicyVersion:
       KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP as KnowledgeBaseTreePolicyVersion,
-    skillVersion: "5" as const,
-    skillContentHash: KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH,
+    skillVersion: "6" as const,
+    skillContentHash: KNOWLEDGE_BASE_MATERIALIZED_V6_SKILL_CONTENT_HASH,
   };
 }
 
 /** Old tasks may retain an earlier exact archive; verify its bytes at load time. */
 export function knowledgeBaseBuildSkillPinSupported(build: {skillContentHash: string | null; skillArchiveSha256?: string | null; skillArchiveBytes?: number | null; skillArchiveStorageKey?: string | null}) {
-  if (build.skillContentHash === KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH) return true;
+  if ([KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH, KNOWLEDGE_BASE_MATERIALIZED_V6_SKILL_CONTENT_HASH].includes(build.skillContentHash ?? "")) return true;
   return isKnowledgeBaseSkillContentHash(build.skillContentHash) &&
     isKnowledgeBaseSkillContentHash(build.skillArchiveSha256) &&
     Number.isSafeInteger(build.skillArchiveBytes) && Number(build.skillArchiveBytes) > 0 &&

@@ -7,6 +7,7 @@ const mock = vi.hoisted(() => ({
   wait: null as any,
   ready: true,
   stops: [] as string[],
+  working: null as any,
 }));
 vi.mock("../server/intent-skill-runtime.js", () => ({
   intentSkillPorts: () => mock.ports,
@@ -17,6 +18,10 @@ vi.mock("../server/knowledge-base-progress-service.js", () => ({
   assertKnowledgeBaseReadyForUpdate: async () => {
     if (!mock.ready) throw new Error("not ready");
   },
+}));
+vi.mock("../server/knowledge-workbench-service.js", () => ({
+  readDiagnosticKnowledgeWorkingSet: async () => mock.working,
+  readDiagnosticKnowledgeArchive: async () => Buffer.from("zip"),
 }));
 vi.mock("../server/diagnostic-monitor.js", async (original) => {
   const real = await original<any>();
@@ -71,7 +76,7 @@ import {
 } from "../server/diagnostic-service.js";
 import { DiagnosticMonitorError } from "../server/diagnostic-monitor.js";
 import { intentHash } from "../server/intent-skill-runtime.js";
-import { DIAGNOSTIC_CATEGORIES } from "../contracts/diagnostics.js";
+import { DIAGNOSTIC_CATEGORIES, DIAGNOSTIC_QUESTION_RULES_VERSION } from "../contracts/diagnostics.js";
 import { SEMANTIC_AUDIT_METRICS, SEMANTIC_AUDIT_DIMENSIONS } from "../contracts/semantic-audit.js";
 const table = (name: string) =>
   new Proxy({ name } as any, {
@@ -215,6 +220,7 @@ beforeEach(() => {
   mock.submits = [];
   mock.wait = null;
   mock.ready = true;
+  mock.working = null;
   mock.stops = [];
   db.execute = async (query?: any) => {
     const text = query?.strings.join(" ");
@@ -240,6 +246,8 @@ beforeEach(() => {
             status: "published",
             publishedSnapshotId: "snapshot-1",
             activeTurnId: null,
+            executionMode: mock.working ? "materialized_bundle_v1" : null,
+            workingSetId: mock.working?.id,
           },
         ],
       ];
@@ -273,8 +281,8 @@ beforeEach(() => {
 async function draft() {
   const s = service(),
     id = randomUUID();
-  await s.create({ clientRequestId: id, subjectScope: "医学美容科" });
-  return { s, id };
+  const run = await s.create({ clientRequestId: id, subjectScope: "医学美容科" });
+  return { s, id: run.id };
 }
 async function start() {
   const { s, id } = await draft();
@@ -291,6 +299,7 @@ async function start() {
         r.subject,
         category,
         category + "问题原文",
+        DIAGNOSTIC_QUESTION_RULES_VERSION,
       ]),
     },
   }));
@@ -311,6 +320,37 @@ describe("durable Brand diagnostic lifecycle", () => {
     for (const c of DIAGNOSTIC_CATEGORIES) r.results[c] = { assessment: { category: c, topics: [], answers: [], ...(c === "product_scenario" ? { knowledgeCoverage: [] } : {}) }, algorithm: "brand_diagnostics_v2" };
     return { s, id };
   }
+  it("returns one initial diagnosis for simultaneous independent request ids", async () => {
+    const first = randomUUID(), second = randomUUID();
+    const [a, b] = await Promise.all([service().create({ clientRequestId: first }), service().create({ clientRequestId: second })]);
+    expect(a.id).toBe(b.id);
+    expect((await service().workspace()).initialRunId).toBe(a.id);
+    expect(db.data.operations.filter((row) => row.operationType === "brand_diagnostic_v1")).toHaveLength(1);
+  });
+  it("permits a validated full working copy before confirmation and freezes its content", async () => {
+    mock.ready = false;
+    mock.working = { id: randomUUID(), generation: 1, contentVersion: 1, packageSha256: "a".repeat(64), documents: documents.map((doc) => ({ ...doc, leafId: "one", reviewStatus: "draft" })) };
+    const workspace = await service().workspace();
+    expect(workspace.knowledge).toMatchObject({ ready: true, downstreamReady: false, status: "draft_ready" });
+    const { s, id } = await draft();
+    const originalHash = state(id).basis.contentHash;
+    expect(state(id).basis).toMatchObject({ kind: "working_set", packageSha256: "a".repeat(64) });
+    mock.working.documents[0].reviewStatus = "confirmed";
+    expect((await s.workspace()).knowledge.bases?.[0].contentHash).toBe(originalHash);
+    mock.working.documents[0].content += "新增业务内容。";
+    await expect(s.recommend(id)).rejects.toMatchObject({ code: "KNOWLEDGE_CHANGED" });
+    expect(state(id).basis.contentHash).toBe(originalHash);
+  });
+  it("resumes the stopped initial diagnosis without replacing supplier identities", async () => {
+    const { s, id } = await start();
+    await s.tick(id);
+    const submitted = state(id).attempts.filter((attempt: any) => attempt.taskId).map((attempt: any) => [attempt.id, attempt.taskId]);
+    await s.stop(id);
+    await s.retry(id);
+    expect(state(id).phase).toBe("collecting");
+    expect(state(id).attempts.filter((attempt: any) => attempt.taskId).map((attempt: any) => [attempt.id, attempt.taskId])).toEqual(submitted);
+    expect((await service().create({ clientRequestId: randomUUID() })).id).toBe(id);
+  });
   it("removes internal execution details without losing business activity", async () => {
     const { s, id } = await draft();
     await s.recommend(id);
@@ -595,6 +635,7 @@ describe("durable Brand diagnostic lifecycle", () => {
       code: "KNOWLEDGE_NOT_READY",
     });
     mock.ready = true;
+  mock.working = null;
     const { s, id } = await draft();
     expect((await s.documents(id))[0].evidenceStatus).toBe(
       "needs_verification",
@@ -685,6 +726,7 @@ describe("durable Brand diagnostic lifecycle", () => {
     await expect(
       s.start(id, { expectedRevision: state(id).revision }),
     ).rejects.toMatchObject({ code: "KNOWLEDGE_CHANGED" });
+    state(id).basis.snapshotId = "snapshot-1";
     const started = await start();
     mock.ready = false;
     await started.s.tick(started.id);

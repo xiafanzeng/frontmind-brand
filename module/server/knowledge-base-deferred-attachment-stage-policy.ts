@@ -52,7 +52,7 @@ export async function requireKnowledgeBaseDeferredAttachmentStageBuild(
   if (
     !build ||
     build.executionMode !== MATERIALIZED_KNOWLEDGE_BASE_EXECUTION_MODE ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     build.providerProtocol !== "manus_v2"
   ) {
     throw new KnowledgeBaseTurnReservationError(

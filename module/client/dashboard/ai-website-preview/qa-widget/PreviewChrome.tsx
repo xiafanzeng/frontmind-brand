@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import {
   BarChart3,
   BookOpen,
-  Bot,
   ChevronDown,
   CircleUserRound,
   Crosshair,
@@ -66,10 +65,6 @@ export function PreviewChrome({
               <span>{label}</span>
             </button>
           ))}
-          <div className="aqwp-side-link aqwp-side-link--agent">
-            <Bot />
-            <span>通用智能体</span>
-          </div>
         </nav>
 
         <div className="aqwp-sidebar__bottom">

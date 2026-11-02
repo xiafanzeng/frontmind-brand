@@ -46,9 +46,11 @@ async function readJson(response: Response): Promise<unknown> {
 export async function startJudgeEvaluation(input: {
   questionId: string;
   expectedRevision?: number;
+  retry?: {taskId: string; attempt: number};
   signal?: AbortSignal;
 }): Promise<{
   taskId: string;
+  attempt: number;
   recordRevision: number;
   sourceFingerprint: string;
   knowledgeFingerprint: string;
@@ -58,6 +60,7 @@ export async function startJudgeEvaluation(input: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       questionId: input.questionId,
+      ...(input.retry ? {retry: input.retry} : {}),
       ...(input.expectedRevision !== undefined && input.expectedRevision > 0
         ? { expectedRevision: input.expectedRevision }
         : {}),
@@ -71,6 +74,7 @@ export async function startJudgeEvaluation(input: {
   }
   return {
     taskId: body.taskId,
+    attempt: typeof body.attempt === "number" && Number.isInteger(body.attempt) && body.attempt >= 0 ? body.attempt : 0,
     recordRevision: body.recordRevision,
     sourceFingerprint: String(body.sourceFingerprint ?? ""),
     knowledgeFingerprint: String(body.knowledgeFingerprint ?? "none"),

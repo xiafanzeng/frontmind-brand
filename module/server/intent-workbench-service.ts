@@ -12,6 +12,7 @@ import {
 import {intentHash, prepareIntentSkill, reserveIntentSkill, intentSkillClient, readIntentSkillInput, uploadIntentSkill,
   validateIntentSkillResult, INTENT_WIRE_SCHEMA, intentSkillPorts, IntentSkillRuntimeError, type IntentSkillInput} from "./intent-skill-runtime.js";
 import {updateIntentQuestionSchema, deleteIntentQuestionSchema, mutateIntentQuestion, IntentQuestionMutationError} from "../contracts/intent-question-mutations.js";
+import {isHostIntentQuestion, reconcileHostIntentQuestions} from "./intent-question-catalog.js";
 
 export class IntentWorkbenchError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {super(message);}
@@ -60,6 +61,12 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       const ledger = await readLedger(tx, true);
       if (expectedRevision !== undefined && ledger.revision !== expectedRevision)
         throw new IntentWorkbenchError("REVISION_CONFLICT", "清单已被更新，请重新读取后操作");
+      // Formal question maintenance shares this project write lock. Check the
+      // source again after acquiring it, before reserving any paid task or
+      // applying a command, including callers that skipped the preceding GET.
+      if (expectedRevision !== undefined && core.intentQuestionCatalog &&
+          reconcileHostIntentQuestions(structuredClone(ledger.state), await core.intentQuestionCatalog(request)))
+        throw new IntentWorkbenchError("REVISION_CONFLICT", "正式问题已更新，请重新读取后操作");
       const result = await work(tx, ledger);
       await tx.execute(sql`UPDATE brand_intent_workspaces SET payload = ${JSON.stringify(ledger.state)}, revision = revision + 1 WHERE ${ledgerScope}`);
       return result;
@@ -86,6 +93,15 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   async function observe(): Promise<IntentWorkspace> {
     const db = await database();
     let [ledger, data] = await Promise.all([readLedger(db), knowledge()]);
+    if (core.intentQuestionCatalog) {
+      const questions = await core.intentQuestionCatalog(request);
+      if (reconcileHostIntentQuestions(structuredClone(ledger.state), questions)) {
+        await locked(undefined, async (_tx, current) => {
+          reconcileHostIntentQuestions(current.state, questions);
+        });
+        ledger = await readLedger(db);
+      }
+    }
     // Ledger-scoped job IDs are the authority for reading local historical tasks.
     // Only previously accepted structured output is eligible; never call a model.
     const snapshots = new Map<string, NonNullable<IntentSkillJob["result"]>>();
@@ -431,6 +447,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         }
         if (state.questions.length > 500) throw new IntentWorkbenchError("LIST_LIMIT", "优化清单最多保留 500 条问题");
       } else if (input.kind === "update-question" || input.kind === "delete-question") {
+        if (isHostIntentQuestion(state.questions.find(question => question.id === input.questionId)))
+          throw new IntentWorkbenchError("FORMAL_QUESTION_MAINTENANCE_REQUIRED", "正式问题请通过问题维护入口修改或删除；原应答与历史记录会保留");
         try {mutateIntentQuestion(state, input);}
         catch (cause) {
           if (cause instanceof IntentQuestionMutationError) throw new IntentWorkbenchError(cause.code, cause.message);
@@ -479,6 +497,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       });
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({questionId: plan.questionId, action: structuredClone(action), status: "pending" as const})));
       if (!changes.length) throw new IntentWorkbenchError("EMPTY_PLAN", "请至少选择一项动作");
+      if (changes.some(change => change.action.kind === "question" && isHostIntentQuestion(ledger.state.questions.find(question => question.id === change.questionId))))
+        throw new IntentWorkbenchError("FORMAL_QUESTION_MAINTENANCE_REQUIRED", "正式问题的题干修改请通过修改问题入口采用；取消该题干动作后可继续执行知识优化");
       const nodeIds = changes.filter(change => change.action.kind === "node").map(change => change.action.nodeId);
       if (new Set(nodeIds).size !== nodeIds.length) throw new IntentWorkbenchError("NODE_CONFLICT", "多个方案修改同一知识节点，请分别执行并重新生成方案");
       ledger.state.receipts.push({id: input.clientRequestId, status: "running", createdAt: new Date().toISOString(), changes,
@@ -526,6 +546,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         if (!failure && change.action.kind === "question") {
           const question = ledger.state.questions.find(item => item.id === change.questionId);
           if (!question || question.question !== change.action.before) failure = "问题已被修改，请重新评估";
+          else if (isHostIntentQuestion(question)) failure = "正式问题请通过问题维护入口采用此题干；原应答与历史记录会保留";
           else question.question = change.action.after;
         }
         if (!failure && change.action.kind === "todo") {

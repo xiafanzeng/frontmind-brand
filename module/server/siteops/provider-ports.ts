@@ -10,6 +10,8 @@ export interface DashboardAgentClient {
  recoverMissingCreate?(input:Parameters<DashboardAgentClient["createTask"]>[0]):ReturnType<DashboardAgentClient["createTask"]>;
  sendMessage(input:any):Promise<{taskId:string;taskUrl?:string|null;requestId?:string|null;raw:Record<string,unknown>;[key:string]:unknown}>;
  taskDetail(taskId:string):Promise<any>;
+ backfillProcessSummaries?(taskId:string):Promise<void>;
+ readProcessSummaries?(taskId:string):Promise<{events:ManusV2MessageEvent[];pending:boolean}>;
  listAllMessages(input:{taskId:string;order:'asc'|'desc';stopAfterOperationToken?:string}):Promise<ManusV2MessageEvent[]>;
  findCreatedTask(input:any):Promise<any>;
  stopTask(input:any):Promise<any>;

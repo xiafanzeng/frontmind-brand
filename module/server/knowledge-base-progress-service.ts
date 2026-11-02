@@ -1632,7 +1632,7 @@ export function knowledgeBaseBuildRequiresApprovedReset(
 ) {
   return (
     build.executionMode !== "materialized_bundle_v1" ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     !knowledgeBaseBuildSkillPinSupported(build) ||
     build.providerProtocol !== "manus_v2" ||
     build.contentVersion === null ||
@@ -1755,7 +1755,7 @@ function buildDto(
     knowledgeBasePackageProjectionCompatibility(build);
   const materializedV5 =
     build.executionMode === "materialized_bundle_v1" &&
-    build.skillVersion === "5";
+    (build.skillVersion === "5" || build.skillVersion === "6");
   const hasDisplayableContent = rows.some(
     (row) =>
       typeof row.contentMarkdown === "string" && row.contentMarkdown.trim(),
@@ -2271,7 +2271,7 @@ export async function getKnowledgeBaseProgress(input: {
   progress.execution = await loadKnowledgeBaseExecution({ userId: input.userId, buildId: build.id, generation: build.generation, executor: db });
   if (
     build.executionMode !== "materialized_bundle_v1" ||
-    build.skillVersion !== "5"
+    (build.skillVersion !== "5" && build.skillVersion !== "6")
   ) {
     return progress;
   }
@@ -2560,7 +2560,7 @@ async function readKnowledgeBaseObservationProjection(
   const terminalFailedTurnRow =
     !build.activeTurnId &&
     build.executionMode === "materialized_bundle_v1" &&
-    build.skillVersion === "5" &&
+    (build.skillVersion === "5" || build.skillVersion === "6") &&
     (build.status === "protocol_error" || build.status === "failed")
       ? await db
           .select()
@@ -2926,6 +2926,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     typeof conversationTurns.$inferSelect,
     | "id"
     | "clientRequestId"
+    | "operationKey"
     | "expectedLeafId"
     | "attachmentFileIds"
     | "metadata"
@@ -2933,7 +2934,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
   > | null;
   terminalCompletedTurnRow: Pick<
     typeof conversationTurns.$inferSelect,
-    "id" | "clientRequestId" | "status"
+    "id" | "clientRequestId" | "status" | "operationKey"
   > | null;
   terminalFailedTurnRow: Pick<
     typeof conversationTurns.$inferSelect,
@@ -3086,6 +3087,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     completedTurnRow?.clientRequestId && completedMessageSequence !== undefined
       ? {
           turnId: completedTurnRow.id,
+          operationKey: completedTurnRow.operationKey ?? undefined,
           clientRequestId: completedTurnRow.clientRequestId,
           messageSequence: completedMessageSequence,
         }

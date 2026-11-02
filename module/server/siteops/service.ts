@@ -2472,6 +2472,72 @@ export function requireSiteDesignRecommendationTemplate<
   return template;
 }
 
+/** A retained project may keep an admitted template after active.json advances.
+ * Only server-owned candidates from that project's current cycle authorize an
+ * immutable-version read; a browser cannot choose an arbitrary old catalog. */
+export async function resolveSiteDesignRecommendationTemplate(input: {
+  coordinate: SiteDesignTemplateCoordinate;
+  activeCatalog: Parameters<typeof requireSiteDesignRecommendationTemplate>[0];
+  frozenCandidates: readonly {
+    templateCoordinate: SiteDesignTemplateCoordinate | null;
+    executionAdmitted: boolean;
+  }[];
+  loadVersion: (version: string) => Promise<Parameters<typeof requireSiteDesignRecommendationTemplate>[0]>;
+}) {
+  if (input.activeCatalog?.catalogVersion === input.coordinate.version) {
+    return requireSiteDesignRecommendationTemplate(input.activeCatalog, input.coordinate);
+  }
+  const retained = input.frozenCandidates.some(candidate =>
+    candidate.executionAdmitted
+    && candidate.templateCoordinate?.id === input.coordinate.id
+    && candidate.templateCoordinate.version === input.coordinate.version,
+  );
+  if (!retained) {
+    throw new SiteOpsServiceError("REVISION_CONFLICT",
+      "所选网站模板不属于当前项目的可用候选，请刷新后重新选择。", 409);
+  }
+  return requireSiteDesignRecommendationTemplate(
+    await input.loadVersion(input.coordinate.version), input.coordinate,
+  );
+}
+
+async function requireSiteDesignTemplateForOwnedProject(
+  executor: any,
+  ownerUserId: number,
+  coordinate: SiteDesignTemplateCoordinate,
+  suppliedProject?: typeof siteProjects.$inferSelect,
+) {
+  const activeCatalog = await loadStaticTemplateCatalogForServiceReadiness();
+  if (activeCatalog?.catalogVersion === coordinate.version) {
+    return requireSiteDesignRecommendationTemplate(activeCatalog, coordinate);
+  }
+  const project = suppliedProject ?? await loadOwnedProject(executor, ownerUserId);
+  const rows = project ? await executor
+    .select({ sourceMetadata: websiteStyleSamples.sourceMetadata })
+    .from(websiteStyleSamples)
+    .innerJoin(websiteStyleSampleBatches, eq(websiteStyleSamples.batchId, websiteStyleSampleBatches.id))
+    .where(and(
+      eq(websiteStyleSampleBatches.siteProjectId, project.id),
+      eq(websiteStyleSampleBatches.userId, ownerUserId),
+      eq(websiteStyleSampleBatches.sourceKind, "siteops_21st"),
+      gte(websiteStyleSampleBatches.createdAt, project.currentTaskStartedAt),
+      customerVisibleStyleBatchStatusCondition(),
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${websiteStyleSamples.sourceMetadata}, '$.catalogCandidateId')) = ${coordinate.id}`,
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${websiteStyleSamples.sourceMetadata}, '$.catalogVersion')) = ${coordinate.version}`,
+    ))
+    .limit(1) : [];
+  return resolveSiteDesignRecommendationTemplate({
+    coordinate, activeCatalog,
+    frozenCandidates: rows.map((row: { sourceMetadata: unknown }) => publicVisualMetadata(row.sourceMetadata)),
+    loadVersion: async version => {
+      const catalog = await requireStaticTemplateCatalogVersion(version, { verifyIntegrityStats: true });
+      return { ...catalog, entries: catalog.entries.map(entry => ({ ...entry,
+        executionAdmission: "executionAdmission" in entry ? entry.executionAdmission : { status: "unavailable" as const },
+      })) };
+    },
+  });
+}
+
 /**
  * Replaces storage identifiers and archive paths with snapshot-bound opaque
  * coordinates before recommendation data can cross the public API boundary.
@@ -3463,11 +3529,8 @@ export async function recommendSiteDesign(
   const ownerUserId = enterpriseWorkspaceUserId(actor.id);
   await requireSiteOpsReadOnlyEntitlement(ownerUserId);
   const input = siteDesignRecommendationInputSchema.parse(value);
-  requireSiteDesignRecommendationTemplate(
-    await loadStaticTemplateCatalogForServiceReadiness(),
-    input.template,
-  );
   const db = await requireDb();
+  await requireSiteDesignTemplateForOwnedProject(db, ownerUserId, input.template);
   const rows = await db
     .select()
     .from(knowledgeBaseSnapshots)
@@ -3553,10 +3616,6 @@ export async function saveSiteDesignPreferences(
   const ownerUserId = enterpriseWorkspaceUserId(actor.id);
   await requireSiteOpsEntitlement(ownerUserId);
   const input = siteDesignPreferencesSaveInputSchema.parse(value);
-  requireSiteDesignRecommendationTemplate(
-    await loadStaticTemplateCatalogForServiceReadiness(),
-    input.draft.template,
-  );
   const db = await requireDb();
   await db.transaction(async (tx: any) => {
     await lockCustomerProjectBusinessWrite(tx, ownerUserId, actor);
@@ -3569,6 +3628,7 @@ export async function saveSiteDesignPreferences(
     if (!project) {
       throw new SiteOpsServiceError("NOT_FOUND", "AI 建站会话不存在。", 404);
     }
+    await requireSiteDesignTemplateForOwnedProject(tx, ownerUserId, input.draft.template, project);
     if (project.revision !== input.expectedProjectRevision) {
       throw new SiteOpsServiceError(
         "REVISION_CONFLICT",

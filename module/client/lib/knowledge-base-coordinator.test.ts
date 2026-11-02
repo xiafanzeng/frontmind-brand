@@ -81,6 +81,18 @@ function awaitingInputObservation(
 }
 
 describe("KnowledgeBasePollingCoordinator", () => {
+  it("polls the short research-summary tail without extending local confirmation polling", () => {
+    const observation = awaitingInputObservation();
+    observation.completedTurn = { turnId: "research-turn", clientRequestId: "r", messageSequence: 1 };
+    observation.interaction.progress!.execution = { schemaVersion: 1, taskId: "build-1", coverage: "complete", timeline: [
+      { id: "research", turnId: "research-turn", userSequence: 1, timestamp: 1000, rank: 0, kind: "status", phase: "researching", status: "ended" },
+      { id: "finished", turnId: "research-turn", userSequence: 1, timestamp: 2000, rank: 1, kind: "status", phase: "published", status: "ended" },
+    ] };
+    expect(observationNeedsPolling(observation, 3000)).toBe(true);
+    expect(observationNeedsPolling(observation, 78_000)).toBe(false);
+    observation.completedTurn.turnId = "local-confirm";
+    expect(observationNeedsPolling(observation, 3000)).toBe(false);
+  });
   it.each(["activeTurn", "approvedPresentation", "completedTurn"] as const)(
     "accepts an ordinary reply acknowledged by %s",
     (field) => {

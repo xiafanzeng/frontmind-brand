@@ -181,7 +181,7 @@ export type KnowledgeBaseWorkingSetManifest = {
   contentVersion: number;
   skill: {
     name: "socratic-kb-builder";
-    version: "5";
+    version: "5" | "6";
     contentHash: string;
   };
   treePolicyVersion: 2;
@@ -208,6 +208,7 @@ export type KnowledgeBaseWorkingSetExpectation = Readonly<{
   generation: number;
   contentVersion: number;
   skillContentHash: string;
+  skillVersion?: "5" | "6";
   treePolicyVersion: number;
   companyName: string;
   companyWebsite: string | null;
@@ -385,6 +386,7 @@ export class KnowledgeBaseMaterializedContractError extends Error {
     readonly category:
       | "contract"
       | "manifest_parse"
+      | "depth"
       | "frozen_source_conflict" = "contract",
   ) {
     super(message);
@@ -397,6 +399,33 @@ function fail(
   category: KnowledgeBaseMaterializedContractError["category"] = "contract",
 ): never {
   throw new KnowledgeBaseMaterializedContractError(message, category);
+}
+
+export function knowledgeBaseVisibleCharacters(markdown: string) {
+  const text = markdown.replace(/^\s*#\s+[^\n]*(?:\n|$)/u, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/gu, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
+    .replace(/https?:\/\/\S+/gu, "")
+    .replace(/[\s#>*_`~]/gu, "");
+  return Array.from(text).length;
+}
+
+/** Byte-bound evidence sufficiency only; source truth is not established here. */
+export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManifest, files: ReadonlyMap<string, Buffer>) {
+  if (manifest.skill.version !== "6") return [];
+  const policy = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth;
+  return manifest.leaves.flatMap((leaf) => {
+    const evidence = new Map<string, string>();
+    for (const path of leaf.evidencePaths) {
+      const text = files.get(path)?.toString("utf8") ?? "";
+      evidence.set(text.replace(/\s/gu, ""), text);
+    }
+    const evidenceCharacters = [...evidence.values()].reduce((count, text) => count + knowledgeBaseVisibleCharacters(text), 0);
+    const bodyCharacters = knowledgeBaseVisibleCharacters(files.get(leaf.contentPath)?.toString("utf8") ?? "");
+    return evidenceCharacters >= policy.evidenceThreshold && bodyCharacters < policy.minimumBodyCharacters
+      ? [{ leafId: leaf.leafId, title: leaf.title, evidenceCharacters, bodyCharacters, minimumBodyCharacters: policy.minimumBodyCharacters }]
+      : [];
+  });
 }
 
 export function isKnowledgeBasePatchManifestParseError(error: unknown) {
@@ -1220,11 +1249,12 @@ async function validateKnowledgeBaseWorkingSetArchiveInternal(
     onNormalized: coordinateNormalized,
   });
 
+  const skillVersion = expected.skillVersion ?? (raw.skill && typeof raw.skill === "object" && (raw.skill as JsonObject).version === "6" ? "6" : "5");
   let rawSkillHash: unknown;
   try {
     const skillRaw = object(raw.skill, "skill");
     rawSkillHash = skillRaw.contentHash;
-    if (skillRaw.name !== "socratic-kb-builder" || skillRaw.version !== "5") {
+    if (skillRaw.name !== "socratic-kb-builder" || skillRaw.version !== skillVersion) {
       coordinateNormalized();
     }
   } catch {
@@ -1829,7 +1859,7 @@ async function validateKnowledgeBaseWorkingSetArchiveInternal(
     contentVersion,
     skill: {
       name: "socratic-kb-builder",
-      version: "5",
+      version: skillVersion,
       contentHash: skillHash,
     },
     treePolicyVersion: treePolicyVersion as 2,
@@ -1842,6 +1872,8 @@ async function validateKnowledgeBaseWorkingSetArchiveInternal(
     logo,
     counts,
   };
+  const depthIssues = knowledgeBaseDepthIssues(manifest, canonicalInputFiles);
+  if (depthIssues.length) fail(`KNOWLEDGE_BASE_DEPTH_INSUFFICIENT: ${JSON.stringify(depthIssues)}`, "depth");
   const canonical = await canonicalWorkingSetArchive({
     manifest,
     files: canonicalInputFiles,
@@ -1996,7 +2028,7 @@ async function salvageInitialWorkingSetAsFlatView(input: {
     contentVersion: input.authority.contentVersion,
     skill: {
       name: "socratic-kb-builder",
-      version: "5",
+      version: input.authority.skillVersion ?? "5",
       contentHash: input.authority.skillContentHash,
     },
     treePolicyVersion: 2,
@@ -2097,6 +2129,10 @@ export async function normalizeMaterializedKnowledgeBaseResult(
           resetRequired: true,
         };
       }
+      if (error.category === "depth") return {
+        kind: "rejected", code: "KNOWLEDGE_BASE_MATERIALIZED_CONTRACT_INVALID",
+        stage: "canonical_validation", resetRequired: true,
+      };
       try {
         validated = await salvageInitialWorkingSetAsFlatView(input);
       } catch (fallbackError) {
@@ -3046,6 +3082,7 @@ async function composeNormalizedKnowledgeBasePatch(input: {
       generation: manifest.generation,
       contentVersion: manifest.contentVersion,
       skillContentHash: manifest.skill.contentHash,
+      skillVersion: manifest.skill.version,
       treePolicyVersion: manifest.treePolicyVersion,
       companyName: manifest.company.name,
       companyWebsite: manifest.company.website,

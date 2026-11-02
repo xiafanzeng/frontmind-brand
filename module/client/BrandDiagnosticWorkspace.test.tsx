@@ -69,6 +69,8 @@ beforeEach(() => {
           runs: [],
         }),
       };
+    if (path.endsWith("/knowledge")) return { ok: true, json: async () => [] };
+    if (path.endsWith("/retry")) run.phase = run.confirmedAt ? "collecting" : "draft";
     if (path.endsWith("/draft")) {
       run.questions = body.questions;
       run.platforms = body.platforms;
@@ -284,11 +286,11 @@ describe("single-page diagnostic interaction", () => {
         .disabled,
     ).toBe(true);
     fireEvent.click(
-      screen.getByRole("button", { name: "前往智能知识库，继续逐项确认" }),
+      screen.getByRole("button", { name: "前往智能知识库" }),
     );
     expect(onOpenKnowledge).toHaveBeenCalledOnce();
   });
-  it("keeps unsaved questions when creating a fresh draft after stopping", async () => {
+  it("resumes the same initial diagnosis and retains unsaved questions after stopping", async () => {
     run.phase = "stopped";
     localStorage.setItem(
       "brand-diagnostic-draft",
@@ -307,7 +309,7 @@ describe("single-page diagnostic interaction", () => {
     );
     render(<BrandDiagnosticWorkspace />);
     const button = await screen.findByRole("button", {
-      name: "保留选题，新建诊断",
+      name: "继续本次初诊",
     });
     expect(
       (screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).disabled,
@@ -316,10 +318,10 @@ describe("single-page diagnostic interaction", () => {
     expect(
       (screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).value,
     ).toBe("保留这道自定义问题");
-    expect(
+    await waitFor(() => expect(
       (screen.getByLabelText("产品场景问题") as HTMLTextAreaElement).disabled,
-    ).toBe(false);
-    expect(new URLSearchParams(location.search).get("diagnosis")).toBeNull();
+    ).toBe(false));
+    expect(new URLSearchParams(location.search).get("diagnosis")).toBe(id);
     expect(mock.fetch.mock.calls.some(([url]) => url.endsWith("/start"))).toBe(
       false,
     );

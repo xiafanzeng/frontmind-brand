@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the portable v5 working-set or leaf-patch ZIP contract."""
+"""Validate a frozen working set and one bounded v6 depth correction."""
 
 from __future__ import annotations
 
@@ -68,6 +68,64 @@ ASSET_DISPLAY_ROLES = {"hero", "inline", "badge"}
 
 def fail(message: str) -> None:
     raise ValueError(message)
+
+
+def visible_characters(markdown: str) -> int:
+    text = re.sub(r"^\s*#\s+[^\n]*(?:\n|$)", "", markdown)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"https?://\S+", "", text)
+    return len(re.sub(r"[\s#>*_`~]", "", text))
+
+
+def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -> list[dict]:
+    if skill_version != "6":
+        return []
+    policy = WORKING_SET_POLICY["depth"]
+    ledger = {row["path"]: row for row in manifest["evidenceLedger"]}
+    issues = []
+    for leaf in manifest["leaves"]:
+        unique = {}
+        for name in leaf["evidencePaths"]:
+            row = ledger.get(name)
+            if not row or row["leafId"] != leaf["leafId"] or not is_text_evidence_path(name):
+                continue
+            try:
+                payload = archive.read(name)
+                if hashlib.sha256(payload).hexdigest() != row["sha256"]:
+                    continue
+                text = payload.decode("utf-8")
+            except (KeyError, UnicodeDecodeError):
+                continue
+            unique[re.sub(r"\s", "", text)] = text
+        evidence = sum(visible_characters(text) for text in unique.values())
+        body = visible_characters(archive.read(leaf["contentPath"]).decode("utf-8"))
+        if evidence >= policy["evidenceThreshold"] and body < policy["minimumBodyCharacters"]:
+            issues.append({"leafId": leaf["leafId"], "title": leaf["title"],
+                           "evidenceCharacters": evidence, "bodyCharacters": body,
+                           "minimumBodyCharacters": policy["minimumBodyCharacters"]})
+    return issues
+
+
+def record_depth_check(archive_path: pathlib.Path, operation_id: str, issues: list[dict]) -> None:
+    identity = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()[:24]
+    state_path = archive_path.parent / f".frontmind-depth-{identity}.json"
+    previous = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else None
+    archive_hash = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    if previous and previous["status"] == "exhausted":
+        fail("DEPTH_REWRITE_EXHAUSTED: 本次操作已用完一次集中补写。")
+    if not issues:
+        if previous:
+            state_path.write_text(json.dumps({**previous, "status": "validated", "validatedHash": archive_hash}), encoding="utf-8")
+        return
+    if previous and previous["sourceHash"] != archive_hash:
+        state_path.write_text(json.dumps({**previous, "status": "exhausted"}), encoding="utf-8")
+        fail("DEPTH_REWRITE_EXHAUSTED: 已使用一次集中补写，仍有证据充分但正文过短的节点；停止提交。" + json.dumps(issues, ensure_ascii=False))
+    if not previous:
+        state_path.write_text(json.dumps({"version": 1, "operationId": operation_id,
+            "sourceHash": archive_hash, "status": "rewrite_required", "rewritePasses": 1,
+            "issues": issues}, ensure_ascii=False), encoding="utf-8")
+    fail("DEPTH_REWRITE_REQUIRED: 仅集中补写以下节点一次，复用包内证据，不重复采集；更新正文与哈希后再次校验。" + json.dumps(issues, ensure_ascii=False))
 
 
 def normalized_media_type(value: object) -> str | None:
@@ -678,7 +736,7 @@ def validate_bundle(
     skill = manifest.get("skill")
     expected_skill = {
         "name": "socratic-kb-builder",
-        "version": "5",
+        "version": expected.get("skill_version") or ("6" if isinstance(skill, dict) and skill.get("version") == "6" else "5"),
         "contentHash": expected["skill_content_hash"],
     }
     if skill != expected_skill:
@@ -1036,6 +1094,7 @@ def main() -> None:
     parser.add_argument("--expected-generation", type=int)
     parser.add_argument("--expected-content-version", type=int)
     parser.add_argument("--expected-skill-content-hash")
+    parser.add_argument("--expected-skill-version", choices=("5", "6"))
     parser.add_argument("--expected-tree-policy-version", type=int)
     parser.add_argument("--expected-company-base64url")
     parser.add_argument("--expected-uploads-read", type=int)
@@ -1051,6 +1110,7 @@ def main() -> None:
         "generation": args.expected_generation,
         "content_version": args.expected_content_version,
         "skill_content_hash": args.expected_skill_content_hash,
+        "skill_version": args.expected_skill_version,
         "tree_policy_version": args.expected_tree_policy_version,
         "company_identity": expected_company_identity(args.expected_company_base64url)
         if args.expected_company_base64url
@@ -1123,6 +1183,9 @@ def main() -> None:
         if "BUNDLE.json" in names and "PATCH.json" not in names:
             manifest = read_json(archive, "BUNDLE.json")
             declared = validate_bundle(archive, manifest, expected, diagnostics)
+            version = expected["skill_version"] or manifest.get("skill", {}).get("version", "5")
+            if version == "6":
+                record_depth_check(archive_path, expected["operation_id"], depth_issues(archive, manifest, version))
             label = "frontmind.kb-working-set.v1"
         elif "PATCH.json" in names and "BUNDLE.json" not in names:
             manifest = read_json(archive, "PATCH.json")

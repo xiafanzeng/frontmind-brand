@@ -1453,7 +1453,7 @@ export function knowledgeBaseMaterializedRecoveryContractVersion(build: {
 }) {
   if (
     build.executionMode !== "materialized_bundle_v1" ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     build.providerProtocol !== "manus_v2" ||
     typeof build.contentVersion !== "number"
   ) {
@@ -1472,7 +1472,7 @@ export function knowledgeBaseMaterializedCompletionContractVersion(build: {
 }) {
   if (
     build.executionMode !== "materialized_bundle_v1" ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     build.providerProtocol !== "manus_v2" ||
     typeof build.contentVersion !== "number"
   ) {
@@ -4386,7 +4386,7 @@ export async function reserveKnowledgeBaseStartBuild(
     }
     if (
       build.executionMode !== "materialized_bundle_v1" ||
-      build.skillVersion !== "5" ||
+      (build.skillVersion !== "5" && build.skillVersion !== "6") ||
       !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       knowledgeBaseMaterializedRecoveryContractVersion(build) !== 1 ||
@@ -8058,7 +8058,7 @@ export async function settleKnowledgeBaseManusV2ExplicitRejection(
     const frozenHash = metadata.frozenProviderRequestHash;
     if (
       build.executionMode !== "materialized_bundle_v1" ||
-      build.skillVersion !== "5" ||
+      (build.skillVersion !== "5" && build.skillVersion !== "6") ||
       !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       metadata.providerProtocol !== "manus_v2" ||
@@ -8193,7 +8193,7 @@ export async function beginKnowledgeBaseManusV2Dispatch(
     const metadata = metadataOf(turn);
     if (
       build.executionMode !== "materialized_bundle_v1" ||
-      build.skillVersion !== "5" ||
+      (build.skillVersion !== "5" && build.skillVersion !== "6") ||
       !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       metadata.attachmentsFrozen !== true ||
@@ -8309,7 +8309,7 @@ export async function bindKnowledgeBaseManusV2Submission(
     const metadata = metadataOf(turn);
     if (
       build.executionMode !== "materialized_bundle_v1" ||
-      build.skillVersion !== "5" ||
+      (build.skillVersion !== "5" && build.skillVersion !== "6") ||
       !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       metadata.providerProtocol !== "manus_v2" ||
@@ -9845,7 +9845,7 @@ function assertMaterializedResultPendingAuthority(input: {
   if (
     build.activeTurnId !== turn.id ||
     build.executionMode !== "materialized_bundle_v1" ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     build.providerProtocol !== "manus_v2" ||
     (build.status !== "researching" && build.status !== "confirming") ||
     !taskId ||
@@ -11187,7 +11187,7 @@ export async function settleKnowledgeBasePreCreateFailureForApprovedReset(
     }
     if (
       build.executionMode !== "materialized_bundle_v1" ||
-      build.skillVersion !== "5" ||
+      (build.skillVersion !== "5" && build.skillVersion !== "6") ||
       !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       metadata.materializedRecoveryContractVersion !== 1 ||
@@ -11486,7 +11486,7 @@ export async function findRecoverableKnowledgeBaseTurnIds(
     .where(
       and(
         eq(knowledgeBaseBuilds.executionMode, "materialized_bundle_v1"),
-        eq(knowledgeBaseBuilds.skillVersion, "5"),
+        inArray(knowledgeBaseBuilds.skillVersion, ["5", "6"]),
         sql`${knowledgeBaseBuilds.skillContentHash} REGEXP '^[a-f0-9]{64}$'`,
         eq(knowledgeBaseBuilds.providerProtocol, "manus_v2"),
         isNotNull(knowledgeBaseBuilds.contentVersion),
@@ -11521,7 +11521,7 @@ async function settleLockedMaterializedCreateOutcomeUnknownForReset(input: {
   if (
     build.activeTurnId !== turn.id ||
     build.executionMode !== "materialized_bundle_v1" ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     build.providerProtocol !== "manus_v2" ||
     turn.upstreamTaskId !== null ||
     metadata.materializedRecoveryContractVersion !== 1 ||
@@ -11662,7 +11662,7 @@ export async function claimKnowledgeBaseTurnForRecovery(
     );
     if (
       build.executionMode !== "materialized_bundle_v1" ||
-      build.skillVersion !== "5" ||
+      (build.skillVersion !== "5" && build.skillVersion !== "6") ||
       !knowledgeBaseBuildSkillPinSupported(build) ||
       build.providerProtocol !== "manus_v2" ||
       build.contentVersion === null ||

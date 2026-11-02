@@ -1048,7 +1048,7 @@ export function knowledgeBaseAllowsFirstLeafLogoReplacement(input: {
   return (
     input.requested === true &&
     (input.skillVersion === "4" ||
-      (input.skillVersion === "5" &&
+      ((input.skillVersion === "5" || input.skillVersion === "6") &&
         input.executionMode === "materialized_bundle_v1")) &&
     input.confirmedCount === 0 &&
     input.directPrefilledCount === 0

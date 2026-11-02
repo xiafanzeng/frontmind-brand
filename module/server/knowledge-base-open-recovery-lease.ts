@@ -53,7 +53,7 @@ export function classifyKnowledgeBaseOpenRecoveryBuild(
 ): KnowledgeBaseOpenRecoveryKind | null {
   if (
     build.executionMode !== "materialized_bundle_v1" ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     build.providerProtocol !== "manus_v2" ||
     build.contentVersion === null
   ) {

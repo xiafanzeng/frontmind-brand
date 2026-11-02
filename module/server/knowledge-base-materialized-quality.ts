@@ -36,6 +36,7 @@ export function materializedInitialResearchQuality(input: {
   researchCoverage: unknown;
   leafIds: readonly string[];
   expectedUploadsRead: number;
+  retainedEvidenceFiles?: number;
   warnings?: KnowledgeBaseResultQualityDto["warnings"];
   droppedCount?: number;
   normalization?: Pick<
@@ -44,6 +45,15 @@ export function materializedInitialResearchQuality(input: {
   >;
 }) {
   const acceptedCount = input.leafIds.length;
+  const coverage = record(input.researchCoverage);
+  const pages = record(coverage?.officialPages);
+  const declaredCount = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+  const sourceEvidence = input.retainedEvidenceFiles === undefined ? undefined : {
+    providerDeclaredOfficialPages: declaredCount(pages?.succeeded),
+    providerDeclaredPublicQueries: declaredCount(coverage?.publicQueries),
+    retainedEvidenceFiles: input.retainedEvidenceFiles,
+    externalFactVerification: "not_established" as const,
+  };
   const countComplete = acceptedCount >= 30 && acceptedCount <= 115;
   const droppedBody = input.warnings?.some(
     (warning) => warning.code === "RESULT_INCOMPLETE",
@@ -93,6 +103,7 @@ export function materializedInitialResearchQuality(input: {
     initialResearchCoverage,
     materializedQuality: {
       completeness: publishable ? ("complete" as const) : ("partial" as const),
+      ...(sourceEvidence ? { sourceEvidence } : {}),
       stats: {
         acceptedCount,
         expectedCount: 30,
@@ -140,6 +151,7 @@ export function materializedBuildResultQuality(
     return undefined;
   }
   const rawStats = record(raw.stats);
+  const source = record(raw.sourceEvidence);
   const acceptedCount = Number(rawStats?.acceptedCount);
   const expectedCount = Number(rawStats?.expectedCount);
   const droppedCount = Number(rawStats?.droppedCount);
@@ -159,6 +171,12 @@ export function materializedBuildResultQuality(
     : [];
   return {
     completeness: raw.completeness,
+    ...(source?.externalFactVerification === "not_established" && Number.isSafeInteger(source.retainedEvidenceFiles) && Number(source.retainedEvidenceFiles) >= 0
+      ? { sourceEvidence: {
+          providerDeclaredOfficialPages: Number.isSafeInteger(source.providerDeclaredOfficialPages) ? Number(source.providerDeclaredOfficialPages) : null,
+          providerDeclaredPublicQueries: Number.isSafeInteger(source.providerDeclaredPublicQueries) ? Number(source.providerDeclaredPublicQueries) : null,
+          retainedEvidenceFiles: Number(source.retainedEvidenceFiles), externalFactVerification: "not_established" as const,
+        } } : {}),
     ...(Number.isSafeInteger(acceptedCount) &&
     acceptedCount >= 0 &&
     Number.isSafeInteger(droppedCount) &&
@@ -198,7 +216,7 @@ export function isMaterializedBuildPublishable(
   if (
     build.executionMode !== MATERIALIZED_EXECUTION_MODE ||
     build.providerProtocol !== "manus_v2" ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     !knowledgeBaseBuildSkillPinSupported(build) ||
     !build.activeWorkingSetId ||
     !Number.isSafeInteger(build.contentVersion) ||

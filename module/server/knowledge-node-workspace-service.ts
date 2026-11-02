@@ -141,7 +141,7 @@ function assertCurrentBuild(build: KnowledgeBaseBuild) {
   if (
     build.executionMode !== "materialized_bundle_v1" ||
     build.providerProtocol !== "manus_v2" ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     !knowledgeBaseBuildSkillPinSupported(build) ||
     knowledgeBaseMaterializedRecoveryContractVersion(build) !== 1 ||
     knowledgeBaseMaterializedCompletionContractVersion(build) !==

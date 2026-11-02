@@ -268,8 +268,8 @@ export async function buildKnowledgeBasePrompt({
   initialBundleExpectation?: KnowledgeBaseInitialBundleExpectation;
   treePolicyVersion?: number;
 }) {
-  const isV5 = protocolOperation?.skillVersion === "5";
-  if (isV5) {
+  const isMaterialized = protocolOperation?.skillVersion === "5" || protocolOperation?.skillVersion === "6";
+  if (isMaterialized) {
     if (!initialBundleExpectation) {
       throw new KnowledgeBaseEnterpriseIdentityError(
         "ENTERPRISE_IDENTITY_MISMATCH",
@@ -294,6 +294,7 @@ export async function buildKnowledgeBasePrompt({
     ).researchWebsites;
     if (
       expectation.operationId !== protocolOperation.operationId ||
+      (expectation.skillVersion ?? "5") !== protocolOperation.skillVersion ||
       !expectation.operationId ||
       !expectation.buildId ||
       !Number.isSafeInteger(expectation.generation) ||
@@ -336,7 +337,7 @@ export async function buildKnowledgeBasePrompt({
       `buildId=${expectation.buildId}`,
       `generation=${expectation.generation}`,
       `contentVersion=${expectation.contentVersion}`,
-      `skillName=socratic-kb-builder；skillVersion=5`,
+      `skillName=socratic-kb-builder；skillVersion=${protocolOperation.skillVersion}`,
       `skillContentHash=${expectation.skillContentHash}`,
       "BUNDLE.json.skill.contentHash 必须逐字复制上述 skillContentHash。它是 FrontMind 冻结的 Skill 逻辑内容哈希，不是 Skill ZIP 的物理 SHA-256；禁止重新计算、替换或推断。",
       `company.name=${expectation.companyName}`,
@@ -345,7 +346,7 @@ export async function buildKnowledgeBasePrompt({
       `expectedUploadsRead=${expectation.expectedUploadsRead}`,
       `treePolicyVersion=${expectation.treePolicyVersion}`,
       `ZIP 文件名必须为 ${archiveFilename}，根目录必须含 BUNDLE.json。`,
-      `运行 python3 scripts/validate_working_set.py --expected-operation-id ${expectation.operationId} --expected-build-id ${expectation.buildId} --expected-generation ${expectation.generation} --expected-content-version ${expectation.contentVersion} --expected-skill-content-hash ${expectation.skillContentHash} --expected-tree-policy-version ${expectation.treePolicyVersion} --expected-company-base64url ${expectedCompanyIdentity} --expected-uploads-read ${expectation.expectedUploadsRead} ${archiveFilename}；只有输出 VALID frontmind.kb-working-set.v1 后才能把同一 ZIP 作为唯一附件返回。`,
+      `运行 python3 scripts/validate_working_set.py --expected-operation-id ${expectation.operationId} --expected-build-id ${expectation.buildId} --expected-generation ${expectation.generation} --expected-content-version ${expectation.contentVersion} --expected-skill-content-hash ${expectation.skillContentHash}${protocolOperation.skillVersion === "6" ? " --expected-skill-version 6" : ""} --expected-tree-policy-version ${expectation.treePolicyVersion} --expected-company-base64url ${expectedCompanyIdentity} --expected-uploads-read ${expectation.expectedUploadsRead} ${archiveFilename}；只有输出 VALID frontmind.kb-working-set.v1 后才能把同一 ZIP 作为唯一附件返回。`,
       "只有 customerAttachments 中明确列出的文件属于客户事实资料；应用管理的 Skill、instructions 与 prefill 只用于执行合同。",
       "完整读取全部客户资料，并使用普通浏览/搜索补足证据；不得输出过程回执。",
       `customerAttachments=${JSON.stringify(attachments.map((item) => item.filename))}`,
