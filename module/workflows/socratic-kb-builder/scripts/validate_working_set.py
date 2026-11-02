@@ -82,14 +82,15 @@ def visible_characters(markdown: str) -> int:
     return len(visible_text(markdown))
 
 
-def source_text(markdown: str) -> str:
-    text = unicodedata.normalize("NFKC", markdown)
+def source_text(markdown: str, exclude_gap: bool = False) -> str:
+    source = re.sub(r"^## 节点资料缺口\s*\n[\s\S]*$", "", markdown, flags=re.MULTILINE) if exclude_gap else markdown
+    text = unicodedata.normalize("NFKC", source)
     text = re.sub(r"^\s*#{1,6}\s+.*$", "", text, flags=re.MULTILINE)
     return re.sub(r"^\s*(?:来源(?:地址)?|源文件|抓取时间|检索时间|获取时间|定位|页码|Source|Retrieved(?:At)?)\s*[:：].*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
 
 
-def numeric_text(markdown: str) -> str:
-    text = source_text(markdown)
+def numeric_text(markdown: str, exclude_gap: bool = False) -> str:
+    text = source_text(markdown, exclude_gap)
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
     text = re.sub(r"(?:https?://|upload://)[^\s\u4e00-\u9fff，。！？；、）】》]+", "", text)
@@ -110,13 +111,54 @@ def normalized_number(value: str, power: int = 0) -> str:
     return f"{digits[:len(digits) - trailing]}e{power - len(fraction) + trailing}"
 
 
-def numeric_claims(text: str) -> list[dict]:
+def numeric_claims(text: str, exclude_gap: bool = False) -> list[dict]:
     units = "|".join(WORKING_SET_POLICY["depth"]["evidenceTraceability"]["quantityUnits"])
     pattern = rf"(?<![0-9.])([0-9]+(?:,[0-9]{{3}})*(?:\.[0-9]+)?)(亿|万)?(?:余|多)?({units})"
     aliases = WORKING_SET_POLICY["depth"]["evidenceTraceability"]["quantityUnitAliases"]
     return [{"label": match.group(0), "literal": normalized_number(match.group(1)),
              "quantity": normalized_number(match.group(1), 8 if match.group(2) == "亿" else 4 if match.group(2) == "万" else 0) + ":" + aliases.get(match.group(3), match.group(3))}
-            for match in re.finditer(pattern, numeric_text(text))]
+            for match in re.finditer(pattern, numeric_text(text, exclude_gap))]
+
+
+def substantive_markdown(markdown: str) -> str:
+    return "\n\n".join(paragraph for paragraph in re.split(r"\n\s*\n", markdown)
+                       if not re.match(r"^\s*(?:>\s*)?资料不足[:：]", paragraph))
+
+
+def body_paragraphs(markdown: str) -> list[str]:
+    return [visible_text(unicodedata.normalize("NFKC", paragraph)) for paragraph in re.split(r"\n\s*\n", substantive_markdown(markdown))
+            if visible_text(paragraph)]
+
+
+def has_sparse_evidence_exception(manifest: dict, leaf: dict, evidence: dict, evidence_sources: dict, markdown: str) -> bool:
+    """Validate the reviewable declaration, without asserting that its gap is true."""
+    coverage = manifest["researchCoverage"]
+    minimum = WORKING_SET_POLICY["depth"]["bodySubstance"]["minimumExceptionDetailCharacters"]
+    if (coverage.get("stopReason") != "source_limited"
+            or visible_characters(coverage.get("limitationReason", "")) < minimum
+            or not any(dimension["status"] == "gap" and leaf["leafId"] in dimension["leafIds"]
+                       for dimension in coverage["dimensions"])):
+        return False
+    notice_match = re.search(r"(?:^|\n)\s*(?:>\s*)?资料不足[:：]([^\n]+)", markdown)
+    notice = notice_match.group(1) if notice_match else ""
+    if visible_characters(notice) < minimum:
+        return False
+    for text in evidence.values():
+        section = re.search(r"^## 节点资料缺口\s*\n([\s\S]*)$", text, flags=re.MULTILINE)
+        if not section:
+            continue
+        fields = dict((match.group(1), match.group(2).strip()) for match in re.finditer(
+            r"^(节点|缺失事实|已读来源|已读定位|来源局限)[:：]\s*(.+)$", section.group(1), flags=re.MULTILINE))
+        missing = fields.get("缺失事实", "")
+        source = fields.get("已读来源", "")
+        bound_source = source in evidence_sources.get(text, set())
+        if (fields.get("节点") == leaf["leafId"] and bound_source and leaf["title"] in missing
+                and visible_characters(missing) >= minimum and missing in notice
+                and visible_characters(fields.get("已读定位", "")) >= 4
+                and re.search(r"页|章|节|表|段|page|chapter|section", fields.get("已读定位", ""), flags=re.IGNORECASE)
+                and visible_characters(fields.get("来源局限", "")) >= minimum):
+            return True
+    return False
 
 
 def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -> list[dict]:
@@ -125,11 +167,15 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
     policy = WORKING_SET_POLICY["depth"]
     traceability = policy["evidenceTraceability"]
     new_bindings = manifest["skill"]["contentHash"] not in traceability["legacySkillContentHashes"]
+    substance = policy["bodySubstance"]
+    new_substance = manifest["skill"]["contentHash"] not in substance["legacySkillContentHashes"]
     ledger = {row["path"]: row for row in manifest["evidenceLedger"]}
     shared = {}
+    paragraphs = {}
     records = []
     for leaf in manifest["leaves"]:
         unique = {}
+        evidence_sources = {}
         for name in leaf["evidencePaths"]:
             row = ledger.get(name)
             if not row or row["leafId"] != leaf["leafId"] or not is_text_evidence_path(name):
@@ -141,19 +187,28 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
                 text = payload.decode("utf-8")
             except (KeyError, UnicodeDecodeError):
                 continue
-            identity = visible_text(source_text(text)) if new_bindings else re.sub(r"\s", "", text)
+            if row.get("sourceUrl"):
+                evidence_sources.setdefault(text, set()).add(row["sourceUrl"])
+            identity = visible_text(source_text(text, new_substance)) if new_bindings else re.sub(r"\s", "", text)
             if identity:
                 unique[identity] = text
         for identity in unique:
             owners = shared.setdefault(identity, {"leaves": set(), "branches": set()})
             owners["leaves"].add(leaf["leafId"])
             owners["branches"].add(leaf["branchId"])
-        records.append((leaf, unique))
-    issues = []
-    for leaf, unique in records:
-        texts = list(unique.values())
-        evidence = sum(visible_characters(source_text(text) if new_bindings else text) for text in texts)
         markdown = archive.read(leaf["contentPath"]).decode("utf-8")
+        leaf_paragraphs = body_paragraphs(markdown)
+        for paragraph in leaf_paragraphs:
+            if len(paragraph) < substance["minimumSharedParagraphCharacters"]:
+                continue
+            owners = paragraphs.setdefault(paragraph, {"leaves": set(), "branches": set()})
+            owners["leaves"].add(leaf["leafId"])
+            owners["branches"].add(leaf["branchId"])
+        records.append((leaf, unique, evidence_sources, markdown, leaf_paragraphs))
+    issues = []
+    for leaf, unique, evidence_sources, markdown, leaf_paragraphs in records:
+        texts = list(unique.values())
+        evidence = sum(visible_characters(source_text(text, new_substance) if new_bindings else text) for text in texts)
         body_text = visible_text(markdown)
         body = len(body_text)
         minimum = traceability["minimumBodyCharacters"] if new_bindings else policy["minimumBodyCharacters"]
@@ -169,18 +224,29 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
         if new_bindings:
             reused = bool(unique) and all(len(shared[identity]["leaves"]) >= traceability["minimumSharedLeaves"]
                 and len(shared[identity]["branches"]) >= traceability["minimumSharedBranches"] for identity in unique)
-            source_claims = [claim for text in texts for claim in numeric_claims(text)]
+            source_claims = [claim for text in texts for claim in numeric_claims(text, new_substance)]
             source_quantities = {claim["quantity"] for claim in source_claims}
             typed_source_numbers = {claim["literal"] for claim in source_claims}
             source_numbers = {normalized_number(match.group(0)) for text in texts
-                for match in re.finditer(r"(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])", numeric_text(text))}
-            missing = list(dict.fromkeys(claim["label"] for claim in numeric_claims(markdown)
+                for match in re.finditer(r"(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])", numeric_text(text, new_substance))}
+            missing = list(dict.fromkeys(claim["label"] for claim in numeric_claims(substantive_markdown(markdown) if new_substance else markdown)
                 if claim["quantity"] not in source_quantities and (claim["literal"] not in source_numbers or claim["literal"] in typed_source_numbers)))
             if reused or missing:
                 issues.append({**issue, "reason": "EVIDENCE_REUSED_ACROSS_TOPICS" if reused else "NUMERIC_CLAIMS_UNVERIFIED",
                                **({"unverifiedNumericClaims": missing} if missing else {})})
                 continue
-        if evidence >= policy["evidenceThreshold"] and body < minimum:
+        if new_substance:
+            template = sum(len(paragraph) for paragraph in leaf_paragraphs if paragraph in paragraphs
+                           and len(paragraphs[paragraph]["leaves"]) >= substance["minimumSharedLeaves"]
+                           and len(paragraphs[paragraph]["branches"]) >= substance["minimumSharedBranches"])
+            effective = sum(len(paragraph) for paragraph in leaf_paragraphs) - template
+            substantive_issue = {**issue, "minimumBodyCharacters": substance["minimumBodyCharacters"],
+                                 "effectiveBodyCharacters": effective, "templateCharacters": template}
+            if template:
+                issues.append({**substantive_issue, "reason": "BODY_TEMPLATE_REUSED"})
+            elif effective < substance["minimumBodyCharacters"] and not has_sparse_evidence_exception(manifest, leaf, unique, evidence_sources, markdown):
+                issues.append({**substantive_issue, "reason": "SUBSTANTIVE_BODY_TOO_SHORT"})
+        elif evidence >= policy["evidenceThreshold"] and body < minimum:
             issues.append(issue)
     return issues
 
@@ -203,7 +269,7 @@ def record_depth_check(archive_path: pathlib.Path, operation_id: str, issues: li
         state_path.write_text(json.dumps({"version": 1, "operationId": operation_id,
             "sourceHash": archive_hash, "status": "rewrite_required", "rewritePasses": 1,
             "issues": issues}, ensure_ascii=False), encoding="utf-8")
-    fail("DEPTH_REWRITE_REQUIRED: 仅集中修正以下节点一次。EVIDENCE_COPIES_NODE_BODY 须恢复已采集的来源原文，不得改写节点正文充当证据；跨主题重复证据须按原文段落重绑；缺失数值须核对或标明待核验；通过关联检查且证据充分时补写正文。复用已有采集，更新文件与哈希后再次校验。" + json.dumps(issues, ensure_ascii=False))
+    fail("DEPTH_REWRITE_REQUIRED: 仅集中修正以下节点一次。EVIDENCE_COPIES_NODE_BODY 须恢复已采集的来源原文，不得改写节点正文充当证据；跨主题重复证据须按原文段落重绑；缺失数值须核对或标明待核验；清除跨节点模板后按有效正文补写，资料确实不足须逐叶留存可审核例外。复用已有采集，更新文件与哈希后再次校验。" + json.dumps(issues, ensure_ascii=False))
 
 
 def normalized_media_type(value: object) -> str | None:
