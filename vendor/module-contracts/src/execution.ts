@@ -3,6 +3,11 @@
 export type GeneralThinkingText = {
   /** Explicit provider-designated public summary; private thinkingText is not UI copy. */
   publicSummary?: string;
+  publicSummaryTitle?: string;
+  publicSummarySourceHash?: string;
+  publicSummaryModel?: "gpt-6.1-sol" | "gpt-5.6-sol";
+  publicSummaryEffort?: "low";
+  publicSummaryFallback?: boolean;
   thinkingText?: string;
   thinkingSource?: "event" | "stream";
   thinkingComplete?: boolean;
@@ -105,7 +110,20 @@ export function generalThinkingText(
     typeof value.publicSummary === "string" && value.publicSummary.trim()
       ? value.publicSummary.trim().slice(0, 8000)
       : undefined;
-  return publicSummary ? { publicSummary } : {};
+  if (!publicSummary) return {};
+  const generated = typeof value.publicSummarySourceHash === "string" &&
+    /^[a-f0-9]{64}$/.test(value.publicSummarySourceHash) &&
+    typeof value.publicSummaryTitle === "string" &&
+    value.publicSummaryTitle.length <= 40 && /[\u4e00-\u9fff]/.test(value.publicSummaryTitle) &&
+    ["gpt-6.1-sol", "gpt-5.6-sol"].includes(value.publicSummaryModel ?? "") &&
+    value.publicSummaryEffort === "low";
+  return { publicSummary, ...(generated ? {
+    publicSummaryTitle: value.publicSummaryTitle,
+    publicSummarySourceHash: value.publicSummarySourceHash,
+    publicSummaryModel: value.publicSummaryModel,
+    publicSummaryEffort: value.publicSummaryEffort,
+    publicSummaryFallback: value.publicSummaryFallback === true,
+  } : {}) };
 }
 
 /** Strict whitelist at both normalization and persisted-data read boundaries. */
