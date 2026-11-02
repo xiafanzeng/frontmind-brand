@@ -1362,7 +1362,16 @@ function upsertHeadMarkup(html: string, markup: string) {
   return html.replace(/<html\b([^>]*)>/iu, `<html$1><head>${markup}</head>`);
 }
 
-function normalizeRoutePages(input: {
+function escapeHtmlText(value: string) {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&#39;");
+}
+
+export function normalizeRoutePages(input: {
   files: OutputFile[];
   routes: string[];
   mode: "preview" | "production";
@@ -1374,6 +1383,9 @@ function normalizeRoutePages(input: {
     knowledgeSnapshotId: string;
     knowledgeArchiveHash: string;
   } | null;
+  /** Per-route SEO copy from the frozen content plan; paths must be exact. */
+  routeMetadata?: ReadonlyMap<string, { title: string; description: string }>;
+  siteName?: string | null;
 }) {
   const fileMap = new Map(input.files.map((file) => [file.path, file.bytes]));
   const documentCsp = nativeDocumentCsp(input.assistantApiOrigin);
@@ -1406,6 +1418,8 @@ function normalizeRoutePages(input: {
     let html = rootHtml
       .replace(/<meta\s+name=["']robots["'][^>]*>/giu, "")
       .replace(/<link\s+rel=["']canonical["'][^>]*>/giu, "")
+      .replace(/<title>[^<]*<\/title>/giu, "")
+      .replace(/<meta\s+(?:name|property)=["'](?:description|og:[a-z_]+)["'][^>]*>/giu, "")
       .replace(
         /<meta\s+http-equiv=["']Content-Security-Policy["'][^>]*>/giu,
         "",
@@ -1426,6 +1440,60 @@ function normalizeRoutePages(input: {
         html,
         `<link rel="canonical" href="${canonical}">`,
       );
+    }
+    // Deterministic per-route SEO copy from the frozen plan; the provider
+    // source never supplies these tags itself.
+    const metadata = route ? input.routeMetadata?.get(route) : undefined;
+    const siteName = input.siteName?.trim() || null;
+    if (metadata) {
+      const pageTitle =
+        route === "/" && siteName
+          ? siteName
+          : [metadata.title, siteName].filter(Boolean).join(" · ");
+      if (pageTitle) {
+        html = upsertHeadMarkup(
+          html,
+          `<title>${escapeHtmlText(pageTitle)}</title>`,
+        );
+      }
+      if (metadata.description) {
+        html = upsertHeadMarkup(
+          html,
+          `<meta name="description" content="${escapeHtmlText(metadata.description)}">`,
+        );
+      }
+      if (input.mode !== "preview") {
+        const canonical = new URL(route!, input.canonicalOrigin!).toString();
+        const ogTitle = metadata.title || siteName || "";
+        if (ogTitle) {
+          html = upsertHeadMarkup(
+            html,
+            `<meta property="og:title" content="${escapeHtmlText(ogTitle)}">`,
+          );
+        }
+        if (metadata.description) {
+          html = upsertHeadMarkup(
+            html,
+            `<meta property="og:description" content="${escapeHtmlText(metadata.description)}">`,
+          );
+        }
+        html = upsertHeadMarkup(
+          html,
+          '<meta property="og:type" content="website">',
+        );
+        html = upsertHeadMarkup(
+          html,
+          `<meta property="og:url" content="${canonical}">`,
+        );
+        if (siteName) {
+          html = upsertHeadMarkup(
+            html,
+            `<meta property="og:site_name" content="${escapeHtmlText(siteName)}">`,
+          );
+        }
+      }
+    } else if (siteName && output !== "404.html") {
+      html = upsertHeadMarkup(html, `<title>${escapeHtmlText(siteName)}</title>`);
     }
     fileMap.set(output, Buffer.from(html, "utf8"));
   }
@@ -2664,6 +2732,21 @@ export async function materializeNativeReactSource(
             knowledgeArchiveHash: build.knowledgeArchiveHash,
           }
         : null,
+      routeMetadata: frozenContentPlan?.plan
+        ? new Map(
+            frozenContentPlan.plan.routes.map((route) => [
+              routePath(route.path),
+              {
+                title: route.title,
+                description: route.summary || route.purpose,
+              },
+            ]),
+          )
+        : undefined,
+      siteName:
+        (brief as { designPreferences?: { siteName?: string | null } })
+          .designPreferences?.siteName
+        ?? brief.companyName,
     });
     const checks = assertStaticHardSafety({
       files,

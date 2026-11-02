@@ -4819,7 +4819,9 @@ export function nativeSourceSystemPromptForWorkflow(workflowVersion: string) {
 3. 导航和有目标 CTA 使用计划内规范路径的真实 <a href>，可见链接文字必须包含计划 cta.label。计划图片使用可信 publicUrl 和非空 alt。
 4. 不得加入认证、支付、数据库、后台、统计、webhook、外部脚本、远程请求、远程资源、动态执行或动态 import。
 5. 输出 FrontMind Vite SPA；保留 execution shell，在 ${NATIVE_RUNTIME_ROUTE_MODULE} 用 eager static import 导出 ${NATIVE_RUNTIME_ROUTE_MANIFEST_EXPORT}。多页初始化与 popstate 调用 window.canonicalSitePathname()；仅函数不存在时回退 window.location.pathname。每个包含 JSX 的模块都必须显式绑定或 import React。
-6. 运行 production build 和 ${NATIVE_SOURCE_PREFLIGHT_V2_FILENAME}，逐路由确认无 pageerror、console.error 和空白 root。只交付 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME}。`;
+6. 站内搜索必须覆盖全站：对计划全部 routes 的 section 标题与正文以及各路由 userQuestions 做客户端关键词匹配，不得只过滤当前页面；结果按栏目分组、显示所属栏目并链接到对应路由（可带 hash 锚点定位到区块）；无匹配时给出改用页面 AI 助手或联系 CTA 的明确提示。
+7. 每个内容区块必须提供“查看文档原文”入口，以简洁文档模板（区块小标题 + 逐字段落/列表）呈现该区块 sourceDocumentIds 对应的 dossier 文档原文；不得摘要化、改写或省略原文事实。文档视图用页面内锚点或区块内展开实现，禁止新增 route manifest 路由，视觉保持模板基线。
+8. 运行 production build 和 ${NATIVE_SOURCE_PREFLIGHT_V2_FILENAME}，逐路由确认无 pageerror、console.error 和空白 root。只交付 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME}。`;
   }
   if (workflowVersion === SITEOPS_STATIC_TEMPLATE_WORKFLOW_VERSION) {
     return TWENTY_FIRST_STATIC_TEMPLATE_V2_8_SYSTEM_PROMPT;
