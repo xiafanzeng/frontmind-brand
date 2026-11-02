@@ -3,6 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({ starting: false, batchStartedAt: null as number | null, knowledge: { initialized: true } as Record<string, unknown>,
+  userKnowledge: undefined as Record<string, unknown> | undefined,
+  assistantKnowledge: undefined as Record<string, unknown> | undefined,
   recover: vi.fn(), observe: vi.fn(), register: vi.fn(), wake: vi.fn(), reconcile: vi.fn() }));
 vi.mock("../lib/knowledge-progress", async importOriginal => ({
   ...await importOriginal<typeof import("../lib/knowledge-progress")>(),
@@ -13,8 +15,8 @@ vi.mock("../host", () => ({
   useConversation: () => ({ hydrated: true, activeConversation: {
     id: "existing", status: "completed", knowledgeBase: mocks.knowledge,
     messages: [
-      { id: "user", role: "user", content: "确认", timestamp: 1 },
-      { id: "assistant", role: "assistant", content: "## 企业概况", timestamp: 2 },
+      { id: "user", role: "user", content: "确认", timestamp: 1, knowledgeBase: mocks.userKnowledge },
+      { id: "assistant", role: "assistant", content: "## 企业概况", timestamp: 2, knowledgeBase: mocks.assistantKnowledge },
     ],
   }, commitKnowledgeBaseObservation: mocks.observe, registerKnowledgeBaseConversation: mocks.register, wakeKnowledgeBaseConversation: mocks.wake }),
   useRuntimeContext: () => ({ workspaceId: "test", accountId: 1 }),
@@ -34,7 +36,7 @@ vi.mock("./KnowledgeBaseManagedUploadRecovery", () => ({ default: (props: unknow
 import KnowledgeConversation from "./KnowledgeConversation";
 
 afterEach(cleanup);
-beforeEach(() => { vi.clearAllMocks(); mocks.starting = false; mocks.batchStartedAt = null; mocks.knowledge = { initialized: true }; });
+beforeEach(() => { vi.clearAllMocks(); mocks.starting = false; mocks.batchStartedAt = null; mocks.knowledge = { initialized: true }; mocks.userKnowledge = undefined; mocks.assistantKnowledge = undefined; });
 it("subscribes to the restored build before reservation fields arrive", () => {
   mocks.knowledge = { initialized: false };
   const progress = { build: { id: "existing-build", status: "researching" }, branches: [] } as any;
@@ -131,4 +133,32 @@ it("retains the local starter's stopped uploads and files until refresh needs se
   render(<KnowledgeConversation />);
   expect(screen.getByTestId("knowledge-starter")).toBeDefined();
   expect(mocks.recover).not.toHaveBeenCalled();
+});
+
+
+it("keeps confirmation content and divider without displaying model duration", () => {
+  mocks.userKnowledge = { kind: "pending_user", serverOwned: true, turnId: "local-turn",
+    operationKey: "kb:turn:shared-hash-format", operationType: "local_confirm" };
+  const { container } = render(<KnowledgeConversation />);
+  expect(screen.getByText("确认")).toBeDefined();
+  expect(container.querySelector(".execution-divider")).not.toBeNull();
+  expect(container.querySelector(".execution-duration")).toBeNull();
+  expect(screen.queryByText(/用时.*秒/)).toBeNull();
+});
+
+
+it("keeps declared counts and retained sources inside the collapsed research history", () => {
+  mocks.assistantKnowledge = { kind: "presentation", serverOwned: true, presentationKey: "current" };
+  const progress = { build: { id: "build", status: "confirming" }, branches: [], resultQuality: {
+    completeness: "complete", sourceEvidence: { providerDeclaredOfficialPages: 12,
+      providerDeclaredPublicQueries: 10, retainedEvidenceFiles: 42, retainedDistinctSourceUrls: 9,
+      externalFactVerification: "not_established" },
+  } } as any;
+  render(<KnowledgeConversation knowledgeBaseProgress={progress} />);
+  const history = screen.getByText("初始资料采集与知识构建过程").closest("details")!;
+  expect(history.open).toBe(false);
+  expect(history.contains(screen.getByText("去重来源链接"))).toBe(true);
+  expect(history.contains(screen.getByText("9 个"))).toBe(true);
+  expect(history.contains(screen.getByText("模型申报的官方页面"))).toBe(true);
+  expect(history.contains(screen.getByText("待核验"))).toBe(true);
 });

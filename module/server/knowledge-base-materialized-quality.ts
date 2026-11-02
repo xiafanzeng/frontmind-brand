@@ -37,6 +37,7 @@ export function materializedInitialResearchQuality(input: {
   leafIds: readonly string[];
   expectedUploadsRead: number;
   retainedEvidenceFiles?: number;
+  evidenceSourceUrls?: readonly (string | null)[];
   warnings?: KnowledgeBaseResultQualityDto["warnings"];
   droppedCount?: number;
   normalization?: Pick<
@@ -52,6 +53,9 @@ export function materializedInitialResearchQuality(input: {
     providerDeclaredOfficialPages: declaredCount(pages?.succeeded),
     providerDeclaredPublicQueries: declaredCount(coverage?.publicQueries),
     retainedEvidenceFiles: input.retainedEvidenceFiles,
+    ...(input.evidenceSourceUrls ? {
+      retainedDistinctSourceUrls: new Set(input.evidenceSourceUrls.filter(Boolean)).size,
+    } : {}),
     externalFactVerification: "not_established" as const,
   };
   const countComplete = acceptedCount >= 30 && acceptedCount <= 115;
@@ -176,6 +180,8 @@ export function materializedBuildResultQuality(
           providerDeclaredOfficialPages: Number.isSafeInteger(source.providerDeclaredOfficialPages) ? Number(source.providerDeclaredOfficialPages) : null,
           providerDeclaredPublicQueries: Number.isSafeInteger(source.providerDeclaredPublicQueries) ? Number(source.providerDeclaredPublicQueries) : null,
           retainedEvidenceFiles: Number(source.retainedEvidenceFiles), externalFactVerification: "not_established" as const,
+          ...(Number.isSafeInteger(source.retainedDistinctSourceUrls) && Number(source.retainedDistinctSourceUrls) >= 0
+            ? { retainedDistinctSourceUrls: Number(source.retainedDistinctSourceUrls) } : {}),
         } } : {}),
     ...(Number.isSafeInteger(acceptedCount) &&
     acceptedCount >= 0 &&

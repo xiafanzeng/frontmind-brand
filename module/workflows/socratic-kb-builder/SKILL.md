@@ -132,11 +132,33 @@ conflicts and verification gaps as declared evidence files instead.
 
 ## Depth and one correction pass
 
+Save source material before drafting nodes. For each successfully read public
+page or document, retain the relevant original passages with their headings,
+date, source identity and page/section locator. Search-result snippets remain
+snippets and cannot prove that the underlying page was read. Use the existing
+evidence ledger to associate these passages with each relevant leaf. Preserve
+the complete relevant passage even when it is longer than the eventual node.
+
+Do not write a node and then copy it into its evidence file. Do not replace
+source passages with your own conclusion, a rewritten digest or generic
+verification disclaimers. The validator reports EVIDENCE_COPIES_NODE_BODY when
+all of a leaf's evidence repeats its body with only a short wrapper. Restore
+the independently captured source material before validating again.
+
+If a source cannot be read, record that specific limitation and the affected
+facts. Mark affected research dimensions as gap and use source_limited or
+budget_reached as appropriate. Do not report coverage_complete from search
+snippets or count repeated leaf copies as separately visited official pages.
+
 For new v6 bundles, ordinary leaf bodies target 600–1,200 Chinese characters,
 core product/service/capability leaves target 800–1,800, and branch overviews
 target 1,200–2,500. These are evidence-adaptive drafting targets. Develop the
 supported scope, capabilities, delivery or usage, concrete examples and limits
 as applicable. Do not replace a chapter with a one-paragraph stage summary.
+Write substantial nodes in small batches when the full knowledge package is
+too long for one response or file-writing call. Complete each batch from its
+retained source passages. Do not shorten every node to fit the entire package
+into one script or response.
 
 Treat each declared overview as a customer node with a clear overview title;
 keep its prose distinct from the detailed leaves. Store every body in the
@@ -151,6 +173,9 @@ machine-readable depth policy counts visible body characters after the title,
 and deduplicates only this leaf's retained, hash-valid evidence. When relevant
 evidence contains at least 1,500 characters but the body has fewer than 300,
 it emits `DEPTH_REWRITE_REQUIRED` with the full affected-node list.
+The same correction list identifies copied evidence. Correct that evidence
+from the already captured source passages first, then assess body depth. Do
+not paraphrase a copied evidence file just to evade the independence check.
 
 On that result, perform exactly one concentrated correction pass over the
 listed nodes. Reread their existing evidence files and expand only supported

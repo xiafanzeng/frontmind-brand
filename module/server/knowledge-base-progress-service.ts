@@ -2927,6 +2927,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     | "id"
     | "clientRequestId"
     | "operationKey"
+    | "operationType"
     | "expectedLeafId"
     | "attachmentFileIds"
     | "metadata"
@@ -2934,7 +2935,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
   > | null;
   terminalCompletedTurnRow: Pick<
     typeof conversationTurns.$inferSelect,
-    "id" | "clientRequestId" | "status" | "operationKey"
+    "id" | "clientRequestId" | "status" | "operationKey" | "operationType"
   > | null;
   terminalFailedTurnRow: Pick<
     typeof conversationTurns.$inferSelect,
@@ -3088,6 +3089,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
       ? {
           turnId: completedTurnRow.id,
           operationKey: completedTurnRow.operationKey ?? undefined,
+          operationType: completedTurnRow.operationType ?? undefined,
           clientRequestId: completedTurnRow.clientRequestId,
           messageSequence: completedMessageSequence,
         }

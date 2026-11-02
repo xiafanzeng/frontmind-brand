@@ -401,13 +401,16 @@ function fail(
   throw new KnowledgeBaseMaterializedContractError(message, category);
 }
 
-export function knowledgeBaseVisibleCharacters(markdown: string) {
-  const text = markdown.replace(/^\s*#\s+[^\n]*(?:\n|$)/u, "")
+function knowledgeBaseVisibleText(markdown: string) {
+  return markdown.replace(/^\s*#\s+[^\n]*(?:\n|$)/u, "")
     .replace(/!\[[^\]]*\]\([^)]*\)/gu, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
-    .replace(/https?:\/\/\S+/gu, "")
+    .replace(/https?:\/\/[^\s\u4e00-\u9fff，。！？；、）】》]+/gu, "")
     .replace(/[\s#>*_`~]/gu, "");
-  return Array.from(text).length;
+}
+
+export function knowledgeBaseVisibleCharacters(markdown: string) {
+  return Array.from(knowledgeBaseVisibleText(markdown)).length;
 }
 
 /** Byte-bound evidence sufficiency only; source truth is not established here. */
@@ -421,7 +424,20 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
       evidence.set(text.replace(/\s/gu, ""), text);
     }
     const evidenceCharacters = [...evidence.values()].reduce((count, text) => count + knowledgeBaseVisibleCharacters(text), 0);
-    const bodyCharacters = knowledgeBaseVisibleCharacters(files.get(leaf.contentPath)?.toString("utf8") ?? "");
+    const body = knowledgeBaseVisibleText(files.get(leaf.contentPath)?.toString("utf8") ?? "");
+    const bodyCharacters = Array.from(body).length;
+    const independence = policy.evidenceIndependence;
+    // Existing builds retain their frozen first-v6 contract. New submissions
+    // use the server-bound Skill hash, so their output cannot select this pin.
+    const legacyEvidence = (independence.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
+    const onlyBodyCopies = evidence.size > 0 && [...evidence.values()].every((text) => {
+      const source = knowledgeBaseVisibleText(text);
+      return source.includes(body) && Array.from(source).length - bodyCharacters <= independence.maximumExtraCharacters;
+    });
+    if (!legacyEvidence && bodyCharacters >= independence.minimumBodyCharacters && onlyBodyCopies) {
+      return [{ leafId: leaf.leafId, title: leaf.title, evidenceCharacters, bodyCharacters,
+        minimumBodyCharacters: policy.minimumBodyCharacters, reason: "EVIDENCE_COPIES_NODE_BODY" }];
+    }
     return evidenceCharacters >= policy.evidenceThreshold && bodyCharacters < policy.minimumBodyCharacters
       ? [{ leafId: leaf.leafId, title: leaf.title, evidenceCharacters, bodyCharacters, minimumBodyCharacters: policy.minimumBodyCharacters }]
       : [];

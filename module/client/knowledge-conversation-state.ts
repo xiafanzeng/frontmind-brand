@@ -71,6 +71,7 @@ export interface LocalMessage {
     kind: "pending_user" | "presentation" | "completion";
     buildId?: string;
     operationKey?: string;
+    operationType?: string;
     clientRequestId?: string;
     turnId?: string;
     presentationKey?: string;
@@ -563,6 +564,7 @@ export function applyKnowledgeBaseObservation(
           buildId: (observation.progress ?? observation.interaction.progress)
             ?.build.id,
           operationKey: observation.activeTurn?.operationKey,
+          operationType: observation.activeTurn?.operationType,
           turnId: activeTurnId,
           generation: observation.generation,
           revision: observation.activeTurn?.expectedRevision ?? undefined,
@@ -600,6 +602,7 @@ export function applyKnowledgeBaseObservation(
             ?.build.id,
           turnId: completedTurn.turnId,
           operationKey: completedTurn.operationKey ?? message.knowledgeBase.operationKey,
+          operationType: completedTurn.operationType ?? message.knowledgeBase.operationType,
           generation: observation.generation,
           serverOwned: true,
         },

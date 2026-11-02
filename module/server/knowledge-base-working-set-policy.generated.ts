@@ -94,11 +94,18 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
     }
   },
   "depth": {
-    "version": "knowledge_depth_v1",
+    "version": "knowledge_depth_v2",
     "skillVersion": "6",
     "evidenceThreshold": 1500,
     "minimumBodyCharacters": 300,
     "maximumRewritePasses": 1,
+    "evidenceIndependence": {
+      "minimumBodyCharacters": 80,
+      "maximumExtraCharacters": 200,
+      "legacySkillContentHashes": [
+        "3a2b025caea4c6e6921eb397e1daf5792c5825475918a9db5f880ce9695d1155"
+      ]
+    },
     "leafTarget": [
       600,
       1200

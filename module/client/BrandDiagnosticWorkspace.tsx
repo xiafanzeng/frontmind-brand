@@ -84,7 +84,13 @@ export default function BrandDiagnosticWorkspace({
   preview?: boolean;
   storageKey?: string;
 }) {
-  const operation = useMemo(() => captureWorkspaceRestOperation(), []);
+  const operationRef = useRef<ReturnType<typeof captureWorkspaceRestOperation> | null>(null);
+  function currentOperation() {
+    // The host activates its enterprise scope in a layout effect. Capture only
+    // when an effect or user action begins, then retain that identity across awaits.
+    operationRef.current ??= captureWorkspaceRestOperation();
+    return operationRef.current;
+  }
   const savedDraft = useMemo(() => {
     try {
       const value = JSON.parse(localStorage.getItem(storageKey) ?? "null");
@@ -98,6 +104,7 @@ export default function BrandDiagnosticWorkspace({
     savedDraft?.clientRequestId ?? crypto.randomUUID(),
   );
   async function request<T>(path: string, body?: unknown): Promise<T> {
+    const operation = currentOperation();
     operation.assertActive();
     const response = await operation.fetch(ROOT + path, {
       method: body === undefined ? "GET" : "POST",
@@ -319,6 +326,7 @@ export default function BrandDiagnosticWorkspace({
   }
   async function downloadKnowledge() {
     const current = await persist();
+    const operation = currentOperation();
     const response = await operation.fetch(
       `${ROOT}/${current.id}/knowledge-archive`,
       {

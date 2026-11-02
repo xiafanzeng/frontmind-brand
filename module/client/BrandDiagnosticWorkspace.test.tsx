@@ -7,13 +7,17 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const mock = vi.hoisted(() => ({ fetch: vi.fn() }));
+import { useLayoutEffect } from "react";
+const mock = vi.hoisted(() => ({ fetch: vi.fn(), scopeReady: true }));
 vi.mock("./host", () => ({
-  captureWorkspaceRestOperation: () => ({
+  captureWorkspaceRestOperation: () => {
+    if (!mock.scopeReady) throw new Error("Workspace scope activates after render");
+    return {
     fetch: mock.fetch,
     assertActive: () => {},
     headers: (v: any) => v,
-  }),
+    };
+  },
 }));
 import BrandDiagnosticWorkspace from "./BrandDiagnosticWorkspace";
 import {
@@ -42,6 +46,7 @@ const makeRun = () => ({
 });
 let run: any, ready: boolean;
 beforeEach(() => {
+  mock.scopeReady = true;
   ready = true;
   run = makeRun();
   localStorage.clear();
@@ -112,6 +117,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("single-page diagnostic interaction", () => {
+  it("captures the enterprise request scope after the host layout effect activates it", async () => {
+    mock.scopeReady = false;
+    function WorkspaceOwner() {
+      useLayoutEffect(() => { mock.scopeReady = true; }, []);
+      return <BrandDiagnosticWorkspace />;
+    }
+    render(<WorkspaceOwner />);
+    expect(await screen.findByRole("button", { name: "根据知识库推荐问题" })).toBeDefined();
+    expect(screen.queryByText(/Workspace scope activates/)).toBeNull();
+  });
   it("labels pending recommendation and validation without exposing execution logs", async () => {
     history.replaceState({}, "", `/?view=diagnostics&diagnosis=${id}`);
     run.activity.recommendation = { status: "running" };

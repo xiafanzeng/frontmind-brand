@@ -366,3 +366,25 @@ describe("knowledge-base reply snapshots", () => {
     );
   });
 });
+
+describe("local knowledge confirmation execution", () => {
+  it("receives the completed operation kind before the next history refresh", async () => {
+    const { isLocalKnowledgeConfirmation, knowledgeExecutionItems } = await import('./lib/knowledge-execution-presentation');
+    const value = conversation("local-confirmation");
+    value.messages = [{ id: "optimistic", role: "user", content: "确认", timestamp: 100,
+      knowledgeBase: { kind: "pending_user", clientRequestId: "local-request" } }];
+    const next = applyKnowledgeBaseObservation(value, {
+      generation: 1, stateEpoch: 1, activeTurn: null, approvedPresentation: null, progress: null, notice: null,
+      completedTurn: { turnId: "local-turn", clientRequestId: "local-request", messageSequence: 2,
+        operationKey: "kb:turn:shared-hash-format", operationType: "local_confirm" },
+      interaction: { interactionState: "awaiting_input", canReply: true, canPublish: false, progress: null },
+    } as any);
+    const confirmed = next.messages.find(message => message.role === "user")!;
+    expect(confirmed.knowledgeBase).toMatchObject({ operationType: "local_confirm", serverOwned: true, turnId: "local-turn" });
+    expect(isLocalKnowledgeConfirmation(confirmed)).toBe(true);
+    expect(isLocalKnowledgeConfirmation({ ...confirmed, knowledgeBase: { ...confirmed.knowledgeBase!, operationType: "revise" } })).toBe(false);
+    expect(isLocalKnowledgeConfirmation({ ...confirmed, knowledgeBase: { ...confirmed.knowledgeBase!, operationType: undefined } })).toBe(false);
+    expect(isLocalKnowledgeConfirmation({ ...confirmed, knowledgeBase: { ...confirmed.knowledgeBase!, serverOwned: false } })).toBe(false);
+    expect(knowledgeExecutionItems([{ kind: "status", turnId: "local-turn" } as any], new Set(["local-turn"]))).toEqual([]);
+  });
+});

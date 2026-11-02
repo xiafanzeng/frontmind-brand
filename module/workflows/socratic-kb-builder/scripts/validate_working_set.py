@@ -70,12 +70,16 @@ def fail(message: str) -> None:
     raise ValueError(message)
 
 
-def visible_characters(markdown: str) -> int:
+def visible_text(markdown: str) -> str:
     text = re.sub(r"^\s*#\s+[^\n]*(?:\n|$)", "", markdown)
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"https?://\S+", "", text)
-    return len(re.sub(r"[\s#>*_`~]", "", text))
+    text = re.sub(r"https?://[^\s\u4e00-\u9fff，。！？；、）】》]+", "", text)
+    return re.sub(r"[\s#>*_`~]", "", text)
+
+
+def visible_characters(markdown: str) -> int:
+    return len(visible_text(markdown))
 
 
 def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -> list[dict]:
@@ -99,7 +103,21 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
                 continue
             unique[re.sub(r"\s", "", text)] = text
         evidence = sum(visible_characters(text) for text in unique.values())
-        body = visible_characters(archive.read(leaf["contentPath"]).decode("utf-8"))
+        body_text = visible_text(archive.read(leaf["contentPath"]).decode("utf-8"))
+        body = len(body_text)
+        independence = policy["evidenceIndependence"]
+        legacy = manifest["skill"]["contentHash"] in independence["legacySkillContentHashes"]
+        copied = bool(unique) and all(
+            body_text in visible_text(text)
+            and len(visible_text(text)) - body <= independence["maximumExtraCharacters"]
+            for text in unique.values()
+        )
+        if not legacy and body >= independence["minimumBodyCharacters"] and copied:
+            issues.append({"leafId": leaf["leafId"], "title": leaf["title"],
+                           "evidenceCharacters": evidence, "bodyCharacters": body,
+                           "minimumBodyCharacters": policy["minimumBodyCharacters"],
+                           "reason": "EVIDENCE_COPIES_NODE_BODY"})
+            continue
         if evidence >= policy["evidenceThreshold"] and body < policy["minimumBodyCharacters"]:
             issues.append({"leafId": leaf["leafId"], "title": leaf["title"],
                            "evidenceCharacters": evidence, "bodyCharacters": body,
@@ -125,7 +143,7 @@ def record_depth_check(archive_path: pathlib.Path, operation_id: str, issues: li
         state_path.write_text(json.dumps({"version": 1, "operationId": operation_id,
             "sourceHash": archive_hash, "status": "rewrite_required", "rewritePasses": 1,
             "issues": issues}, ensure_ascii=False), encoding="utf-8")
-    fail("DEPTH_REWRITE_REQUIRED: 仅集中补写以下节点一次，复用包内证据，不重复采集；更新正文与哈希后再次校验。" + json.dumps(issues, ensure_ascii=False))
+    fail("DEPTH_REWRITE_REQUIRED: 仅集中修正以下节点一次。EVIDENCE_COPIES_NODE_BODY 须恢复已采集的来源原文，不得改写节点正文充当证据；证据充分而正文过短时补写正文。复用已有采集，更新文件与哈希后再次校验。" + json.dumps(issues, ensure_ascii=False))
 
 
 def normalized_media_type(value: object) -> str | None:

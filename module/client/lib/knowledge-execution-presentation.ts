@@ -1,12 +1,12 @@
 import type { LocalMessage } from "../knowledge-conversation-state";
 import type { ExecutionDisplayEntry } from "@frontmind/module-ui/lib/general-execution-display";
 
-/** This prefix is the server's durable local-confirm operation contract. */
+/** Local confirmations are identified by the server-owned turn operation. */
 export function isLocalKnowledgeConfirmation(message: LocalMessage) {
   return (
     message.role === "user" &&
     message.knowledgeBase?.serverOwned === true &&
-    message.knowledgeBase.operationKey?.startsWith("kb:confirm:") === true
+    message.knowledgeBase.operationType === "local_confirm"
   );
 }
 
