@@ -1335,6 +1335,9 @@ export function SimplifiedWebsiteBuilderPreview({
   // exposes (buildPhase beats the coarse execution-step stage).
   const liveBuildInFlight = siteOps
     && (liveBuildStatus === "preparing"
+      || liveBuildStatus === "visual_searching"
+      || liveBuildStatus === "design_compiling"
+      || liveBuildStatus === "contract_ready"
       || liveBuildStatus === "building"
       || liveBuildStatus === "qa_running");
   const [buildClockNow, setBuildClockNow] = useState(() => Date.now());
