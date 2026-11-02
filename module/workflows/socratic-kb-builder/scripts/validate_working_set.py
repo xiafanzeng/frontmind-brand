@@ -82,12 +82,52 @@ def visible_characters(markdown: str) -> int:
     return len(visible_text(markdown))
 
 
+def source_text(markdown: str) -> str:
+    text = unicodedata.normalize("NFKC", markdown)
+    text = re.sub(r"^\s*#{1,6}\s+.*$", "", text, flags=re.MULTILINE)
+    return re.sub(r"^\s*(?:来源(?:地址)?|源文件|抓取时间|检索时间|获取时间|定位|页码|Source|Retrieved(?:At)?)\s*[:：].*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
+
+
+def numeric_text(markdown: str) -> str:
+    text = source_text(markdown)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"(?:https?://|upload://)[^\s\u4e00-\u9fff，。！？；、）】》]+", "", text)
+    text = re.sub(r"(?:第\s*)?[0-9]+(?:\s*[-—–至~]\s*[0-9]+)?\s*页", "", text)
+    text = re.sub(r"(?:版本|编号|version|\bv)\s*[A-Za-z0-9._-]+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*[0-9]+(?:[.、)）]\s*)?\s*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[0-9]+(?:\.[0-9]+)*[.、)）]\s+", "", text, flags=re.MULTILINE)
+    return re.sub(r"\s", "", text)
+
+
+def normalized_number(value: str, power: int = 0) -> str:
+    parts = value.replace(",", "").split(".")
+    whole, fraction = parts[0], parts[1] if len(parts) > 1 else ""
+    digits = (whole + fraction).lstrip("0")
+    if not digits:
+        return "0"
+    trailing = len(digits) - len(digits.rstrip("0"))
+    return f"{digits[:len(digits) - trailing]}e{power - len(fraction) + trailing}"
+
+
+def numeric_claims(text: str) -> list[dict]:
+    units = "|".join(WORKING_SET_POLICY["depth"]["evidenceTraceability"]["quantityUnits"])
+    pattern = rf"(?<![0-9.])([0-9]+(?:,[0-9]{{3}})*(?:\.[0-9]+)?)(亿|万)?(?:余|多)?({units})"
+    aliases = WORKING_SET_POLICY["depth"]["evidenceTraceability"]["quantityUnitAliases"]
+    return [{"label": match.group(0), "literal": normalized_number(match.group(1)),
+             "quantity": normalized_number(match.group(1), 8 if match.group(2) == "亿" else 4 if match.group(2) == "万" else 0) + ":" + aliases.get(match.group(3), match.group(3))}
+            for match in re.finditer(pattern, numeric_text(text))]
+
+
 def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -> list[dict]:
     if skill_version != "6":
         return []
     policy = WORKING_SET_POLICY["depth"]
+    traceability = policy["evidenceTraceability"]
+    new_bindings = manifest["skill"]["contentHash"] not in traceability["legacySkillContentHashes"]
     ledger = {row["path"]: row for row in manifest["evidenceLedger"]}
-    issues = []
+    shared = {}
+    records = []
     for leaf in manifest["leaves"]:
         unique = {}
         for name in leaf["evidencePaths"]:
@@ -101,27 +141,47 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
                 text = payload.decode("utf-8")
             except (KeyError, UnicodeDecodeError):
                 continue
-            unique[re.sub(r"\s", "", text)] = text
-        evidence = sum(visible_characters(text) for text in unique.values())
-        body_text = visible_text(archive.read(leaf["contentPath"]).decode("utf-8"))
+            identity = visible_text(source_text(text)) if new_bindings else re.sub(r"\s", "", text)
+            if identity:
+                unique[identity] = text
+        for identity in unique:
+            owners = shared.setdefault(identity, {"leaves": set(), "branches": set()})
+            owners["leaves"].add(leaf["leafId"])
+            owners["branches"].add(leaf["branchId"])
+        records.append((leaf, unique))
+    issues = []
+    for leaf, unique in records:
+        texts = list(unique.values())
+        evidence = sum(visible_characters(source_text(text) if new_bindings else text) for text in texts)
+        markdown = archive.read(leaf["contentPath"]).decode("utf-8")
+        body_text = visible_text(markdown)
         body = len(body_text)
+        minimum = traceability["minimumBodyCharacters"] if new_bindings else policy["minimumBodyCharacters"]
+        issue = {"leafId": leaf["leafId"], "title": leaf["title"], "evidenceCharacters": evidence,
+                 "bodyCharacters": body, "minimumBodyCharacters": minimum}
         independence = policy["evidenceIndependence"]
         legacy = manifest["skill"]["contentHash"] in independence["legacySkillContentHashes"]
-        copied = bool(unique) and all(
-            body_text in visible_text(text)
-            and len(visible_text(text)) - body <= independence["maximumExtraCharacters"]
-            for text in unique.values()
-        )
+        copied = bool(texts) and all(body_text in visible_text(text)
+            and len(visible_text(text)) - body <= independence["maximumExtraCharacters"] for text in texts)
         if not legacy and body >= independence["minimumBodyCharacters"] and copied:
-            issues.append({"leafId": leaf["leafId"], "title": leaf["title"],
-                           "evidenceCharacters": evidence, "bodyCharacters": body,
-                           "minimumBodyCharacters": policy["minimumBodyCharacters"],
-                           "reason": "EVIDENCE_COPIES_NODE_BODY"})
+            issues.append({**issue, "reason": "EVIDENCE_COPIES_NODE_BODY"})
             continue
-        if evidence >= policy["evidenceThreshold"] and body < policy["minimumBodyCharacters"]:
-            issues.append({"leafId": leaf["leafId"], "title": leaf["title"],
-                           "evidenceCharacters": evidence, "bodyCharacters": body,
-                           "minimumBodyCharacters": policy["minimumBodyCharacters"]})
+        if new_bindings:
+            reused = bool(unique) and all(len(shared[identity]["leaves"]) >= traceability["minimumSharedLeaves"]
+                and len(shared[identity]["branches"]) >= traceability["minimumSharedBranches"] for identity in unique)
+            source_claims = [claim for text in texts for claim in numeric_claims(text)]
+            source_quantities = {claim["quantity"] for claim in source_claims}
+            typed_source_numbers = {claim["literal"] for claim in source_claims}
+            source_numbers = {normalized_number(match.group(0)) for text in texts
+                for match in re.finditer(r"(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])", numeric_text(text))}
+            missing = list(dict.fromkeys(claim["label"] for claim in numeric_claims(markdown)
+                if claim["quantity"] not in source_quantities and (claim["literal"] not in source_numbers or claim["literal"] in typed_source_numbers)))
+            if reused or missing:
+                issues.append({**issue, "reason": "EVIDENCE_REUSED_ACROSS_TOPICS" if reused else "NUMERIC_CLAIMS_UNVERIFIED",
+                               **({"unverifiedNumericClaims": missing} if missing else {})})
+                continue
+        if evidence >= policy["evidenceThreshold"] and body < minimum:
+            issues.append(issue)
     return issues
 
 
@@ -138,12 +198,12 @@ def record_depth_check(archive_path: pathlib.Path, operation_id: str, issues: li
         return
     if previous and previous["sourceHash"] != archive_hash:
         state_path.write_text(json.dumps({**previous, "status": "exhausted"}), encoding="utf-8")
-        fail("DEPTH_REWRITE_EXHAUSTED: 已使用一次集中补写，仍有证据充分但正文过短的节点；停止提交。" + json.dumps(issues, ensure_ascii=False))
+        fail("DEPTH_REWRITE_EXHAUSTED: 已使用一次集中补写，仍有证据绑定、数值可追溯性或正文深度未通过的节点；停止提交。" + json.dumps(issues, ensure_ascii=False))
     if not previous:
         state_path.write_text(json.dumps({"version": 1, "operationId": operation_id,
             "sourceHash": archive_hash, "status": "rewrite_required", "rewritePasses": 1,
             "issues": issues}, ensure_ascii=False), encoding="utf-8")
-    fail("DEPTH_REWRITE_REQUIRED: 仅集中修正以下节点一次。EVIDENCE_COPIES_NODE_BODY 须恢复已采集的来源原文，不得改写节点正文充当证据；证据充分而正文过短时补写正文。复用已有采集，更新文件与哈希后再次校验。" + json.dumps(issues, ensure_ascii=False))
+    fail("DEPTH_REWRITE_REQUIRED: 仅集中修正以下节点一次。EVIDENCE_COPIES_NODE_BODY 须恢复已采集的来源原文，不得改写节点正文充当证据；跨主题重复证据须按原文段落重绑；缺失数值须核对或标明待核验；通过关联检查且证据充分时补写正文。复用已有采集，更新文件与哈希后再次校验。" + json.dumps(issues, ensure_ascii=False))
 
 
 def normalized_media_type(value: object) -> str | None:

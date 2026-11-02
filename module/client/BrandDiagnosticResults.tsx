@@ -420,7 +420,7 @@ export function DiagnosticKnowledgeComparison({
         </span>
       </div>
       <p className="bd-note">
-        对照基准来自企业已确认知识。与知识一致不代表已获外部证实；“无法核验”不等于错误，待核实事实仍保留其边界。
+        对照基准来自本轮冻结知识。与知识一致不代表已获外部证实；“无法核验”不等于错误，待核实事实仍保留其边界。
       </p>
       <div className="bd-comparison-filters" aria-label="筛选知识对照判断">
         <button

@@ -181,6 +181,8 @@ describe("diagnostic result evidence", () => {
       />,
     );
     expect(screen.getByText("知识库中的科室范围")).toBeTruthy();
+    expect(screen.getByText(/对照基准来自本轮冻结知识/)).toBeTruthy();
+    expect(screen.queryByText(/对照基准来自企业已确认知识/)).toBeNull();
     expect(screen.getByText("AI 正确表达了科室范围")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /查看知识节点/ }));
     expect(onKnowledge).toHaveBeenCalledWith("scope.md");

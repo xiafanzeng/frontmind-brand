@@ -197,6 +197,17 @@ describe("single-page diagnostic interaction", () => {
     history.replaceState({}, "", `/?diagnosis=${id}`);
   }
 
+  it("places category metrics before the complete finding", async () => {
+    withSavedResult();
+    run.results.reputation.metrics = [{ id: "positive", label: "正面回答", value: 33.33, unit: "%", numerator: 5, denominator: 15 }];
+    const { container } = render(<BrandDiagnosticWorkspace />);
+    await screen.findAllByRole("button", { name: /正面回答/ });
+    const metrics = container.querySelector("#diagnostic-metrics-reputation")!;
+    const finding = metrics.parentElement!.querySelector(".bd-finding")!;
+    expect(finding.textContent).toBe(run.results.reputation.assessment.summary);
+    expect(metrics.compareDocumentPosition(finding) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("adds only a semantic audit to saved answers and can stop it after the old task completed", async () => {
     withSavedResult();
     render(<BrandDiagnosticWorkspace />);

@@ -413,34 +413,118 @@ export function knowledgeBaseVisibleCharacters(markdown: string) {
   return Array.from(knowledgeBaseVisibleText(markdown)).length;
 }
 
-/** Byte-bound evidence sufficiency only; source truth is not established here. */
-export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManifest, files: ReadonlyMap<string, Buffer>) {
+function knowledgeBaseSourceText(markdown: string) {
+  return markdown.normalize("NFKC")
+    .replace(/^\s*#{1,6}\s+.*$/gmu, "")
+    .replace(/^\s*(?:来源(?:地址)?|源文件|抓取时间|检索时间|获取时间|定位|页码|Source|Retrieved(?:At)?)\s*[:：].*$/gimu, "");
+}
+
+function knowledgeBaseNumericText(markdown: string) {
+  return knowledgeBaseSourceText(markdown)
+    .replace(/!\[[^\]]*\]\([^)]*\)/gu, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
+    .replace(/(?:https?:\/\/|upload:\/\/)[^\s\u4e00-\u9fff，。！？；、）】》]+/gu, "")
+    .replace(/(?:第\s*)?\d+(?:\s*[-—–至~]\s*\d+)?\s*页/gu, "")
+    .replace(/(?:版本|编号|version|\bv)\s*[A-Za-z0-9._-]+/giu, "")
+    .replace(/^\s*\d+(?:[.、)）]\s*)?\s*$/gmu, "")
+    .replace(/^\s*\d+(?:\.\d+)*[.、)）]\s+/gmu, "")
+    .replace(/\s/gu, "");
+}
+
+/** Decimal normalization stays exact for quantities beyond JavaScript integers. */
+function knowledgeBaseNumber(value: string, power = 0) {
+  const [whole, fraction = ""] = value.replace(/,/gu, "").split(".");
+  const digits = (whole + fraction).replace(/^0+/u, "");
+  if (!digits) return "0";
+  const trailing = digits.match(/0+$/u)?.[0].length ?? 0;
+  return `${digits.slice(0, digits.length - trailing)}e${power - fraction.length + trailing}`;
+}
+
+function knowledgeBaseNumericClaims(text: string) {
+  const units = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth.evidenceTraceability.quantityUnits.join("|");
+  const pattern = new RegExp(`(?<![0-9.])([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]+)?)(亿|万)?(?:余|多)?(${units})`, "gu");
+  const aliases: Readonly<Record<string, string>> = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth.evidenceTraceability.quantityUnitAliases;
+  return [...knowledgeBaseNumericText(text).matchAll(pattern)].map(match => ({
+    label: match[0],
+    literal: knowledgeBaseNumber(match[1]),
+    quantity: `${knowledgeBaseNumber(match[1], match[2] === "亿" ? 8 : match[2] === "万" ? 4 : 0)}:${aliases[match[3]] ?? match[3]}`,
+  }));
+}
+
+interface KnowledgeBaseDepthIssue {
+  leafId: string;
+  title: string;
+  evidenceCharacters: number;
+  bodyCharacters: number;
+  minimumBodyCharacters: number;
+  reason?: string;
+  unverifiedNumericClaims?: string[];
+}
+
+/** Checks retained evidence bindings and quantities, not external factual truth. */
+export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManifest, files: ReadonlyMap<string, Buffer>): KnowledgeBaseDepthIssue[] {
   if (manifest.skill.version !== "6") return [];
   const policy = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth;
-  return manifest.leaves.flatMap((leaf) => {
+  const traceability = policy.evidenceTraceability;
+  const newBindings = !(traceability.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
+  const ledger = new Map(manifest.evidenceLedger.map(row => [row.path, row]));
+  const shared = new Map<string, { leaves: Set<string>; branches: Set<string> }>();
+  const records = manifest.leaves.map(leaf => {
     const evidence = new Map<string, string>();
     for (const path of leaf.evidencePaths) {
-      const text = files.get(path)?.toString("utf8") ?? "";
-      evidence.set(text.replace(/\s/gu, ""), text);
+      const row = ledger.get(path);
+      const bytes = files.get(path);
+      if (!row || row.leafId !== leaf.leafId || !isTextEvidencePath(path) || !bytes || sha256(bytes) !== row.sha256) continue;
+      let text: string;
+      try { text = decodeUtf8(bytes, path); } catch { continue; }
+      const identity = newBindings ? knowledgeBaseVisibleText(knowledgeBaseSourceText(text)) : text.replace(/\s/gu, "");
+      if (identity) evidence.set(identity, text);
     }
-    const evidenceCharacters = [...evidence.values()].reduce((count, text) => count + knowledgeBaseVisibleCharacters(text), 0);
-    const body = knowledgeBaseVisibleText(files.get(leaf.contentPath)?.toString("utf8") ?? "");
+    for (const identity of evidence.keys()) {
+      const owners = shared.get(identity) ?? { leaves: new Set<string>(), branches: new Set<string>() };
+      owners.leaves.add(leaf.leafId);
+      owners.branches.add(leaf.branchId);
+      shared.set(identity, owners);
+    }
+    return { leaf, evidence };
+  });
+  return records.flatMap<KnowledgeBaseDepthIssue>(({ leaf, evidence }) => {
+    const texts = [...evidence.values()];
+    const evidenceCharacters = texts.reduce((count, text) => count + knowledgeBaseVisibleCharacters(newBindings ? knowledgeBaseSourceText(text) : text), 0);
+    const markdown = files.get(leaf.contentPath)?.toString("utf8") ?? "";
+    const body = knowledgeBaseVisibleText(markdown);
     const bodyCharacters = Array.from(body).length;
+    const minimumBodyCharacters = newBindings ? traceability.minimumBodyCharacters : policy.minimumBodyCharacters;
+    const issue = { leafId: leaf.leafId, title: leaf.title, evidenceCharacters, bodyCharacters, minimumBodyCharacters };
     const independence = policy.evidenceIndependence;
-    // Existing builds retain their frozen first-v6 contract. New submissions
-    // use the server-bound Skill hash, so their output cannot select this pin.
     const legacyEvidence = (independence.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
-    const onlyBodyCopies = evidence.size > 0 && [...evidence.values()].every((text) => {
+    const onlyBodyCopies = texts.length > 0 && texts.every(text => {
       const source = knowledgeBaseVisibleText(text);
       return source.includes(body) && Array.from(source).length - bodyCharacters <= independence.maximumExtraCharacters;
     });
     if (!legacyEvidence && bodyCharacters >= independence.minimumBodyCharacters && onlyBodyCopies) {
-      return [{ leafId: leaf.leafId, title: leaf.title, evidenceCharacters, bodyCharacters,
-        minimumBodyCharacters: policy.minimumBodyCharacters, reason: "EVIDENCE_COPIES_NODE_BODY" }];
+      return [{ ...issue, reason: "EVIDENCE_COPIES_NODE_BODY" }];
     }
-    return evidenceCharacters >= policy.evidenceThreshold && bodyCharacters < policy.minimumBodyCharacters
-      ? [{ leafId: leaf.leafId, title: leaf.title, evidenceCharacters, bodyCharacters, minimumBodyCharacters: policy.minimumBodyCharacters }]
-      : [];
+    if (newBindings) {
+      const reused = evidence.size > 0 && [...evidence.keys()].every(identity => {
+        const owners = shared.get(identity)!;
+        return owners.leaves.size >= traceability.minimumSharedLeaves && owners.branches.size >= traceability.minimumSharedBranches;
+      });
+      const sourceClaims = texts.flatMap(knowledgeBaseNumericClaims);
+      const sourceQuantities = new Set(sourceClaims.map(claim => claim.quantity));
+      const typedSourceNumbers = new Set(sourceClaims.map(claim => claim.literal));
+      const sourceNumbers = new Set(texts.flatMap(text =>
+        [...knowledgeBaseNumericText(text).matchAll(/(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])/gu)]
+          .map(match => knowledgeBaseNumber(match[0]))));
+      const missing = [...new Set(knowledgeBaseNumericClaims(markdown)
+        .filter(claim => !sourceQuantities.has(claim.quantity) && (!sourceNumbers.has(claim.literal) || typedSourceNumbers.has(claim.literal)))
+        .map(claim => claim.label))];
+      if (reused || missing.length) return [{ ...issue,
+        reason: reused ? "EVIDENCE_REUSED_ACROSS_TOPICS" : "NUMERIC_CLAIMS_UNVERIFIED",
+        ...(missing.length ? { unverifiedNumericClaims: missing } : {}),
+      }];
+    }
+    return evidenceCharacters >= policy.evidenceThreshold && bodyCharacters < minimumBodyCharacters ? [issue] : [];
   });
 }
 

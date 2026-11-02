@@ -2501,10 +2501,13 @@ async function readKnowledgeBaseObservationProjection(
     null;
   if (
     !build.activeTurnId &&
-    !currentRow &&
-    (build.status === "ready_to_publish" || build.status === "published")
+    (build.lastAppliedOperationKey ||
+      (!currentRow && (build.status === "ready_to_publish" || build.status === "published")))
   ) {
     if (build.lastAppliedOperationKey) {
+      // A pre-generated next node still points to its initial research turn.
+      // Acknowledge the operation that advanced the build independently of
+      // that content provenance, including intermediate local confirmations.
       // This is the exact durable operation that advanced the build. Do not
       // guess from second-resolution timestamps: two turns can complete in the
       // same second, and a later maintenance turn must not acknowledge the
@@ -3075,10 +3078,10 @@ function projectKnowledgeBaseObservationSnapshot(input: {
   const completedTurnRow =
     activeTurnRow?.status === "completed"
       ? activeTurnRow
-      : presentationTurnRow?.status === "completed"
-        ? presentationTurnRow
-        : terminalCompletedTurnRow?.status === "completed"
-          ? terminalCompletedTurnRow
+      : terminalCompletedTurnRow?.status === "completed"
+        ? terminalCompletedTurnRow
+        : presentationTurnRow?.status === "completed"
+          ? presentationTurnRow
           : null;
   const completedMessageSequence = messageSequence(
     completedTurnRow?.id,
