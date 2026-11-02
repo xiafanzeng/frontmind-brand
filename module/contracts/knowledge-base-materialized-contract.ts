@@ -413,14 +413,15 @@ export function knowledgeBaseVisibleCharacters(markdown: string) {
   return Array.from(knowledgeBaseVisibleText(markdown)).length;
 }
 
-function knowledgeBaseSourceText(markdown: string) {
-  return markdown.normalize("NFKC")
+function knowledgeBaseSourceText(markdown: string, excludeGap = false) {
+  const source = excludeGap ? markdown.replace(/^## 节点资料缺口\s*\n[\s\S]*$/mu, "") : markdown;
+  return source.normalize("NFKC")
     .replace(/^\s*#{1,6}\s+.*$/gmu, "")
     .replace(/^\s*(?:来源(?:地址)?|源文件|抓取时间|检索时间|获取时间|定位|页码|Source|Retrieved(?:At)?)\s*[:：].*$/gimu, "");
 }
 
-function knowledgeBaseNumericText(markdown: string) {
-  return knowledgeBaseSourceText(markdown)
+function knowledgeBaseNumericText(markdown: string, excludeGap = false) {
+  return knowledgeBaseSourceText(markdown, excludeGap)
     .replace(/!\[[^\]]*\]\([^)]*\)/gu, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
     .replace(/(?:https?:\/\/|upload:\/\/)[^\s\u4e00-\u9fff，。！？；、）】》]+/gu, "")
@@ -440,11 +441,11 @@ function knowledgeBaseNumber(value: string, power = 0) {
   return `${digits.slice(0, digits.length - trailing)}e${power - fraction.length + trailing}`;
 }
 
-function knowledgeBaseNumericClaims(text: string) {
+function knowledgeBaseNumericClaims(text: string, excludeGap = false) {
   const units = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth.evidenceTraceability.quantityUnits.join("|");
   const pattern = new RegExp(`(?<![0-9.])([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]+)?)(亿|万)?(?:余|多)?(${units})`, "gu");
   const aliases: Readonly<Record<string, string>> = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth.evidenceTraceability.quantityUnitAliases;
-  return [...knowledgeBaseNumericText(text).matchAll(pattern)].map(match => ({
+  return [...knowledgeBaseNumericText(text, excludeGap).matchAll(pattern)].map(match => ({
     label: match[0],
     literal: knowledgeBaseNumber(match[1]),
     quantity: `${knowledgeBaseNumber(match[1], match[2] === "亿" ? 8 : match[2] === "万" ? 4 : 0)}:${aliases[match[3]] ?? match[3]}`,
@@ -459,6 +460,54 @@ interface KnowledgeBaseDepthIssue {
   minimumBodyCharacters: number;
   reason?: string;
   unverifiedNumericClaims?: string[];
+  effectiveBodyCharacters?: number;
+  templateCharacters?: number;
+}
+
+function knowledgeBaseSubstantiveMarkdown(markdown: string) {
+  return markdown.split(/\n\s*\n/u)
+    .filter(paragraph => !/^\s*(?:>\s*)?资料不足[:：]/u.test(paragraph))
+    .join("\n\n");
+}
+
+function knowledgeBaseBodyParagraphs(markdown: string) {
+  return knowledgeBaseSubstantiveMarkdown(markdown).split(/\n\s*\n/u)
+    .map(paragraph => knowledgeBaseVisibleText(paragraph.normalize("NFKC"))).filter(Boolean);
+}
+
+/** This checks a reviewable declaration, not whether the claimed gap is true. */
+function knowledgeBaseHasSparseEvidenceException(
+  manifest: KnowledgeBaseWorkingSetManifest,
+  leaf: KnowledgeBaseWorkingSetLeaf,
+  evidence: ReadonlyMap<string, string>,
+  evidenceSources: ReadonlyMap<string, Set<string>>,
+  markdown: string,
+) {
+  const coverage = manifest.researchCoverage;
+  const dimensions = coverage.dimensions as Array<{ status: string; leafIds: string[] }>;
+  const minimum = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth.bodySubstance.minimumExceptionDetailCharacters;
+  if (coverage.stopReason !== "source_limited" || typeof coverage.limitationReason !== "string"
+    || knowledgeBaseVisibleCharacters(coverage.limitationReason) < minimum
+    || !dimensions.some(dimension => dimension.status === "gap" && dimension.leafIds.includes(leaf.leafId))) return false;
+  const notice = markdown.match(/(?:^|\n)\s*(?:>\s*)?资料不足[:：]([^\n]+)/u)?.[1] ?? "";
+  if (knowledgeBaseVisibleCharacters(notice) < minimum) return false;
+  return [...evidence.values()].some(text => {
+    const section = text.match(/^## 节点资料缺口\s*\n([\s\S]*)$/mu)?.[1];
+    if (!section) return false;
+    const fields = new Map([...section.matchAll(/^(节点|缺失事实|已读来源|已读定位|来源局限)[:：]\s*(.+)$/gmu)]
+      .map(match => [match[1], match[2].trim()]));
+    const missing = fields.get("缺失事实") ?? "";
+    const source = fields.get("已读来源") ?? "";
+    const locator = fields.get("已读定位") ?? "";
+    const limitation = fields.get("来源局限") ?? "";
+    const boundSource = evidenceSources.get(text)?.has(source) === true;
+    return fields.get("节点") === leaf.leafId && boundSource
+      && missing.includes(leaf.title) && knowledgeBaseVisibleCharacters(missing) >= minimum
+      && notice.includes(missing)
+      && knowledgeBaseVisibleCharacters(locator) >= 4
+      && /页|章|节|表|段|page|chapter|section/iu.test(locator)
+      && knowledgeBaseVisibleCharacters(limitation) >= minimum;
+  });
 }
 
 /** Checks retained evidence bindings and quantities, not external factual truth. */
@@ -467,17 +516,24 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
   const policy = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth;
   const traceability = policy.evidenceTraceability;
   const newBindings = !(traceability.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
+  const substance = policy.bodySubstance;
+  const newSubstance = !(substance.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
   const ledger = new Map(manifest.evidenceLedger.map(row => [row.path, row]));
   const shared = new Map<string, { leaves: Set<string>; branches: Set<string> }>();
+  const paragraphs = new Map<string, { leaves: Set<string>; branches: Set<string> }>();
   const records = manifest.leaves.map(leaf => {
     const evidence = new Map<string, string>();
+    const evidenceSources = new Map<string, Set<string>>();
     for (const path of leaf.evidencePaths) {
       const row = ledger.get(path);
       const bytes = files.get(path);
       if (!row || row.leafId !== leaf.leafId || !isTextEvidencePath(path) || !bytes || sha256(bytes) !== row.sha256) continue;
       let text: string;
       try { text = decodeUtf8(bytes, path); } catch { continue; }
-      const identity = newBindings ? knowledgeBaseVisibleText(knowledgeBaseSourceText(text)) : text.replace(/\s/gu, "");
+      const sources = evidenceSources.get(text) ?? new Set<string>();
+      if (row.sourceUrl) sources.add(row.sourceUrl);
+      evidenceSources.set(text, sources);
+      const identity = newBindings ? knowledgeBaseVisibleText(knowledgeBaseSourceText(text, newSubstance)) : text.replace(/\s/gu, "");
       if (identity) evidence.set(identity, text);
     }
     for (const identity of evidence.keys()) {
@@ -486,12 +542,20 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
       owners.branches.add(leaf.branchId);
       shared.set(identity, owners);
     }
-    return { leaf, evidence };
-  });
-  return records.flatMap<KnowledgeBaseDepthIssue>(({ leaf, evidence }) => {
-    const texts = [...evidence.values()];
-    const evidenceCharacters = texts.reduce((count, text) => count + knowledgeBaseVisibleCharacters(newBindings ? knowledgeBaseSourceText(text) : text), 0);
     const markdown = files.get(leaf.contentPath)?.toString("utf8") ?? "";
+    const bodyParagraphs = knowledgeBaseBodyParagraphs(markdown);
+    for (const paragraph of bodyParagraphs) {
+      if (Array.from(paragraph).length < substance.minimumSharedParagraphCharacters) continue;
+      const owners = paragraphs.get(paragraph) ?? { leaves: new Set<string>(), branches: new Set<string>() };
+      owners.leaves.add(leaf.leafId);
+      owners.branches.add(leaf.branchId);
+      paragraphs.set(paragraph, owners);
+    }
+    return { leaf, evidence, evidenceSources, markdown, bodyParagraphs };
+  });
+  return records.flatMap<KnowledgeBaseDepthIssue>(({ leaf, evidence, evidenceSources, markdown, bodyParagraphs }) => {
+    const texts = [...evidence.values()];
+    const evidenceCharacters = texts.reduce((count, text) => count + knowledgeBaseVisibleCharacters(newBindings ? knowledgeBaseSourceText(text, newSubstance) : text), 0);
     const body = knowledgeBaseVisibleText(markdown);
     const bodyCharacters = Array.from(body).length;
     const minimumBodyCharacters = newBindings ? traceability.minimumBodyCharacters : policy.minimumBodyCharacters;
@@ -510,19 +574,34 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
         const owners = shared.get(identity)!;
         return owners.leaves.size >= traceability.minimumSharedLeaves && owners.branches.size >= traceability.minimumSharedBranches;
       });
-      const sourceClaims = texts.flatMap(knowledgeBaseNumericClaims);
+      const sourceClaims = texts.flatMap(text => knowledgeBaseNumericClaims(text, newSubstance));
       const sourceQuantities = new Set(sourceClaims.map(claim => claim.quantity));
       const typedSourceNumbers = new Set(sourceClaims.map(claim => claim.literal));
       const sourceNumbers = new Set(texts.flatMap(text =>
-        [...knowledgeBaseNumericText(text).matchAll(/(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])/gu)]
+        [...knowledgeBaseNumericText(text, newSubstance).matchAll(/(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])/gu)]
           .map(match => knowledgeBaseNumber(match[0]))));
-      const missing = [...new Set(knowledgeBaseNumericClaims(markdown)
+      const missing = [...new Set(knowledgeBaseNumericClaims(newSubstance ? knowledgeBaseSubstantiveMarkdown(markdown) : markdown)
         .filter(claim => !sourceQuantities.has(claim.quantity) && (!sourceNumbers.has(claim.literal) || typedSourceNumbers.has(claim.literal)))
         .map(claim => claim.label))];
       if (reused || missing.length) return [{ ...issue,
         reason: reused ? "EVIDENCE_REUSED_ACROSS_TOPICS" : "NUMERIC_CLAIMS_UNVERIFIED",
         ...(missing.length ? { unverifiedNumericClaims: missing } : {}),
       }];
+    }
+    if (newSubstance) {
+      const templateCharacters = bodyParagraphs.reduce((count, paragraph) => {
+        const owners = paragraphs.get(paragraph);
+        return count + (owners && owners.leaves.size >= substance.minimumSharedLeaves
+          && owners.branches.size >= substance.minimumSharedBranches ? Array.from(paragraph).length : 0);
+      }, 0);
+      const effectiveBodyCharacters = bodyParagraphs.reduce((count, paragraph) => count + Array.from(paragraph).length, 0) - templateCharacters;
+      const substantiveIssue = { ...issue, minimumBodyCharacters: substance.minimumBodyCharacters, effectiveBodyCharacters, templateCharacters };
+      if (templateCharacters) return [{ ...substantiveIssue, reason: "BODY_TEMPLATE_REUSED" }];
+      if (effectiveBodyCharacters < substance.minimumBodyCharacters
+        && !knowledgeBaseHasSparseEvidenceException(manifest, leaf, evidence, evidenceSources, markdown)) {
+        return [{ ...substantiveIssue, reason: "SUBSTANTIVE_BODY_TOO_SHORT" }];
+      }
+      return [];
     }
     return evidenceCharacters >= policy.evidenceThreshold && bodyCharacters < minimumBodyCharacters ? [issue] : [];
   });

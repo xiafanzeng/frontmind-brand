@@ -94,7 +94,7 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
     }
   },
   "depth": {
-    "version": "knowledge_depth_v3",
+    "version": "knowledge_depth_v4",
     "skillVersion": "6",
     "evidenceThreshold": 1500,
     "minimumBodyCharacters": 300,
@@ -166,6 +166,18 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
         "名": "人",
         "千米": "公里"
       }
+    },
+    "bodySubstance": {
+      "minimumBodyCharacters": 600,
+      "minimumSharedParagraphCharacters": 40,
+      "minimumSharedLeaves": 5,
+      "minimumSharedBranches": 3,
+      "minimumExceptionDetailCharacters": 20,
+      "legacySkillContentHashes": [
+        "3a2b025caea4c6e6921eb397e1daf5792c5825475918a9db5f880ce9695d1155",
+        "d755fea93a08163a6d39fa04dcdb4b14abeffbede24ee49479845db4bb5df30d",
+        "b3b384c8ec3d9151d9701cff843feba7ef1f5bed2397f4590aace2b99d5bcb7d"
+      ]
     }
   }
 } as const;

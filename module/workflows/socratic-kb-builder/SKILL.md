@@ -139,8 +139,10 @@ snippets and cannot prove that the underlying page was read. Use the existing
 evidence ledger to associate these passages with each relevant leaf. Preserve
 the complete relevant passage even when it is longer than the eventual node.
 
-Map each node to its relevant original passages and printed page or section
-locators before writing the node. Keep tables with their headings and units.
+Read the complete corresponding PDF chapter before drafting its nodes. Map each
+node to the actual retained source passages and printed page or section locators.
+Preserve original wording, table headings, units and the year to which each fact
+belongs. A rewritten digest cannot be labeled as an original source excerpt.
 A shared source document may support several topics, but each topic must retain
 its own supporting passages. Do not fall back to one generic paragraph when a
 topic lookup fails. Record the missing support and retrieve the appropriate
@@ -182,8 +184,9 @@ of fragmenting them into many short summaries. The actual count follows the
 evidence and this preference adds no hard node-count restriction. Do not add
 inferences or repetitive prose to meet a character target.
 
-Write substantial nodes in batches of five to eight when the full knowledge
-package is too long for one response or file-writing call. Freeze each batch's
+Write nodes in batches of five to eight, completing and checking each batch
+before moving on. Never use one script to produce a short summary for every node
+in the full package. Freeze each batch's
 source passages, page locators and numeric excerpts before expanding its nodes.
 Do not shorten every node to fit the entire package into one script or response.
 
@@ -195,14 +198,50 @@ Never pad sparse evidence, reuse unrelated facts, manufacture examples or
 repeat a disclaimer to reach a length target. A short, honest node is valid
 when relevant evidence is insufficient. Retain the specific gap in evidence.
 
-Always pass `--expected-skill-version 6` to the initial bundle validator. Its
-machine-readable depth policy counts visible body characters after the title,
-and deduplicates only this leaf's retained, hash-valid evidence. When relevant
-evidence contains at least 1,500 source characters and has passed the binding
-and numeric checks, but the body has fewer than 600 characters,
-it emits `DEPTH_REWRITE_REQUIRED` with the full affected-node list.
-Only newly pinned writers use this 600-character minimum and the new binding
-checks. Previously frozen Skill revisions retain their original read contracts.
+Always pass `--expected-skill-version 6` to the initial bundle validator.
+Every newly pinned ordinary node must contain at least 600 effective visible
+body characters. The type-specific drafting targets above remain applicable.
+This minimum is checked even when the writer retained only a short excerpt.
+Shared paragraphs of at least 40 visible characters appearing in at least five
+nodes and three branches do not count toward body depth and produce
+BODY_TEMPLATE_REUSED. Move a genuinely shared usage or date disclaimer into the
+package-level explanation. Keep each node's supported facts, explanation,
+examples and boundaries specific to its own subject.
+
+A truly sparse topic may use a reviewable exception after the corresponding
+source chapter and available official material have been read. Global
+source_limited alone never exempts a node. All of these conditions are required:
+
+- researchCoverage.stopReason is source_limited and limitationReason explains
+  the specific exhausted sources and missing material.
+- A researchCoverage.dimensions entry has status gap and explicitly includes
+  this leafId. Preserve the actual gap instead of marking every dimension covered.
+- Append the fixed section below to this node's own hash-bound evidence file.
+  Use its exact leafId, a missing-fact description containing the node title,
+  the sourceUrl from this file's evidenceLedger entry, a concrete page/section
+  locator and a source-specific limitation. Both detail descriptions need at
+  least 20 visible characters. The validator checks declaration completeness,
+  while the saved source remains available for review.
+- Include a short visible paragraph beginning 资料不足： in the node body, with
+  the exact missing-fact description. This notice does not count toward body
+  depth. Preserve the supported facts and avoid speculative padding.
+
+```markdown
+## 节点资料缺口
+节点：<exact leafId>
+缺失事实：<node title and specific missing facts>
+已读来源：<this evidence file's exact sourceUrl>
+已读定位：<printed page and section or table>
+来源局限：<what the read source omits and which relevant source is unavailable>
+```
+
+Keep this section last in the evidence file. It is excluded from source size,
+source reuse and numeric-support checks. Unexplained short nodes produce
+SUBSTANTIVE_BODY_TOO_SHORT. Both insufficient depth and repeated templates must
+be fixed together in the single permitted correction pass. If the supported
+material remains inadequate and the exception cannot be established, stop with
+an explicit incomplete result. Previously frozen Skill revisions retain their
+original read contracts.
 
 The same correction list identifies copied or incorrectly shared evidence. Correct that evidence
 from the already captured source passages first, then assess body depth. Do
