@@ -98,6 +98,7 @@ import {
   type SiteContentPlanV2,
 } from "../../contracts/siteops-content-plan.js";
 import { createHostOwnedSiteDesignResultV2 } from "../../contracts/siteops-host-design.js";
+import { missingFeaturedRouteIds } from "./site-design-runtime.js";
 import { managedAgentProfileSchema } from "@frontmind/module-contracts/agent-profile";
 import {
   canonicalJson,
@@ -722,6 +723,9 @@ const providerStateV2Schema = providerStateV1Schema
       .optional(),
     nativeRepairInput: nativeSourceRepairInputSchema.optional(),
     nativeSourceFileId: z.string().min(1).max(512).optional(),
+    // Consecutive unclassified materialization/persistence failures; bounds
+    // the previously unbounded silent 10 s retry loop.
+    nativeUnclassifiedFailureCount: z.number().int().min(0).max(99).optional(),
     nativeSourceAttachmentEventId: z.string().min(1).max(512).optional(),
     nativeSourceAttachmentIdentity: z.string().min(1).max(768).optional(),
     nativeSourceAttachmentScope: nativeSourceAttachmentScopeSchema.optional(),
@@ -6435,6 +6439,20 @@ async function handleNativeReactSiteBuild(input: {
           : [],
         requiredMediaIds: currentRevisionMediaPlanIds,
       });
+      // A dynamic information architecture plan defines the routes the build
+      // renders; every owner-selected featured column must exist in it, or
+      // materialization would fail closed on every poll without a repairable
+      // signal. Reject at intake so the content-plan repair loop regenerates
+      // the plan with the missing columns named.
+      const missingFeatured = missingFeaturedRouteIds(
+        input.brief.designPreferences ?? null,
+        siteContentPlanRoutes(frozenContentPlan).map((route) => route.id),
+      );
+      if (missingFeatured.length > 0) {
+        throw new SiteContentPlanValidationError([
+          `CONTENT_PLAN_FEATURED_ROUTES_NOT_COVERED:${missingFeatured.slice(0, 8).join(",")}`,
+        ]);
+      }
     } catch (error) {
       const issues =
         error instanceof SiteContentPlanValidationError
@@ -8693,6 +8711,33 @@ async function handleNativeReactSiteBuild(input: {
     ) {
       throw error;
     }
+    // Unclassified materialization failures previously returned a silent
+    // 10 s pending forever (e.g. SITE_DESIGN_FEATURED_ROUTE_MISSING). Log the
+    // error identity and bound the retries so builds end in a visible state.
+    const unclassifiedStreak =
+      (currentState?.nativeUnclassifiedFailureCount ?? 0) + 1;
+    console.error("[siteops-manus] materialize_unclassified_failure", {
+      operationId: input.operation.id,
+      buildId: input.context.build.id,
+      errorName: error instanceof Error ? error.name : typeof error,
+      code:
+        error instanceof Error
+          ? error.message.slice(0, 120)
+          : String(error).slice(0, 120),
+      streak: unclassifiedStreak,
+    });
+    if (unclassifiedStreak > 3) {
+      throw new SiteOpsManusFailure(
+        "SITEOPS_MATERIALIZATION_UNCLASSIFIED",
+        `网站构建在物化阶段连续失败（${error instanceof Error ? error.message.slice(0, 80) : "未知错误"}）；请重置后重新开始。`,
+        "attention_required",
+        providerStateV2(currentState),
+      );
+    }
+    currentState = transitionProviderState(currentState, {
+      stage: providerStateV2(currentState).stage,
+      nativeUnclassifiedFailureCount: unclassifiedStreak,
+    });
     return pending(providerStateV2(currentState), taskId, "qa_running", 10_000);
   }
   logManusBuildStage({
@@ -8709,6 +8754,7 @@ async function handleNativeReactSiteBuild(input: {
     taskId,
     buildPhase: "persisting_preview",
     buildCheckpoint: "compile_started",
+    nativeUnclassifiedFailureCount: 0,
   });
   try {
     await persistOperationProgress(
@@ -8745,6 +8791,32 @@ async function handleNativeReactSiteBuild(input: {
     ) {
       throw error;
     }
+    // Same bounded-retry treatment as materialization: transient persistence
+    // errors retry, but never silently forever.
+    const persistStreak =
+      (currentState?.nativeUnclassifiedFailureCount ?? 0) + 1;
+    console.error("[siteops-manus] persist_artifacts_failure", {
+      operationId: input.operation.id,
+      buildId: input.context.build.id,
+      errorName: error instanceof Error ? error.name : typeof error,
+      code:
+        error instanceof Error
+          ? error.message.slice(0, 120)
+          : String(error).slice(0, 120),
+      streak: persistStreak,
+    });
+    if (persistStreak > 3) {
+      throw new SiteOpsManusFailure(
+        "SITEOPS_ARTIFACT_PERSIST_RETRY_EXHAUSTED",
+        "网站构建产物保存连续失败；请重置后重新开始。",
+        "attention_required",
+        providerStateV2(currentState),
+      );
+    }
+    currentState = transitionProviderState(currentState, {
+      stage: providerStateV2(currentState).stage,
+      nativeUnclassifiedFailureCount: persistStreak,
+    });
     return pending(providerStateV2(currentState), taskId, "qa_running", 10_000);
   }
   const artifactBindings = buildArtifactBindingsSchema.parse({

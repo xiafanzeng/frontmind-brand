@@ -44,6 +44,21 @@ function featuredNavigation(
 }
 
 /**
+ * Featured route ids selected by the owner that a dynamic information
+ * architecture plan does not define. The plan intake rejects such plans
+ * before source generation; without this check the runtime guard above
+ * failed during materialization and the orchestrator retried it silently.
+ */
+export function missingFeaturedRouteIds(
+  preferences: Pick<SiteDesignPreferences, "featuredRouteIds"> | null | undefined,
+  planRouteIds: readonly string[],
+): string[] {
+  if (!preferences) return [];
+  const known = new Set(planRouteIds);
+  return preferences.featuredRouteIds.filter((routeId) => !known.has(routeId));
+}
+
+/**
  * Projects only the immutable, build-owned SiteDesignPreferences. Callers
  * must pass the frozen build Brief, never the mutable project Brief.
  */
