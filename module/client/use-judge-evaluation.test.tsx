@@ -16,7 +16,7 @@ function setup(errorCode = "RESPONSE_LOGIC_JUDGE_TASK_FAILED") {
     .mockResolvedValueOnce(started("original"))
     .mockResolvedValueOnce(response(422, {error: {code: errorCode, message: "评估未完成"}}))
     .mockResolvedValueOnce(started("retry", 1));
-  configureIntentWorkspaceHost({captureRestOperation: signal => ({
+  configureIntentWorkspaceHost({captureRestOperation: (signal?: AbortSignal | null) => ({
     signal: signal ?? new AbortController().signal, assertActive() {}, fetch,
   })} as unknown as Parameters<typeof configureIntentWorkspaceHost>[0]);
   const hook = renderHook(() => useJudgeEvaluation({questionId: "q", recordRevision: 3, sourceFingerprint: "fingerprint"}));

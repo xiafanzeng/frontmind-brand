@@ -64,8 +64,15 @@ export function assertDiagnosticQuestionPortfolio(
         text.includes(normalizeQuestion(basis.companyName))
       )
         throw new Error("行业排名题需为不点名当前企业的开放推荐问题");
-    } else if (!anchor(question.enterpriseAnchor)) {
-      throw new Error("问题需要包含有知识依据的企业或诊断主体名称");
+    } else if (
+      !anchor(question.enterpriseAnchor) &&
+      !(
+        question.enterpriseAnchor &&
+        normalizeQuestion(question.enterpriseAnchor) === normalizeQuestion(basis.companyName) &&
+        text.includes(normalizeQuestion(basis.companyName))
+      )
+    ) {
+      throw new Error(`问题“${question.text}”需要包含冻结知识所属企业或有知识依据的诊断主体名称。行业排名题仍须省略当前企业名称`);
     }
     if (
       question.category === "reputation" &&
