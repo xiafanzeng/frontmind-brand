@@ -539,7 +539,10 @@ export async function activateInitialKnowledgeBaseWorkingSet(input: {
     const turnMetadata = record(turn.metadata) || {};
     const researchQuality = materializedInitialResearchQuality({
       researchCoverage: validated.manifest.researchCoverage,
-      ...(validated.manifest.skill.version === "6" ? { retainedEvidenceFiles: validated.manifest.evidenceLedger.length } : {}),
+      ...(validated.manifest.skill.version === "6" ? {
+        retainedEvidenceFiles: validated.manifest.evidenceLedger.length,
+        evidenceSourceUrls: validated.manifest.evidenceLedger.map(row => row.sourceUrl),
+      } : {}),
       leafIds: validated.manifest.leaves.map((leaf) => leaf.leafId),
       expectedUploadsRead: input.initialBundleExpectation.expectedUploadsRead,
       warnings: normalization?.diagnostics ?? validated.warnings,
@@ -2066,7 +2069,10 @@ export async function applyKnowledgeBaseRevisionWorkingSet(input: {
     : 0;
   const revisionQuality = materializedInitialResearchQuality({
     researchCoverage: normalization.manifest.researchCoverage,
-    ...(normalization.manifest.skill.version === "6" ? { retainedEvidenceFiles: normalization.manifest.evidenceLedger.length } : {}),
+    ...(normalization.manifest.skill.version === "6" ? {
+      retainedEvidenceFiles: normalization.manifest.evidenceLedger.length,
+      evidenceSourceUrls: normalization.manifest.evidenceLedger.map(row => row.sourceUrl),
+    } : {}),
     leafIds: normalization.manifest.leaves.map((leaf) => leaf.leafId),
     expectedUploadsRead: Number(coverage.uploadsRead),
     warnings: [...(priorQuality?.warnings || []), ...normalization.diagnostics],

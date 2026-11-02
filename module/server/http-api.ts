@@ -115,7 +115,6 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  const recommendQuestionTemplates = (path:string) => async (req:Request,res:import("express").Response) => {
   res.setHeader("Cache-Control","no-store");
   const token=(core.environment.MOLIZHISHU_TOKEN ?? core.environment.MOLIZHISHU_API_KEY ?? "").trim();
-  if(!token){res.status(503).json({error:{code:"MOLIZHISHU_NOT_CONFIGURED",message:"模力指数 API 尚未配置，请由部署人员设置服务端 MOLIZHISHU_TOKEN。"}});return;}
   // 线上实测契约：两个 recommend 端点部署在 business.molizhishu.com，企业字段名为 brand。
   const brand=typeof req.body?.brand === "string" ? req.body.brand.trim() : "";
   if(!brand || brand.length>120){res.status(400).json({error:{code:"INVALID_BRAND",message:"请填写有效的企业名称。"}});return;}
@@ -127,6 +126,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   const normalizedBase=base;
   try{
    await assertQuestionTemplateAccess(core,req);
+   if(!token){res.status(503).json({error:{code:"MOLIZHISHU_NOT_CONFIGURED",message:"模力指数 API 尚未配置，请由部署人员设置服务端 MOLIZHISHU_TOKEN。"}});return;}
    const response=await requestQuestionTemplate(normalizedBase,path,token,req.body);
    const text=await response.text();let payload:unknown;try{payload=JSON.parse(text);}catch{payload={message:"上游接口返回非 JSON 内容。"};}
    const record=payload&&typeof payload==="object"?payload as Record<string,unknown>:{};

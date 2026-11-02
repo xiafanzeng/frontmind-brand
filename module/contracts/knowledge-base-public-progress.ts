@@ -256,6 +256,7 @@ export interface KnowledgeBaseResultQualityDto {
     providerDeclaredOfficialPages: number | null;
     providerDeclaredPublicQueries: number | null;
     retainedEvidenceFiles: number;
+    retainedDistinctSourceUrls?: number;
     externalFactVerification: "not_established";
   };
   stats?: {
@@ -400,6 +401,8 @@ export interface KnowledgeBaseActiveTurnDto {
 export interface KnowledgeBaseCompletedTurnDto {
   turnId: string;
   operationKey?: string;
+  /** Persisted operation kind, including local materialized confirmations. */
+  operationType?: string;
   clientRequestId: string;
   messageSequence: number;
 }
