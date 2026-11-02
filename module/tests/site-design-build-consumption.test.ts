@@ -10,6 +10,7 @@ import {
 import {
   projectSiteDesignRuntime,
   siteAssistantBootConfig,
+  missingFeaturedRouteIds,
 } from "../server/siteops/site-design-runtime.js";
 import {
   siteAssistantApiOrigin,
@@ -106,6 +107,31 @@ function qaInput(input: { brief: SiteBrief; files: SourceFile[] }) {
     sourceDocumentIds: ["doc-home", "doc-product", "doc-about", "doc-faq"],
   };
 }
+
+describe("missingFeaturedRouteIds", () => {
+  it("returns nothing without persisted preferences", () => {
+    expect(missingFeaturedRouteIds(null, ["home"])).toEqual([]);
+    expect(missingFeaturedRouteIds(undefined, [])).toEqual([]);
+  });
+
+  it("returns every selected column the plan does not define", () => {
+    expect(
+      missingFeaturedRouteIds(
+        { featuredRouteIds: ["home", "about", "centers"] },
+        ["home", "about"],
+      ),
+    ).toEqual(["centers"]);
+  });
+
+  it("returns nothing when the plan covers the selection", () => {
+    expect(
+      missingFeaturedRouteIds(
+        { featuredRouteIds: ["home", "about"] },
+        ["home", "about", "centers"],
+      ),
+    ).toEqual([]);
+  });
+});
 
 describe("site design consumption in the shipped build", () => {
   it("accepts a dist whose CSS declares the frozen site accent", () => {
