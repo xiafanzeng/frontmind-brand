@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { intentSkillPorts } from "./intent-skill-runtime.js";
 import { resolveBrandIntentQuestion, toConfiguredIntentQuestion, type BrandQuestionResolverPorts } from "./brand-question-resolver.js";
-import { createResponseLogicService } from "./response-logic-service.js";
+import { createResponseLogicService, type ResponseLogicPorts, type ResponseLogicQuestionRow } from "./response-logic-service.js";
 import { getLatestKnowledgeSnapshot as getLatestKnowledgeSnapshotFromModuleService } from "./knowledge-snapshot-service.js";
 import { projectGeneralExecution as projectGeneralExecutionFromModule } from "./general-execution-projection.js";
 import {
@@ -140,10 +140,21 @@ export type ResponseLogicRuntimeCore = ResponseLogicApiPorts & {
   responseLogicService: ReturnType<typeof createResponseLogicService>;
 };
 
+/** Dashboard keeps its formal question IDs, record scope and frozen task credentials.
+ * Undefined means a Brand-native question; null means an explicitly unavailable host question. */
+export interface ResponseLogicHostPorts {
+  resolveQuestion(userId: number, projectId: string | null, questionId: string): Promise<ConfiguredIntentQuestion | null | undefined>;
+  loadQuestionForWrite(...args: Parameters<NonNullable<ResponseLogicPorts["loadQuestionForWrite"]>>): Promise<ResponseLogicQuestionRow | null | undefined>;
+  loadQuestionForReadiness(userId: number, questionId: string): Promise<ResponseLogicQuestionRow | null | undefined>;
+  servicePorts: Pick<ResponseLogicPorts, "enterpriseOwnerPredicate" | "credentialMayServeAccount" | "claimUpstreamTask">;
+  getCredentialForUpstreamResource: ResponseLogicApiPorts["getCredentialForUpstreamResource"];
+}
+
 export function assembleResponseLogicCore(input: {
   getDb(): Promise<MySql2Database<any> | null>;
   /** Server environment (defaults to process.env) for provider-mode checks. */
   environment?: Readonly<Record<string, string | undefined>>;
+  host?: ResponseLogicHostPorts;
 }): ResponseLogicRuntimeCore {
   const bkp = intentSkillPorts();
   const db = input.getDb;
@@ -165,6 +176,8 @@ export function assembleResponseLogicCore(input: {
     enterpriseProjectId: string | null,
     questionId: string,
   ): Promise<ConfiguredIntentQuestion | null> => {
+    const hostQuestion = await input.host?.resolveQuestion(accountUserId, enterpriseProjectId, questionId);
+    if (hostQuestion !== undefined) return hostQuestion;
     const resolved = await resolveBrandIntentQuestion(questionResolverPorts, {
       accountUserId,
       enterpriseProjectId,
@@ -192,6 +205,8 @@ export function assembleResponseLogicCore(input: {
     // expectedScope comparison with CONFLICT. The never-matching relational
     // stubs below remain only as the port-absent fallback path.
     loadQuestionForWrite: async (executor: never, userId: number, questionId: string) => {
+      const hostQuestion = await input.host?.loadQuestionForWrite(executor, userId, questionId);
+      if (hostQuestion !== undefined) return hostQuestion;
       const projectId = bkp.currentEnterpriseProjectId();
       const workspaceKey = createHash("sha256")
         .update(`${userId}:${projectId ?? "personal"}`, "utf-8")
@@ -226,6 +241,8 @@ export function assembleResponseLogicCore(input: {
         : null;
     },
     loadQuestionForReadiness: async (userId: number, questionId: string) => {
+      const hostQuestion = await input.host?.loadQuestionForReadiness(userId, questionId);
+      if (hostQuestion !== undefined) return hostQuestion;
       const resolved = await resolveQuestion(userId, bkp.currentEnterpriseProjectId(), questionId);
       return resolved
         ? {
@@ -245,6 +262,7 @@ export function assembleResponseLogicCore(input: {
     enterpriseProjectIdForOwner: (userId: number) => bkp.currentEnterpriseProjectId(),
     credentialMayServeAccount: async () => true, // Brand credential model doesn't have account-level restrictions
     claimUpstreamTask: async () => {}, // upstream_resources handled via recordUpstreamResource
+    ...input.host?.servicePorts,
   });
 
   const core = {
@@ -284,6 +302,7 @@ export function assembleResponseLogicCore(input: {
       return { credentialRef: req.frontmindCredential?.credentialRef };
     },
     getCredentialForUpstreamResource: (userId: number, kind: string, upstreamId: string) => {
+      if (input.host) return input.host.getCredentialForUpstreamResource(userId, kind as never, upstreamId);
       return bkp.getDecryptedCredentialForUser(userId) as never;
     },
     createCredentialAgentClient: (credential: never, options?: Record<string, unknown>) => {

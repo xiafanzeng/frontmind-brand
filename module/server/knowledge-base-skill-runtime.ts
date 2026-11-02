@@ -30,15 +30,19 @@ interface LoadedKnowledgeBaseSkill {
 }
 export interface KnowledgeSkillRuntimeCore extends Pick<ReturnType<typeof createKnowledgeBaseLocalSourceStore>, "persistKnowledgeBaseSkillArchive" | "readKnowledgeBaseLocalSource"> { archiveCandidates(): readonly string[]; }
 export const KNOWLEDGE_BASE_SKILL_ATTACHMENT_FILENAME =
-  "socratic-kb-builder-v5.skill.zip";
+  "socratic-kb-builder.skill.zip";
+export function knowledgeBaseSkillAttachmentFilename(version: string, reservedFilename?: string) {
+  if (reservedFilename) return reservedFilename;
+  return version === "5" ? "socratic-kb-builder-v5.skill.zip" : KNOWLEDGE_BASE_SKILL_ATTACHMENT_FILENAME;
+}
 export function createKnowledgeBaseSkillRuntime(core: KnowledgeSkillRuntimeCore) {
 const { persistKnowledgeBaseSkillArchive, readKnowledgeBaseLocalSource } = core;
 
 
 const skillArchiveCandidates = core.archiveCandidates();
 
-const v5SkillArchiveCandidates = skillArchiveCandidates.map((candidate) =>
-  path.join(path.dirname(candidate), "socratic-kb-builder-v5.skill"),
+const versionedSkillArchiveCandidates = (version: string) => skillArchiveCandidates.map((candidate) =>
+  path.join(path.dirname(candidate), `socratic-kb-builder-v${version}.skill`),
 );
 
 /** Compatibility call sites fail closed; old builds require an approved reset. */
@@ -56,16 +60,16 @@ function knowledgeBasePinnedV4SkillSelection(input: {
 function knowledgeBasePinnedV5SkillSelection(input: {
   skillVersion: string;
   skillContentHash?: string | null;
-}): KnowledgeBaseSkillSelection & { version: "5"; contentHash: string } {
+}): KnowledgeBaseSkillSelection & { version: "5" | "6"; contentHash: string } {
   const contentHash = String(input.skillContentHash || "")
     .trim()
     .toLowerCase();
-  if (input.skillVersion !== "5" || !/^[a-f0-9]{64}$/u.test(contentHash)) {
+  if ((input.skillVersion !== "5" && input.skillVersion !== "6") || !/^[a-f0-9]{64}$/u.test(contentHash)) {
     throw new Error(
       "Knowledge-base materialized build is missing its immutable Skill v5 content hash",
     );
   }
-  return { version: "5", contentHash };
+  return { version: input.skillVersion as "5" | "6", contentHash };
 }
 
 const skillArchiveCache = new Map<string, LoadedKnowledgeBaseSkill>();
@@ -83,7 +87,7 @@ async function loadKnowledgeBaseSkillArchiveInternal(
   selection: KnowledgeBaseSkillSelection,
   allowHistoricalAlias: boolean,
 ) {
-  if (selection.version !== "5") {
+  if (!["5", "6"].includes(selection.version)) {
     throw new Error(
       "RESET_REQUIRED: pre-v5 knowledge-base builds cannot load a runtime Skill",
     );
@@ -99,7 +103,7 @@ async function loadKnowledgeBaseSkillArchiveInternal(
       "Knowledge-base Skill v5 pin must be an exact content hash",
     );
   }
-  const version = "5" as const;
+  const version = selection.version as "5" | "6";
   const cacheKey = `${allowHistoricalAlias ? "historical" : "strict"}:${version}:${selection.contentHash || "latest"}`;
   const cached = skillArchiveCache.get(cacheKey);
   if (cached) {
@@ -129,13 +133,13 @@ async function loadKnowledgeBaseSkillArchiveInternal(
   let lastError: unknown;
   let contentHashMismatchError: Error | null = null;
   const candidates = selection.contentHash
-    ? v5SkillArchiveCandidates.map((candidate) =>
+    ? versionedSkillArchiveCandidates(version).map((candidate) =>
         path.join(
           path.dirname(candidate),
-          `socratic-kb-builder-v5-${selection.contentHash}.skill`,
+          `socratic-kb-builder-v${version}-${selection.contentHash}.skill`,
         ),
       )
-    : v5SkillArchiveCandidates;
+    : versionedSkillArchiveCandidates(version);
   for (const candidate of candidates) {
     try {
       const archive = await fs.readFile(candidate);
@@ -187,7 +191,7 @@ async function loadKnowledgeBaseSkillArchiveInternal(
 }
 
 async function loadKnowledgeBaseSkillArchive(
-  selection: KnowledgeBaseSkillSelection = { version: "5" },
+  selection: KnowledgeBaseSkillSelection = { version: "6" },
 ) {
   return loadKnowledgeBaseSkillArchiveInternal(selection, false);
 }
@@ -211,7 +215,7 @@ async function readKnowledgeBaseReleaseSkillArchiveAttachment(
   }
   const retained = await persistKnowledgeBaseSkillArchive(physical.bytes);
   return {
-    filename: KNOWLEDGE_BASE_SKILL_ATTACHMENT_FILENAME,
+    filename: knowledgeBaseSkillAttachmentFilename(selection.version),
     bytes: physical.bytes,
     contentHash: loaded.contentHash,
     physicalSha256: retained.contentSha256,
@@ -221,7 +225,7 @@ async function readKnowledgeBaseReleaseSkillArchiveAttachment(
 }
 
 async function readKnowledgeBaseSkillArchiveAttachment(
-  selection: KnowledgeBaseSkillSelection = { version: "5" },
+  selection: KnowledgeBaseSkillSelection = { version: "6" },
 ) {
   return readKnowledgeBaseReleaseSkillArchiveAttachment(selection, false);
 }
@@ -230,7 +234,7 @@ async function readKnowledgeBaseSkillArchiveAttachment(
 async function readKnowledgeBasePinnedSkillArchiveAttachment(
   input: KnowledgeBaseSkillSelection & KnowledgeBaseSkillPhysicalPin,
 ) {
-  if (input.version !== "5") {
+  if (!["5", "6"].includes(input.version)) {
     throw new Error(
       "RESET_REQUIRED: pre-v5 knowledge-base builds cannot load a runtime Skill",
     );
@@ -266,7 +270,7 @@ async function readKnowledgeBasePinnedSkillArchiveAttachment(
       sizeBytes: Number(archiveBytes),
     });
     return {
-      filename: KNOWLEDGE_BASE_SKILL_ATTACHMENT_FILENAME,
+      filename: knowledgeBaseSkillAttachmentFilename(input.version),
       bytes,
       contentHash: logicalContentHash,
       physicalSha256,
@@ -306,14 +310,14 @@ async function readKnowledgeBasePinnedSkillArchiveAttachment(
 }
 
 async function getKnowledgeBaseSkillDescriptor(
-  selection: KnowledgeBaseSkillSelection = { version: "5" },
+  selection: KnowledgeBaseSkillSelection = { version: "6" },
 ) {
-  if (selection.version !== "5") {
+  if (!["5", "6"].includes(selection.version)) {
     throw new Error(
       "RESET_REQUIRED: pre-v5 knowledge-base builds cannot load a runtime Skill",
     );
   }
-  const version = "5" as const;
+  const version = selection.version as "5" | "6";
   const archive = await readKnowledgeBaseSkillArchiveAttachment({
     version,
     contentHash: selection.contentHash,

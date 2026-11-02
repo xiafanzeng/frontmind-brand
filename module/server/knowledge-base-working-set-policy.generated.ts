@@ -92,5 +92,24 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
     "presentationNormalized": {
       "code": "PRESENTATION_NORMALIZED"
     }
+  },
+  "depth": {
+    "version": "knowledge_depth_v1",
+    "skillVersion": "6",
+    "evidenceThreshold": 1500,
+    "minimumBodyCharacters": 300,
+    "maximumRewritePasses": 1,
+    "leafTarget": [
+      600,
+      1200
+    ],
+    "coreLeafTarget": [
+      800,
+      1800
+    ],
+    "overviewTarget": [
+      1200,
+      2500
+    ]
   }
 } as const;

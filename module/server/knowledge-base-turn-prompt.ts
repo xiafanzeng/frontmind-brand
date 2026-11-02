@@ -94,7 +94,7 @@ export async function buildKnowledgeBaseTurnPrompt(input: {
     input.userMessage,
     input.attachments.length,
   );
-  if (input.skillVersion === "5") {
+  if ((input.skillVersion === "5" || input.skillVersion === "6")) {
     const base = input.materializedBase;
     if (
       !base ||

@@ -156,7 +156,7 @@ export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeRe
             <p><b>修改建议</b>{item.suggestion}</p>
           </div>
         </details>)}</div>:<p className="rl-dx-empty">当前四维评估未发现待处理问题。</p>}
-        <div className="rl-eval-diagnosis-method">数据来源：{dataSourceLabel ?? "LLM 语义评估（异步模型任务）"}<br/>评分为会话内结果；内容变化或刷新后需重新评估。</div></aside>
+        <div className="rl-eval-diagnosis-method">数据来源：{dataSourceLabel ?? "LLM 语义评估（异步模型任务）"}<br/>评分基于本次问题、应答和知识依据；刷新可读取原评估，内容变更后需重新评估。</div></aside>
     </div>
     <div className="rl-eval-actions"><span>优化建议需人工审核后采用；采用为本地预览状态，不写入服务器。</span><button type="button" className="rl-eval-outline" onClick={onBack}>返回详情</button><button type="button" className="rl-eval-primary" onClick={onOptimize}>生成优化方案 →</button></div>
     </>;})()}

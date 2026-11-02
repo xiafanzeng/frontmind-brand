@@ -1995,7 +1995,7 @@ function ResponseLogicQuestionEditor({
   const retryDemoEvaluation = () => {
     void (async () => {
       if (!(await questionFreshness.checkNow())) return;
-      void judge.start();
+      void judge.start({retry: true});
     })();
   };
   const judgeErrorText = judge.state.phase === "failed"

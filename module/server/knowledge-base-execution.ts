@@ -30,6 +30,29 @@ export function configureKnowledgeBaseExecutions(core: KnowledgeExecutionCore) {
 
 type ManusV2MessageEvent = Record<string, unknown> & {id:string;type:string;timestamp:number;providerOriginalRank?:number};
 
+export async function loadCompletedKnowledgeBaseSummaryTurn(input: {
+  userId: number;
+  buildId: string;
+  generation: number;
+  turnId: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("DATABASE_UNAVAILABLE");
+  const [turn] = await db
+    .select({ id: conversationTurns.id, upstreamTaskId: conversationTurns.upstreamTaskId,
+      completedAt: conversationTurns.completedAt })
+    .from(conversationTurns)
+    .where(and(
+      enterpriseOwnerPredicate(conversationTurns, input.userId),
+      eq(conversationTurns.id, input.turnId),
+      eq(conversationTurns.buildId, input.buildId),
+      eq(conversationTurns.buildGeneration, input.generation),
+      eq(conversationTurns.status, "completed"),
+    ))
+    .limit(1);
+  return turn?.upstreamTaskId ? { ...turn, upstreamTaskId: turn.upstreamTaskId } : null;
+}
+
 /** Called by the existing, leased knowledge worker; it never starts another provider poller. */
 export async function persistKnowledgeBaseExecution(input: {
   userId: number;
@@ -37,6 +60,7 @@ export async function persistKnowledgeBaseExecution(input: {
   generation: number;
   turnId: string;
   events: readonly ManusV2MessageEvent[];
+  completedSummaryTaskId?: string;
 }) {
   const db = await getDb();
   if (!db) return;
@@ -49,7 +73,7 @@ export async function persistKnowledgeBaseExecution(input: {
           enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.id, input.buildId),
           eq(knowledgeBaseBuilds.generation, input.generation),
-          eq(knowledgeBaseBuilds.activeTurnId, input.turnId),
+          ...(input.completedSummaryTaskId ? [] : [eq(knowledgeBaseBuilds.activeTurnId, input.turnId)]),
         ),
       )
       .limit(1)
@@ -60,6 +84,8 @@ export async function persistKnowledgeBaseExecution(input: {
         id: conversationTurns.id,
         sequence: messages.sequence,
         messageId: messages.id,
+        status: conversationTurns.status,
+        upstreamTaskId: conversationTurns.upstreamTaskId,
       })
       .from(conversationTurns)
       .innerJoin(
@@ -79,9 +105,11 @@ export async function persistKnowledgeBaseExecution(input: {
       )
       .limit(1);
     if (!turn) return;
+    if (input.completedSummaryTaskId && (turn.status !== "completed" || turn.upstreamTaskId !== input.completedSummaryTaskId)) return;
     for (const [index, event] of input.events.entries()) {
       const activity = generalExecutionActivity(event.executionActivity);
       if (!activity) continue;
+      if (input.completedSummaryTaskId && (activity.kind !== "status" || activity.status !== "thinking" || !activity.publicSummarySourceHash)) continue;
       const timestamp = Number(event.timestamp);
       if (!Number.isFinite(timestamp) || timestamp < 0) continue;
       const normalizedPayload = {
@@ -116,6 +144,62 @@ export async function persistKnowledgeBaseExecution(input: {
         });
     }
   });
+}
+
+const summaryTails = new Map<string, Promise<void>>();
+const summaryTailKey = (input: { userId: number; buildId: string; generation: number; turnId: string }) =>
+  `${input.userId}:${input.buildId}:${input.generation}:${input.turnId}`;
+type SavedProcessSummaries = { events: readonly ManusV2MessageEvent[]; pending: boolean };
+/** Execution-side reads only. Late summary insertion never changes a turn or its knowledge. */
+export function collectKnowledgeBaseSummaryTail(input: {
+  userId: number; buildId: string; generation: number; turnId: string; taskId: string;
+  read: () => Promise<SavedProcessSummaries>;
+  durationMs?: number; intervalMs?: number;
+  persist?: typeof persistKnowledgeBaseExecution;
+}) {
+  const key = summaryTailKey(input);
+  if (summaryTails.has(key)) return summaryTails.get(key)!;
+  const deadline = Date.now() + Math.min(input.durationMs ?? 75_000, 1_250_000);
+  const work = (async () => {
+    do {
+      try {
+        const observation = await input.read();
+        await (input.persist ?? persistKnowledgeBaseExecution)({ userId: input.userId, buildId: input.buildId,
+          generation: input.generation, turnId: input.turnId, completedSummaryTaskId: input.taskId, events: observation.events });
+        if (!observation.pending) return;
+      } catch { /* Provider reads are recoverable and never block the completed business task. */ }
+      await new Promise<void>((resolve) => { const timer = setTimeout(resolve, input.intervalMs ?? 3000); timer.unref?.(); });
+    } while (Date.now() < deadline);
+  })().finally(() => summaryTails.delete(key));
+  summaryTails.set(key, work);
+  return work;
+}
+
+/** Recover saved summaries after a Dashboard restart without dispatching inference.
+ * Older completed turns receive one read. Only the remaining completion window
+ * can restart background reads; explicit historical backfill owns its longer tail. */
+export async function restoreKnowledgeBaseSummaryTail(input: {
+  userId: number; buildId: string; generation: number; turnId: string;
+  read: (taskId: string) => Promise<SavedProcessSummaries>;
+}, dependencies: {
+  loadTurn?: typeof loadCompletedKnowledgeBaseSummaryTurn;
+  persist?: typeof persistKnowledgeBaseExecution;
+  now?: () => number;
+} = {}) {
+  if (summaryTails.has(summaryTailKey(input))) return false;
+  const turn = await (dependencies.loadTurn ?? loadCompletedKnowledgeBaseSummaryTurn)(input);
+  if (!turn?.upstreamTaskId) return false;
+  const taskId = turn.upstreamTaskId;
+  const read = () => input.read(taskId);
+  const saved = await read();
+  const persist = dependencies.persist ?? persistKnowledgeBaseExecution;
+  await persist({ ...input, completedSummaryTaskId: taskId, events: saved.events });
+  const elapsed = (dependencies.now ?? Date.now)() - Number(turn.completedAt);
+  const remaining = Number.isFinite(elapsed) && elapsed >= 0 ? Math.max(0, 75_000 - elapsed) : 0;
+  if (saved.pending && remaining > 0) {
+    void collectKnowledgeBaseSummaryTail({ ...input, taskId, read, persist, durationMs: remaining });
+  }
+  return saved.events.length > 0;
 }
 
 /** Owned, current-generation evidence only; old conversations are never reconstructed. */

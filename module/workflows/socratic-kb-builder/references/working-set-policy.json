@@ -9,8 +9,15 @@
     "patchWarningLimit": 50
   },
   "evidence": {
-    "textExtensions": [".md", ".markdown", ".txt"],
-    "textMimeTypes": ["text/markdown", "text/plain"],
+    "textExtensions": [
+      ".md",
+      ".markdown",
+      ".txt"
+    ],
+    "textMimeTypes": [
+      "text/markdown",
+      "text/plain"
+    ],
     "optionalBinary": {
       "disposition": "drop",
       "warning": {
@@ -28,7 +35,11 @@
   },
   "authority": {
     "initial": {
-      "hard": ["operationId", "archiveSafety", "manifestMultiplicity"],
+      "hard": [
+        "operationId",
+        "archiveSafety",
+        "manifestMultiplicity"
+      ],
       "serverOwned": [
         "buildId",
         "generation",
@@ -48,7 +59,11 @@
         "removalOwnership",
         "frozenUploadBytes"
       ],
-      "serverOwned": ["buildId", "generation", "baseContentVersion"]
+      "serverOwned": [
+        "buildId",
+        "generation",
+        "baseContentVersion"
+      ]
     }
   },
   "warnings": {
@@ -74,5 +89,24 @@
     "presentationNormalized": {
       "code": "PRESENTATION_NORMALIZED"
     }
+  },
+  "depth": {
+    "version": "knowledge_depth_v1",
+    "skillVersion": "6",
+    "evidenceThreshold": 1500,
+    "minimumBodyCharacters": 300,
+    "maximumRewritePasses": 1,
+    "leafTarget": [
+      600,
+      1200
+    ],
+    "coreLeafTarget": [
+      800,
+      1800
+    ],
+    "overviewTarget": [
+      1200,
+      2500
+    ]
   }
 }

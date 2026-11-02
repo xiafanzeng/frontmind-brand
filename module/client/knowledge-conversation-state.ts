@@ -50,7 +50,7 @@ export interface LocalMessage {
   content: string;
   attachments?: Attachment[];
   timestamp: number;
-  outputFiles?: { fileUrl: string; fileName: string; mimeType: string }[];
+  outputFiles?: { fileUrl: string; fileName: string; mimeType: string; sha256?: string }[];
   /** Inline base64 images embedded in assistant text (for display in MarkdownRenderer) */
   inlineImages?: { src: string; alt?: string }[];
   /** Per-response elapsed time in seconds (set when the response completes) */
@@ -599,6 +599,7 @@ export function applyKnowledgeBaseObservation(
           buildId: (observation.progress ?? observation.interaction.progress)
             ?.build.id,
           turnId: completedTurn.turnId,
+          operationKey: completedTurn.operationKey ?? message.knowledgeBase.operationKey,
           generation: observation.generation,
           serverOwned: true,
         },

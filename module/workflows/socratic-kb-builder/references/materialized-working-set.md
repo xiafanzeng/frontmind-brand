@@ -15,7 +15,7 @@ Extra top-level fields are forbidden.
   "contentVersion": 1,
   "skill": {
     "name": "socratic-kb-builder",
-    "version": "5",
+    "version": "6",
     "contentHash": "64-lowercase-hex"
   },
   "treePolicyVersion": 2,
@@ -266,3 +266,7 @@ Always run `scripts/validate_working_set.py` with the complete named
 `--expected-*` flags printed in the operation instructions. Initial validation
 must include `--expected-uploads-read`; a structural-only validation without
 frozen coordinates is invalid.
+
+## Depth validation
+
+Use the v6 targets and one correction pass in SKILL.md. A server-frozen v6 bundle with at least 1,500 retained evidence characters for a node and fewer than 300 body characters is rejected. Page/query counters are producer declarations. Retained evidence file identities and hashes are verifiable package facts; they do not certify the truth of the source claims.

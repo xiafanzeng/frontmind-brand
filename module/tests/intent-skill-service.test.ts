@@ -9,7 +9,7 @@ import type {ModuleHttpCore} from "../server/http-api";
 import type {Request} from "express";
 
 vi.mock("../server/knowledge-node-workspace-service.js", () => ({getKnowledgeNodeDetails: vi.fn(), saveKnowledgeNodeContent: vi.fn()}));
-function harness() {
+function harness(options: {mysqlJsonPayload?: "object" | "string"} = {}) {
   const operations = mysqlTable("operations_test", {id: varchar("id", {length: 191})});
   const tasks = mysqlTable("tasks_test", {id: varchar("id", {length: 191}), operationId: varchar("operationId", {length: 191})});
   const events = mysqlTable("events_test", {id: varchar("id", {length: 191}), taskId: varchar("taskId", {length: 191}), normalizedPayload: json("normalizedPayload")});
@@ -17,12 +17,23 @@ function harness() {
   const storedTasks: any[] = []; const storedOperations: any[] = []; const storedEvents: any[] = [];
   const nodes = [{leafId: "node", title: "选材", branchTitle: "产品", status: "confirmed", content: "材料选择依据适用条件。", contentVersion: 1}];
   const dialect = new MySqlDialect();
+  // MySQL JSON normalizes object keys; neither driver return shape preserves
+  // the insertion order used by the writer. Exercise the real SQL payload
+  // boundary instead of passing the same in-memory question object back.
+  function persistedPayload(state: ReturnType<typeof emptyIntentState>) {
+    const value = JSON.parse(JSON.stringify(state), (_key, value) =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.length - b.length || a.localeCompare(b)))
+        : value);
+    return options.mysqlJsonPayload === "object" ? value : JSON.stringify(value);
+  }
   const db: any = {
     async execute(query: any) {
       const {sql, params} = dialect.sqlToQuery(query);
       if (sql.startsWith("INSERT IGNORE")) ledger ??= {revision: 0, state: JSON.parse(params.at(-1) as string)};
       if (sql.startsWith("UPDATE brand_intent")) {ledger!.state = JSON.parse(params[0] as string); ledger!.revision++;}
-      if (sql.startsWith("SELECT revision")) return [[...(ledger ? [{revision: ledger.revision, payload: JSON.stringify(ledger.state)}] : [])]];
+      if (sql.startsWith("SELECT revision")) return [[...(ledger ? [{revision: ledger.revision,
+        payload: options.mysqlJsonPayload ? persistedPayload(ledger.state) : JSON.stringify(ledger.state)}] : [])]];
       if (sql.includes("FROM knowledge_base_builds")) return [[{id: "build", conversationId: "conversation", generation: 1, contentVersion: 1, status: "published", activeTurnId: null}]];
       if (sql.includes("FROM knowledge_base_build_nodes")) return [nodes];
       return [[]];
@@ -92,6 +103,75 @@ function harness() {
     core, storedEvents, ledger: () => ledger!};
 }
 describe("优化模型持久化任务", () => {
+  it.each(["object", "string"] as const)("MySQL JSON %s round trip keeps GET stable and permits the first evaluation once", async mysqlJsonPayload => {
+    const h = harness({mysqlJsonPayload});
+    const questions = [{id: "q", question: "材料如何选择？", category: "product_scenario", subdivision: "",
+      tableId: "dashboard:confirmed", rowIndex: 0, sourceRevision: 4}];
+    h.core.intentQuestionCatalog = async () => questions;
+    const first = await h.service.observe();
+    expect(first.state.questions).toEqual(questions);
+    expect(JSON.stringify(first.state.questions[0])).not.toBe(JSON.stringify(questions[0]));
+    expect(first.state.questions[0].sourceRevision).toBe(4);
+    expect((await h.service.observe()).revision).toBe(first.revision);
+    const request = {...h.request, expectedRevision: first.revision};
+    const started = await h.service.command(request);
+    expect(started.state.jobs).toHaveLength(1);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.storedTasks).toHaveLength(1);
+    expect((await h.service.observe()).revision).toBe(started.revision);
+    const repeated = await h.service.command(request);
+    expect(repeated.state.jobs).toHaveLength(1);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.storedTasks).toHaveLength(1);
+  });
+  it("同步宿主正式问题但不更换 ID、不重复写入或启动评估", async () => {
+    const h = harness();
+    let questions = Array.from({length: 8}, (_, rowIndex) => ({id: `formal-${rowIndex}`,
+      question: `正式问题${rowIndex}？`, category: "product_scenario", subdivision: "",
+      tableId: "dashboard:confirmed", rowIndex, sourceRevision: 4}));
+    h.core.intentQuestionCatalog = vi.fn(async () => questions);
+    const first = await h.service.observe();
+    expect(first.state.questions).toEqual(questions);
+    expect((await h.service.observe()).revision).toBe(first.revision);
+    expect(h.client.createTask).not.toHaveBeenCalled();
+    expect(h.storedTasks).toEqual([]);
+    await expect(h.service.command({kind: "delete-question", questionId: questions[0].id,
+      expectedRevision: first.revision})).rejects.toMatchObject({code: "FORMAL_QUESTION_MAINTENANCE_REQUIRED"});
+    questions = questions.slice(1);
+    const refreshed = await h.service.observe();
+    expect(refreshed.state.questions.map(q => q.id)).toEqual(questions.map(q => q.id));
+    expect(h.client.createTask).not.toHaveBeenCalled();
+  });
+  it("正式题干动作要求原维护流程，不写投影、不启动无效复评", async () => {
+    const h = harness();
+    const initial = await h.intake();
+    h.core.intentQuestionCatalog = async () => initial.state.questions.map(question => ({...question, tableId: "dashboard:confirmed"}));
+    const synced = await h.service.observe();
+    await h.service.command({...h.request, kind: "plan", expectedRevision: synced.revision});
+    h.send();
+    const planned = await h.service.poll();
+    await expect(h.service.execute({expectedRevision: planned.revision,
+      clientRequestId: "00000000-0000-4000-8000-000000000007", questionIds: ["q"]}))
+      .rejects.toMatchObject({code: "FORMAL_QUESTION_MAINTENANCE_REQUIRED"});
+    expect(h.ledger().state.receipts).toEqual([]);
+    expect(h.ledger().state.questions).toEqual(synced.state.questions);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
+  it("checks formal source freshness before reserving a paid command", async () => {
+    const h = harness();
+    const initial = await h.intake();
+    const questions = initial.state.questions.map(question => ({...question, tableId: "dashboard:confirmed"}));
+    h.core.intentQuestionCatalog = async () => questions;
+    const synced = await h.service.observe();
+    // Simulate another writer changing the formal source after the preflight
+    // observe but before this operation obtains the business write lock.
+    h.core.intentQuestionCatalog = vi.fn().mockResolvedValueOnce(questions)
+      .mockResolvedValue(questions.map(question => ({...question, question: "正式来源已修改？", sourceRevision: 2})));
+    await expect(h.service.command({...h.request, expectedRevision: synced.revision}))
+      .rejects.toMatchObject({code: "REVISION_CONFLICT"});
+    expect(h.storedTasks).toEqual([]);
+    expect(h.client.createTask).not.toHaveBeenCalled();
+  });
   it("问题修改和删除通过真实命令落库，保留历史且不创建模型任务", async () => {
     const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
     const completed = await h.service.poll();

@@ -19,13 +19,14 @@ export const DIAGNOSTIC_PLATFORMS = [
   { id: "yuanbao", label: "腾讯元宝" },
   { id: "qianwen", label: "千问" },
 ] as const;
+export const DIAGNOSTIC_QUESTION_RULES_VERSION = "brand_questions_v2";
 export const DIAGNOSTIC_MODEL_POLICY = "brand_diagnostics_v1" as const;
 export const categorySchema = z.enum(DIAGNOSTIC_CATEGORIES);
 const short = z.string().trim().min(1).max(1000);
 export const questionSchema = z
   .object({
     category: categorySchema,
-    text: z.string().trim().min(4).max(500),
+    text: z.string().trim().min(4).max(120),
     source: z.enum(["recommended", "custom"]),
   })
   .strict();
@@ -33,22 +34,31 @@ export type DiagnosticQuestion = z.infer<typeof questionSchema> & {
   validation?: { accepted: boolean; reason: string; inputHash: string };
 };
 export type KnowledgeBasis = {
+  kind?: "working_set" | "published_snapshot";
   snapshotId: string;
   version: number;
   buildId: string;
   conversationId: string;
   companyName: string;
   contentHash: string;
+  generation?: number;
+  contentVersion?: number;
+  packageSha256?: string;
+  confirmed?: number;
+  total?: number;
   documents: Array<{
     path: string;
     title: string;
     content: string;
     evidenceStatus?: string;
+    leafId?: string;
+    reviewStatus?: string;
   }>;
 };
+export type KnowledgeBasisOption = Omit<KnowledgeBasis, "documents">;
 export type KnowledgeReadiness = {
   ready: boolean;
-  status: "missing" | "confirming" | "publishing" | "ready";
+  status: "missing" | "confirming" | "publishing" | "ready" | "draft_ready";
   message: string;
   confirmed: number;
   total: number;
@@ -56,6 +66,8 @@ export type KnowledgeReadiness = {
   snapshotId: string | null;
   version: number | null;
   conversationId: string | null;
+  downstreamReady?: boolean;
+  bases?: KnowledgeBasisOption[];
 };
 export const recommendationSchema = z
   .object({
@@ -64,9 +76,12 @@ export const recommendationSchema = z
         z
           .object({
             category: categorySchema,
-            text: z.string().trim().min(4).max(500),
-            rationale: short,
-            evidenceRefs: z.array(short).min(1).max(8),
+            text: z.string().trim().min(4).max(120),
+            rationale: z.string().trim().min(4).max(120),
+            enterpriseAnchor: z.string().trim().min(2).max(120).nullable(),
+            offeringAnchor: z.string().trim().min(2).max(120).nullable(),
+            competitorAnchor: z.string().trim().min(2).max(120).nullable(),
+            evidenceRefs: z.array(short).min(1).max(3),
           })
           .strict(),
       )
@@ -254,6 +269,7 @@ export type DiagnosticMetric = {
   label: string;
   value: number | null;
   denominator?: number;
+  numerator?: number;
   unit: "%" | "位" | "份" | "项";
   sampleIds: string[];
 };
@@ -359,6 +375,7 @@ export type DiagnosticAttempt = {
   sample?: DiagnosticSample;
 };
 export type DiagnosticRun = {
+  initialDiagnostic?: boolean;
   id: string;
   version: 1;
   revision: number;
@@ -412,6 +429,7 @@ export type DiagnosticRunView = Omit<
 export type DiagnosticActivity = { status: DiagnosticJob["status"]; error?: string };
 export type DiagnosticWorkspace = {
   knowledge: KnowledgeReadiness;
+  initialRunId?: string | null;
   platforms: typeof DIAGNOSTIC_PLATFORMS;
   repeatPerPlatform: 5;
   model: "gpt-6.1-sol";

@@ -64,6 +64,14 @@ const validJudge: JudgeOutput = judgeOutputSchema.parse({
 });
 
 describe("judge client", () => {
+  it("sends the explicit failed attempt and reads the accepted retry number", async () => {
+    const {calls} = installFetch([() => jsonResponse(200, {taskId: "retry-task", attempt: 2,
+      recordRevision: 3, sourceFingerprint: "fp-abc"})]);
+    const retry = {taskId: "failed-task", attempt: 1};
+    const result = await startJudgeEvaluation({questionId: "q1", expectedRevision: 3, retry});
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({questionId: "q1", expectedRevision: 3, retry});
+    expect(result).toMatchObject({taskId: "retry-task", attempt: 2});
+  });
   it("starts a judge task and returns taskId with context", async () => {
     const { calls } = installFetch([() => startResponse]);
     const result = await startJudgeEvaluation({ questionId: "q1", expectedRevision: 3 });

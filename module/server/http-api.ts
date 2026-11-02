@@ -10,6 +10,8 @@ import {createResponseLogicApi} from "@frontmind/module-brand/server/response-lo
 import {createResponseLogicRecordRouter} from "@frontmind/module-brand/server/response-logic-record-api";
 import {createResponseLogicCredentialMiddleware} from "@frontmind/module-brand/server/response-logic-credential-middleware";
 import {createDiagnosticRouter} from "@frontmind/module-brand/server/diagnostic-api";
+import type {IntentQuestion} from "../contracts/intent-workbench.js";
+import type {ResponseLogicHostPorts} from "./response-logic-runtime.js";
 import {
  createEnterpriseRagEvaluationService,
  EnterpriseRagEvaluationError,
@@ -21,6 +23,9 @@ export interface ModuleHttpCore {
  database():Promise<MySql2Database<any>>;
  /** Server-only runtime settings. Never return this object or secret values to the browser. */
  environment:Readonly<Record<string,string|undefined>>;
+ /** Host-owned formal questions are projected without replacing their authority. */
+ intentQuestionCatalog?(request:Request):Promise<IntentQuestion[]>;
+ responseLogicHost?:ResponseLogicHostPorts;
 }
 
 /** Add new module-owned APIs here. Mounted in both Dashboard and the development subdomain. */
@@ -149,7 +154,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  // evaluation, judge, optimizer — all mounted via the original Intent
  // router factory (response-logic-api.ts, 2,236 lines) with runtime ports
  // assembled from BrandKeywordPorts + Brand ledger question resolver.
- const rlRuntime = assembleResponseLogicCore({ getDb: () => core.database(), environment: core.environment });
+ const rlRuntime = assembleResponseLogicCore({ getDb: () => core.database(), environment: core.environment, host: core.responseLogicHost });
  // The module namespace mount has no Core credential attachment middleware;
  // resolve the server-side credential (XTY-aware keyword chain) for the
  // response-logic routes before the handlers read it.

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/mysql2";
-import { assembleResponseLogicCore } from "../server/response-logic-runtime";
+import { assembleResponseLogicCore, type ResponseLogicHostPorts } from "../server/response-logic-runtime";
 import { registerIntentSkillPorts } from "../server/intent-skill-runtime";
 import { resolveBrandIntentQuestion } from "../server/brand-question-resolver";
 import { createFakeMysqlClient } from "./helpers/response-logic-fake-mysql.js";
@@ -31,7 +31,7 @@ const saveValue = {
   publish: false,
 } as never;
 
-function createHarness() {
+function createHarness(host?: ResponseLogicHostPorts) {
   const fake = createFakeMysqlClient({
     ledger: [
       {
@@ -52,11 +52,36 @@ function createHarness() {
     currentEnterpriseProjectId: () => null,
     lockCustomerProjectBusinessWrite: async () => {},
   } as never);
-  const runtime = assembleResponseLogicCore({ getDb: async () => db as never });
+  const runtime = assembleResponseLogicCore({ getDb: async () => db as never, host });
   return { fake, db, runtime };
 }
 
 describe("brand response-logic runtime save (real drizzle construction, in-memory mysql)", () => {
+  it("uses formal host question identity, revision and original credential rather than a ledger projection", async () => {
+    const configured = {questionId: QUESTION_ID, groupId: "ranking", groupTitle: "行业排名词",
+      question: "正式题干", intent: "正式意图", summary: "正式说明",
+      writeScope: {revision: 77, contractId: null, quotaPeriodId: "original-project"}};
+    const host: ResponseLogicHostPorts = {
+      resolveQuestion: vi.fn(async () => configured),
+      loadQuestionForWrite: vi.fn(async () => ({status: "selected", selectionApprovalStatus: "approved",
+        locked: true, ...configured.writeScope})),
+      loadQuestionForReadiness: vi.fn(async () => null),
+      servicePorts: {} as never,
+      getCredentialForUpstreamResource: vi.fn(async () => ({id: "frozen-credential"}) as never),
+    };
+    const {runtime, fake} = createHarness(host);
+    expect(await runtime.resolveQuestion(USER, null, QUESTION_ID)).toEqual(configured);
+    const record = await runtime.responseLogicService.saveResponseLogicEntry({userId: USER,
+      expectedQuestionScope: configured.writeScope,
+      value: {...(saveValue as object), ...configured} as never});
+    expect(record).toMatchObject({questionId: QUESTION_ID, groupId: "ranking", question: "正式题干", intent: "正式意图"});
+    expect(host.loadQuestionForWrite).toHaveBeenCalled();
+    expect(fake.sqlLog.some(q => q.includes("brand_intent_workspaces") && /for update/i.test(q))).toBe(false);
+    expect(await runtime.getCredentialForUpstreamResource(USER, "task", "original-task")).toEqual({id: "frozen-credential"});
+    expect(host.getCredentialForUpstreamResource).toHaveBeenCalledWith(USER, "task", "original-task");
+    vi.mocked(host.resolveQuestion).mockResolvedValue(null);
+    expect(await runtime.resolveQuestion(USER, null, QUESTION_ID)).toBeNull();
+  });
   it("resolves the ledger question through the real resolver and driver tuple shape", async () => {
     const { db } = createHarness();
     const resolved = await resolveBrandIntentQuestion(

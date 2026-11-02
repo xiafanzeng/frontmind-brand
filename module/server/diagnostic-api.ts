@@ -19,11 +19,12 @@ export function createDiagnosticRouter(core: ModuleHttpCore): Router {
     return createDiagnosticService(core, context, actor);
   };
   const handle =
-    (fn: (req: Request) => Promise<unknown>) =>
+    (fn: (req: Request, res: Response) => Promise<unknown>) =>
     async (req: Request, res: Response) => {
       try {
         res.setHeader("Cache-Control", "no-store");
-        res.json(await fn(req));
+        const result = await fn(req, res);
+        if (!res.headersSent) res.json(result);
       } catch (e) {
         const known = e instanceof DiagnosticError;
         res
@@ -96,5 +97,13 @@ export function createDiagnosticRouter(core: ModuleHttpCore): Router {
     "/:id/knowledge",
     handle((req) => service(req).documents(req.params.id)),
   );
+  router.get("/:id/knowledge-archive", handle(async (req, res) => {
+    const archive = await service(req).archive(req.params.id);
+    if (archive.snapshotUrl) { res.redirect(307, archive.snapshotUrl); return; }
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", 'attachment; filename="diagnostic-knowledge.zip"');
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.send(archive.bytes);
+  }));
   return router;
 }

@@ -82,6 +82,7 @@ const judgeStartInputSchema = z
   .object({
     questionId: z.string().trim().min(1).max(191),
     expectedRevision: z.number().int().positive().optional(),
+    retry: z.object({taskId: z.string().trim().min(1).max(255), attempt: z.number().int().min(0).max(99)}).strict().optional(),
   })
   .strict();
 
@@ -126,6 +127,12 @@ function judgeIdempotencyKey(input: {
       ]),
       "utf8",
     )
+    .digest("hex");
+}
+
+function judgeAttemptKey(contextKey: string, attempt: number) {
+  return attempt === 0 ? contextKey : createHash("sha256")
+    .update(JSON.stringify(["frontmind-response-logic-judge-retry-v1", contextKey, attempt]))
     .digest("hex");
 }
 
@@ -709,7 +716,7 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
             .update(knowledgeSnapshot.documents.map((doc) => doc.content).join("\n"), "utf8")
             .digest("hex")
         : "none";
-      const idemKey = judgeIdempotencyKey({
+      const contextIdempotencyKey = judgeIdempotencyKey({
         userId: workspaceUserId,
         questionId: parsed.data.questionId,
         recordRevision: record.revision,
@@ -719,13 +726,63 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
         questionHash: currentQuestionHash,
       });
 
-      // Create task
-      const client = core.createCredentialAgentClient(requestCredential, {
-        baseUrl: core.getUpstreamBaseUrl(request),
-        accountUserId: workspaceUserId,
-        intentId: idemKey,
-        rateLimitScope: `managed-user:${workspaceUserId}`,
+      const clientFor = (attempt: number, credential = requestCredential) => core.createCredentialAgentClient(credential, {
+        baseUrl: core.getUpstreamBaseUrl(request), accountUserId: workspaceUserId,
+        intentId: judgeAttemptKey(contextIdempotencyKey, attempt), rateLimitScope: `managed-user:${workspaceUserId}`,
       });
+      const findAttempt = async (attempt: number, credential = requestCredential) => {
+        const client = clientFor(attempt, credential);
+        if (!client.findCreatedTask) return null;
+        const key = judgeAttemptKey(contextIdempotencyKey, attempt);
+        return (await client.findCreatedTask({title: `FrontMind judge ${key.slice(0, 24)}`, operationToken: key})).unique;
+      };
+      const reply = (taskId: string, attempt: number) => {
+        res.setHeader("Cache-Control", "no-store");
+        res.json({taskId, attempt, status: "running", recordRevision: record.revision,
+          sourceFingerprint: fingerprint, knowledgeFingerprint, questionHash: currentQuestionHash, judgeVersion: "1"});
+      };
+      let attempt = 0;
+      const retry = parsed.data.retry;
+      if (retry) {
+        const previousCredential = await core.getCredentialForUpstreamResource(workspaceUserId, "task", retry.taskId);
+        if (!previousCredential) {
+          judgeError(res, 403, "RESPONSE_LOGIC_JUDGE_TASK_FORBIDDEN", "当前 Judge 任务不属于此账号");
+          return;
+        }
+        const previous = await findAttempt(retry.attempt, previousCredential);
+        if (!previous || previous.id !== retry.taskId) {
+          judgeError(res, 409, "RESPONSE_LOGIC_JUDGE_RETRY_CONTEXT_CHANGED", "问题、知识或评估版本已变化，请重新查看评估");
+          return;
+        }
+        const previousEvents = await clientFor(retry.attempt, previousCredential).listAllMessages({taskId: retry.taskId, order: "desc"});
+        if (core.latestManusV2TaskState(previousEvents) !== "error") {
+          judgeError(res, 409, "RESPONSE_LOGIC_JUDGE_RETRY_NOT_FAILED", "原评估尚未明确失败，请继续读取原任务");
+          return;
+        }
+        attempt = retry.attempt + 1;
+      }
+
+      // Restoring the page follows existing attempts without dispatching a new
+      // model. A repeated explicit retry also returns the already accepted
+      // child attempt, including one whose initial response was lost.
+      let existing = await findAttempt(attempt);
+      if (existing) {
+        while (attempt < 100 && existing.status === "error") {
+          const next = await findAttempt(attempt + 1);
+          if (!next) break;
+          existing = next;
+          attempt++;
+        }
+        await core.recordUpstreamResource({userId: workspaceUserId, apiCredentialId: requestCredential.id,
+          kind: "task", upstreamId: existing.id});
+        reply(existing.id, attempt);
+        return;
+      }
+
+      const idemKey = judgeAttemptKey(contextIdempotencyKey, attempt);
+
+      // Create task
+      const client = clientFor(attempt);
 
       // Upload skill, turn-input, and evidence (if knowledge available)
       const attachments: Array<{ file_id: string; filename: string }> = [];
@@ -753,7 +810,8 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
       }
 
       const created = await client.createTask({
-        prompt: `${prompt}\n\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: idemKey })}`,
+        prompt: `${prompt}\n\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: idemKey,
+          ...(retry ? {judgeContext: contextIdempotencyKey, attempt, retryOfTaskId: retry.taskId} : {}) })}`,
         attachments,
         title: `FrontMind judge ${idemKey.slice(0, 24)}`,
         agentProfile: core.toUpstreamAgentProfile(requestCredential.agentProfile),
@@ -789,16 +847,7 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
         return;
       }
 
-      res.setHeader("Cache-Control", "no-store");
-      res.json({
-        taskId: created.taskId,
-        status: "running",
-        recordRevision: record.revision,
-        sourceFingerprint: fingerprint,
-        knowledgeFingerprint,
-        questionHash: currentQuestionHash,
-        judgeVersion: "1",
-      });
+      reply(created.taskId, attempt);
     } catch (error) {
       judgeFailure(res, error);
     }

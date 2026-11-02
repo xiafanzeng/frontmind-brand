@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { ModuleHttpCore } from "./http-api.js";
 import { intentHash, intentSkillPorts } from "./intent-skill-runtime.js";
 import { assertKnowledgeBaseReadyForUpdate } from "./knowledge-base-progress-service.js";
+import { readDiagnosticKnowledgeWorkingSet, readDiagnosticKnowledgeArchive } from "./knowledge-workbench-service.js";
 import { diagnosticEvidenceCatalog } from "./diagnostic-evidence.js";
 import { SEMANTIC_AUDIT_VERSION, semanticAuditOutputSchema } from "../contracts/semantic-audit.js";
 import { validateSemanticAudit } from "./semantic-audit.js";
@@ -25,6 +26,7 @@ import {
   DIAGNOSTIC_LABELS,
   DIAGNOSTIC_PLATFORMS,
   DIAGNOSTIC_MODEL_POLICY,
+  DIAGNOSTIC_QUESTION_RULES_VERSION,
   questionSchema,
   recommendationSchema,
   validationSchema,
@@ -63,7 +65,7 @@ const auditReady = (r: DiagnosticRun, category: DiagnosticCategory) =>
   auditWanted(r, category) && !!r.results[category] && !r.audits?.[category] &&
   !r.jobs.some((j) => j.kind === "audit" && j.category === category);
 const qHash = (r: DiagnosticRun, q: { category: string; text: string }) =>
-  intentHash([r.basis.contentHash, r.subject, q.category, q.text]);
+  intentHash([r.basis.contentHash, r.subject, q.category, q.text, DIAGNOSTIC_QUESTION_RULES_VERSION]);
 export function diagnosticView(r: DiagnosticRun): DiagnosticRunView {
   const { basis, attempts, jobs, lease: _, events: _events, updatedAt: _updatedAt, ...rest } = r;
   const { documents: __, ...basisMeta } = basis;
@@ -74,8 +76,25 @@ export function diagnosticView(r: DiagnosticRun): DiagnosticRunView {
     else if (j.kind === "validate") activity.validation = value;
     else if (j.category) activity[j.kind === "audit" ? "audits" : "assessments"][j.category] = value;
   }
+  const questions = r.questions.map((question) => {
+    if (r.confirmedAt || question.validation?.inputHash === qHash(r, question)) return question;
+    const { validation: _, ...draft } = question;
+    return draft;
+  });
+  const results = { ...r.results };
+  for (const category of DIAGNOSTIC_CATEGORIES) {
+    const result = results[category];
+    if (!result || !assessmentSchema.safeParse(result.assessment).success) continue;
+    results[category] = {
+      ...result,
+      metrics: diagnosticMetrics(result.assessment),
+      breakdown: diagnosticBreakdown(result.assessment, attempts.flatMap((attempt) => attempt.category === category && attempt.sample ? [attempt.sample] : []), r.subject),
+    };
+  }
   return {
     ...rest,
+    results,
+    questions,
     basis: basisMeta,
     attempts: attempts.map(({ sample, taskId, ...a }) => ({
       ...a,
@@ -179,9 +198,10 @@ export function createDiagnosticService(
       throw new DiagnosticError("FORBIDDEN", "无权修改企业诊断", 403);
     model.assertActorAllowed(actor);
   }
-  async function knowledge(): Promise<{
+  async function knowledge(selectedBasisId?: string): Promise<{
     readiness: KnowledgeReadiness;
     basis?: KnowledgeBasis;
+    bases: KnowledgeBasis[];
   }> {
     const db = await core.database();
     const owner = sql`userId=${context.accountUserId} AND enterpriseProjectId <=> ${context.enterpriseProjectId}`;
@@ -192,7 +212,7 @@ export function createDiagnosticService(
     )[0];
     const build = rows(
       await db.execute(
-        sql`SELECT id,conversationId,companyName,status,publishedSnapshotId,activeTurnId,content_version AS contentVersion FROM knowledge_base_builds WHERE ${owner} AND (execution_mode IS NULL OR execution_mode<>'reset_retired') ORDER BY updatedAt DESC LIMIT 1`,
+        sql`SELECT id,conversationId,companyName,status,publishedSnapshotId,activeTurnId,content_version AS contentVersion,execution_mode AS executionMode,active_working_set_id AS workingSetId FROM knowledge_base_builds WHERE ${owner} AND (execution_mode IS NULL OR execution_mode<>'reset_retired') ORDER BY updatedAt DESC LIMIT 1`,
       ),
     )[0];
     const nodes = build
@@ -213,7 +233,7 @@ export function createDiagnosticService(
       ready: false,
       status: !build ? "missing" : "confirming",
       message: !build
-        ? "请先构建知识库并逐项确认"
+        ? "请先完成知识库资料构建"
         : `知识库已确认 ${confirmed}/${nodes.length} 项`,
       confirmed,
       total: nodes.length,
@@ -222,69 +242,57 @@ export function createDiagnosticService(
       version: snapshot?.version ?? null,
       conversationId: build?.conversationId ?? null,
     };
-    if (
-      !build ||
-      !nodes.length ||
-      confirmed !== nodes.length ||
-      build.activeTurnId
-    )
-      return { readiness };
-    try {
-      await assertKnowledgeBaseReadyForUpdate({
-        userId: context.accountUserId,
-        conversationId: build.conversationId,
-        expectedBuildId: build.id,
-      });
-    } catch {
-      return { readiness };
+    const bases: KnowledgeBasis[] = [];
+    if (build?.executionMode === "materialized_bundle_v1" && build.workingSetId && !build.activeTurnId) {
+      try {
+        const working = await readDiagnosticKnowledgeWorkingSet(context.accountUserId, build.conversationId);
+        if (working?.documents.length) bases.push({
+          kind: "working_set", snapshotId: `working-set:${working.id}`,
+          version: working.contentVersion, buildId: build.id,
+          conversationId: build.conversationId, companyName,
+          generation: working.generation, contentVersion: working.contentVersion,
+          packageSha256: working.packageSha256, confirmed, total: nodes.length,
+          // Review-only transitions do not invalidate selected questions.
+          contentHash: intentHash(working.documents.map(({ path, title, content, leafId }) => ({ path, title, content, leafId }))),
+          documents: working.documents,
+        });
+      } catch {
+        readiness.message = "知识工作包暂不可核验，请重新读取";
+      }
     }
-    if (
-      !snapshot ||
-      snapshot.sourceBuildId !== build.id ||
-      build.publishedSnapshotId !== snapshot.id ||
-      build.status !== "published"
-    )
-      return {
-        readiness: {
-          ...readiness,
-          status: "publishing",
-          message: "节点已确认，正在等待当前知识版本发布",
-        },
-      };
-    const documents = (obj(snapshot.documents) as KnowledgeBasis["documents"])
-      .filter((d) => typeof d.content === "string" && d.content.trim())
-      .map((d) => ({
-        path: d.path,
-        title: d.title,
-        content: d.content,
-        evidenceStatus: d.evidenceStatus,
-      }));
-    if (!documents.length)
-      return {
-        readiness: { ...readiness, message: "已发布知识版本缺少可引用正文" },
-      };
-    return {
-      readiness: {
-        ...readiness,
-        ready: true,
-        status: "ready",
-        message: "全部节点已确认，知识版本已发布",
-      },
-      basis: {
-        snapshotId: snapshot.id,
-        version: snapshot.version,
-        buildId: build.id,
-        conversationId: build.conversationId,
-        companyName,
-        contentHash: intentHash(documents),
-        documents,
-      },
-    };
+    let publishedReady = false;
+    if (build && snapshot?.sourceBuildId === build.id && build.publishedSnapshotId === snapshot.id &&
+        build.status === "published" && confirmed === nodes.length && nodes.length && !build.activeTurnId) {
+      try {
+        await assertKnowledgeBaseReadyForUpdate({ userId: context.accountUserId, conversationId: build.conversationId, expectedBuildId: build.id });
+        publishedReady = true;
+      } catch { /* The diagnostic working copy can still be independently ready. */ }
+    }
+    if (snapshot && (publishedReady || snapshot.sourceBuildId !== build?.id)) {
+      const documents = (obj(snapshot.documents) as KnowledgeBasis["documents"])
+        .filter((d) => typeof d.content === "string" && d.content.trim())
+        .map((d) => ({ path: d.path, title: d.title, content: d.content, evidenceStatus: d.evidenceStatus }));
+      if (documents.length) bases.push({
+        kind: "published_snapshot", snapshotId: snapshot.id, version: snapshot.version,
+        buildId: snapshot.sourceBuildId, conversationId: snapshot.sourceConversationId,
+        companyName, contentHash: intentHash(documents), documents,
+        confirmed: documents.length, total: documents.length,
+      });
+    }
+    const basis = selectedBasisId ? bases.find((item) => item.snapshotId === selectedBasisId) : bases[0];
+    return { bases, basis, readiness: {
+      ...readiness, ready: !!basis, downstreamReady: bases.some((item) => item.kind === "published_snapshot"),
+      status: basis ? basis.kind === "working_set" ? "draft_ready" : "ready" : readiness.status,
+      message: basis ? basis.kind === "working_set"
+        ? `完整工作稿可用于诊断 · 已确认 ${confirmed}/${nodes.length} 项`
+        : "正式知识版本已发布" : readiness.message,
+      bases: bases.map(({ documents: _, ...meta }) => meta),
+    } };
   }
-  async function list() {
+  async function list(executor?: any): Promise<DiagnosticRun[]> {
     return (
       await (
-        await core.database()
+        executor ?? await core.database()
       )
         .select({ operation: model.agentOperations, task: model.agentTasks })
         .from(model.agentOperations)
@@ -304,6 +312,7 @@ export function createDiagnosticService(
     const [k, runs] = await Promise.all([knowledge(), list()]);
     return {
       knowledge: k.readiness,
+      initialRunId: initialRun(runs)?.id ?? null,
       platforms: DIAGNOSTIC_PLATFORMS,
       repeatPerPlatform: 5 as const,
       model: "gpt-6.1-sol" as const,
@@ -315,6 +324,29 @@ export function createDiagnosticService(
         createdAt,
       })),
     };
+  }
+  function initialRun(runs: DiagnosticRun[]) {
+    return runs.find((run) => run.initialDiagnostic) ??
+      [...runs].sort((left, right) =>
+        Number(!!right.confirmedAt) - Number(!!left.confirmedAt) ||
+        (right.confirmedAt ?? right.createdAt).localeCompare(left.confirmedAt ?? left.createdAt))[0];
+  }
+  async function bindExistingInitialRun() {
+    const db = await core.database();
+    return db.transaction(async (tx: any) => {
+      await model.lockAccountRecord(tx, context.accountUserId);
+      await model.lockCustomerProjectBusinessWrite(tx, context.accountUserId, actor);
+      const selected = initialRun(await list(tx));
+      if (!selected) return null;
+      if (!selected.initialDiagnostic) {
+        const record = await find(selected.id, tx);
+        selected.initialDiagnostic = true;
+        await tx.update(model.agentTasks).set({
+          providerRuntime: { ...record.task.providerRuntime, [ROOT]: selected },
+        }).where(eq(model.agentTasks.id, record.task.id));
+      }
+      return selected;
+    });
   }
   async function credential() {
     const c = await model.getDecryptedCredentialForUser(context.accountUserId);
@@ -332,9 +364,12 @@ export function createDiagnosticService(
       .object({
         clientRequestId: uuid,
         subjectScope: z.string().trim().max(120).default(""),
+        basisId: z.string().min(1).max(160).optional(),
       })
       .strict()
       .parse(value);
+    const initial = await bindExistingInitialRun();
+    if (initial) return diagnosticView(initial);
     const existing = await find(input.clientRequestId);
     if (existing) {
       if (state(existing).subjectScope !== input.subjectScope)
@@ -344,7 +379,7 @@ export function createDiagnosticService(
         );
       return diagnosticView(state(existing));
     }
-    const k = await knowledge();
+    const k = await knowledge(input.basisId);
     if (!k.basis)
       throw new DiagnosticError("KNOWLEDGE_NOT_READY", k.readiness.message);
     const c = await credential();
@@ -369,9 +404,11 @@ export function createDiagnosticService(
       events: [],
       createdAt: now(),
       updatedAt: now(),
+      initialDiagnostic: true,
     };
 
     const db = await core.database();
+    let selectedId = r.id;
     await db.transaction(async (tx: any) => {
       await model.lockAccountRecord(tx, context.accountUserId);
       await model.lockCustomerProjectBusinessWrite(
@@ -379,6 +416,8 @@ export function createDiagnosticService(
         context.accountUserId,
         actor,
       );
+      const concurrent = initialRun(await list(tx));
+      if (concurrent) { selectedId = concurrent.id; return; }
       if (await find(r.id, tx)) return;
       await tx.insert(model.agentOperations).values({
         id: r.id,
@@ -418,10 +457,10 @@ export function createDiagnosticService(
         },
       });
     });
-    return diagnosticView(state(await owned(r.id)));
+    return diagnosticView(state(await owned(selectedId)));
   }
   async function assertCurrentBasis(r: DiagnosticRun) {
-    const k = await knowledge();
+    const k = await knowledge(r.basis.snapshotId);
     if (
       !k.basis ||
       k.basis.snapshotId !== r.basis.snapshotId ||
@@ -429,7 +468,7 @@ export function createDiagnosticService(
     )
       throw new DiagnosticError(
         "KNOWLEDGE_CHANGED",
-        "知识版本已变化，请使用已确认的新版本建立诊断",
+        "知识正文已变化，请更新本轮知识依据后重新校验问题",
       );
   }
   async function save(id: string, value: unknown) {
@@ -437,6 +476,7 @@ export function createDiagnosticService(
     const input = z
       .object({
         expectedRevision: z.number().int().nonnegative(),
+        basisId: z.string().min(1).max(160).optional(),
         questions: z.array(questionSchema).max(4),
         platforms: z
           .array(z.enum(["doubao", "yuanbao", "qianwen"]))
@@ -445,7 +485,11 @@ export function createDiagnosticService(
       })
       .strict()
       .parse(value);
-    await assertCurrentBasis(state(await owned(id)));
+    const before = state(await owned(id));
+    const nextBasis = input.basisId ? (await knowledge(input.basisId)).basis : undefined;
+    if (input.basisId && !nextBasis)
+      throw new DiagnosticError("KNOWLEDGE_NOT_READY", "所选知识版本尚不可用，请重新读取");
+    if (!input.basisId) await assertCurrentBasis(before);
     if (
       new Set(input.questions.map((q) => q.category)).size !==
         input.questions.length ||
@@ -457,6 +501,14 @@ export function createDiagnosticService(
         throw new DiagnosticError("FROZEN", "本轮配置已经冻结或停止");
       if (r.revision !== input.expectedRevision)
         throw new DiagnosticError("REVISION_CHANGED", "草稿已更新，请重新读取");
+      const basisChanged = nextBasis && (nextBasis.snapshotId !== r.basis.snapshotId || nextBasis.contentHash !== r.basis.contentHash);
+      if (basisChanged) {
+        if (r.jobs.some(activeJob))
+          throw new DiagnosticError("MODEL_RUNNING", "请等待当前问题处理完成后更新知识依据");
+        r.basis = nextBasis;
+        r.recommendations = [];
+        r.questions = r.questions.map(({ validation: _, ...question }) => question);
+      }
       r.questions = input.questions.map((q) => {
         const previous = r.questions.find(
           (x) => x.category === q.category && x.text === q.text,
@@ -464,11 +516,11 @@ export function createDiagnosticService(
         const recommended =
           q.source === "recommended" &&
           r.recommendations.some(
-            (x) => x.category === q.category && x.text === q.text,
+            (x) => x.category === q.category && x.text === q.text && Object.hasOwn(x, "enterpriseAnchor"),
           );
         return {
           ...q,
-          ...(previous?.validation
+          ...(previous?.validation?.inputHash === qHash(r, q)
             ? { validation: previous.validation }
             : recommended
               ? {
@@ -491,10 +543,12 @@ export function createDiagnosticService(
     category?: DiagnosticCategory,
   ) {
     const c = await credential();
-    const skill = await readFile(
+    let skill = await readFile(
       new URL(`../workflows/brand-diagnostics/${kind === "audit" ? "SEMANTIC_AUDIT.md" : "SKILL.md"}`, import.meta.url),
       "utf8",
     );
+    if (kind === "recommend" || kind === "validate")
+      skill += "\n\n" + await readFile(new URL("../workflows/brand-diagnostics/QUESTIONS.md", import.meta.url), "utf8");
     return mutate(id, async (r, tx) => {
       if (r.phase === "stopped")
         throw new DiagnosticError("STOPPED", "本轮已停止");
@@ -524,6 +578,7 @@ export function createDiagnosticService(
         questions: selected,
         samples,
         skill,
+        ...(["recommend", "validate"].includes(kind) ? { questionRulesVersion: DIAGNOSTIC_QUESTION_RULES_VERSION } : {}),
         ...(kind === "audit" ? {
           category,
           scoringVersion: SEMANTIC_AUDIT_VERSION,
@@ -677,6 +732,18 @@ export function createDiagnosticService(
   async function documents(id: string) {
     return state(await owned(id)).basis.documents;
   }
+  async function archive(id: string) {
+    const { basis } = state(await owned(id));
+    if (basis.kind !== "working_set")
+      return { snapshotUrl: `/api/dashboard/knowledge/snapshots/${encodeURIComponent(basis.snapshotId)}/archive` };
+    if (!basis.generation || !basis.contentVersion || !basis.packageSha256)
+      throw new DiagnosticError("KNOWLEDGE_UNAVAILABLE", "冻结知识包缺少版本信息");
+    const bytes = await readDiagnosticKnowledgeArchive(context.accountUserId, basis.conversationId, {
+      id: uuid.parse(basis.snapshotId.replace(/^working-set:/, "")),
+      generation: basis.generation, contentVersion: basis.contentVersion, packageSha256: basis.packageSha256,
+    });
+    return { bytes };
+  }
   async function semanticAudits(id: string, value: unknown) {
     allowWrite();
     const { categories } = z.object({ categories: z.array(z.enum(DIAGNOSTIC_CATEGORIES)).min(1).max(4).optional() }).strict().parse(value ?? {});
@@ -720,11 +787,11 @@ export function createDiagnosticService(
   async function retry(id: string) {
     allowWrite();
     const r = state(await owned(id));
-    if (r.phase === "stopped")
-      throw new DiagnosticError(
-        "STOPPED",
-        "已停止的任务不会自动重启，请新建诊断",
-      );
+    if (r.phase === "stopped") {
+      await mutate(id, (current) => {
+        current.phase = current.confirmedAt ? "collecting" : "draft";
+      });
+    }
     const refreshCoverage =
       !!r.results.product_scenario &&
       !Array.isArray(
@@ -754,7 +821,7 @@ export function createDiagnosticService(
 
     });
     for (const j of latestDiagnosticJobs(r.jobs).filter(
-      (j) => j.status === "failed",
+      (j) => j.status === "failed" || j.status === "cancelled",
     )) {
       const satisfied =
         j.kind === "audit" ? !!r.audits?.[j.category!]
@@ -1252,6 +1319,7 @@ export function createDiagnosticService(
     observe,
     answer,
     documents,
+    archive,
     semanticAudits,
     semanticAudit,
     stop,

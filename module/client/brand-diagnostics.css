@@ -1317,3 +1317,36 @@
 [id^="diagnostic-metrics-"] {
   scroll-margin-top: 80px;
 }
+
+/* Diagnostic charts and document evidence remain scoped to this workspace. */
+.bd-basis-select { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 16px 0; color: var(--bd-muted); }
+.bd-basis-select select { min-width: 220px; max-width: 100%; border: 1px solid var(--bd-line); background: #fff; border-radius: 10px; padding: 10px 14px; color: var(--bd-ink); }
+.bd-candidate { border: 1px solid var(--bd-line); border-radius: 14px; overflow: hidden; background: #fff; }
+.bd-candidates .bd-candidate > button { width: 100%; border: 0; border-radius: 0; }
+.bd-question-evidence { padding: 0 12px 10px; display: grid; gap: 5px; }
+.bd-question-evidence .bd-evidence-link { display: block; padding: 7px 9px; border: 0; border-radius: 6px; text-align: left; background: #f8f7fb; font-size: 11px; line-height: 1.5; }
+.bd-evidence-link strong, .bd-evidence-link small { display: block; overflow-wrap: anywhere; }
+.bd-evidence-link strong { font-weight: 500; color: var(--bd-accent); }
+.bd-evidence-link small { color: var(--bd-muted); }
+.bd-chart-panel { border: 1px solid var(--bd-line); background: linear-gradient(160deg,#faf8fe,#fff 50%); padding: 24px; margin: 24px 0; border-radius: 16px; }
+.bd-chart-panel header h4 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.bd-chart-panel header p { margin: 0 0 20px; color: var(--bd-muted); font-size: 12px; }
+.bd-stacked-chart { display: flex; gap: 3px; min-height: 40px; overflow: hidden; border-radius: 8px; background: #efedf4; }
+.bd-workspace .bd-stacked-chart button { border: 0; padding: 7px 0; min-width: 3px; border-radius: 0; color: white; font-size: 12px; font-weight: 600; }
+.bd-chart-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 24px; }
+.bd-workspace .bd-chart-legend button { border: 0; background: transparent; padding: 5px 0; margin-right: 12px; font-size: 11px; }
+.bd-chart-legend i { width: 8px; height: 8px; border-radius: 50%; }
+.bd-platform-charts { display: grid; grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); gap: 24px; }
+.bd-platform-chart { min-width: 0; }
+.bd-platform-chart h5 { display: flex; justify-content: space-between; margin: 0 0 14px; font-size: 13px; font-weight: 600; }
+.bd-platform-chart h5 small { font-weight: 400; color: var(--bd-muted); }
+.bd-workspace .bd-platform-chart button { display: grid; grid-template-columns: 1fr auto; width: 100%; border: 0; background: transparent; border-radius: 0; padding: 8px 0; text-align: left; font-size: 11px; }
+.bd-platform-chart button strong { font-variant-numeric: tabular-nums; font-weight: 500; }
+.bd-chart-track { grid-column: 1 / -1; height: 7px; background: #ece9f2; border-radius: 6px; overflow: hidden; }
+.bd-chart-track i { display: block; height: 100%; border-radius: 6px; }
+.bd-knowledge-drawer > .bd-answer-content { overflow-y: auto; padding: 24px; }
+@media (max-width: 640px) {
+  .bd-chart-panel { padding: 16px; }
+  .bd-platform-charts { grid-template-columns: 1fr; }
+  .bd-basis-select select { min-width: 0; width: 100%; }
+}

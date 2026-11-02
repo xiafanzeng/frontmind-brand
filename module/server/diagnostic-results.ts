@@ -15,6 +15,7 @@ import {
   diagnosticEvidenceCatalog,
   resolveDiagnosticQuote,
 } from "./diagnostic-evidence.js";
+import { assertDiagnosticQuestionPortfolio, diagnosticQuestionFormatIssue } from "./diagnostic-question-quality.js";
 const normalized = (v: string) =>
   v.normalize("NFKC").replace(/\s+/g, " ").trim();
 const quoted = (source: string, value: string) =>
@@ -32,6 +33,7 @@ export function validateRecommendations(value: unknown, basis: KnowledgeBasis) {
       if (!basis.documents.some((d) => d.path === p))
         throw new Error("候选依据不在知识版本中");
   }
+  assertDiagnosticQuestionPortfolio(result.questions, basis);
   return result.questions;
 }
 export function validateQuestionDecisions(
@@ -48,6 +50,8 @@ export function validateQuestionDecisions(
   for (const q of result.decisions) {
     if (!questions.some((x) => x.category === q.category && x.text === q.text))
       throw new Error("校验改写了问题");
+    const formatIssue = diagnosticQuestionFormatIssue(q.text);
+    if (formatIssue) { q.accepted = false; q.reason = formatIssue; }
     if (q.accepted && !q.evidenceRefs.length)
       throw new Error("通过校验的题目缺少知识依据");
     for (const p of q.evidenceRefs)
@@ -226,6 +230,7 @@ export function diagnosticMetrics(a: DiagnosticAssessment): DiagnosticMetric[] {
       ? Math.round((ids.length / denominator) * 1000) / 10
       : null,
     denominator,
+    numerator: ids.length,
     unit: "%",
     sampleIds: [...new Set(ids)],
   });
@@ -339,6 +344,7 @@ export function diagnosticMetrics(a: DiagnosticAssessment): DiagnosticMetric[] {
         ? Math.round((coverage.length / knowledgeTopics.length) * 1000) / 10
         : null,
       denominator: knowledgeTopics.length,
+      numerator: coverage.length,
       unit: "%",
       sampleIds: [
         ...new Set(

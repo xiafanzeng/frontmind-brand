@@ -363,7 +363,7 @@ describe("四类诊断证据与指标", () => {
   it("自定义排名题可通过，但校验不能改写文本", () => {
     const q = {
       category: "industry_ranking" as const,
-      text: "本地医美机构推荐",
+      text: "本地有哪些医美机构推荐？",
     };
     const value = {
       decisions: [

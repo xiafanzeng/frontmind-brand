@@ -3,7 +3,7 @@ name: socratic-kb-builder
 description: Materialize or revise a deep Chinese enterprise knowledge base as a complete hash-addressed ZIP working set. Use for a new FrontMind Dashboard knowledge-base build or a single-leaf revision; never use it to continue a previous task or to advance a confirmed node.
 ---
 
-# Socratic Enterprise Knowledge Base Builder v5
+# Socratic Enterprise Knowledge Base Builder v6
 
 Create an evidence-grounded enterprise encyclopedia as an immutable working
 set. Dashboard, not the model task, owns traversal, confirmation and final
@@ -90,7 +90,7 @@ consumes the ZIP only and does not consume this sentence.
 
 ## Task isolation
 
-- Every operation is a new top-level Manus v2 task.
+- Every operation is a new top-level task under the server-frozen model policy.
 - Do not request, infer or reuse a parent task, previous task, chat history,
   previous Provider file ID or previous signed URL.
 - Do not ask the user to confirm content inside the task.
@@ -130,18 +130,43 @@ a non-empty body. Do not emit formal-content markers, `## 资料元数据`,
 or metadata keys in node Markdown. Preserve sources, excerpts, crawl notes,
 conflicts and verification gaps as declared evidence files instead.
 
-Use these evidence-adaptive minimums:
+## Depth and one correction pass
 
-- overview with evidence:
-  `max(120, min(target, floor(evidenceCharacters * 0.25)))`, where target is
-  5,000 for product/service branches and 2,500 otherwise;
-- leaf with evidence:
-  `max(80, min(500, floor(evidenceCharacters * 0.20)))`;
-- zero-evidence overview: 60; zero-evidence leaf: 40. State only the supported
-  facts in node prose and retain the specific gap in leaf-scoped evidence.
+For new v6 bundles, ordinary leaf bodies target 600–1,200 Chinese characters,
+core product/service/capability leaves target 800–1,800, and branch overviews
+target 1,200–2,500. These are evidence-adaptive drafting targets. Develop the
+supported scope, capabilities, delivery or usage, concrete examples and limits
+as applicable. Do not replace a chapter with a one-paragraph stage summary.
 
-Never pad one topic with another topic's facts. Do not expose source appendices
-inside customer-visible prose.
+Treat each declared overview as a customer node with a clear overview title;
+keep its prose distinct from the detailed leaves. Store every body in the
+existing leaf/node contract, without inventing new manifest fields.
+
+Never pad sparse evidence, reuse unrelated facts, manufacture examples or
+repeat a disclaimer to reach a length target. A short, honest node is valid
+when relevant evidence is insufficient. Retain the specific gap in evidence.
+
+Always pass `--expected-skill-version 6` to the initial bundle validator. Its
+machine-readable depth policy counts visible body characters after the title,
+and deduplicates only this leaf's retained, hash-valid evidence. When relevant
+evidence contains at least 1,500 characters but the body has fewer than 300,
+it emits `DEPTH_REWRITE_REQUIRED` with the full affected-node list.
+
+On that result, perform exactly one concentrated correction pass over the
+listed nodes. Reread their existing evidence files and expand only supported
+content toward the appropriate target. Reuse all valid research and other
+node bodies. Do not repeat web collection, add new model tasks, change IDs,
+delete evidence to evade the check or change unrelated nodes. Update exact
+body hashes and run the same validator again. Its hidden local state file
+records the one-pass budget and must remain outside the output ZIP. Do not
+remove or overwrite that state. `DEPTH_REWRITE_EXHAUSTED` requires stopping
+without submitting an invalid ZIP. Dashboard independently repeats the depth
+check against the server-frozen Skill version and rejects an unrepaired bundle.
+
+If a long evidence file is irrelevant, resolve its leaf association during the
+initial evidence review. The correction pass cannot silently remove supporting
+material merely to reduce the evidence count. Citation text is evidence, not
+proof that an external assertion is true.
 
 ## Logo and image rules
 
@@ -178,7 +203,9 @@ decoded bytes and original upload SHA.
 - 30 MiB total image bytes
 
 Stop duplicate SKUs, pagination, translated copies and low-value news before
-they displace uncovered business dimensions. Maintain actual counters; never
+they displace uncovered business dimensions. Counters for official-page reads and public queries are task-declared observations.
+The evidence file count and hashes are independently checked by Dashboard; this
+check does not establish external factual truth. Maintain actual counters; never
 invent sources, facts, images or completeness values.
 
 ## Output discipline

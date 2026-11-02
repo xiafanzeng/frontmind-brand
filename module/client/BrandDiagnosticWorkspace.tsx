@@ -3,7 +3,6 @@ import * as Dialog from "@radix-ui/react-dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  ArrowDown,
   ArrowRight,
   Check,
   ChevronRight,
@@ -31,6 +30,7 @@ import {
   DiagnosticSemanticAudit,
   isDiagnosticPending,
 } from "./BrandDiagnosticResults";
+import { DiagnosticCharts } from "./DiagnosticCharts";
 import "./brand-diagnostics.css";
 const ROOT = "/api/modules/brand/diagnostics";
 
@@ -75,10 +75,12 @@ function locationPatch(values: Record<string, string | null>) {
 }
 export default function BrandDiagnosticWorkspace({
   onOpenKnowledge,
+  onOpenMonitoring,
   preview = false,
   storageKey = "brand-diagnostic-draft",
 }: {
   onOpenKnowledge?: () => void;
+  onOpenMonitoring?: () => void;
   preview?: boolean;
   storageKey?: string;
 }) {
@@ -129,7 +131,8 @@ export default function BrandDiagnosticWorkspace({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [knowledgePath, setKnowledgePath] = useState<string | null>(null);
+  const [basisId, setBasisId] = useState<string>(savedDraft?.basisId ?? "");
   const [documents, setDocuments] = useState<KnowledgeBasis["documents"]>([]);
   const [category, setCategory] = useState<DiagnosticCategory | null>(
     initial.current.category,
@@ -149,14 +152,31 @@ export default function BrandDiagnosticWorkspace({
           questions,
           platforms,
           subjectScope,
+          basisId,
         }),
       );
     else localStorage.removeItem(storageKey);
-  }, [dirty, questions, platforms, subjectScope, runId, storageKey, preview]);
+  }, [
+    dirty,
+    questions,
+    platforms,
+    subjectScope,
+    basisId,
+    runId,
+    storageKey,
+    preview,
+  ]);
   const currentId = useRef(runId);
   currentId.current = runId;
   dirtyRef.current = dirty;
+  const latestRun = useRef<DiagnosticRunView | null>(null);
   function adopt(value: DiagnosticRunView, force = false) {
+    if (
+      latestRun.current?.id === value.id &&
+      latestRun.current.revision > value.revision
+    )
+      return;
+    latestRun.current = value;
     setRun(value);
     if (value.confirmedAt) {
       setDirty(false);
@@ -166,6 +186,7 @@ export default function BrandDiagnosticWorkspace({
       setQuestions(value.questions);
       setPlatforms(value.platforms);
       setSubjectScope(value.subjectScope);
+      setBasisId(value.basis.snapshotId);
     }
   }
   async function refresh() {
@@ -175,14 +196,11 @@ export default function BrandDiagnosticWorkspace({
     if (id) {
       adopt(await request<DiagnosticRunView>(`/${id}`));
       if (urlState().id !== id) locationPatch({ diagnosis: id });
-    } else if (
-      !dirtyRef.current &&
-      w.runs.length &&
-      !new URLSearchParams(window.location.search).has("new")
-    ) {
-      currentId.current = w.runs[0].id;
-      setRunId(w.runs[0].id);
-      locationPatch({ diagnosis: w.runs[0].id });
+    } else if (w.initialRunId) {
+      currentId.current = w.initialRunId;
+      setRunId(w.initialRunId);
+      adopt(await request<DiagnosticRunView>(`/${w.initialRunId}`));
+      locationPatch({ diagnosis: w.initialRunId, new: null });
     }
     setLoadError("");
   }
@@ -237,6 +255,7 @@ export default function BrandDiagnosticWorkspace({
     const created = await request<DiagnosticRunView>("/drafts", {
       clientRequestId: draftRequestId.current,
       subjectScope,
+      basisId: basisId || workspace?.knowledge.bases?.[0]?.snapshotId,
     });
     setRunId(created.id);
     currentId.current = created.id;
@@ -256,6 +275,7 @@ export default function BrandDiagnosticWorkspace({
         source,
       })),
       platforms,
+      basisId: basisId || current.basis.snapshotId,
     });
     setDirty(false);
     dirtyRef.current = false;
@@ -288,22 +308,54 @@ export default function BrandDiagnosticWorkspace({
     locationPatch({ question: null, answer: null, metric: null });
   }
   async function showKnowledge(path?: string) {
-    if (run && !documents.length)
-      setDocuments(await request(`/${run.id}/knowledge`));
-    setKnowledgeOpen(true);
-    requestAnimationFrame(() => {
-      const target = path
-        ? document.getElementById(`knowledge-${encodeURIComponent(path)}`)
-        : document.getElementById("diagnostic-knowledge");
-      if (target instanceof HTMLDetailsElement) target.open = true;
-      target?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+    const current = await ensureDraft();
+    const content = documents.length
+      ? documents
+      : await request<KnowledgeBasis["documents"]>(`/${current.id}/knowledge`);
+    if (!Array.isArray(content))
+      throw new Error("知识依据格式不正确，请重新读取");
+    setDocuments(content);
+    setKnowledgePath(path ?? content[0]?.path ?? "missing");
   }
-  async function openKnowledge() {
-    setKnowledgeOpen((v) => !v);
-    if (run && !documents.length)
-      setDocuments(await request(`/${run.id}/knowledge`));
+  async function downloadKnowledge() {
+    const current = await persist();
+    const response = await operation.fetch(
+      `${ROOT}/${current.id}/knowledge-archive`,
+      {
+        credentials: "same-origin",
+        headers: operation.headers({}),
+      },
+    );
+    operation.assertActive();
+    if (!response.ok) throw new Error("知识工作包读取失败，请重试");
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${current.basis.companyName}-知识库-v${current.basis.version}.zip`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
+  useEffect(() => {
+    setDocuments([]);
+    if (!runId) return;
+    let active = true;
+    void request<KnowledgeBasis["documents"]>(`/${runId}/knowledge`)
+      .then((value) => {
+        if (active && Array.isArray(value)) setDocuments(value);
+      })
+      .catch(() => {
+        /* Opening a document retries and reports the error. */
+      });
+    return () => {
+      active = false;
+    };
+  }, [runId, run?.basis.contentHash]);
+  const selectedBasis =
+    workspace?.knowledge.bases?.find((basis) => basis.snapshotId === basisId) ??
+    (run ? run.basis : workspace?.knowledge.bases?.[0]);
+  const selectedDocument = documents.find(
+    (document) => document.path === knowledgePath,
+  );
   const frozen = !!run?.confirmedAt;
   const stopped = run?.phase === "stopped";
   const running = run && ["collecting", "analyzing"].includes(run.phase);
@@ -355,7 +407,7 @@ export default function BrandDiagnosticWorkspace({
     return (
       <div className="bd-workspace">
         <h1>AI 语义诊断</h1>
-        <p>连接企业工作区后，使用逐项确认的知识库开始四类诊断。</p>
+        <p>连接企业工作区后，使用完整知识工作包开始四类诊断。</p>
       </div>
     );
   return (
@@ -368,7 +420,7 @@ export default function BrandDiagnosticWorkspace({
         <div>
           <span className="bd-eyebrow">品牌建设</span>
           <h2>AI 语义诊断</h2>
-          <p>基于已确认知识，查看四类真实回答中的品牌表现与认知差异。</p>
+          <p>基于本轮知识版本，查看四类真实回答中的品牌表现与认知差异。</p>
         </div>
         <span className="bd-status">
           {run
@@ -383,7 +435,7 @@ export default function BrandDiagnosticWorkspace({
       </header>
       <nav className="bd-steps" aria-label="诊断流程">
         {[
-          ["knowledge", "确认知识库"],
+          ["knowledge", "知识依据"],
           ["questions", "选择问题"],
           ["collection", "真实采集"],
           ["results", "语义诊断"],
@@ -407,8 +459,8 @@ export default function BrandDiagnosticWorkspace({
         <div className="bd-section-heading">
           <span className="bd-number">01</span>
           <div>
-            <h2>已确认知识库</h2>
-            <p>本轮诊断的事实依据与适用范围</p>
+            <h2>本轮知识依据</h2>
+            <p>选择完整工作稿或正式发布版本，冻结本轮对照范围</p>
           </div>
           <Database size={23} />
         </div>
@@ -420,66 +472,66 @@ export default function BrandDiagnosticWorkspace({
               <strong>
                 {run?.subject ?? workspace.knowledge.companyName ?? "当前企业"}
               </strong>
+              {selectedBasis && (
+                <span className="bd-status">
+                  {selectedBasis.kind === "working_set"
+                    ? "构建工作稿"
+                    : "正式发布版"}{" "}
+                  · v{selectedBasis.version}
+                </span>
+              )}
               <span>
-                {run
-                  ? `本轮知识版本 ${run.basis.version}`
-                  : workspace.knowledge.version
-                    ? `知识版本 ${workspace.knowledge.version}`
-                    : "尚未发布"}
+                {selectedBasis
+                  ? `${selectedBasis.total ?? workspace.knowledge.total} 个节点 · 已确认 ${selectedBasis.confirmed ?? workspace.knowledge.confirmed} 个`
+                  : workspace.knowledge.message}
               </span>
-              <span>{workspace.knowledge.message}</span>
             </div>
-            {run && workspace.knowledge.snapshotId !== run.basis.snapshotId && (
+            {!frozen && !!workspace.knowledge.bases?.length && (
+              <label className="bd-basis-select">
+                知识版本
+                <select
+                  value={basisId || selectedBasis?.snapshotId}
+                  disabled={busy || activeBusiness}
+                  onChange={(event) => {
+                    setBasisId(event.target.value);
+                    setDirty(true);
+                    setDocuments([]);
+                  }}
+                >
+                  {workspace.knowledge.bases.map((basis) => (
+                    <option key={basis.snapshotId} value={basis.snapshotId}>
+                      {basis.kind === "working_set"
+                        ? "构建工作稿"
+                        : "正式发布版"}{" "}
+                      · v{basis.version} ·{" "}
+                      {basis.total ?? workspace.knowledge.total} 个节点
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {selectedBasis?.kind === "working_set" && (
               <p className="bd-note">
-                知识库已有新版本；本轮仍使用启动时冻结的版本 {run.basis.version}
-                。
+                已确认 {selectedBasis.confirmed ?? 0}/
+                {selectedBasis.total ?? workspace.knowledge.total}{" "}
+                个节点。初诊采用这一工作稿，人工审阅与事实核验状态会随依据保留。
               </p>
             )}
-            {workspace.knowledge.ready || run ? (
-              <>
+            <div className="bd-toolbar">
+              {(workspace.knowledge.ready || run) && (
                 <button
-                  className="bd-link"
-                  onClick={() => void act(openKnowledge)}
+                  disabled={busy}
+                  onClick={() => void act(downloadKnowledge)}
                 >
-                  {knowledgeOpen ? "收起本轮知识依据" : "回看本轮知识依据"}
-                  <ArrowDown size={16} />
+                  下载本轮知识 ZIP
                 </button>
-                {knowledgeOpen && (
-                  <div className="bd-knowledge">
-                    {documents.length ? (
-                      documents.map((d) => (
-                        <details
-                          key={d.path}
-                          id={`knowledge-${encodeURIComponent(d.path)}`}
-                        >
-                          <summary>
-                            {d.title}
-                            <small>
-                              {d.evidenceStatus === "needs_verification"
-                                ? " · 待核实内容"
-                                : ""}
-                            </small>
-                          </summary>
-                          <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]}>
-                            {d.content}
-                          </ReactMarkdown>
-                        </details>
-                      ))
-                    ) : (
-                      <p>当前没有可展示的知识正文。</p>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="bd-knowledge-build">
-                {onOpenKnowledge && (
-                  <button className="bd-link" onClick={onOpenKnowledge}>
-                    前往智能知识库，继续逐项确认
-                  </button>
-                )}
-              </div>
-            )}
+              )}
+              {onOpenKnowledge && (
+                <button className="bd-link" onClick={onOpenKnowledge}>
+                  前往智能知识库
+                </button>
+              )}
+            </div>
           </>
         )}
       </section>
@@ -495,7 +547,7 @@ export default function BrandDiagnosticWorkspace({
           </div>
         </div>
         {!workspace?.knowledge.ready && !run ? (
-          <p>完成上方知识库逐项确认并发布后，即可选择诊断问题。</p>
+          <p>完整知识工作包生成并校验后，即可选择初诊问题。</p>
         ) : (
           <>
             <div className="bd-scope">
@@ -520,7 +572,7 @@ export default function BrandDiagnosticWorkspace({
                 disabled={busy || frozen || stopped || recommending}
                 onClick={() =>
                   void act(async () => {
-                    const r = await ensureDraft();
+                    const r = await persist();
                     adopt(await request(`/${r.id}/recommend`, {}));
                   })
                 }
@@ -531,7 +583,7 @@ export default function BrandDiagnosticWorkspace({
                   <Search size={16} />
                 )}{" "}
                 {run?.recommendations.length
-                  ? "使用已生成的推荐问题"
+                  ? "刷新推荐问题"
                   : "根据知识库推荐问题"}
               </button>
               <small>也可以直接输入四题，再校验问题。</small>
@@ -556,63 +608,85 @@ export default function BrandDiagnosticWorkspace({
                       {run?.recommendations
                         .filter((q) => q.category === c)
                         .map((candidate, i) => (
-                          <button
-                            key={i}
-                            aria-pressed={q?.text === candidate.text}
-                            disabled={frozen || stopped || busy}
-                            onClick={() =>
-                              editQuestion(c, candidate.text, "recommended")
-                            }
-                          >
-                            <span>
-                              {q?.text === candidate.text ? (
-                                <Check size={16} />
-                              ) : (
-                                <span className="bd-radio" />
-                              )}
-                            </span>
-                            <span>
-                              {candidate.text}
-                              <small>{candidate.rationale}</small>
-                            </span>
-                          </button>
+                          <div key={i} className="bd-candidate">
+                            <button
+                              aria-pressed={q?.text === candidate.text}
+                              disabled={frozen || stopped || busy}
+                              onClick={() =>
+                                editQuestion(c, candidate.text, "recommended")
+                              }
+                            >
+                              <span>
+                                {q?.text === candidate.text ? (
+                                  <Check size={16} />
+                                ) : (
+                                  <span className="bd-radio" />
+                                )}
+                              </span>
+                              <span>
+                                {candidate.text}
+                                <small>{candidate.rationale}</small>
+                              </span>
+                            </button>
+                            <div
+                              className="bd-question-evidence"
+                              aria-label="推荐知识依据"
+                            >
+                              {candidate.evidenceRefs
+                                .slice(0, 3)
+                                .map((path) => {
+                                  const doc = documents.find(
+                                    (document) => document.path === path,
+                                  );
+                                  return (
+                                    <button
+                                      key={path}
+                                      className="bd-evidence-link"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        void act(() => showKnowledge(path))
+                                      }
+                                    >
+                                      <strong>
+                                        {doc?.title ?? "查看知识依据"}
+                                      </strong>
+                                      {doc && (
+                                        <small>
+                                          {doc.content
+                                            .replace(/[#*`>]/g, "")
+                                            .slice(0, 90)}
+                                          …
+                                        </small>
+                                      )}
+                                      <small>
+                                        {doc?.evidenceStatus ===
+                                        "needs_verification"
+                                          ? "待核实"
+                                          : "知识对照"}
+                                      </small>
+                                    </button>
+                                  );
+                                })}
+                            </div>
+                          </div>
                         ))}
                     </div>
+                    {activity?.recommendation?.status === "completed" &&
+                      !run?.recommendations.some((candidate) => candidate.category === c) &&
+                      <p className="bd-note">{c === "competitor_comparison" ? "当前知识缺少可核验的比较对象。可输入双方与一个比较维度后校验。" : "本类知识依据暂不足以形成推荐。可直接输入一个具体问题后校验。"}</p>}
                     <label>
-                      自己输入或修改问题
                       <textarea
                         aria-label={`${DIAGNOSTIC_LABELS[c]}问题`}
                         value={q?.text ?? ""}
                         disabled={frozen || stopped || busy}
                         rows={3}
-                        maxLength={500}
+                        maxLength={120}
                         onChange={(e) =>
                           editQuestion(c, e.target.value, "custom")
                         }
                         placeholder="输入一条清楚、具体的问题"
                       />
                     </label>
-                    {!!run?.recommendations.filter((x) => x.category === c)
-                      .length && (
-                      <details className="bd-note">
-                        <summary>查看推荐的知识依据</summary>
-                        {[
-                          ...new Set(
-                            run.recommendations
-                              .filter((x) => x.category === c)
-                              .flatMap((x) => x.evidenceRefs),
-                          ),
-                        ].map((path) => (
-                          <button
-                            className="bd-link"
-                            key={path}
-                            onClick={() => void act(() => showKnowledge(path))}
-                          >
-                            {path}
-                          </button>
-                        ))}
-                      </details>
-                    )}
                     {q?.validation && (
                       <p
                         className={
@@ -809,9 +883,10 @@ export default function BrandDiagnosticWorkspace({
                   停止本轮
                 </button>
               )}
-              {(run.phase === "partial" || failedAssessment) &&
-                run.phase !== "completed" &&
-                run.phase !== "stopped" && (
+              {(run.phase === "partial" ||
+                run.phase === "stopped" ||
+                failedAssessment) &&
+                run.phase !== "completed" && (
                   <button
                     disabled={busy}
                     onClick={() =>
@@ -820,7 +895,7 @@ export default function BrandDiagnosticWorkspace({
                       )
                     }
                   >
-                    恢复未完成诊断
+                    {stopped ? "继续本次初诊" : "恢复未完成诊断"}
                   </button>
                 )}
             </div>
@@ -928,7 +1003,11 @@ export default function BrandDiagnosticWorkspace({
                           <small>{m.value === null ? "" : m.unit}</small>
                         </strong>
                         {m.denominator !== undefined && (
-                          <small>统计基数 {m.denominator}</small>
+                          <small>
+                            {m.numerator !== undefined
+                              ? `${m.numerator} / ${m.denominator}${c === "product_scenario" ? " 项" : " 份回答"}`
+                              : `统计基数 ${m.denominator}`}
+                          </small>
                         )}
                         {m.unit === "%" && m.value !== null && (
                           <div className="bd-bar">
@@ -938,6 +1017,10 @@ export default function BrandDiagnosticWorkspace({
                       </button>
                     ))}
                   </div>
+                  <DiagnosticCharts
+                    result={result}
+                    onDrilldown={(id) => openAnswers(c, id)}
+                  />
                   <CategoryMatrix
                     result={result}
                     onDrilldown={(id) => openAnswers(c, id)}
@@ -1024,68 +1107,85 @@ export default function BrandDiagnosticWorkspace({
           );
         })}
       </section>
-      <footer className="bd-footer">
-        {workspace && workspace.runs.length > 0 && (
-          <label>
-            切换诊断任务
-            <select
-              value={runId ?? ""}
-              disabled={busy || dirty}
-              onChange={(e) => {
-                setRunId(e.target.value);
-                currentId.current = e.target.value;
-                setDocuments([]);
-                setRun(null);
-                locationPatch({
-                  diagnosis: e.target.value,
-                  question: null,
-                  answer: null,
-                  metric: null,
-                });
-                closeAnswers();
-              }}
-            >
-              <option value="">选择一轮诊断</option>
-              {workspace.runs.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.subject} · {new Date(r.createdAt).toLocaleString("zh-CN")}{" "}
-                  · {phases[r.phase]}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {run && (
-          <button
-            disabled={busy || (dirty && !stopped) || !!running || (!stopped && activeBusiness)}
-            onClick={() => {
-              setRun(null);
-              setRunId(null);
-              currentId.current = null;
-              draftRequestId.current = crypto.randomUUID();
-              if (stopped) {
-                setQuestions((items) => items.map(({ validation, ...q }) => q));
-                setDirty(true);
-                dirtyRef.current = true;
-              } else {
-                setQuestions([]);
-                setPlatforms(["doubao", "yuanbao", "qianwen"]);
-                setSubjectScope("");
-              }
-              setDocuments([]);
-              locationPatch({
-                diagnosis: null,
-                question: null,
-                answer: null,
-                metric: null,
-                new: "1",
-              });
-            }}
-          >
-            {stopped ? "保留选题，新建诊断" : "新建诊断"}
-          </button>
-        )}
-      </footer>
+      {stopped && !frozen && (
+        <button
+          disabled={busy}
+          onClick={() =>
+            void act(async () => adopt(await request(`/${run!.id}/retry`, {})))
+          }
+        >
+          继续本次初诊
+        </button>
+      )}
+      {run?.phase === "completed" && (
+        <footer className="bd-footer">
+          <p>本企业初诊已完成。后续问题与复测可在进度监控中继续维护。</p>
+          {onOpenMonitoring && (
+            <button onClick={onOpenMonitoring}>
+              进入进度监控
+              <ArrowRight size={16} />
+            </button>
+          )}
+        </footer>
+      )}
+      <Dialog.Root
+        open={knowledgePath !== null}
+        onOpenChange={(open) => {
+          if (!open) setKnowledgePath(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="bd-overlay" />
+          <Dialog.Content className="bd-drawer bd-knowledge-drawer fm-brand-portal-theme">
+            <header>
+              <div>
+                <Dialog.Title>
+                  {selectedDocument?.title ?? "知识依据"}
+                </Dialog.Title>
+                <Dialog.Description>
+                  本轮冻结知识 ·{" "}
+                  {run?.basis.kind === "working_set"
+                    ? "构建工作稿"
+                    : "正式发布版"}{" "}
+                  v{run?.basis.version}
+                </Dialog.Description>
+              </div>
+              <Dialog.Close aria-label="关闭知识详情">
+                <X size={22} />
+              </Dialog.Close>
+            </header>
+            <div className="bd-answer-content">
+              {selectedDocument ? (
+                <>
+                  <p className="bd-note">
+                    {selectedDocument.reviewStatus === "confirmed"
+                      ? "已人工确认"
+                      : "保留原审阅状态"}{" "}
+                    ·{" "}
+                    {selectedDocument.evidenceStatus === "needs_verification"
+                      ? "待核实内容"
+                      : "事实核验以所附来源为依据"}
+                  </p>
+                  <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]}>
+                    {selectedDocument.content}
+                  </ReactMarkdown>
+                </>
+              ) : (
+                <p role="alert">
+                  未找到本轮冻结版本中的该文档。
+                  <button
+                    onClick={() =>
+                      void act(() => showKnowledge(knowledgePath!))
+                    }
+                  >
+                    重新读取
+                  </button>
+                </p>
+              )}
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
       <Dialog.Root
         open={category !== null}
         onOpenChange={(open) => {
