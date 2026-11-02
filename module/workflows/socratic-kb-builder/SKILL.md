@@ -139,6 +139,27 @@ snippets and cannot prove that the underlying page was read. Use the existing
 evidence ledger to associate these passages with each relevant leaf. Preserve
 the complete relevant passage even when it is longer than the eventual node.
 
+Map each node to its relevant original passages and printed page or section
+locators before writing the node. Keep tables with their headings and units.
+A shared source document may support several topics, but each topic must retain
+its own supporting passages. Do not fall back to one generic paragraph when a
+topic lookup fails. Record the missing support and retrieve the appropriate
+passage from the already available source. A complete document or a generic
+excerpt copied across different branches does not establish node-level support.
+
+Check each explicit quantity, amount and percentage against this node's retained
+passages. Preserve years and units. For a transparent unit conversion, retain
+the original amount and state the conversion. Missing numeric support is
+NUMERIC_CLAIMS_UNVERIFIED and requires verification or evidence rebinding. It
+is not a finding that the underlying fact is false. Page numbers, identifiers
+and version numbers are not factual quantity claims.
+
+The validator reports EVIDENCE_REUSED_ACROSS_TOPICS when all evidence for a node
+is reused across at least five nodes and three branches. Titles, source labels,
+retrieval times and page locator wrappers do not make a repeated passage unique.
+Rebind the affected topics to their actual source passages, then check quantities
+and body depth together in the one permitted correction pass.
+
 Do not write a node and then copy it into its evidence file. Do not replace
 source passages with your own conclusion, a rewritten digest or generic
 verification disclaimers. The validator reports EVIDENCE_COPIES_NODE_BODY when
@@ -155,10 +176,16 @@ core product/service/capability leaves target 800–1,800, and branch overviews
 target 1,200–2,500. These are evidence-adaptive drafting targets. Develop the
 supported scope, capabilities, delivery or usage, concrete examples and limits
 as applicable. Do not replace a chapter with a one-paragraph stage summary.
-Write substantial nodes in small batches when the full knowledge package is
-too long for one response or file-writing call. Complete each batch from its
-retained source passages. Do not shorten every node to fit the entire package
-into one script or response.
+When the evidence base is one annual report, prefer 30–40 complete business
+themes within the existing 30–115 node contract. Combine related facts instead
+of fragmenting them into many short summaries. The actual count follows the
+evidence and this preference adds no hard node-count restriction. Do not add
+inferences or repetitive prose to meet a character target.
+
+Write substantial nodes in batches of five to eight when the full knowledge
+package is too long for one response or file-writing call. Freeze each batch's
+source passages, page locators and numeric excerpts before expanding its nodes.
+Do not shorten every node to fit the entire package into one script or response.
 
 Treat each declared overview as a customer node with a clear overview title;
 keep its prose distinct from the detailed leaves. Store every body in the
@@ -171,9 +198,13 @@ when relevant evidence is insufficient. Retain the specific gap in evidence.
 Always pass `--expected-skill-version 6` to the initial bundle validator. Its
 machine-readable depth policy counts visible body characters after the title,
 and deduplicates only this leaf's retained, hash-valid evidence. When relevant
-evidence contains at least 1,500 characters but the body has fewer than 300,
+evidence contains at least 1,500 source characters and has passed the binding
+and numeric checks, but the body has fewer than 600 characters,
 it emits `DEPTH_REWRITE_REQUIRED` with the full affected-node list.
-The same correction list identifies copied evidence. Correct that evidence
+Only newly pinned writers use this 600-character minimum and the new binding
+checks. Previously frozen Skill revisions retain their original read contracts.
+
+The same correction list identifies copied or incorrectly shared evidence. Correct that evidence
 from the already captured source passages first, then assess body depth. Do
 not paraphrase a copied evidence file just to evade the independence check.
 

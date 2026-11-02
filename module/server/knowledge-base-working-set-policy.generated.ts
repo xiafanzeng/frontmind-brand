@@ -94,7 +94,7 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
     }
   },
   "depth": {
-    "version": "knowledge_depth_v2",
+    "version": "knowledge_depth_v3",
     "skillVersion": "6",
     "evidenceThreshold": 1500,
     "minimumBodyCharacters": 300,
@@ -117,6 +117,55 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
     "overviewTarget": [
       1200,
       2500
-    ]
+    ],
+    "evidenceTraceability": {
+      "minimumBodyCharacters": 600,
+      "minimumSharedLeaves": 5,
+      "minimumSharedBranches": 3,
+      "legacySkillContentHashes": [
+        "3a2b025caea4c6e6921eb397e1daf5792c5825475918a9db5f880ce9695d1155",
+        "d755fea93a08163a6d39fa04dcdb4b14abeffbede24ee49479845db4bb5df30d"
+      ],
+      "quantityUnits": [
+        "平方米",
+        "人次",
+        "人时",
+        "小时",
+        "分钟",
+        "公里",
+        "千米",
+        "学时",
+        "专业",
+        "%",
+        "人",
+        "名",
+        "个",
+        "项",
+        "所",
+        "家",
+        "门",
+        "套",
+        "台",
+        "本",
+        "册",
+        "部",
+        "亩",
+        "元",
+        "年",
+        "月",
+        "天",
+        "次",
+        "组",
+        "条",
+        "间",
+        "篇",
+        "件",
+        "位"
+      ],
+      "quantityUnitAliases": {
+        "名": "人",
+        "千米": "公里"
+      }
+    }
   }
 } as const;

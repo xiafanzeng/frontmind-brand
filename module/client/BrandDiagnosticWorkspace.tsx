@@ -998,7 +998,6 @@ export default function BrandDiagnosticWorkspace({
                     <a href={`#diagnostic-audit-${c}`}>五维审计</a>
                     <a href={`#diagnostic-comparison-${c}`}>知识库对照</a>
                   </nav>
-                  <p className="bd-finding">{result.assessment.summary}</p>
                   <small className="bd-measurement">
                     有效／计划回答 {result.samples} /{" "}
                     {run!.platforms.length * 5} 份 · {run?.platforms.length}{" "}
@@ -1027,6 +1026,7 @@ export default function BrandDiagnosticWorkspace({
                       </button>
                     ))}
                   </div>
+                  <p className="bd-finding">{result.assessment.summary}</p>
                   <DiagnosticCharts
                     result={result}
                     onDrilldown={(id) => openAnswers(c, id)}
