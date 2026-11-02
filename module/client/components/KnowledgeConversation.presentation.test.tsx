@@ -1,9 +1,13 @@
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({ starting: false, batchStartedAt: null as number | null, knowledge: { initialized: true } as Record<string, unknown>,
-  recover: vi.fn(), observe: vi.fn(), wake: vi.fn() }));
+  recover: vi.fn(), observe: vi.fn(), register: vi.fn(), wake: vi.fn(), reconcile: vi.fn() }));
+vi.mock("../lib/knowledge-progress", async importOriginal => ({
+  ...await importOriginal<typeof import("../lib/knowledge-progress")>(),
+  reconcileKnowledgeBaseObservation: mocks.reconcile,
+}));
 vi.mock("../host", () => ({
   ChatInput: () => <div data-testid="shared-knowledge-composer" />,
   useConversation: () => ({ hydrated: true, activeConversation: {
@@ -12,7 +16,7 @@ vi.mock("../host", () => ({
       { id: "user", role: "user", content: "确认", timestamp: 1 },
       { id: "assistant", role: "assistant", content: "## 企业概况", timestamp: 2 },
     ],
-  }, commitKnowledgeBaseObservation: mocks.observe, wakeKnowledgeBaseConversation: mocks.wake }),
+  }, commitKnowledgeBaseObservation: mocks.observe, registerKnowledgeBaseConversation: mocks.register, wakeKnowledgeBaseConversation: mocks.wake }),
   useRuntimeContext: () => ({ workspaceId: "test", accountId: 1 }),
   useWorkspaceDraftGuard: () => {},
   captureWorkspaceRestOperation: vi.fn(),
@@ -31,6 +35,53 @@ import KnowledgeConversation from "./KnowledgeConversation";
 
 afterEach(cleanup);
 beforeEach(() => { vi.clearAllMocks(); mocks.starting = false; mocks.batchStartedAt = null; mocks.knowledge = { initialized: true }; });
+it("subscribes to the restored build before reservation fields arrive", () => {
+  mocks.knowledge = { initialized: false };
+  const progress = { build: { id: "existing-build", status: "researching" }, branches: [] } as any;
+  const view = render(<KnowledgeConversation knowledgeBaseProgress={progress} />);
+  expect(mocks.register).toHaveBeenCalledWith("existing");
+  expect(mocks.wake).toHaveBeenCalledWith("existing");
+  expect(screen.queryByTestId("knowledge-upload-recovery")).toBeNull();
+  // The existing coordinator supplies the authoritative observation after wake.
+  mocks.knowledge = { initialized: true, activeTurnOperationType: "start", activeTurnAwaitingClientAttachments: true,
+    activeTurnId: "same-turn", activeClientRequestId: "same-request" };
+  view.rerender(<KnowledgeConversation knowledgeBaseProgress={progress} />);
+  expect(screen.getByTestId("knowledge-upload-recovery")).toBeDefined();
+  expect(mocks.wake).toHaveBeenCalledTimes(1);
+});
+
+it("registers an empty conversation without polling a nonexistent build", () => {
+  mocks.knowledge = { initialized: false };
+  render(<KnowledgeConversation />);
+  expect(mocks.register).toHaveBeenCalledWith("existing");
+  expect(mocks.wake).not.toHaveBeenCalled();
+});
+
+it("shows business failure and rereads the same task without creating a model request", async () => {
+  mocks.knowledge = { initialized: true, retainedCustomerAttachmentCount: 2,
+    notice: { message: "任务连接暂时中断", severity: "warning", recoveryAction: "reconcile" } };
+  const observation = { generation: 1, stateEpoch: 2 };
+  mocks.reconcile.mockResolvedValueOnce(observation);
+  render(<KnowledgeConversation />);
+  expect(screen.getByText("任务连接暂时中断")).toBeDefined();
+  expect(screen.getByText("2 个客户附件已保留")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "检查当前任务状态" }));
+  await waitFor(() => expect(mocks.observe).toHaveBeenCalledWith("existing", observation));
+  expect(mocks.reconcile).toHaveBeenCalledWith({ conversationId: "existing" });
+});
+
+it("opens the existing reset confirmation when recovery requires a new build", () => {
+  mocks.knowledge = { initialized: true,
+    notice: { message: "当前资料需要重新上传", severity: "error", recoveryAction: "approve_reset" } };
+  const reset = vi.fn();
+  window.addEventListener("frontmind:request-knowledge-reset", reset);
+  render(<KnowledgeConversation />);
+  fireEvent.click(screen.getByRole("button", { name: "重置后重新上传" }));
+  expect(reset).toHaveBeenCalledTimes(1);
+  expect(mocks.reconcile).not.toHaveBeenCalled();
+  window.removeEventListener("frontmind:request-knowledge-reset", reset);
+});
+
 it("preserves projected text, result blocks on both sides and user-only execution dividers", () => {
   const { container } = render(<KnowledgeConversation
     messageProjection={message => message.id === "assistant" ? { ...message, content: "## 已采用的企业概况" } : message}

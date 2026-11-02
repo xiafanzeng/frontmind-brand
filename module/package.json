@@ -202,6 +202,7 @@
     "./client/lib/knowledge-base-coordinator": "./client/lib/knowledge-base-coordinator.ts",
     "./client/lib/knowledge-snapshot": "./client/lib/knowledge-snapshot.ts",
     "./client/lib/knowledge-progress": "./client/lib/knowledge-progress.ts",
+    "./client/lib/knowledge-notice": "./client/lib/knowledge-notice.ts",
     "./client/api-hooks": "./client/api-hooks.ts",
     "./client/knowledge-conversation-state": "./client/knowledge-conversation-state.ts",
     "./client/conversation-types": "./client/conversation-types.ts",
