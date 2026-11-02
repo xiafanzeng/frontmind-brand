@@ -6441,19 +6441,23 @@ async function handleNativeReactSiteBuild(input: {
           : [],
         requiredMediaIds: currentRevisionMediaPlanIds,
       });
-      // A dynamic information architecture plan defines the routes the build
-      // renders; every owner-selected featured column must exist in it, or
-      // materialization would fail closed on every poll without a repairable
-      // signal. Reject at intake so the content-plan repair loop regenerates
-      // the plan with the missing columns named.
+      // A dynamic information architecture plan freely defines its own routes
+      // and the plan generator never sees the owner's column selection, so a
+      // fresh plan legitimately supersedes ids selected against an older
+      // brief. Do not reject: log the superseded columns and remap/drop the
+      // selection when the effective brief is built below.
       const missingFeatured = missingFeaturedRouteIds(
         input.brief.designPreferences ?? null,
         siteContentPlanRoutes(frozenContentPlan).map((route) => route.id),
       );
       if (missingFeatured.length > 0) {
-        throw new SiteContentPlanValidationError([
-          `CONTENT_PLAN_FEATURED_ROUTES_NOT_COVERED:${missingFeatured.slice(0, 8).join(",")}`,
-        ]);
+        console.warn(
+          "[siteops-manus] featured_routes_superseded_by_plan",
+          JSON.stringify({
+            operationId: input.operation.id,
+            missingFeatured: missingFeatured.slice(0, 16),
+          }),
+        );
       }
     } catch (error) {
       const issues =
@@ -6632,12 +6636,51 @@ async function handleNativeReactSiteBuild(input: {
       );
     }
   }
-  const effectiveBrief = frozenContentPlan
-    ? siteBriefSchema.parse({
+  const effectiveBrief = (() => {
+    if (!frozenContentPlan) return input.brief;
+    const planRoutes = siteContentPlanRoutes(frozenContentPlan);
+    const preferences = input.brief.designPreferences ?? null;
+    if (!preferences) {
+      return siteBriefSchema.parse({
         ...input.brief,
-        routes: siteContentPlanRoutes(frozenContentPlan),
-      })
-    : input.brief;
+        routes: planRoutes,
+      });
+    }
+    // Project the owner's column selection onto the plan's information
+    // architecture by id, then by the column's brief path; selections from a
+    // superseded architecture map to nothing and are dropped. An empty
+    // projection falls back to the full plan navigation instead of an empty
+    // menu, and materialization can never hit a missing featured route.
+    const planRouteById = new Map(planRoutes.map((route) => [route.id, route]));
+    const briefRouteById = new Map(
+      input.brief.routes.map((route) => [route.id, route] as const),
+    );
+    const normalizePath = (slug: string) =>
+      slug === "/" ? "/" : `/${slug.replace(/^\/+|\/+$/gu, "")}/`;
+    const projected = preferences.featuredRouteIds.flatMap((routeId) => {
+      if (planRouteById.has(routeId)) return [routeId];
+      const briefRoute = briefRouteById.get(routeId);
+      if (!briefRoute) return [];
+      const match = planRoutes.find(
+        (route) => normalizePath(route.slug) === normalizePath(briefRoute.slug),
+      );
+      return match ? [match.id] : [];
+    });
+    const { designPreferences: _superseded, ...briefWithoutPreferences } =
+      input.brief;
+    return siteBriefSchema.parse({
+      ...briefWithoutPreferences,
+      routes: planRoutes,
+      ...(projected.length > 0
+        ? {
+            designPreferences: {
+              ...preferences,
+              featuredRouteIds: projected,
+            },
+          }
+        : {}),
+    });
+  })();
   const expectedContentPlanSha256 = dynamicInformationArchitecture
     ? (frozenContentPlanCoordinates?.sha256 ??
       (currentState?.schemaVersion === 2
