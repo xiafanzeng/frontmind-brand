@@ -147,7 +147,7 @@ it("keeps confirmation content and divider without displaying model duration", (
 });
 
 
-it("keeps declared counts and retained sources inside the collapsed research history", () => {
+it("keeps research history without exposing collection and evidence counters", () => {
   mocks.assistantKnowledge = { kind: "presentation", serverOwned: true, presentationKey: "current" };
   const progress = { build: { id: "build", status: "confirming" }, branches: [], resultQuality: {
     completeness: "complete", sourceEvidence: { providerDeclaredOfficialPages: 12,
@@ -157,10 +157,11 @@ it("keeps declared counts and retained sources inside the collapsed research his
   render(<KnowledgeConversation knowledgeBaseProgress={progress} />);
   const history = screen.getByText("初始资料采集与知识构建过程").closest("details")!;
   expect(history.open).toBe(false);
-  expect(history.contains(screen.getByText("去重来源链接"))).toBe(true);
-  expect(history.contains(screen.getByText("9 个"))).toBe(true);
-  expect(history.contains(screen.getByText("模型申报的官方页面"))).toBe(true);
-  expect(history.contains(screen.getByText("待核验"))).toBe(true);
+  expect(history.querySelector(".knowledge-workspace-status")).toBeNull();
+  for (const label of ["模型申报的官方页面", "模型申报的公开检索", "已保存证据文件", "去重来源链接", "外部事实核验"]) {
+    expect(screen.queryByText(label)).toBeNull();
+  }
+  expect(screen.getByRole("heading", { name: "企业概况" })).toBeDefined();
 });
 
 

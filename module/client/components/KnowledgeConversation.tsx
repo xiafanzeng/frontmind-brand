@@ -182,7 +182,6 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
     (message) => message.knowledgeBase?.kind === "presentation",
   );
   const foldResearch = !running && firstNodeIndex > 0;
-  const sourceEvidence = props.knowledgeBaseProgress?.resultQuality?.sourceEvidence;
   if (!context.hydrated && !hasKnownBuild && !messages.length)
     return (
       <p role="status">
@@ -268,17 +267,6 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
             {foldResearch && (
               <details className="brand-knowledge-research-history">
                 <summary>初始资料采集与知识构建过程</summary>
-                {sourceEvidence && (
-                  <dl className="knowledge-workspace-status">
-                    <dt>模型申报的官方页面</dt><dd>{sourceEvidence.providerDeclaredOfficialPages ?? "未提供"}</dd>
-                    <dt>模型申报的公开检索</dt><dd>{sourceEvidence.providerDeclaredPublicQueries ?? "未提供"}</dd>
-                    <dt>已保存证据文件</dt><dd>{sourceEvidence.retainedEvidenceFiles} 份</dd>
-                    {sourceEvidence.retainedDistinctSourceUrls !== undefined && <>
-                      <dt>去重来源链接</dt><dd>{sourceEvidence.retainedDistinctSourceUrls} 个</dd>
-                    </>}
-                    <dt>外部事实核验</dt><dd>待核验</dd>
-                  </dl>
-                )}
                 {messages.slice(0, firstNodeIndex).map(renderMessage)}
               </details>
             )}
