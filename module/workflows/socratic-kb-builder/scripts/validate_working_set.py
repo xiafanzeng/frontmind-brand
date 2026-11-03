@@ -14,6 +14,7 @@ import sys
 import unicodedata
 import urllib.parse
 import zipfile
+from collections import deque
 
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,190}$")
@@ -150,6 +151,65 @@ def body_paragraphs(markdown: str) -> list[str]:
             if visible_text(paragraph)]
 
 
+def body_fragments(markdown: str, title: str) -> dict:
+    """Index sentences and reflow-independent windows using Unicode code points."""
+    policy = WORKING_SET_POLICY["depth"]["bodySubstance"]["reflow"]
+    def normalize(value):
+        return "".join(char for char in value if not char.isspace() and unicodedata.category(char)[0] not in "PS")
+    literal_title = visible_text(unicodedata.normalize("NFKC", title))
+    paragraphs = [paragraph.replace(literal_title, "") if literal_title else paragraph
+                  for paragraph in body_paragraphs(markdown)]
+    text = "".join(normalize(paragraph) for paragraph in paragraphs)
+    fragments = []
+    start = 0
+    for paragraph in paragraphs:
+        paragraph_key = normalize(paragraph)
+        paragraph_end = start + len(paragraph_key)
+        if paragraph_end - start >= policy["minimumFragmentCharacters"]:
+            fragments.append({"key": paragraph_key, "start": start, "end": paragraph_end})
+        for sentence in re.split(r"[。！？!?；;\n]+", paragraph):
+            key = normalize(sentence)
+            end = start + len(key)
+            if end - start >= policy["minimumFragmentCharacters"]:
+                fragments.append({"key": key, "start": start, "end": end})
+            start = end
+    # Hashes select windows only; literal keys prevent hash-collision matches.
+    width = policy["minimumFragmentCharacters"]
+    span = policy["fingerprintWindow"]
+    queue = deque()
+    current_hash = 0
+    power = pow(257, width - 1, 2 ** 32)
+    last_selected = -1
+    for index, char in enumerate(text):
+        if index >= width:
+            current_hash = (current_hash - ord(text[index - width]) * power) & 0xffffffff
+        current_hash = (current_hash * 257 + ord(char)) & 0xffffffff
+        if index < width - 1:
+            continue
+        position = index - width + 1
+        while queue and queue[0][1] <= position - span:
+            queue.popleft()
+        while queue and queue[-1][0] >= current_hash:
+            queue.pop()
+        queue.append((current_hash, position))
+        if position < span - 1 and index < len(text) - 1:
+            continue
+        selected = queue[0][1]
+        if selected != last_selected:
+            fragments.append({"key": text[selected:selected + width], "start": selected, "end": selected + width})
+            last_selected = selected
+    return {"characters": len(text), "fragments": fragments}
+
+
+def covered_characters(fragments: list[dict]) -> int:
+    total = 0
+    end = 0
+    for fragment in sorted(fragments, key=lambda item: (item["start"], item["end"])):
+        total += max(0, fragment["end"] - max(end, fragment["start"]))
+        end = max(end, fragment["end"])
+    return total
+
+
 def has_sparse_evidence_exception(manifest: dict, leaf: dict, evidence: dict, evidence_sources: dict, markdown: str) -> bool:
     """Validate the reviewable declaration, without asserting that its gap is true."""
     coverage = manifest["researchCoverage"]
@@ -190,6 +250,7 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
     substance = policy["bodySubstance"]
     new_substance = manifest["skill"]["contentHash"] not in substance["legacySkillContentHashes"]
     normalize_title = manifest["skill"]["contentHash"] not in substance["literalTitleNormalizationLegacyHashes"]
+    reflow = manifest["skill"]["contentHash"] not in substance["reflow"]["legacySkillContentHashes"]
     quoted_only = manifest["skill"]["contentHash"] not in policy["quotedEvidence"]["legacySkillContentHashes"]
     def retained_source(text):
         if not quoted_only:
@@ -202,6 +263,7 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
     ledger = {row["path"]: row for row in manifest["evidenceLedger"]}
     shared = {}
     paragraphs = {}
+    fragments = {}
     records = []
     for leaf in manifest["leaves"]:
         unique = {}
@@ -236,9 +298,14 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
             owners = paragraphs.setdefault(paragraph_key(paragraph, leaf["title"]), {"leaves": set(), "branches": set()})
             owners["leaves"].add(leaf["leafId"])
             owners["branches"].add(leaf["branchId"])
-        records.append((leaf, unique, evidence_sources, markdown, leaf_paragraphs))
+        leaf_fragments = body_fragments(markdown, leaf["title"]) if reflow else None
+        for fragment in leaf_fragments["fragments"] if leaf_fragments else []:
+            owners = fragments.setdefault(fragment["key"], {"leaves": set(), "branches": set()})
+            owners["leaves"].add(leaf["leafId"])
+            owners["branches"].add(leaf["branchId"])
+        records.append((leaf, unique, evidence_sources, markdown, leaf_paragraphs, leaf_fragments))
     issues = []
-    for leaf, unique, evidence_sources, markdown, leaf_paragraphs in records:
+    for leaf, unique, evidence_sources, markdown, leaf_paragraphs, leaf_fragments in records:
         texts = list(unique.values())
         evidence = sum(visible_characters(source_text(retained_source(text), new_substance) if new_bindings else text) for text in texts)
         body_text = visible_text(markdown)
@@ -274,13 +341,15 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
                                **({"unverifiedNumericClaims": missing} if missing else {})})
                 continue
         if new_substance:
-            template = sum(len(paragraph) for paragraph in leaf_paragraphs if paragraph_key(paragraph, leaf["title"]) in paragraphs
+            template = covered_characters([fragment for fragment in leaf_fragments["fragments"]
+                if len(fragments[fragment["key"]]["leaves"]) >= substance["minimumSharedLeaves"]
+                and len(fragments[fragment["key"]]["branches"]) >= substance["minimumSharedBranches"]]) if leaf_fragments else sum(len(paragraph) for paragraph in leaf_paragraphs if paragraph_key(paragraph, leaf["title"]) in paragraphs
                            and len(paragraphs[paragraph_key(paragraph, leaf["title"])]["leaves"]) >= substance["minimumSharedLeaves"]
                            and len(paragraphs[paragraph_key(paragraph, leaf["title"])]["branches"]) >= substance["minimumSharedBranches"])
-            effective = sum(len(paragraph) for paragraph in leaf_paragraphs) - template
+            effective = (leaf_fragments["characters"] if leaf_fragments else sum(len(paragraph) for paragraph in leaf_paragraphs)) - template
             substantive_issue = {**issue, "minimumBodyCharacters": substance["minimumBodyCharacters"],
                                  "effectiveBodyCharacters": effective, "templateCharacters": template}
-            if template:
+            if template and (not leaf_fragments or effective < substance["minimumBodyCharacters"]):
                 issues.append({**substantive_issue, "reason": "BODY_TEMPLATE_REUSED"})
             elif effective < substance["minimumBodyCharacters"] and not has_sparse_evidence_exception(manifest, leaf, unique, evidence_sources, markdown):
                 issues.append({**substantive_issue, "reason": "SUBSTANTIVE_BODY_TOO_SHORT"})

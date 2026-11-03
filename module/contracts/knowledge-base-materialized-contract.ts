@@ -493,6 +493,71 @@ function knowledgeBaseBodyParagraphs(markdown: string) {
     .map(paragraph => knowledgeBaseVisibleText(paragraph.normalize("NFKC"))).filter(Boolean);
 }
 
+interface KnowledgeBaseBodyFragment { key: string; start: number; end: number }
+
+/** Matching uses code points in both runtimes, not UTF-16 offsets. */
+function knowledgeBaseBodyFragments(markdown: string, title: string) {
+  const policy = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth.bodySubstance.reflow;
+  const normalize = (value: string) => value.replace(/[\p{P}\p{S}\s]/gu, "");
+  const literalTitle = knowledgeBaseVisibleText(title.normalize("NFKC"));
+  const paragraphs = knowledgeBaseBodyParagraphs(markdown)
+    .map(paragraph => literalTitle ? paragraph.split(literalTitle).join("") : paragraph);
+  const fragments: KnowledgeBaseBodyFragment[] = [];
+  const text = Array.from(paragraphs.map(normalize).join(""));
+  let start = 0;
+  for (const paragraph of paragraphs) {
+    const paragraphKey = normalize(paragraph);
+    const paragraphEnd = start + Array.from(paragraphKey).length;
+    if (paragraphEnd - start >= policy.minimumFragmentCharacters) {
+      fragments.push({ key: paragraphKey, start, end: paragraphEnd });
+    }
+    for (const sentence of paragraph.split(/[。！？!?；;\n]+/u)) {
+      const key = normalize(sentence);
+      const end = start + Array.from(key).length;
+      if (end - start >= policy.minimumFragmentCharacters) fragments.push({ key, start, end });
+      start = end;
+    }
+  }
+  // Winnow rolling hashes to bound the retained index. Equality is always checked
+  // using the literal window: hash collisions never establish shared content.
+  const width = policy.minimumFragmentCharacters;
+  const span = policy.fingerprintWindow;
+  const queue: Array<{ hash: number; start: number }> = [];
+  let head = 0;
+  let hash = 0;
+  let power = 1;
+  let lastSelected = -1;
+  for (let index = 1; index < width; index++) power = Math.imul(power, 257) >>> 0;
+  for (let index = 0; index < text.length; index++) {
+    if (index >= width) hash = (hash - Math.imul(text[index - width]!.codePointAt(0)!, power)) >>> 0;
+    hash = (Math.imul(hash, 257) + text[index]!.codePointAt(0)!) >>> 0;
+    if (index < width - 1) continue;
+    const position = index - width + 1;
+    while (head < queue.length && queue[head]!.start <= position - span) head++;
+    while (queue.length > head && queue[queue.length - 1]!.hash >= hash) queue.pop();
+    queue.push({ hash, start: position });
+    if (position < span - 1 && index < text.length - 1) continue;
+    const selected = queue[head]!.start;
+    if (selected !== lastSelected) {
+      fragments.push({ key: text.slice(selected, selected + width).join(""), start: selected, end: selected + width });
+      lastSelected = selected;
+    }
+    if (head > 1024) { queue.splice(0, head); head = 0; }
+  }
+  return { characters: text.length, fragments };
+}
+
+function knowledgeBaseCoveredCharacters(fragments: KnowledgeBaseBodyFragment[]) {
+  const ranges = fragments.sort((left, right) => left.start - right.start || left.end - right.end);
+  let total = 0;
+  let end = 0;
+  for (const range of ranges) {
+    total += Math.max(0, range.end - Math.max(end, range.start));
+    end = Math.max(end, range.end);
+  }
+  return total;
+}
+
 /** This checks a reviewable declaration, not whether the claimed gap is true. */
 function knowledgeBaseHasSparseEvidenceException(
   manifest: KnowledgeBaseWorkingSetManifest,
@@ -537,6 +602,7 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
   const substance = policy.bodySubstance;
   const newSubstance = !(substance.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
   const normalizeTitle = !(substance.literalTitleNormalizationLegacyHashes as readonly string[]).includes(manifest.skill.contentHash);
+  const reflow = !(substance.reflow.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
   const quotedOnly = !(policy.quotedEvidence.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
   const sourceText = (text: string) => {
     if (!quotedOnly) return text;
@@ -550,6 +616,7 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
   const ledger = new Map(manifest.evidenceLedger.map(row => [row.path, row]));
   const shared = new Map<string, { leaves: Set<string>; branches: Set<string> }>();
   const paragraphs = new Map<string, { leaves: Set<string>; branches: Set<string> }>();
+  const fragments = new Map<string, { leaves: Set<string>; branches: Set<string> }>();
   const records = manifest.leaves.map(leaf => {
     const evidence = new Map<string, string>();
     const evidenceSources = new Map<string, Set<string>>();
@@ -582,9 +649,16 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
       owners.branches.add(leaf.branchId);
       paragraphs.set(key, owners);
     }
-    return { leaf, evidence, evidenceSources, markdown, bodyParagraphs };
+    const bodyFragments = reflow ? knowledgeBaseBodyFragments(markdown, leaf.title) : null;
+    for (const { key } of bodyFragments?.fragments ?? []) {
+      const owners = fragments.get(key) ?? { leaves: new Set<string>(), branches: new Set<string>() };
+      owners.leaves.add(leaf.leafId);
+      owners.branches.add(leaf.branchId);
+      fragments.set(key, owners);
+    }
+    return { leaf, evidence, evidenceSources, markdown, bodyParagraphs, bodyFragments };
   });
-  return records.flatMap<KnowledgeBaseDepthIssue>(({ leaf, evidence, evidenceSources, markdown, bodyParagraphs }) => {
+  return records.flatMap<KnowledgeBaseDepthIssue>(({ leaf, evidence, evidenceSources, markdown, bodyParagraphs, bodyFragments }) => {
     const texts = [...evidence.values()];
     const evidenceCharacters = texts.reduce((count, text) => count + knowledgeBaseVisibleCharacters(newBindings ? knowledgeBaseSourceText(sourceText(text), newSubstance) : text), 0);
     const body = knowledgeBaseVisibleText(markdown);
@@ -627,14 +701,20 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
       }];
     }
     if (newSubstance) {
-      const templateCharacters = bodyParagraphs.reduce((count, paragraph) => {
+      const templateCharacters = bodyFragments ? knowledgeBaseCoveredCharacters(bodyFragments.fragments.filter(fragment => {
+        const owners = fragments.get(fragment.key)!;
+        return owners.leaves.size >= substance.minimumSharedLeaves && owners.branches.size >= substance.minimumSharedBranches;
+      })) : bodyParagraphs.reduce((count, paragraph) => {
         const owners = paragraphs.get(paragraphKey(paragraph, leaf.title));
         return count + (owners && owners.leaves.size >= substance.minimumSharedLeaves
           && owners.branches.size >= substance.minimumSharedBranches ? Array.from(paragraph).length : 0);
       }, 0);
-      const effectiveBodyCharacters = bodyParagraphs.reduce((count, paragraph) => count + Array.from(paragraph).length, 0) - templateCharacters;
+      const effectiveBodyCharacters = (bodyFragments?.characters
+        ?? bodyParagraphs.reduce((count, paragraph) => count + Array.from(paragraph).length, 0)) - templateCharacters;
       const substantiveIssue = { ...issue, minimumBodyCharacters: substance.minimumBodyCharacters, effectiveBodyCharacters, templateCharacters };
-      if (templateCharacters) return [{ ...substantiveIssue, reason: "BODY_TEMPLATE_REUSED" }];
+      if (templateCharacters && (!bodyFragments || effectiveBodyCharacters < substance.minimumBodyCharacters)) {
+        return [{ ...substantiveIssue, reason: "BODY_TEMPLATE_REUSED" }];
+      }
       if (effectiveBodyCharacters < substance.minimumBodyCharacters
         && !knowledgeBaseHasSparseEvidenceException(manifest, leaf, evidence, evidenceSources, markdown)) {
         return [{ ...substantiveIssue, reason: "SUBSTANTIVE_BODY_TOO_SHORT" }];
