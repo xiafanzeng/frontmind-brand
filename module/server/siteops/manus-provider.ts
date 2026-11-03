@@ -4859,6 +4859,7 @@ SiteContentPlanWireV2 必须是以下精确扁平形状，不得省略任何字�
 - 顶层仅允许 wireSchemaVersion、operationToken、inventorySha256、routes、sections、navigation、coverage。wireSchemaVersion 必须为 2，operationToken 必须精确为 ${input.operationToken}，inventorySha256 必须精确为 ${input.inventorySha256}。
 - routes 每项仅允许 routeId、path、title、navigation、parentPath、detailOfPath、purpose、userQuestions、h1、summary、ctaLabel、ctaTargetPath；routes 内绝对不得嵌套 sections。无父级/详情归属/CTA 时相应字段显式为 null。
 - sections 是独立顶层数组，每项仅允许 routeId、sectionId、blockKind、heading、purpose、body、sourceDocumentIds、evidenceExcerpts、mediaIds、entityIds、faqIds。sourceDocumentIds 与 evidenceExcerpts 按下标一一对应。
+- routes 中每个路由的 routeId 必须至少被一个 section 引用；没有任何内容区块可绑定的路由必须并入相邻路由或从 routes 中删除，绝不能留下零 section 的路由。
 - 每个 section（包括 hero、CTA 和纯结构区块）的 sourceDocumentIds 与 evidenceExcerpts 都必须至少各有一项；若区块无法绑定逐字来源，就合并进有来源的区块或省略该区块，绝不能输出空来源数组。
 - navigation 每项仅允许 label、targetPath。coverage 每项仅允许 sourceDocumentId、status、routeIds、omissionReason；used 时 routeIds 非空且 omissionReason=null，omitted 时 routeIds=[] 且 omissionReason 为具体字符串。
 
@@ -4869,7 +4870,7 @@ SiteContentPlanWireV2 必须是以下精确扁平形状，不得省略任何字�
   );
 }
 
-function siteContentPlanSchemaRepairIssues(error: unknown) {
+export function siteContentPlanSchemaRepairIssues(error: unknown) {
   if (!(error instanceof z.ZodError)) return [];
   return [
     ...new Set(
@@ -4878,7 +4879,14 @@ function siteContentPlanSchemaRepairIssues(error: unknown) {
           .map((segment) => String(segment).replace(/[^A-Za-z0-9_-]/gu, ""))
           .filter(Boolean)
           .join(".");
-        return `CONTENT_PLAN_SCHEMA_${issue.code.toUpperCase()}@${path || "root"}`;
+        // A bare code@path token (e.g. ...CUSTOM@routes.4.routeId) gives the
+        // repair model no way to tell WHICH route failed; the schema's custom
+        // messages carry the offending entity identity, so forward them.
+        const detail =
+          issue.code === "custom" && typeof issue.message === "string"
+            ? `: ${issue.message.replace(/\s+/gu, " ").trim().slice(0, 240)}`
+            : "";
+        return `CONTENT_PLAN_SCHEMA_${issue.code.toUpperCase()}@${path || "root"}${detail}`;
       }),
     ),
   ];
