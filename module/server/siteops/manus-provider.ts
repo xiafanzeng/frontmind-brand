@@ -220,11 +220,16 @@ import {
   TWENTY_FIRST_NATIVE_TEMPLATE_V2_7_SYSTEM_PROMPT,
   TWENTY_FIRST_STATIC_TEMPLATE_V2_8_SYSTEM_PROMPT,
   auditNativeRuntimeContractV1,
+  lenientSourceReceiptWireSchema,
   readNativeSourceAttachment,
   siteSourceReceiptV1Schema,
   validateNativeReactSourceArchive,
   type NativeRuntimeAudit,
 } from "./native-react-source.js";
+
+/** Provider-model plan compliance is nondeterministic; allow one extra
+ * targeted repair before declaring the plan stage exhausted. */
+const SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS = 2 as const;
 import {
   SITEOPS_NATIVE_TEMPLATE_WORKFLOW_VERSION,
   SITEOPS_NATIVE_VISUAL_WORKFLOW_VERSION,
@@ -710,7 +715,7 @@ const providerStateV2Schema = providerStateV1Schema
     nativeSourceContractVersion: z.literal(2).optional(),
     nativeSourceRuntimeCoordinates:
       nativeSourceRuntimeCoordinatesSchema.optional(),
-    contentPlanAttempt: z.number().int().min(0).max(1).optional(),
+    contentPlanAttempt: z.number().int().min(0).max(SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS).optional(),
     contentPlanOperationToken: z.string().min(1).max(512).optional(),
     contentPlanInventorySha256: z
       .string()
@@ -6464,15 +6469,23 @@ async function handleNativeReactSiteBuild(input: {
         error instanceof SiteContentPlanValidationError
           ? error.issues
           : ["CONTENT_PLAN_SCHEMA_INVALID"];
-      if (planAttempt >= 1) {
+      console.warn(
+        "[siteops-manus] content_plan_rejected",
+        JSON.stringify({
+          operationId: input.operation.id,
+          attempt: planAttempt,
+          issues: issues.slice(0, 12),
+        }),
+      );
+      if (planAttempt >= SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS) {
         throw new SiteOpsManusFailure(
           "SITEOPS_CONTENT_PLAN_REPAIR_EXHAUSTED",
-          "AI 信息架构计划在一次定向修复后仍未通过来源与覆盖校验。",
+          `AI 信息架构计划在 ${SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS} 次定向修复后仍未通过来源与覆盖校验。`,
           "failed",
           providerStateV2(currentState),
         );
       }
-      const repairAttempt = 1;
+      const repairAttempt = planAttempt + 1;
       const repairToken = `siteops-content-plan:${input.operation.id}:${repairAttempt}`;
       const unknownState = transitionProviderState(currentState, {
         stage: "content_plan_repair_send_unknown",
@@ -7926,7 +7939,29 @@ async function handleNativeReactSiteBuild(input: {
         acceptCurrentPhaseWhileRunning: true,
         signal: input.signal,
         validateCandidate: (value) => {
-          contextualSourceReceiptSchema.parse(value);
+          const parsed = contextualSourceReceiptSchema.safeParse(value);
+          if (parsed.success) return;
+          // The strict schema pins self-reported hash copies (preflight sha,
+          // content plan sha, …) and rejects unknown fields; the provider
+          // model writes those by hand and typos used to end the build with
+          // no repair path. Recover structurally-sound receipts: identity
+          // (operation token), baseline hash and preflight status stay
+          // mandatory, and every relaxed claim is logged and re-derived from
+          // the actual archive by validateNativeReactSourceArchive.
+          const lenient = lenientSourceReceiptWireSchema.safeParse(value);
+          if (!lenient.success) {
+            throw new z.ZodError(parsed.error.issues.slice(0, 16));
+          }
+          console.warn(
+            "[siteops-manus] source_receipt_lenient_accept",
+            JSON.stringify({
+              operationId: input.operation.id,
+              issues: parsed.error.issues.slice(0, 8).map((issue) => ({
+                path: issue.path.join("."),
+                code: issue.code,
+              })),
+            }),
+          );
         },
       });
   if (receiptResolution.invalid) {
