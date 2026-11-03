@@ -420,6 +420,24 @@ function knowledgeBaseSourceText(markdown: string, excludeGap = false) {
     .replace(/^\s*(?:来源(?:地址)?|源文件|抓取时间|检索时间|获取时间|定位|页码|Source|Retrieved(?:At)?)\s*[:：].*$/gimu, "");
 }
 
+/** Only located, declared original passages can support a new build's facts. */
+function knowledgeBaseOriginalPassages(markdown: string) {
+  const headings = [...markdown.matchAll(/^##[ \t]+原文引用[ \t]*\r?$/gmu)];
+  if (headings.length !== 1) return { text: "", valid: false };
+  const tail = markdown.slice(headings[0]!.index! + headings[0]![0].length).replace(/^\r?\n/u, "");
+  const boundary = tail.search(/^#{1,2}[ \t]+/mu);
+  const section = boundary < 0 ? tail : tail.slice(0, boundary);
+  const locators = [...section.matchAll(/^(?:定位|页码)[ \t]*[:：][ \t]*([^\n]+)\r?$/gmu)];
+  const location = /(?:第\s*)?[0-9一二三四五六七八九十百]+(?:\s*[-—–至~]\s*[0-9一二三四五六七八九十百]+)?\s*[页章节段表]|[“「《][^”」》\n]{2,}[”」》]\s*[章节段表]|(?:page|chapter|section)\s+[0-9ivx]+\b/iu;
+  let valid = locators.length > 0 && !section.slice(0, locators[0]?.index ?? 0).trim();
+  const passages = locators.map((locator, index) => {
+    const passage = section.slice(locator.index! + locator[0].length, locators[index + 1]?.index).trim();
+    if (!location.test(locator[1]!) || !knowledgeBaseVisibleCharacters(knowledgeBaseSourceText(passage))) valid = false;
+    return passage;
+  });
+  return { text: passages.join("\n\n"), valid };
+}
+
 function knowledgeBaseNumericText(markdown: string, excludeGap = false) {
   return knowledgeBaseSourceText(markdown, excludeGap)
     .replace(/!\[[^\]]*\]\([^)]*\)/gu, "")
@@ -518,6 +536,13 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
   const newBindings = !(traceability.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
   const substance = policy.bodySubstance;
   const newSubstance = !(substance.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
+  const normalizeTitle = !(substance.literalTitleNormalizationLegacyHashes as readonly string[]).includes(manifest.skill.contentHash);
+  const quotedOnly = !(policy.quotedEvidence.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
+  const sourceText = (text: string) => quotedOnly ? knowledgeBaseOriginalPassages(text).text : text;
+  const paragraphKey = (paragraph: string, title: string) => {
+    const literalTitle = knowledgeBaseVisibleText(title.normalize("NFKC"));
+    return normalizeTitle && literalTitle ? paragraph.split(literalTitle).join("") : paragraph;
+  };
   const ledger = new Map(manifest.evidenceLedger.map(row => [row.path, row]));
   const shared = new Map<string, { leaves: Set<string>; branches: Set<string> }>();
   const paragraphs = new Map<string, { leaves: Set<string>; branches: Set<string> }>();
@@ -533,8 +558,9 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
       const sources = evidenceSources.get(text) ?? new Set<string>();
       if (row.sourceUrl) sources.add(row.sourceUrl);
       evidenceSources.set(text, sources);
-      const identity = newBindings ? knowledgeBaseVisibleText(knowledgeBaseSourceText(text, newSubstance)) : text.replace(/\s/gu, "");
+      const identity = newBindings ? knowledgeBaseVisibleText(knowledgeBaseSourceText(sourceText(text), newSubstance)) : text.replace(/\s/gu, "");
       if (identity) evidence.set(identity, text);
+      else if (quotedOnly) evidence.set(`invalid:${path}`, text);
     }
     for (const identity of evidence.keys()) {
       const owners = shared.get(identity) ?? { leaves: new Set<string>(), branches: new Set<string>() };
@@ -546,24 +572,28 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
     const bodyParagraphs = knowledgeBaseBodyParagraphs(markdown);
     for (const paragraph of bodyParagraphs) {
       if (Array.from(paragraph).length < substance.minimumSharedParagraphCharacters) continue;
-      const owners = paragraphs.get(paragraph) ?? { leaves: new Set<string>(), branches: new Set<string>() };
+      const key = paragraphKey(paragraph, leaf.title);
+      const owners = paragraphs.get(key) ?? { leaves: new Set<string>(), branches: new Set<string>() };
       owners.leaves.add(leaf.leafId);
       owners.branches.add(leaf.branchId);
-      paragraphs.set(paragraph, owners);
+      paragraphs.set(key, owners);
     }
     return { leaf, evidence, evidenceSources, markdown, bodyParagraphs };
   });
   return records.flatMap<KnowledgeBaseDepthIssue>(({ leaf, evidence, evidenceSources, markdown, bodyParagraphs }) => {
     const texts = [...evidence.values()];
-    const evidenceCharacters = texts.reduce((count, text) => count + knowledgeBaseVisibleCharacters(newBindings ? knowledgeBaseSourceText(text, newSubstance) : text), 0);
+    const evidenceCharacters = texts.reduce((count, text) => count + knowledgeBaseVisibleCharacters(newBindings ? knowledgeBaseSourceText(sourceText(text), newSubstance) : text), 0);
     const body = knowledgeBaseVisibleText(markdown);
     const bodyCharacters = Array.from(body).length;
     const minimumBodyCharacters = newBindings ? traceability.minimumBodyCharacters : policy.minimumBodyCharacters;
     const issue = { leafId: leaf.leafId, title: leaf.title, evidenceCharacters, bodyCharacters, minimumBodyCharacters };
+    if (quotedOnly && texts.some(text => !knowledgeBaseOriginalPassages(text).valid)) {
+      return [{ ...issue, reason: "EVIDENCE_ORIGINAL_QUOTE_REQUIRED" }];
+    }
     const independence = policy.evidenceIndependence;
     const legacyEvidence = (independence.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
     const onlyBodyCopies = texts.length > 0 && texts.every(text => {
-      const source = knowledgeBaseVisibleText(text);
+      const source = knowledgeBaseVisibleText(sourceText(text));
       return source.includes(body) && Array.from(source).length - bodyCharacters <= independence.maximumExtraCharacters;
     });
     if (!legacyEvidence && bodyCharacters >= independence.minimumBodyCharacters && onlyBodyCopies) {
@@ -574,11 +604,11 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
         const owners = shared.get(identity)!;
         return owners.leaves.size >= traceability.minimumSharedLeaves && owners.branches.size >= traceability.minimumSharedBranches;
       });
-      const sourceClaims = texts.flatMap(text => knowledgeBaseNumericClaims(text, newSubstance));
+      const sourceClaims = texts.flatMap(text => knowledgeBaseNumericClaims(sourceText(text), newSubstance));
       const sourceQuantities = new Set(sourceClaims.map(claim => claim.quantity));
       const typedSourceNumbers = new Set(sourceClaims.map(claim => claim.literal));
       const sourceNumbers = new Set(texts.flatMap(text =>
-        [...knowledgeBaseNumericText(text, newSubstance).matchAll(/(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])/gu)]
+        [...knowledgeBaseNumericText(sourceText(text), newSubstance).matchAll(/(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])/gu)]
           .map(match => knowledgeBaseNumber(match[0]))));
       const missing = [...new Set(knowledgeBaseNumericClaims(newSubstance ? knowledgeBaseSubstantiveMarkdown(markdown) : markdown)
         .filter(claim => !sourceQuantities.has(claim.quantity) && (!sourceNumbers.has(claim.literal) || typedSourceNumbers.has(claim.literal)))
@@ -590,7 +620,7 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
     }
     if (newSubstance) {
       const templateCharacters = bodyParagraphs.reduce((count, paragraph) => {
-        const owners = paragraphs.get(paragraph);
+        const owners = paragraphs.get(paragraphKey(paragraph, leaf.title));
         return count + (owners && owners.leaves.size >= substance.minimumSharedLeaves
           && owners.branches.size >= substance.minimumSharedBranches ? Array.from(paragraph).length : 0);
       }, 0);

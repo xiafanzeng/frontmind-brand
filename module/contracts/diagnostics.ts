@@ -369,12 +369,17 @@ export type DiagnosticAttempt = {
     | "failed"
     | "submission_unknown";
   taskId?: string;
+  stopAcknowledgedAt?: string;
+  stopAttemptedAt?: string;
+  stopError?: string;
   submittedAt?: string;
   nextPollAt?: number;
   error?: string;
   sample?: DiagnosticSample;
 };
 export type DiagnosticRun = {
+  collectionBinding?: import("../server/diagnostic-monitor.js").DiagnosticCollectionBinding;
+  collectionError?: string;
   initialDiagnostic?: boolean;
   id: string;
   version: 1;
@@ -411,7 +416,7 @@ export type DiagnosticRun = {
 };
 export type DiagnosticRunView = Omit<
   DiagnosticRun,
-  "basis" | "attempts" | "jobs" | "lease" | "events" | "updatedAt"
+  "basis" | "attempts" | "jobs" | "lease" | "events" | "updatedAt" | "collectionBinding"
 > & {
   basis: Omit<KnowledgeBasis, "documents">;
   attempts: Array<
@@ -428,6 +433,7 @@ export type DiagnosticRunView = Omit<
 };
 export type DiagnosticActivity = { status: DiagnosticJob["status"]; error?: string };
 export type DiagnosticWorkspace = {
+  collection?: { ready: boolean; reason?: string; platforms: string[] };
   knowledge: KnowledgeReadiness;
   initialRunId?: string | null;
   platforms: typeof DIAGNOSTIC_PLATFORMS;

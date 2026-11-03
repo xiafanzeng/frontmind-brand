@@ -1,6 +1,7 @@
+import { diagnosticOperationStatus, terminalDiagnosticJobOperationStatus } from "./diagnostic-operation-status.js";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { ModuleHttpCore } from "./http-api.js";
 import { intentHash, intentSkillPorts } from "./intent-skill-runtime.js";
@@ -67,7 +68,7 @@ const auditReady = (r: DiagnosticRun, category: DiagnosticCategory) =>
 const qHash = (r: DiagnosticRun, q: { category: string; text: string }) =>
   intentHash([r.basis.contentHash, r.subject, q.category, q.text, DIAGNOSTIC_QUESTION_RULES_VERSION]);
 export function diagnosticView(r: DiagnosticRun): DiagnosticRunView {
-  const { basis, attempts, jobs, lease: _, events: _events, updatedAt: _updatedAt, ...rest } = r;
+  const { basis, attempts, jobs, collectionBinding: _binding, lease: _, events: _events, updatedAt: _updatedAt, ...rest } = r;
   const { documents: __, ...basisMeta } = basis;
   const activity: DiagnosticRunView["activity"] = { assessments: {}, audits: {} };
   for (const j of latestDiagnosticJobs(jobs)) {
@@ -160,6 +161,19 @@ export function createDiagnosticService(
       const storedBefore = JSON.stringify(r);
       const before = intentHash({ ...r, lease: undefined });
       const result = await fn(r, tx);
+      // Repair old child ledgers from persisted, terminal job facts only. A
+      // failed recommendation must not leave an unrelated queued operation.
+      for (const job of r.jobs) {
+        const status = terminalDiagnosticJobOperationStatus(job);
+        if (status) await tx.update(model.agentOperations).set({ status, updatedAt: new Date() })
+          .where(and(eq(model.agentOperations.id, job.id),
+            eq(model.agentOperations.accountUserId, context.accountUserId),
+            context.enterpriseProjectId ? eq(model.agentOperations.enterpriseProjectId, context.enterpriseProjectId) : isNull(model.agentOperations.enterpriseProjectId),
+            sql`${model.agentOperations.status} <> ${status}`));
+      }
+      const operationStatus = diagnosticOperationStatus(r);
+      if (o.operation.status !== operationStatus) await tx.update(model.agentOperations)
+        .set({ status: operationStatus, updatedAt: new Date() }).where(eq(model.agentOperations.id, id));
       // An idle poll must not rewrite the full answer/knowledge ledger.
       if (JSON.stringify(r) === storedBefore) return result;
       if (intentHash({ ...r, lease: undefined }) !== before) {
@@ -174,22 +188,6 @@ export function createDiagnosticService(
           updatedAt: new Date(),
         })
         .where(eq(model.agentTasks.id, task.id));
-      await tx
-        .update(model.agentOperations)
-        .set({
-          status:
-            r.jobs.some(activeJob) || DIAGNOSTIC_CATEGORIES.some((c) => auditReady(r, c)) ? "running"
-            : latestDiagnosticJobs(r.jobs).some((j) => j.kind === "audit" && j.status === "failed") ? "attention_required"
-            : r.phase === "completed"
-              ? "succeeded"
-              : r.phase === "stopped"
-                ? "cancelled"
-                : r.phase === "partial"
-                  ? "attention_required"
-                  : "running",
-          updatedAt: new Date(),
-        })
-        .where(eq(model.agentOperations.id, id));
       return result;
     });
   }
@@ -312,6 +310,7 @@ export function createDiagnosticService(
     const [k, runs] = await Promise.all([knowledge(), list()]);
     return {
       knowledge: k.readiness,
+      collection: (() => { const { binding: _, ...available } = core.diagnosticCollection?.availability() ?? { ready: false, reason: "诊断采集服务尚未配置", platforms: [] }; return available; })(),
       initialRunId: initialRun(runs)?.id ?? null,
       platforms: DIAGNOSTIC_PLATFORMS,
       repeatPerPlatform: 5 as const,
@@ -441,7 +440,8 @@ export function createDiagnosticService(
         credentialVersion: c.version,
         publicProfile: "brand-diagnostics",
         upstreamModel: "gpt-6.1-sol",
-        status: "queued",
+        // A draft has no accepted background work; recommend/start activates it.
+        status: "succeeded",
       });
       await tx.insert(model.agentTasks).values({
         id: randomUUID(),
@@ -671,7 +671,7 @@ export function createDiagnosticService(
     const before = state(await owned(id));
     if (before.confirmedAt) return diagnosticView(before);
     await assertCurrentBasis(before);
-    if (!diagnosticMonitorClient(core.environment).configured)
+    if (!diagnosticMonitorClient(core.diagnosticCollection).configured)
       throw new DiagnosticError(
         "MONITOR_UNAVAILABLE",
         "真实采集服务尚未配置",
@@ -701,6 +701,11 @@ export function createDiagnosticService(
         );
       if (new Set(r.questions.map((q) => q.text.trim())).size !== 4)
         throw new DiagnosticError("DUPLICATE_QUESTION", "四类问题不能重复");
+      const availability = core.diagnosticCollection!.availability();
+      if (!availability.ready || !availability.binding || r.platforms.some((p) => !availability.platforms.includes(p)))
+        throw new DiagnosticError("MONITOR_UNAVAILABLE", availability.reason ?? "所选平台暂不可采集", 503);
+      r.collectionBinding = availability.binding;
+      delete r.collectionError;
       r.confirmedAt = now();
       r.phase = "collecting";
       r.attempts = r.questions.flatMap((q) =>
@@ -767,7 +772,7 @@ export function createDiagnosticService(
     await mutate(id, (r) => {
       if (r.phase === "completed" && !r.jobs.some(activeJob)) return;
       r.phase = "stopped";
-
+      for (const attempt of r.attempts) if (attempt.status === "submitted") attempt.nextPollAt = 0;
     });
     const r = state(await owned(id));
     for (const j of r.jobs.filter((j) =>
@@ -1094,7 +1099,8 @@ export function createDiagnosticService(
     a: DiagnosticAttempt,
     owner: string,
   ) {
-    const monitor = diagnosticMonitorClient(core.environment);
+    const run = state(await owned(id));
+    const monitor = diagnosticMonitorClient(core.diagnosticCollection, run.collectionBinding);
     const attempt = {
       consumerTaskId: a.id,
       question: a.question,
@@ -1127,10 +1133,10 @@ export function createDiagnosticService(
           attempt,
           state(await owned(id)).subject,
         );
-        await update((a) => {
+        await update((a, r) => {
           a.status = "submitted";
           a.taskId = taskId;
-          a.nextPollAt = Date.now() + 300_000;
+          a.nextPollAt = r.phase === "stopped" ? 0 : Date.now() + 300_000;
         });
         return;
       }
@@ -1142,6 +1148,16 @@ export function createDiagnosticService(
         return;
       }
       if (a.status !== "submitted" || (a.nextPollAt ?? 0) > Date.now()) return;
+      if (state(await owned(id)).phase === "stopped" && !a.stopAttemptedAt && !a.stopAcknowledgedAt) {
+        // Cancellation is best effort. Retain the accepted task for result/accounting queries.
+        await update((entry) => { entry.stopAttemptedAt = now(); });
+        try {
+          await monitor.stop(a.taskId!);
+          await update((entry) => { entry.stopAcknowledgedAt = now(); delete entry.stopError; });
+        } catch (error) {
+          await update((entry) => { entry.stopError = error instanceof DiagnosticMonitorError ? error.message : "停止请求未确认，继续核对原采集任务。"; });
+        }
+      }
       const result = await monitor.poll(
         attempt,
         state(await owned(id)).subject,
@@ -1170,7 +1186,7 @@ export function createDiagnosticService(
     } catch (e) {
       if (e instanceof DiagnosticError) return;
       await update((a, r) => {
-        if (e instanceof DiagnosticMonitorError && e.ambiguous) {
+        if (!a.taskId && e instanceof DiagnosticMonitorError && e.ambiguous) {
           a.status = "submission_unknown";
           a.error = "采集提交结果待核对，不会重复提交";
         } else if (
@@ -1190,6 +1206,15 @@ export function createDiagnosticService(
     }
   }
   async function tick(id: string) {
+    const current = state(await owned(id));
+    if (current.confirmedAt && current.attempts.some((a) => ["queued", "submitting", "submitted"].includes(a.status))) {
+      const available = core.diagnosticCollection?.availability();
+      const error = !current.collectionBinding ? "旧采集任务缺少配置绑定，请核对原供应商关联后恢复。"
+        : !available?.ready ? (available?.reason ?? "采集服务暂不可用")
+        : intentHash(current.collectionBinding) !== intentHash(available.binding) ? "采集配置已变更，请核对原任务配置；已有回答已保留。" : undefined;
+      if (error) { if (current.collectionError !== error) await mutate(id, (r) => { r.collectionError = error; }); return; }
+      if (current.collectionError) await mutate(id, (r) => { delete r.collectionError; });
+    }
     const owner = randomUUID();
     let acquired = false;
     let pollModel = false;
@@ -1351,7 +1376,13 @@ export function startDiagnosticWorker(core: ModuleHttpCore) {
         .where(
           and(
             eq(model.agentOperations.operationType, OP),
-            sql`${model.agentOperations.status} IN ('queued','running','attention_required','cancelled')`,
+            // Terminal/attention-only records need an explicit retry. Keep only
+            // stopped runs with accepted/in-flight slots in the polling queue.
+            sql`(${model.agentOperations.status} IN ('queued','running') OR
+              (${model.agentOperations.status} = 'cancelled' AND (
+                JSON_CONTAINS(JSON_EXTRACT(${model.agentTasks.providerRuntime}, '$.brandDiagnostic.attempts[*].status'), JSON_QUOTE('submitted')) OR
+                JSON_CONTAINS(JSON_EXTRACT(${model.agentTasks.providerRuntime}, '$.brandDiagnostic.attempts[*].status'), JSON_QUOTE('submitting'))
+              )))`,
           ),
         )
         .orderBy(desc(model.agentOperations.createdAt))
@@ -1360,15 +1391,16 @@ export function startDiagnosticWorker(core: ModuleHttpCore) {
         const p = task.providerRuntime as any;
         if (!p?.[ROOT] || !p.diagnosticContext) continue;
         await model
-          .runWithStoredEnterpriseProjectScope(
+          .runWithStoredEnterpriseProjectCleanupScope(
             p.diagnosticContext.accountUserId,
             p.diagnosticContext.enterpriseProjectId,
-            () =>
-              createDiagnosticService(
-                core,
-                p.diagnosticContext,
-                p.diagnosticActor,
-              ).tick(p[ROOT].id),
+            async (archived: boolean) => {
+              const service = createDiagnosticService(core, p.diagnosticContext, p.diagnosticActor);
+              if (archived && p[ROOT].phase !== "stopped" &&
+                  (p[ROOT].phase !== "completed" || p[ROOT].jobs.some(activeJob)))
+                await service.stop(p[ROOT].id);
+              await service.tick(p[ROOT].id);
+            },
           )
           .catch((e: unknown) =>
             console.error(

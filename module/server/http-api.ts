@@ -17,6 +17,8 @@ import {
  EnterpriseRagEvaluationError,
 } from "@frontmind/module-brand/server/enterprise-rag-evaluation-service";
 
+import type { DiagnosticCollectionPort } from "./diagnostic-monitor.js";
+
 /** Supplied by the host after authentication; never derive ownership from request data. */
 export interface ModuleHttpCore {
  context(request:Request):{accountUserId:number;actorUserId:number;enterpriseProjectId:string|null;businessOwnerId:string;businessActorId:string};
@@ -26,6 +28,7 @@ export interface ModuleHttpCore {
  /** Host-owned formal questions are projected without replacing their authority. */
  intentQuestionCatalog?(request:Request):Promise<IntentQuestion[]>;
  responseLogicHost?:ResponseLogicHostPorts;
+ diagnosticCollection?:DiagnosticCollectionPort;
 }
 
 /** Add new module-owned APIs here. Mounted in both Dashboard and the development subdomain. */

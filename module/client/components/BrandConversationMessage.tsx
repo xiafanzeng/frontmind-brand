@@ -64,5 +64,5 @@ export default function BrandConversationMessage({ message, allowCopy = false, c
   allowCopy?: boolean;
   children?: ReactNode;
 }) {
-  return <BusinessMessage message={message} isFinalReply={allowCopy} generalChatLinks inlineContent={children} runtime={runtime} />;
+  return <BusinessMessage animateEntrance={false} message={message} isFinalReply={allowCopy} generalChatLinks inlineContent={children} runtime={runtime} />;
 }

@@ -111,6 +111,7 @@ export default function BrandDiagnosticWorkspace({
       credentials: "same-origin",
       headers: operation.headers({ "Content-Type": "application/json" }),
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
     });
     const value = await response.json();
     operation.assertActive();
@@ -137,6 +138,9 @@ export default function BrandDiagnosticWorkspace({
   const dirtyRef = useRef(!!savedDraft);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [startState, setStartState] = useState<"idle" | "saving" | "starting" | "reconciling">("idle");
+  const [startError, setStartError] = useState("");
+  const startLock = useRef(false);
   const [loadError, setLoadError] = useState("");
   const [knowledgePath, setKnowledgePath] = useState<string | null>(null);
   const [basisId, setBasisId] = useState<string>(savedDraft?.basisId ?? "");
@@ -186,6 +190,8 @@ export default function BrandDiagnosticWorkspace({
     latestRun.current = value;
     setRun(value);
     if (value.confirmedAt) {
+      setStartState("idle");
+      setStartError("");
       setDirty(false);
       dirtyRef.current = false;
     }
@@ -256,6 +262,36 @@ export default function BrandDiagnosticWorkspace({
     } finally {
       setBusy(false);
     }
+  }
+  async function startCollection() {
+    if (startLock.current) return;
+    startLock.current = true;
+    setBusy(true);
+    setStartError("");
+    setStartState("saving");
+    let acceptedId: string | null = null;
+    try {
+      const persisted = await persist();
+      acceptedId = persisted.id;
+      const latest = await request<DiagnosticRunView>(`/${persisted.id}`);
+      setStartState("starting");
+      adopt(await request<DiagnosticRunView>(`/${persisted.id}/start`, { expectedRevision: latest.revision }), true);
+    } catch (error) {
+      if (acceptedId) {
+        setStartState("reconciling");
+        try {
+          const observed = await request<DiagnosticRunView>(`/${acceptedId}`);
+          adopt(observed);
+          if (!observed.confirmedAt) {
+            setStartState("idle");
+            setStartError(error instanceof Error ? error.message : "启动未完成，请重试。");
+          }
+        } catch { setStartError("暂时无法核对启动结果，已保留原诊断标识。请重新检查原任务。"); }
+      } else {
+        setStartState("idle");
+        setStartError(error instanceof Error ? error.message : "诊断配置保存失败。");
+      }
+    } finally { setBusy(false); startLock.current = false; }
   }
   async function ensureDraft() {
     if (run) return run;
@@ -635,49 +671,9 @@ export default function BrandDiagnosticWorkspace({
                               </span>
                               <span>
                                 {candidate.text}
-                                <small>{candidate.rationale}</small>
                               </span>
                             </button>
-                            <div
-                              className="bd-question-evidence"
-                              aria-label="推荐知识依据"
-                            >
-                              {candidate.evidenceRefs
-                                .slice(0, 3)
-                                .map((path) => {
-                                  const doc = documents.find(
-                                    (document) => document.path === path,
-                                  );
-                                  return (
-                                    <button
-                                      key={path}
-                                      className="bd-evidence-link"
-                                      disabled={busy}
-                                      onClick={() =>
-                                        void act(() => showKnowledge(path))
-                                      }
-                                    >
-                                      <strong>
-                                        {doc?.title ?? "查看知识依据"}
-                                      </strong>
-                                      {doc && (
-                                        <small>
-                                          {doc.content
-                                            .replace(/[#*`>]/g, "")
-                                            .slice(0, 90)}
-                                          …
-                                        </small>
-                                      )}
-                                      <small>
-                                        {doc?.evidenceStatus ===
-                                        "needs_verification"
-                                          ? "待核实"
-                                          : "知识对照"}
-                                      </small>
-                                    </button>
-                                  );
-                                })}
-                            </div>
+
                           </div>
                         ))}
                     </div>
@@ -786,6 +782,13 @@ export default function BrandDiagnosticWorkspace({
               : `份真实回答 · 4 题 × ${platforms.length} 平台 × 5 次`}
           </span>
         </div>
+        <div aria-live="polite" aria-atomic="true">
+          {workspace?.collection?.ready === false && !frozen && <p className="bd-invalid">{workspace.collection.reason ?? "采集服务暂未就绪"}</p>}
+          {startError && <p className="bd-invalid" role="alert">{startError}</p>}
+          {run?.collectionError && <p className="bd-invalid" role="alert">{run.collectionError}</p>}
+          {startState === "reconciling" && <p className="bd-note">正在核对原诊断是否已接受启动，请勿重复提交。</p>}
+          {(startError || workspace?.collection?.ready === false || run?.collectionError) && <button disabled={busy} onClick={() => void act(async () => { await refresh(); if (!latestRun.current?.confirmedAt) setStartState("idle"); })}>重新检查原任务</button>}
+        </div>
         {!frozen ? (
           <>
             <p className="bd-note">
@@ -793,26 +796,16 @@ export default function BrandDiagnosticWorkspace({
             </p>
             <button
               className="bd-primary"
-              disabled={busy || !canStart}
-              onClick={() =>
-                void act(async () => {
-                  const r = await persist();
-                  const latest = await request<DiagnosticRunView>(`/${r.id}`);
-                  adopt(
-                    await request(`/${r.id}/start`, {
-                      expectedRevision: latest.revision,
-                    }),
-                    true,
-                  );
-                })
-              }
+              disabled={busy || !canStart || startState !== "idle" || workspace?.collection?.ready === false}
+              onClick={() => void startCollection()}
             >
-              开始采集并诊断
-              <ArrowRight size={17} />
+              {startState === "saving" ? "正在保存诊断范围…" : startState === "starting" ? "正在启动采集…" : startState === "reconciling" ? "正在核对原任务…" : "开始采集并诊断"}
+              {startState !== "idle" ? <Loader2 className="bd-spin" size={17} /> : <ArrowRight size={17} />}
             </button>
           </>
         ) : (
           <>
+            <p className="bd-note" aria-live="polite">待提交 {run.attempts.filter(a => a.status === "queued").length} · 提交中 {run.attempts.filter(a => a.status === "submitting").length} · 处理中 {run.attempts.filter(a => a.status === "submitted").length} · 已返回 {run.completedSamples} · 失败 {run.attempts.filter(a => a.status === "failed").length} · 待核对 {run.attempts.filter(a => a.status === "submission_unknown").length}</p>
             <div className="bd-table-wrap">
               <table>
                 <thead>

@@ -28,7 +28,7 @@ import {
 } from "./build-artifact-checkpoint.js";
 import type { SiteOpsWorkerCore } from "./worker-core.js";
 export function createSiteOpsWorker(core: SiteOpsWorkerCore) {
-const { runWithStoredEnterpriseProjectScope, enterpriseAccountOwnerPredicate, enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate, enterpriseOwnerPredicate, getDb, finalizePendingTwentyFirstCredentialRevocations, runtimeErrorForLog, localAssets, messages } = core;
+const { runWithStoredEnterpriseProjectScope, runWithStoredEnterpriseProjectCleanupScope, enterpriseAccountOwnerPredicate, enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate, enterpriseOwnerPredicate, getDb, finalizePendingTwentyFirstCredentialRevocations, runtimeErrorForLog, localAssets, messages } = core;
 const { siteBuilds, siteDeployments, siteOperations, siteProjects, socialPackages, websiteStyleSampleBatches, websiteStyleSamples } = core.tables;
 
 
@@ -2067,7 +2067,18 @@ async function runSiteOpsWorkerSweep(options?: { max?: number }) {
     summary.claimed += 1;
     const [pinnedProject] = await db.select().from(siteProjects).where(eq(siteProjects.id, operation.projectId)).limit(1);
     if (!pinnedProject) { summary.failed += 1; continue; }
-    const finalizedStatus = await runWithStoredEnterpriseProjectScope(pinnedProject.userId, pinnedProject.enterpriseProjectId, async () => {
+    const finalizedStatus = await runWithStoredEnterpriseProjectCleanupScope(pinnedProject.userId, pinnedProject.enterpriseProjectId, async archived => {
+      if (archived) {
+        // AI transports are interrupted by the archive cleanup worker. External
+        // deployments without a cancellation contract keep their original
+        // coordinates for reconciliation; never invoke a new deployment here.
+        const status = operation.providerTaskId || operation.providerOperationId ? "attention_required" : "cancelled";
+        await db.update(siteOperations).set({ status, leaseOwner: null, leaseExpiresAt: null,
+          errorCode: "ENTERPRISE_PROJECT_ARCHIVED",
+          errorMessage: status === "cancelled" ? "企业项目已移除，任务已停止" : "企业项目已移除，已提交操作保留原关联待核对",
+        }).where(and(eq(siteOperations.id, operation.id), eq(siteOperations.leaseOwner, operation.leaseOwner)));
+        return status;
+      }
       const result = stagedBuildCheckpointResult(operation) ?? (await invokeProvider(db, operation));
       return finalize(db, operation, result);
     });

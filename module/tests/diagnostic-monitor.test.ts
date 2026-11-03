@@ -236,139 +236,45 @@ describe("brand report monitoring identity", () => {
   });
 });
 
-describe("brand report provider failures and recovery", () => {
-  it("requires configured credentials before any network request", async () => {
-    const fetcher = vi.fn();
-    vi.stubGlobal("fetch", fetcher);
-    const client = diagnosticMonitorClient({});
+describe("host-owned diagnostic collection", () => {
+  const binding = { contractVersion: "brand_single_sample_v1" as const, credentialId: "fixture", credentialVersion: 1, baseUrl: "https://provider.example/api/business/monitor" };
+  const port = (request = vi.fn()) => ({ availability: () => ({ ready: true, binding, platforms: ["doubao"] }), request });
+  it("does not submit without a configured host", async () => {
+    const client = diagnosticMonitorClient();
     expect(client.configured).toBe(false);
-    await expect(client.submit(attempt(), "测试品牌")).rejects.toMatchObject({
-      code: "MONITOR_NOT_CONFIGURED",
-    });
-    expect(fetcher).not.toHaveBeenCalled();
+    await expect(client.submit(attempt(), "测试品牌")).rejects.toMatchObject({ code: "MONITOR_NOT_CONFIGURED" });
   });
-
-  it("submits the frozen key and one sample only, preserving it across an uncertain retry", async () => {
-    const fetcher = vi
-      .fn()
-      .mockRejectedValueOnce(new DOMException("timeout", "TimeoutError"))
-      .mockResolvedValueOnce(json({ taskId: "provider-task-1" }));
-    vi.stubGlobal("fetch", fetcher);
-    const client = diagnosticMonitorClient({
-      MOLI_API_TOKEN: "fixture-only-token",
-      MOLI_API_ORIGIN: "https://provider.example/",
-    });
-    const current = attempt();
-    await expect(client.submit(current, "测试品牌")).rejects.toMatchObject({
-      code: "MONITOR_NETWORK",
-      ambiguous: true,
-    });
-    await expect(client.submit(current, "测试品牌")).resolves.toBe(
-      "provider-task-1",
-    );
-    const first = JSON.parse(fetcher.mock.calls[0]![1].body);
-    const second = JSON.parse(fetcher.mock.calls[1]![1].body);
-    expect(first).toEqual(second);
-    expect(first).toMatchObject({
-      consumerTaskId: current.consumerTaskId,
-      prompts: [questions[0]],
-      platforms: [{ platform: "doubao", mode: "search", screenshot: 0 }],
-    });
-    expect(fetcher.mock.calls[0]![0]).toBe(
-      "https://provider.example/api/business/monitor/task/batch/shared",
-    );
+  it("submits one question and one platform with the persisted slot identity", async () => {
+    const request = vi.fn().mockResolvedValue({ taskId: "provider-task-1" });
+    const client = diagnosticMonitorClient(port(request), binding);
+    await expect(client.submit(attempt(), "测试品牌")).resolves.toBe("provider-task-1");
+    expect(request).toHaveBeenCalledWith(binding, "submit", { payload: {
+      consumerTaskId: attempt().consumerTaskId, monitorKeywords: "测试品牌", monitorKeywordAliases: [], competitors: [],
+      prompts: [questions[0]], platforms: [{ platform: "doubao", mode: "search", screenshot: 0 }],
+    }});
   });
-
-  it.each([500, 503])(
-    "treats HTTP %i during submission as ambiguous without exposing upstream contents",
-    async (status) => {
-      vi.stubGlobal(
-        "fetch",
-        vi
-          .fn()
-          .mockResolvedValue(
-            new Response(
-              JSON.stringify({
-                success: false,
-                message: "sensitive upstream details must not escape",
-              }),
-              { status },
-            ),
-          ),
-      );
-      const client = diagnosticMonitorClient({
-        MOLI_API_TOKEN: "fixture-only-token",
-      });
-      const error = await client
-        .submit(attempt(), "测试品牌")
-        .catch((value) => value);
-      expect(error).toMatchObject({
-        code: "MONITOR_REJECTED",
-        ambiguous: true,
-      });
-      expect(error.message).not.toContain("sensitive");
-      expect(error.message).not.toContain("fixture-only-token");
-    },
-  );
-
-  it("does not guess a successful task ID from an invalid or empty response", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("invalid-json", { status: 200 }))
-      .mockResolvedValueOnce(json({}));
-    vi.stubGlobal("fetch", fetcher);
-    const client = diagnosticMonitorClient({
-      MOLI_API_TOKEN: "fixture-only-token",
-    });
-    await expect(client.submit(attempt(), "测试品牌")).rejects.toMatchObject({
-      code: "MONITOR_RESPONSE",
-      ambiguous: true,
-    });
-    await expect(client.submit(attempt(), "测试品牌")).rejects.toMatchObject({
-      code: "MONITOR_SUBMISSION_UNKNOWN",
-      ambiguous: true,
-    });
+  it("accepts persisted bindings regardless of JSON key order", async () => {
+    const request = vi.fn().mockResolvedValue({ taskId: "provider-task-1" });
+    const reordered = Object.fromEntries(Object.entries(binding).reverse()) as typeof binding;
+    await expect(diagnosticMonitorClient(port(request), reordered).submit(attempt(), "测试品牌")).resolves.toBe("provider-task-1");
   });
-
-  it("polls the persisted provider task without submitting any replacement", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce(json({ status: "running" }))
-      .mockResolvedValueOnce(json({ status: "completed" }))
-      .mockResolvedValueOnce(json({ subTaskList: [answer()] }));
-    vi.stubGlobal("fetch", fetcher);
-    const client = diagnosticMonitorClient({
-      MOLI_API_TOKEN: "fixture-only-token",
-    });
-    await expect(client.poll(attempt(), "测试品牌")).resolves.toBeNull();
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    await expect(client.poll(attempt(), "测试品牌")).resolves.toMatchObject({
-      id: attempt().consumerTaskId,
-      answer: answer().answerContent,
-    });
-    expect(fetcher.mock.calls.every((call) => call[1].method === "GET")).toBe(
-      true,
-    );
-    expect(fetcher.mock.calls[2]![0]).toContain("/result/provider-task-1");
+  it("blocks rotation before calling the provider", async () => {
+    const request = vi.fn();
+    const client = diagnosticMonitorClient(port(request), { ...binding, credentialVersion: 2 });
+    await expect(client.submit(attempt(), "测试品牌")).rejects.toMatchObject({ code: "MONITOR_BINDING_CHANGED" });
+    expect(request).not.toHaveBeenCalled();
   });
-
-  it("keeps terminal failure and polling transport failure distinct from success", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce(json({ status: "failed" }))
-      .mockRejectedValueOnce(new DOMException("timeout", "TimeoutError"));
-    vi.stubGlobal("fetch", fetcher);
-    const client = diagnosticMonitorClient({
-      MOLI_API_TOKEN: "fixture-only-token",
-    });
-    await expect(client.poll(attempt(), "测试品牌")).rejects.toMatchObject({
-      code: "MONITOR_FAILED",
-      ambiguous: false,
-    });
-    await expect(client.poll(attempt(), "测试品牌")).rejects.toMatchObject({
-      code: "MONITOR_NETWORK",
-      ambiguous: false,
-    });
-    expect(fetcher).toHaveBeenCalledTimes(2);
+  it("does not invent a provider ID from an empty acceptance", async () => {
+    const client = diagnosticMonitorClient(port(vi.fn().mockResolvedValue({})), binding);
+    await expect(client.submit(attempt(), "测试品牌")).rejects.toMatchObject({ code: "MONITOR_SUBMISSION_UNKNOWN", ambiguous: true });
+  });
+  it("polls and stops only the original provider task", async () => {
+    const request = vi.fn().mockResolvedValueOnce({ status: "running" }).mockResolvedValueOnce({ status: "completed" }).mockResolvedValueOnce({ subTaskList: [answer()] }).mockResolvedValueOnce({});
+    const client = diagnosticMonitorClient(port(request), binding);
+    expect(await client.poll(attempt(), "测试品牌")).toBeNull();
+    expect(await client.poll(attempt(), "测试品牌")).toMatchObject({ answer: answer().answerContent });
+    await client.stop("provider-task-1");
+    expect(request.mock.calls.map(call => call[1])).toEqual(["status", "status", "result", "stop"]);
+    expect(request.mock.calls.every(call => call[2].taskId === "provider-task-1")).toBe(true);
   });
 });

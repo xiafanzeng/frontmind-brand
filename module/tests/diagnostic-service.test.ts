@@ -7,6 +7,7 @@ const mock = vi.hoisted(() => ({
   wait: null as any,
   ready: true,
   stops: [] as string[],
+  stopError: null as any,
   working: null as any,
 }));
 vi.mock("../server/intent-skill-runtime.js", () => ({
@@ -29,6 +30,7 @@ vi.mock("../server/diagnostic-monitor.js", async (original) => {
     ...real,
     diagnosticMonitorClient: () => ({
       configured: true,
+      stop: async (id: string) => { mock.stops.push(id); if (mock.stopError) throw mock.stopError; },
       submit: async (a: any) => {
         mock.submits.push(a);
         return mock.wait ? await mock.wait : "supplier-" + a.consumerTaskId;
@@ -48,6 +50,7 @@ vi.mock("drizzle-orm", () => {
       : k;
   return {
     eq: (a: any, b: any) => (r: any) => get(r, a) === get(r, b),
+    isNull: (a: any) => (r: any) => get(r, a) == null,
     and:
       (...ps: any[]) =>
       (r: any) =>
@@ -61,6 +64,8 @@ vi.mock("drizzle-orm", () => {
       if (pattern.trim() === "? <=> ?")
         return (r: any) =>
           (get(r, values[0]) ?? null) === (get(r, values[1]) ?? null);
+      if (pattern.trim() === "? <> ?")
+        return (r: any) => get(r, values[0]) !== get(r, values[1]);
       if (pattern.includes(" IN ("))
         return (r: any) =>
           ["queued", "running", "attention_required", "cancelled"].includes(
@@ -207,7 +212,11 @@ const service = (override = {}) =>
     {
       database: async () => db as any,
       context: () => context,
-      environment: { MOLI_API_TOKEN: "test" },
+      environment: {},
+      diagnosticCollection: {
+        availability: () => ({ ready: true, platforms: ["doubao", "yuanbao", "qianwen"], binding: { contractVersion: "brand_single_sample_v1" as const, credentialId: "fixture", credentialVersion: 1, baseUrl: "https://example.org" } }),
+        request: async () => ({}),
+      },
     },
     { ...context, ...override },
     { id: 7, role: "user" },
@@ -222,6 +231,7 @@ beforeEach(() => {
   mock.ready = true;
   mock.working = null;
   mock.stops = [];
+  mock.stopError = null;
   db.execute = async (query?: any) => {
     const text = query?.strings.join(" ");
     if (text.includes("FROM knowledge_base_snapshots"))
@@ -478,12 +488,25 @@ describe("durable Brand diagnostic lifecycle", () => {
     await s.tick(id);
     expect(state(id).jobs[0].status).toBe("running");
   });
-  it("does not rewrite an idle ledger and still executes a newly requested model task", async () => {
+  it("repairs historical idle operation status once without rewriting the task ledger", async () => {
     const { s, id } = await draft();
+    const operation = db.data.operations.find(operation => operation.id === id)!;
+    expect(operation.status).toBe("succeeded");
     const writes = vi.spyOn(db, "update");
     await s.tick(id);
     expect(writes).not.toHaveBeenCalled();
+    operation.status = "queued";
+    const originalTask = JSON.stringify(db.data.tasks);
+    await s.tick(id);
+    expect(operation.status).toBe("succeeded");
+    expect(JSON.stringify(db.data.tasks)).toBe(originalTask);
+    writes.mockClear();
+    await s.tick(id);
+    expect(writes).not.toHaveBeenCalled();
     state(id).phase = "partial";
+    await s.tick(id);
+    expect(operation.status).toBe("attention_required");
+    writes.mockClear();
     await s.tick(id);
     expect(writes).not.toHaveBeenCalled();
     await s.recommend(id);
@@ -492,9 +515,11 @@ describe("durable Brand diagnostic lifecycle", () => {
     expect(writes).toHaveBeenCalled();
     expect(state(id).jobs[0].status).toBe("running");
     await s.stop(id);
-    writes.mockClear();
+    const stoppedRows = JSON.stringify(db.data);
     await s.tick(id);
-    expect(writes).not.toHaveBeenCalled();
+    // Conditional child reconciliation may issue an UPDATE with zero matching
+    // rows; neither task JSON nor terminal operation timestamps may change.
+    expect(JSON.stringify(db.data)).toBe(stoppedRows);
   });
   it("does not rewrite a waiting model ledger or poll it again after a service restart until due", async () => {
     const { s, id } = await draft();
@@ -590,13 +615,17 @@ describe("durable Brand diagnostic lifecycle", () => {
         await action();
       },
     );
-    mock.ports.runWithStoredEnterpriseProjectScope = restore;
+    mock.ports.runWithStoredEnterpriseProjectCleanupScope = restore;
     vi.useFakeTimers();
     try {
       startDiagnosticWorker({
         database: async () => db as any,
         context: () => context,
-        environment: { MOLI_API_TOKEN: "test" },
+        environment: {},
+      diagnosticCollection: {
+        availability: () => ({ ready: true, platforms: ["doubao", "yuanbao", "qianwen"], binding: { contractVersion: "brand_single_sample_v1" as const, credentialId: "fixture", credentialVersion: 1, baseUrl: "https://example.org" } }),
+        request: async () => ({}),
+      },
       });
       await vi.advanceTimersByTimeAsync(1000);
       expect(restore).toHaveBeenCalledTimes(1);
@@ -607,6 +636,24 @@ describe("durable Brand diagnostic lifecycle", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+  it("recovers archived diagnostics only to stop and query accepted collection tasks", async () => {
+    const { s, id } = await start();
+    await s.tick(id);
+    mock.ports.runWithStoredEnterpriseProjectCleanupScope = async (_owner: number, _project: string, action: (archived: boolean) => Promise<void>) => action(true);
+    vi.useFakeTimers();
+    try {
+      startDiagnosticWorker({ database: async () => db as any, context: () => context, environment: {},
+        diagnosticCollection: { availability: () => ({ ready: true, platforms: ["doubao", "yuanbao", "qianwen"], binding: state(id).collectionBinding }), request: async () => ({}) } });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(state(id).phase).toBe("stopped");
+      expect(state(id).attempts.filter((a: any) => a.status === "completed")).toHaveLength(3);
+      expect(mock.submits).toHaveLength(3);
+      expect(mock.stops).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(mock.submits).toHaveLength(3);
+      expect(mock.stops).toHaveLength(3);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
   it("records an observed fallback even if that model request later fails", async () => {
     const { s, id } = await draft();
@@ -679,6 +726,16 @@ describe("durable Brand diagnostic lifecycle", () => {
     expect(
       mock.submits.slice(3).every((a) => !first.includes(a.consumerTaskId)),
     ).toBe(true);
+  });
+  it("continues original result queries when supplier cancellation is rejected", async () => {
+    const { s, id } = await start();
+    await s.tick(id);
+    const original = state(id).attempts[0].taskId;
+    await s.stop(id);
+    mock.stopError = new DiagnosticMonitorError("MONITOR_REJECTED", "取消不支持");
+    await s.tick(id);
+    expect(state(id).attempts[0]).toMatchObject({ taskId: original, status: "completed", stopError: "取消不支持" });
+    expect(mock.submits).toHaveLength(3);
   });
   it("persists a late supplier acknowledgement after stop, then reads it without another paid request", async () => {
     const { s, id } = await start();

@@ -2014,6 +2014,9 @@ export async function validateNativeReactSourceArchive(input: {
     // Hand-written provider receipts typo pinned literals or add unknown
     // fields; structurally sound ones are recovered here and every relaxed
     // claim is re-derived from the actual archive below.
+    if (input.requiredReceiptVersion === 1) {
+      throw new NativeReactSourceError("NATIVE_SOURCE_RECEIPT_INVALID");
+    }
     const lenient = lenientSourceReceiptWireSchema.safeParse(input.receipt);
     if (!lenient.success) {
       throw new NativeReactSourceError("NATIVE_SOURCE_RECEIPT_INVALID");
@@ -2034,6 +2037,12 @@ export async function validateNativeReactSourceArchive(input: {
     lenientReceipt || receipt.preflightVersion === NATIVE_SOURCE_PREFLIGHT_V2_VERSION
       ? (receipt as SiteSourceReceiptV2)
       : null;
+  // Host-pinned version and coordinates are authoritative. Only the model's
+  // copied claims may be repaired from the archive/runtime audit.
+  if ((v2Receipt && (!input.expectedExecutionBaselineSha256 || !SHA256_PATTERN.test(input.expectedExecutionBaselineSha256))) ||
+      (input.expectedContentPlanSha256 !== undefined && (!v2Receipt || !SHA256_PATTERN.test(input.expectedContentPlanSha256)))) {
+    throw new NativeReactSourceError("NATIVE_SOURCE_RECEIPT_INVALID");
+  }
   let runtimeContract: NativeRuntimeContractV1 | null = null;
   if (v2Receipt) {
     const parsedRuntimeContract = nativeRuntimeContractV1Schema.safeParse(

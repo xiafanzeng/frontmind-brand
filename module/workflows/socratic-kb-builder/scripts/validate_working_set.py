@@ -89,6 +89,26 @@ def source_text(markdown: str, exclude_gap: bool = False) -> str:
     return re.sub(r"^\s*(?:来源(?:地址)?|源文件|抓取时间|检索时间|获取时间|定位|页码|Source|Retrieved(?:At)?)\s*[:：].*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
 
 
+def original_passages(markdown: str) -> dict:
+    """Only located, declared original passages can support a new build's facts."""
+    headings = list(re.finditer(r"^##[ \t]+原文引用[ \t]*\r?$", markdown, flags=re.MULTILINE))
+    if len(headings) != 1:
+        return {"text": "", "valid": False}
+    tail = re.sub(r"^\r?\n", "", markdown[headings[0].end():])
+    boundary = re.search(r"^#{1,2}[ \t]+", tail, flags=re.MULTILINE)
+    section = tail[:boundary.start()] if boundary else tail
+    locators = list(re.finditer(r"^(?:定位|页码)[ \t]*[:：][ \t]*([^\n]+)\r?$", section, flags=re.MULTILINE))
+    location = r"(?:第\s*)?[0-9一二三四五六七八九十百]+(?:\s*[-—–至~]\s*[0-9一二三四五六七八九十百]+)?\s*[页章节段表]|[“「《][^”」》\n]{2,}[”」》]\s*[章节段表]|(?:page|chapter|section)\s+[0-9ivx]+\b"
+    valid = bool(locators) and not section[:locators[0].start()].strip()
+    passages = []
+    for index, locator in enumerate(locators):
+        passage = section[locator.end():locators[index + 1].start() if index + 1 < len(locators) else len(section)].strip()
+        if not re.search(location, locator.group(1), flags=re.IGNORECASE) or not visible_characters(source_text(passage)):
+            valid = False
+        passages.append(passage)
+    return {"text": "\n\n".join(passages), "valid": valid}
+
+
 def numeric_text(markdown: str, exclude_gap: bool = False) -> str:
     text = source_text(markdown, exclude_gap)
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
@@ -169,6 +189,13 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
     new_bindings = manifest["skill"]["contentHash"] not in traceability["legacySkillContentHashes"]
     substance = policy["bodySubstance"]
     new_substance = manifest["skill"]["contentHash"] not in substance["legacySkillContentHashes"]
+    normalize_title = manifest["skill"]["contentHash"] not in substance["literalTitleNormalizationLegacyHashes"]
+    quoted_only = manifest["skill"]["contentHash"] not in policy["quotedEvidence"]["legacySkillContentHashes"]
+    def retained_source(text):
+        return original_passages(text)["text"] if quoted_only else text
+    def paragraph_key(paragraph, title):
+        literal_title = visible_text(unicodedata.normalize("NFKC", title))
+        return paragraph.replace(literal_title, "") if normalize_title and literal_title else paragraph
     ledger = {row["path"]: row for row in manifest["evidenceLedger"]}
     shared = {}
     paragraphs = {}
@@ -189,9 +216,11 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
                 continue
             if row.get("sourceUrl"):
                 evidence_sources.setdefault(text, set()).add(row["sourceUrl"])
-            identity = visible_text(source_text(text, new_substance)) if new_bindings else re.sub(r"\s", "", text)
+            identity = visible_text(source_text(retained_source(text), new_substance)) if new_bindings else re.sub(r"\s", "", text)
             if identity:
                 unique[identity] = text
+            elif quoted_only:
+                unique[f"invalid:{name}"] = text
         for identity in unique:
             owners = shared.setdefault(identity, {"leaves": set(), "branches": set()})
             owners["leaves"].add(leaf["leafId"])
@@ -201,34 +230,37 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
         for paragraph in leaf_paragraphs:
             if len(paragraph) < substance["minimumSharedParagraphCharacters"]:
                 continue
-            owners = paragraphs.setdefault(paragraph, {"leaves": set(), "branches": set()})
+            owners = paragraphs.setdefault(paragraph_key(paragraph, leaf["title"]), {"leaves": set(), "branches": set()})
             owners["leaves"].add(leaf["leafId"])
             owners["branches"].add(leaf["branchId"])
         records.append((leaf, unique, evidence_sources, markdown, leaf_paragraphs))
     issues = []
     for leaf, unique, evidence_sources, markdown, leaf_paragraphs in records:
         texts = list(unique.values())
-        evidence = sum(visible_characters(source_text(text, new_substance) if new_bindings else text) for text in texts)
+        evidence = sum(visible_characters(source_text(retained_source(text), new_substance) if new_bindings else text) for text in texts)
         body_text = visible_text(markdown)
         body = len(body_text)
         minimum = traceability["minimumBodyCharacters"] if new_bindings else policy["minimumBodyCharacters"]
         issue = {"leafId": leaf["leafId"], "title": leaf["title"], "evidenceCharacters": evidence,
                  "bodyCharacters": body, "minimumBodyCharacters": minimum}
+        if quoted_only and any(not original_passages(text)["valid"] for text in texts):
+            issues.append({**issue, "reason": "EVIDENCE_ORIGINAL_QUOTE_REQUIRED"})
+            continue
         independence = policy["evidenceIndependence"]
         legacy = manifest["skill"]["contentHash"] in independence["legacySkillContentHashes"]
-        copied = bool(texts) and all(body_text in visible_text(text)
-            and len(visible_text(text)) - body <= independence["maximumExtraCharacters"] for text in texts)
+        copied = bool(texts) and all(body_text in visible_text(retained_source(text))
+            and len(visible_text(retained_source(text))) - body <= independence["maximumExtraCharacters"] for text in texts)
         if not legacy and body >= independence["minimumBodyCharacters"] and copied:
             issues.append({**issue, "reason": "EVIDENCE_COPIES_NODE_BODY"})
             continue
         if new_bindings:
             reused = bool(unique) and all(len(shared[identity]["leaves"]) >= traceability["minimumSharedLeaves"]
                 and len(shared[identity]["branches"]) >= traceability["minimumSharedBranches"] for identity in unique)
-            source_claims = [claim for text in texts for claim in numeric_claims(text, new_substance)]
+            source_claims = [claim for text in texts for claim in numeric_claims(retained_source(text), new_substance)]
             source_quantities = {claim["quantity"] for claim in source_claims}
             typed_source_numbers = {claim["literal"] for claim in source_claims}
             source_numbers = {normalized_number(match.group(0)) for text in texts
-                for match in re.finditer(r"(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])", numeric_text(text, new_substance))}
+                for match in re.finditer(r"(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])", numeric_text(retained_source(text), new_substance))}
             missing = list(dict.fromkeys(claim["label"] for claim in numeric_claims(substantive_markdown(markdown) if new_substance else markdown)
                 if claim["quantity"] not in source_quantities and (claim["literal"] not in source_numbers or claim["literal"] in typed_source_numbers)))
             if reused or missing:
@@ -236,9 +268,9 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
                                **({"unverifiedNumericClaims": missing} if missing else {})})
                 continue
         if new_substance:
-            template = sum(len(paragraph) for paragraph in leaf_paragraphs if paragraph in paragraphs
-                           and len(paragraphs[paragraph]["leaves"]) >= substance["minimumSharedLeaves"]
-                           and len(paragraphs[paragraph]["branches"]) >= substance["minimumSharedBranches"])
+            template = sum(len(paragraph) for paragraph in leaf_paragraphs if paragraph_key(paragraph, leaf["title"]) in paragraphs
+                           and len(paragraphs[paragraph_key(paragraph, leaf["title"])]["leaves"]) >= substance["minimumSharedLeaves"]
+                           and len(paragraphs[paragraph_key(paragraph, leaf["title"])]["branches"]) >= substance["minimumSharedBranches"])
             effective = sum(len(paragraph) for paragraph in leaf_paragraphs) - template
             substantive_issue = {**issue, "minimumBodyCharacters": substance["minimumBodyCharacters"],
                                  "effectiveBodyCharacters": effective, "templateCharacters": template}

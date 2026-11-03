@@ -2,7 +2,7 @@ import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const mocks = vi.hoisted(() => ({ starting: false, batchStartedAt: null as number | null, knowledge: { initialized: true } as Record<string, unknown>,
+const mocks = vi.hoisted(() => ({ hydrated: true, starting: false, batchStartedAt: null as number | null, knowledge: { initialized: true } as Record<string, unknown>,
   userKnowledge: undefined as Record<string, unknown> | undefined,
   assistantKnowledge: undefined as Record<string, unknown> | undefined,
   recover: vi.fn(), observe: vi.fn(), register: vi.fn(), wake: vi.fn(), reconcile: vi.fn() }));
@@ -12,7 +12,7 @@ vi.mock("../lib/knowledge-progress", async importOriginal => ({
 }));
 vi.mock("../host", () => ({
   ChatInput: () => <div data-testid="shared-knowledge-composer" />,
-  useConversation: () => ({ hydrated: true, activeConversation: {
+  useConversation: () => ({ hydrated: mocks.hydrated, activeConversation: {
     id: "existing", status: "completed", knowledgeBase: mocks.knowledge,
     messages: [
       { id: "user", role: "user", content: "确认", timestamp: 1, knowledgeBase: mocks.userKnowledge },
@@ -36,7 +36,7 @@ vi.mock("./KnowledgeBaseManagedUploadRecovery", () => ({ default: (props: unknow
 import KnowledgeConversation from "./KnowledgeConversation";
 
 afterEach(cleanup);
-beforeEach(() => { vi.clearAllMocks(); mocks.starting = false; mocks.batchStartedAt = null; mocks.knowledge = { initialized: true }; mocks.userKnowledge = undefined; mocks.assistantKnowledge = undefined; });
+beforeEach(() => { vi.clearAllMocks(); mocks.hydrated = true; mocks.starting = false; mocks.batchStartedAt = null; mocks.knowledge = { initialized: true }; mocks.userKnowledge = undefined; mocks.assistantKnowledge = undefined; });
 it("subscribes to the restored build before reservation fields arrive", () => {
   mocks.knowledge = { initialized: false };
   const progress = { build: { id: "existing-build", status: "researching" }, branches: [] } as any;
@@ -161,4 +161,19 @@ it("keeps declared counts and retained sources inside the collapsed research his
   expect(history.contains(screen.getByText("9 个"))).toBe(true);
   expect(history.contains(screen.getByText("模型申报的官方页面"))).toBe(true);
   expect(history.contains(screen.getByText("待核验"))).toBe(true);
+});
+
+
+it("keeps known content visible during host hydration and restores its reading position after remount", () => {
+  mocks.hydrated = false;
+  const view = render(<KnowledgeConversation knowledgeBaseResetRevision={777} />);
+  const viewport = screen.getByTestId("chat-messages-viewport");
+  expect(screen.queryByTestId("knowledge-starter")).toBeNull();
+  expect(screen.getByRole("heading", { name: "企业概况" })).toBeDefined();
+  viewport.scrollTop = 240;
+  fireEvent.scroll(viewport);
+  view.unmount();
+  render(<KnowledgeConversation knowledgeBaseResetRevision={777} />);
+  expect(screen.getByTestId("chat-messages-viewport").scrollTop).toBe(240);
+  expect(screen.queryByText("正在恢复知识库任务…")).toBeNull();
 });

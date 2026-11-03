@@ -14,8 +14,16 @@ export function knowledgeExecutionItems(
   items: ExecutionDisplayEntry[] | undefined,
   localTurns: ReadonlySet<string>,
 ) {
+  let previousSummary: string | undefined;
   return items
     ?.filter((item) => !localTurns.has(item.turnId))
+    .filter((item) => {
+      if (item.kind !== "status" || item.status !== "thinking" || !item.publicSummary) return true;
+      const key = `${item.turnId}:${item.publicSummaryTitle ?? ""}:${item.publicSummary.trim()}`;
+      if (previousSummary === key) return false;
+      previousSummary = key;
+      return true;
+    })
     .map((item) => {
       if (
         item.kind === "status" &&
