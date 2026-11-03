@@ -2361,6 +2361,13 @@ export function safePublicDocuments(
       id: String(document.id || document.path).slice(0, 191),
       path: document.path.slice(0, 512),
       title: document.title.slice(0, 255),
+      // Knowledge nodes are short facts; branchId/branchTitle/order let the
+      // native doc view reassemble each branch into one complete document.
+      branchId: document.branchId ? String(document.branchId).slice(0, 191) : undefined,
+      branchTitle: document.branchTitle
+        ? String(document.branchTitle).slice(0, 255)
+        : undefined,
+      order: typeof document.order === "number" ? document.order : undefined,
       content: document.content,
       kind: document.kind,
       customerVisible: true as const,
@@ -4825,7 +4832,7 @@ export function nativeSourceSystemPromptForWorkflow(workflowVersion: string) {
 4. 不得加入认证、支付、数据库、后台、统计、webhook、外部脚本、远程请求、远程资源、动态执行或动态 import。
 5. 输出 FrontMind Vite SPA；保留 execution shell，在 ${NATIVE_RUNTIME_ROUTE_MODULE} 用 eager static import 导出 ${NATIVE_RUNTIME_ROUTE_MANIFEST_EXPORT}。多页初始化与 popstate 调用 window.canonicalSitePathname()；仅函数不存在时回退 window.location.pathname。每个包含 JSX 的模块都必须显式绑定或 import React。
 6. 站内搜索必须覆盖全站：对计划全部 routes 的 section 标题与正文以及各路由 userQuestions 做客户端关键词匹配，不得只过滤当前页面；结果按栏目分组、显示所属栏目并链接到对应路由（可带 hash 锚点定位到区块）；无匹配时给出改用页面 AI 助手或联系 CTA 的明确提示。
-7. 每个内容区块必须提供“查看文档原文”入口，以简洁文档模板（区块小标题 + 逐字段落/列表）呈现该区块 sourceDocumentIds 对应的 dossier 文档原文；不得摘要化、改写或省略原文事实。文档原文中的网址一律去掉 http(s):// 前缀，只保留域名与路径文字（如 www.example.com/help）；严禁输出完整 URL 字面量或 // 开头的协议相对地址。文档视图用页面内锚点或区块内展开实现，禁止新增 route manifest 路由，视觉保持模板基线。
+7. 每个内容区块的小标题与“查看文档原文”入口都必须打开完整文档视图（模态弹层或全宽文档面板）：dossier 文档带有 branchId、branchTitle、order 字段，同一 branchId 的全部文档按 order 升序组成一份完整知识文档；文档视图以 branchTitle 作为文档大标题，完整列出该分支的每一个节点（节点小节标题 + 逐字段落/列表），不得只展示当前区块引用的节点，不得摘要化、改写或省略任何节点；同一分支被多个区块引用时文档视图内容保持一致。文档原文中的网址一律去掉 http(s):// 前缀，只保留域名与路径文字（如 www.example.com/help）；严禁输出完整 URL 字面量或 // 开头的协议相对地址。文档视图用页面内模态弹层、全宽面板或锚点实现，禁止新增 route manifest 路由，视觉保持模板基线。
 8. 运行 production build 和 ${NATIVE_SOURCE_PREFLIGHT_V2_FILENAME}，逐路由确认无 pageerror、console.error 和空白 root。只交付 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME}。`;
   }
   if (workflowVersion === SITEOPS_STATIC_TEMPLATE_WORKFLOW_VERSION) {

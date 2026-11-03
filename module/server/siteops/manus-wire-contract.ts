@@ -1135,6 +1135,12 @@ export type SiteOpsSourceDocument = {
   content: string;
   kind?: string;
   customerVisible: true;
+  // Knowledge nodes are short facts. branchId/branchTitle/order carry the
+  // knowledge-tree grouping so the native doc view can reassemble each branch
+  // into one complete document instead of isolated one-paragraph fragments.
+  branchId?: string;
+  branchTitle?: string;
+  order?: number;
 };
 
 function jsonAttachment(filename: string, value: unknown) {
