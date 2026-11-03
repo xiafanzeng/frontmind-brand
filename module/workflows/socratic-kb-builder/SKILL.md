@@ -147,7 +147,14 @@ Separate each evidence file into `## 原文引用` (verbatim only, with a page/s
 locator per passage) and `## 整理摘要` (explicit paraphrase). In the original
 section, start each separate passage with `定位：第 12 页` or a specific named
 section such as `定位：“师资队伍”节`; preserve the actual location, never invent
-one. Only these located original passages count as evidence length or numeric
+one. For a PDF, distinguish its one-based physical page index from a printed
+page label: use `定位：PDF 第 13 页（印刷页码 1）` when both are visible.
+Confirm this mapping against the retained page itself; front matter and covers
+often make these numbers different. If the printed label is unavailable, say so
+and retain the physical page index. Copy quotations from that page's extracted
+text, keeping separate passages separate; never reconstruct a quotation from
+memory or from the summary you have just written.
+Only these located original passages count as evidence length or numeric
 support. Generated summaries cannot verify their own facts. A missing original
 section or unlocated passage is `EVIDENCE_ORIGINAL_QUOTE_REQUIRED`. Never concatenate
 sentences from different pages into one purported quotation. Preserve tables'
@@ -206,6 +213,12 @@ Write nodes in batches of five to eight, completing and checking each batch
 before moving on. Never use one script to produce a short summary for every node
 in the full package. Freeze each batch's
 source passages, page locators and numeric excerpts before expanding its nodes.
+First make a leaf-specific fact inventory: concrete entities, facts, procedures,
+conditions, examples and boundaries, each paired with its original source
+passage. Write each leaf independently from that inventory. Scripts may package
+already drafted content; never generate node prose through a loop that inserts
+a title or topic into shared template paragraphs. If the inventory cannot
+support the topic, record its concrete gap instead of expanding generic advice.
 Do not shorten every node to fit the entire package into one script or response.
 
 Treat each declared overview as a customer node with a clear overview title;
@@ -220,9 +233,13 @@ Always pass `--expected-skill-version 6` to the initial bundle validator.
 Every newly pinned ordinary node must contain at least 600 effective visible
 body characters. The type-specific drafting targets above remain applicable.
 This minimum is checked even when the writer retained only a short excerpt.
-Shared paragraphs of at least 40 visible characters appearing in at least five
-nodes and three branches do not count toward body depth and produce
-BODY_TEMPLATE_REUSED. Move a genuinely shared usage or date disclaimer into the
+Shared sentences and continuous text of at least 40 characters appearing in
+at least five nodes and three branches do not count toward body depth. The
+validator strips literal leaf titles, punctuation and layout before comparing
+text, and counts overlapping matches only once. Fewer than 600 remaining
+substantive characters produces BODY_TEMPLATE_REUSED when shared text was
+deducted. Shared enterprise names or facts do not invalidate a node that still
+has sufficient independent content. Move a genuinely shared usage or date disclaimer into the
 package-level explanation. Keep each node's supported facts, explanation,
 examples and boundaries specific to its own subject.
 
@@ -255,10 +272,10 @@ source_limited alone never exempts a node. All of these conditions are required:
 
 Keep this section last in the evidence file. It is excluded from source size,
 source reuse and numeric-support checks. Unexplained short nodes produce
-SUBSTANTIVE_BODY_TOO_SHORT. Template comparison removes each leaf's literal title
-before comparing paragraphs across topics. Inserting the title into otherwise
-identical advice does not add substantive content; reused paragraphs are deducted
-in full. Supply distinct supported facts, process details and applicability for
+SUBSTANTIVE_BODY_TOO_SHORT. Inserting a leaf title, joining paragraphs, changing
+line breaks or punctuation, or paraphrasing generic disclaimers does not add
+substantive content. Do not use these transformations to evade the correction
+list. Shared text is deducted regardless of paragraph layout. Supply distinct supported facts, process details and applicability for
 each node, or use the documented leaf-specific sparse-evidence exception. Both insufficient depth and repeated templates must
 be fixed together in the single permitted correction pass. If the supported
 material remains inadequate and the exception cannot be established, stop with

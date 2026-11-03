@@ -94,7 +94,7 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
     }
   },
   "depth": {
-    "version": "knowledge_depth_v6",
+    "version": "knowledge_depth_v7",
     "skillVersion": "6",
     "evidenceThreshold": 1500,
     "minimumBodyCharacters": 300,
@@ -183,7 +183,19 @@ export const GENERATED_KNOWLEDGE_BASE_WORKING_SET_POLICY = {
         "d755fea93a08163a6d39fa04dcdb4b14abeffbede24ee49479845db4bb5df30d",
         "b3b384c8ec3d9151d9701cff843feba7ef1f5bed2397f4590aace2b99d5bcb7d",
         "a183dac64d9ebacd28382696ee9e41da50141e4aac1022dd449d442e3034db2c"
-      ]
+      ],
+      "reflow": {
+        "minimumFragmentCharacters": 40,
+        "fingerprintWindow": 9,
+        "legacySkillContentHashes": [
+          "3a2b025caea4c6e6921eb397e1daf5792c5825475918a9db5f880ce9695d1155",
+          "d755fea93a08163a6d39fa04dcdb4b14abeffbede24ee49479845db4bb5df30d",
+          "b3b384c8ec3d9151d9701cff843feba7ef1f5bed2397f4590aace2b99d5bcb7d",
+          "a183dac64d9ebacd28382696ee9e41da50141e4aac1022dd449d442e3034db2c",
+          "0b6f84bd96f9b4cb449d28107243320d8674e4688a46a51f1b08c84f1789e171",
+          "1ae6bd16952bc98f0d401213f44d0766ead96fcf4cb77a2d8981d79566caed9b"
+        ]
+      }
     },
     "quotedEvidence": {
       "legacySkillContentHashes": [
