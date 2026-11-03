@@ -175,12 +175,14 @@ function TurnActivity({
   onToggleGroup,
   thinkingDisplay,
   hideSuccessfulResults,
+  hideToolDetails,
 }: {
   items: ActivityItem[];
   expandedGroups?: ReadonlySet<string>;
   onToggleGroup?: (id: string) => void;
   thinkingDisplay?: "disclosure" | "inline";
   hideSuccessfulResults?: boolean;
+  hideToolDetails?: boolean;
 }) {
   const calls = [
     ...new Map(
@@ -249,11 +251,11 @@ function TurnActivity({
             />
           );
         } else if (item.kind === "tool") {
-          if (
+          if (!hideToolDetails && (
             (item.resultOnly && !(hideSuccessfulResults && ["completed", "returned"].includes(item.status))) ||
             ["failed", "unconfirmed"].includes(item.status) ||
             (item.status === "waiting" && item.isCurrent !== false)
-          )
+          ))
             detail = <ActivityLine>{activityTitle(item)}</ActivityLine>;
         } else if (
           item.status === "error" ||
@@ -290,6 +292,7 @@ export function GeneralExecutionActivity({
   placement = "before",
   thinkingDisplay = "disclosure",
   hideSuccessfulResults = false,
+  hideToolDetails = false,
 }: {
   items?: ActivityItem[];
   expandedGroups?: ReadonlySet<string>;
@@ -297,6 +300,7 @@ export function GeneralExecutionActivity({
   placement?: "before" | "after";
   thinkingDisplay?: "disclosure" | "inline";
   hideSuccessfulResults?: boolean;
+  hideToolDetails?: boolean;
 }) {
   if (
     !items?.some(
@@ -331,6 +335,7 @@ export function GeneralExecutionActivity({
           onToggleGroup={onToggleGroup}
           thinkingDisplay={thinkingDisplay}
           hideSuccessfulResults={hideSuccessfulResults}
+          hideToolDetails={hideToolDetails}
         />
       ))}
     </div>
