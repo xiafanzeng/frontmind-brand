@@ -27,6 +27,8 @@ describe("native source system prompt (v2.9)", () => {
     expect(prompt).toContain("查看文档原文");
     expect(prompt).toContain("禁止新增 route manifest 路由");
     expect(prompt).toContain("不得摘要化");
+    // 文档原文里的网址必须去 scheme，否则触发 NATIVE_BUILD_NETWORK_FORBIDDEN。
+    expect(prompt).toContain("去掉 http(s):// 前缀");
   });
 });
 
