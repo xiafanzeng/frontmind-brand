@@ -817,9 +817,13 @@ export function createDiagnosticService(
         if (
           a.status === "failed" &&
           a.taskId &&
-          a.error?.startsWith("采集查询")
+          !a.sample
         ) {
+          // An accepted slot is only queried again. Never enqueue a new paid
+          // submission, including when an earlier local write error was saved
+          // as a collection failure.
           a.status = "submitted";
+          a.nextPollAt = 0;
           delete a.error;
         }
       if (r.confirmedAt) r.phase = "collecting";
@@ -1185,6 +1189,10 @@ export function createDiagnosticService(
       });
     } catch (e) {
       if (e instanceof DiagnosticError) return;
+      // Database/ledger failures say nothing about the supplier outcome. Let
+      // the worker retry the original state instead of persisting a false
+      // terminal failure (or exposing a SQL query in the business UI).
+      if (!(e instanceof DiagnosticMonitorError)) throw e;
       await update((a, r) => {
         if (!a.taskId && e instanceof DiagnosticMonitorError && e.ambiguous) {
           a.status = "submission_unknown";

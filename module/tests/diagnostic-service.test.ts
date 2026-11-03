@@ -8,6 +8,8 @@ const mock = vi.hoisted(() => ({
   ready: true,
   stops: [] as string[],
   stopError: null as any,
+  polls: [] as any[],
+  pollError: null as any,
   working: null as any,
 }));
 vi.mock("../server/intent-skill-runtime.js", () => ({
@@ -35,11 +37,11 @@ vi.mock("../server/diagnostic-monitor.js", async (original) => {
         mock.submits.push(a);
         return mock.wait ? await mock.wait : "supplier-" + a.consumerTaskId;
       },
-      poll: async (a: any) => ({
-        answer: "医学美容科回答",
-        citations: [],
-        references: [],
-      }),
+      poll: async (a: any) => {
+        mock.polls.push(a);
+        if (mock.pollError) throw mock.pollError;
+        return { answer: "医学美容科回答", citations: [], references: [] };
+      },
     }),
   };
 });
@@ -232,6 +234,8 @@ beforeEach(() => {
   mock.working = null;
   mock.stops = [];
   mock.stopError = null;
+  mock.polls = [];
+  mock.pollError = null;
   db.execute = async (query?: any) => {
     const text = query?.strings.join(" ");
     if (text.includes("FROM knowledge_base_snapshots"))
@@ -360,6 +364,66 @@ describe("durable Brand diagnostic lifecycle", () => {
     expect(state(id).phase).toBe("collecting");
     expect(state(id).attempts.filter((attempt: any) => attempt.taskId).map((attempt: any) => [attempt.id, attempt.taskId])).toEqual(submitted);
     expect((await service().create({ clientRequestId: randomUUID() })).id).toBe(id);
+  });
+  it("keeps accepted collection queryable when persisting its answer fails", async () => {
+    const { s, id } = await start();
+    for (const a of state(id).attempts) {
+      a.status = "submitted";
+      a.taskId = "supplier-" + a.id;
+      a.nextPollAt = Date.now() + 600_000;
+    }
+    const original = structuredClone(state(id).attempts[0]);
+    state(id).attempts[0].nextPollAt = 0;
+    const update = db.update.bind(db);
+    let failOnce = true;
+    vi.spyOn(db, "update").mockImplementation((table: any) => ({
+      set: (changes: any) => ({ where: async (predicate: any) => {
+        if (failOnce && changes.providerRuntime?.brandDiagnostic?.attempts[0]?.sample) {
+          failOnce = false;
+          throw new Error("Failed query: update task ledger");
+        }
+        return update(table).set(changes).where(predicate);
+      } }),
+    }));
+    await expect(s.tick(id)).rejects.toThrow("Failed query");
+    expect(state(id).attempts[0]).toMatchObject({ status: "submitted", taskId: original.taskId });
+    expect(state(id).attempts[0].sample).toBeUndefined();
+    await service().tick(id);
+    expect(state(id).attempts[0]).toMatchObject({ status: "completed", taskId: original.taskId });
+    expect(mock.polls.map((a) => a.taskId)).toEqual([original.taskId, original.taskId]);
+    expect(mock.submits).toHaveLength(0);
+  });
+  it("explicit retry re-queries accepted failed slots without submitting them", async () => {
+    const { s, id } = await start();
+    for (const a of state(id).attempts) {
+      a.status = "submitted";
+      a.taskId = "supplier-" + a.id;
+      a.nextPollAt = Date.now() + 600_000;
+    }
+    const a = state(id).attempts[0];
+    a.status = "failed";
+    a.error = "Failed query: update agent_operations";
+    const originalId = a.taskId;
+    await s.retry(id);
+    await s.tick(id);
+    expect(state(id).attempts[0]).toMatchObject({ status: "completed", taskId: originalId });
+    expect(mock.polls.map((a) => a.taskId)).toEqual([originalId]);
+    expect(mock.submits).toHaveLength(0);
+  });
+  it("keeps explicit supplier failures terminal until a user requests a query", async () => {
+    const { s, id } = await start();
+    for (const a of state(id).attempts) {
+      a.status = "submitted";
+      a.taskId = "supplier-" + a.id;
+      a.nextPollAt = Date.now() + 600_000;
+    }
+    state(id).attempts[0].nextPollAt = 0;
+    mock.pollError = new DiagnosticMonitorError("MONITOR_FAILED", "供应商确认失败");
+    await s.tick(id);
+    expect(state(id).attempts[0]).toMatchObject({ status: "failed", error: "供应商确认失败" });
+    await s.tick(id);
+    expect(mock.polls).toHaveLength(1);
+    expect(mock.submits).toHaveLength(0);
   });
   it("removes internal execution details without losing business activity", async () => {
     const { s, id } = await draft();

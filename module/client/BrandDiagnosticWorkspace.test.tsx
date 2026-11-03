@@ -283,6 +283,20 @@ describe("single-page diagnostic interaction", () => {
     expect(screen.queryByRole("button", { name: "恢复未完成诊断" })).toBeNull();
   });
 
+  it("offers recovery of a failed slot while other accepted slots keep collecting", async () => {
+    run.phase = "collecting";
+    run.confirmedAt = new Date().toISOString();
+    run.attempts = [
+      { id: "failed-slot", category: "reputation", platform: "doubao", run: 1, status: "failed", hasAnswer: false },
+      { id: "pending-slot", category: "reputation", platform: "doubao", run: 2, status: "submitted", hasAnswer: false },
+    ];
+    history.replaceState({}, "", `/?diagnosis=${id}`);
+    render(<BrandDiagnosticWorkspace />);
+    fireEvent.click(await screen.findByRole("button", { name: "恢复未完成诊断" }));
+    await waitFor(() => expect(mock.fetch.mock.calls.some(([path]) => path.endsWith(`/${id}/retry`))).toBe(true));
+    expect(mock.fetch.mock.calls.some(([path]) => path.endsWith("/start"))).toBe(false);
+  });
+
   it("restores the task URL when returning to an unsaved local question draft", async () => {
     localStorage.setItem(
       "brand-diagnostic-draft",

@@ -888,6 +888,7 @@ export default function BrandDiagnosticWorkspace({
               )}
               {(run.phase === "partial" ||
                 run.phase === "stopped" ||
+                run.attempts.some((attempt) => attempt.status === "failed") ||
                 failedAssessment) &&
                 run.phase !== "completed" && (
                   <button
