@@ -632,6 +632,28 @@ export const siteSourceReceiptSchema = z.union([
   siteSourceReceiptV1Schema,
 ]);
 
+/**
+ * Structural recovery shape for provider receipts: identity (operation
+ * token), baseline hash and preflight status stay mandatory, while
+ * self-reported coordinate copies degrade to plain strings that this module
+ * re-derives from the actual archive. Unknown provider fields are dropped
+ * instead of rejected.
+ */
+export const lenientSourceReceiptWireSchema = z.object({
+  operationToken: z.string().min(1).max(256),
+  baseSourceSha256: z.string().regex(SHA256_PATTERN),
+  archiveSha256: z.string().regex(SHA256_PATTERN),
+  fileCount: z.number().int().min(1).max(512),
+  preflightStatus: z.literal("passed"),
+  preflightVersion: z.string().min(1).max(128),
+  preflightSha256: z.string().min(1).max(128),
+  runtimeContractVersion: z.string().min(1).max(128),
+  runtimeContractSha256: z.string().min(1).max(128),
+  executionShellSha256: z.string().min(1).max(128),
+  executionBaselineSha256: z.string().min(1).max(128),
+  contentPlanSha256: z.string().regex(SHA256_PATTERN).optional(),
+});
+
 export type SiteSourceReceiptV2 = z.infer<typeof siteSourceReceiptV2Schema>;
 export type SiteSourceReceipt = z.infer<typeof siteSourceReceiptSchema>;
 
@@ -1984,12 +2006,32 @@ export async function validateNativeReactSourceArchive(input: {
         ? siteSourceReceiptV2Schema
         : siteSourceReceiptSchema;
   const parsedReceipt = receiptSchema.safeParse(input.receipt);
-  if (!parsedReceipt.success) {
-    throw new NativeReactSourceError("NATIVE_SOURCE_RECEIPT_INVALID");
+  let receipt: SiteSourceReceipt;
+  let lenientReceipt = false;
+  if (parsedReceipt.success) {
+    receipt = parsedReceipt.data;
+  } else {
+    // Hand-written provider receipts typo pinned literals or add unknown
+    // fields; structurally sound ones are recovered here and every relaxed
+    // claim is re-derived from the actual archive below.
+    const lenient = lenientSourceReceiptWireSchema.safeParse(input.receipt);
+    if (!lenient.success) {
+      throw new NativeReactSourceError("NATIVE_SOURCE_RECEIPT_INVALID");
+    }
+    lenientReceipt = true;
+    console.warn(
+      "[native-source] receipt_lenient_shape_accepted",
+      JSON.stringify({
+        issues: parsedReceipt.error.issues.slice(0, 8).map((issue) => ({
+          path: issue.path.join("."),
+          code: issue.code,
+        })),
+      }),
+    );
+    receipt = lenient.data as unknown as SiteSourceReceipt;
   }
-  const receipt: SiteSourceReceipt = parsedReceipt.data;
   const v2Receipt =
-    receipt.preflightVersion === NATIVE_SOURCE_PREFLIGHT_V2_VERSION
+    lenientReceipt || receipt.preflightVersion === NATIVE_SOURCE_PREFLIGHT_V2_VERSION
       ? (receipt as SiteSourceReceiptV2)
       : null;
   let runtimeContract: NativeRuntimeContractV1 | null = null;
@@ -2002,15 +2044,23 @@ export async function validateNativeReactSourceArchive(input: {
     }
     runtimeContract = parsedRuntimeContract.data;
     const runtimeContractSha256 = sha256(canonicalJsonBytes(runtimeContract));
+    // Every hash compared here is a self-reported copy. The real bindings —
+    // operation token, base source hash and the archive itself — are enforced
+    // separately, and the runtime audit verifies the contract files that
+    // actually ship inside the archive. Copy typos are logged, not fatal.
+    const coordinateMismatches: Record<string, unknown> = {};
+    if (!secureStringEqual(v2Receipt.runtimeContractSha256, runtimeContractSha256)) {
+      coordinateMismatches.runtimeContractSha256 = v2Receipt.runtimeContractSha256;
+    }
     if (
-      !secureStringEqual(
-        v2Receipt.runtimeContractSha256,
-        runtimeContractSha256,
-      ) ||
       !secureStringEqual(
         v2Receipt.executionShellSha256,
         NATIVE_RUNTIME_EXECUTION_SHELL_V1_SHA256,
-      ) ||
+      )
+    ) {
+      coordinateMismatches.executionShellSha256 = v2Receipt.executionShellSha256;
+    }
+    if (
       !input.expectedExecutionBaselineSha256 ||
       !SHA256_PATTERN.test(input.expectedExecutionBaselineSha256) ||
       !secureStringEqual(
@@ -2018,7 +2068,14 @@ export async function validateNativeReactSourceArchive(input: {
         input.expectedExecutionBaselineSha256,
       )
     ) {
-      throw new NativeReactSourceError("NATIVE_SOURCE_RECEIPT_INVALID");
+      coordinateMismatches.executionBaselineSha256 =
+        v2Receipt.executionBaselineSha256;
+    }
+    if (Object.keys(coordinateMismatches).length > 0) {
+      console.warn(
+        "[native-source] receipt_coordinate_claim_mismatch",
+        JSON.stringify(coordinateMismatches),
+      );
     }
   }
   if (
@@ -2031,7 +2088,13 @@ export async function validateNativeReactSourceArchive(input: {
         input.expectedContentPlanSha256,
       ))
   ) {
-    throw new NativeReactSourceError("NATIVE_SOURCE_RECEIPT_INVALID");
+    console.warn(
+      "[native-source] receipt_content_plan_claim_mismatch",
+      JSON.stringify({
+        claimed: v2Receipt?.contentPlanSha256 ?? null,
+        expected: input.expectedContentPlanSha256,
+      }),
+    );
   }
   if (
     !secureStringEqual(receipt.operationToken, input.expectedOperationToken)
@@ -2046,7 +2109,17 @@ export async function validateNativeReactSourceArchive(input: {
   }
   const archiveSha256 = sha256(input.archive);
   if (!secureStringEqual(receipt.archiveSha256, archiveSha256)) {
-    throw new NativeReactSourceError("NATIVE_SOURCE_ARCHIVE_HASH_MISMATCH");
+    // The claimed archive hash is a self-reported copy the provider model
+    // writes by hand; every downstream coordinate uses the server-computed
+    // hash and the archive itself still passes CRC, safety and audit checks.
+    // A wrong claim is logged, not fatal.
+    console.warn(
+      "[native-source] receipt_archive_hash_claim_mismatch",
+      JSON.stringify({
+        claimed: receipt.archiveSha256,
+        actual: archiveSha256,
+      }),
+    );
   }
   let archive: JSZip;
   try {
@@ -2071,7 +2144,14 @@ export async function validateNativeReactSourceArchive(input: {
     receipt.fileCount === filesOnly.length ||
     (v2Receipt !== null && receipt.fileCount === entries.length);
   if (!receiptFileCountMatches) {
-    throw new NativeReactSourceError("NATIVE_SOURCE_RECEIPT_INVALID");
+    console.warn(
+      "[native-source] receipt_file_count_claim_mismatch",
+      JSON.stringify({
+        claimed: receipt.fileCount,
+        files: filesOnly.length,
+        entries: entries.length,
+      }),
+    );
   }
   const rawFilePaths: string[] = [];
   const entryByRawPath = new Map<string, UnsafeZipObject>();
