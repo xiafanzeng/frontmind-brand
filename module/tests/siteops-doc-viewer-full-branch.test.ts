@@ -18,10 +18,19 @@ describe("native source system prompt (full-branch doc view)", () => {
   });
 
   it("forbids partial node display and keeps verbatim rules", () => {
-    expect(prompt).toContain("不得只展示当前区块引用的节点");
+    expect(prompt).toContain("不得只展示被引用的节点");
     expect(prompt).toContain("不得摘要化、改写或省略任何节点");
     expect(prompt).toContain("去掉 http(s):// 前缀");
     expect(prompt).toContain("禁止新增 route manifest 路由");
+  });
+
+  it("wires every existing clickable element and bans aggregation modules", () => {
+    expect(prompt).toContain("每一个可点击的内容元素");
+    expect(prompt).toContain("不得以页面跳转代替文档打开");
+    expect(prompt).toContain("严禁为了承载文档入口而新增");
+    expect(prompt).toContain("聚合模块或聚合区块");
+    expect(prompt).toContain("信息架构与模板基线保持不变");
+    expect(prompt).toContain("与知识分支一一对应且不得重复");
   });
 });
 
