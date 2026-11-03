@@ -161,6 +161,12 @@ topic lookup fails. Record the missing support and retrieve the appropriate
 passage from the already available source. A complete document or a generic
 excerpt copied across different branches does not establish node-level support.
 
+When no source passage supports a node, do not invent one to satisfy the validator.
+A node containing only its title and the specific `资料不足：` notice may use the
+complete per-leaf sparse-evidence exception below. Keep its source inspection log
+and `## 节点资料缺口` record; neither is counted as original evidence. This exception
+does not allow factual prose or numeric claims without their original support.
+
 Check each explicit quantity, amount and percentage against this node's retained
 passages. Preserve years and units. For a transparent unit conversion, retain
 the original amount and state the conversion. Missing numeric support is

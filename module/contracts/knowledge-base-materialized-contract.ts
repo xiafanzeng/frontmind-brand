@@ -538,7 +538,11 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
   const newSubstance = !(substance.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
   const normalizeTitle = !(substance.literalTitleNormalizationLegacyHashes as readonly string[]).includes(manifest.skill.contentHash);
   const quotedOnly = !(policy.quotedEvidence.legacySkillContentHashes as readonly string[]).includes(manifest.skill.contentHash);
-  const sourceText = (text: string) => quotedOnly ? knowledgeBaseOriginalPassages(text).text : text;
+  const sourceText = (text: string) => {
+    if (!quotedOnly) return text;
+    const original = knowledgeBaseOriginalPassages(text);
+    return original.valid ? original.text : "";
+  };
   const paragraphKey = (paragraph: string, title: string) => {
     const literalTitle = knowledgeBaseVisibleText(title.normalize("NFKC"));
     return normalizeTitle && literalTitle ? paragraph.split(literalTitle).join("") : paragraph;
@@ -587,7 +591,11 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
     const bodyCharacters = Array.from(body).length;
     const minimumBodyCharacters = newBindings ? traceability.minimumBodyCharacters : policy.minimumBodyCharacters;
     const issue = { leafId: leaf.leafId, title: leaf.title, evidenceCharacters, bodyCharacters, minimumBodyCharacters };
-    if (quotedOnly && texts.some(text => !knowledgeBaseOriginalPassages(text).valid)) {
+    // A documented absence of facts must not force the writer to invent a quote.
+    // This exception applies only to a gap notice, never to customer-facing claims.
+    const gapOnly = quotedOnly && knowledgeBaseVisibleCharacters(knowledgeBaseSubstantiveMarkdown(markdown)) === 0
+      && knowledgeBaseHasSparseEvidenceException(manifest, leaf, evidence, evidenceSources, markdown);
+    if (quotedOnly && !gapOnly && texts.some(text => !knowledgeBaseOriginalPassages(text).valid)) {
       return [{ ...issue, reason: "EVIDENCE_ORIGINAL_QUOTE_REQUIRED" }];
     }
     const independence = policy.evidenceIndependence;

@@ -192,7 +192,10 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
     normalize_title = manifest["skill"]["contentHash"] not in substance["literalTitleNormalizationLegacyHashes"]
     quoted_only = manifest["skill"]["contentHash"] not in policy["quotedEvidence"]["legacySkillContentHashes"]
     def retained_source(text):
-        return original_passages(text)["text"] if quoted_only else text
+        if not quoted_only:
+            return text
+        original = original_passages(text)
+        return original["text"] if original["valid"] else ""
     def paragraph_key(paragraph, title):
         literal_title = visible_text(unicodedata.normalize("NFKC", title))
         return paragraph.replace(literal_title, "") if normalize_title and literal_title else paragraph
@@ -243,7 +246,10 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
         minimum = traceability["minimumBodyCharacters"] if new_bindings else policy["minimumBodyCharacters"]
         issue = {"leafId": leaf["leafId"], "title": leaf["title"], "evidenceCharacters": evidence,
                  "bodyCharacters": body, "minimumBodyCharacters": minimum}
-        if quoted_only and any(not original_passages(text)["valid"] for text in texts):
+        # A complete gap notice does not need an invented quote; prose claims still do.
+        gap_only = (quoted_only and visible_characters(substantive_markdown(markdown)) == 0
+                    and has_sparse_evidence_exception(manifest, leaf, unique, evidence_sources, markdown))
+        if quoted_only and not gap_only and any(not original_passages(text)["valid"] for text in texts):
             issues.append({**issue, "reason": "EVIDENCE_ORIGINAL_QUOTE_REQUIRED"})
             continue
         independence = policy["evidenceIndependence"]
