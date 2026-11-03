@@ -1,5 +1,5 @@
 import "./knowledge-conversation.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import BrandConversationMessage from "./BrandConversationMessage";
 import { EmptyConversationHint } from "./KnowledgeStarter";
 import { useKnowledgeBaseStarter } from "../lib/useKnowledgeBaseStarter";
@@ -8,7 +8,7 @@ import {
   useKnowledgeBaseUploadField,
 } from "../lib/knowledge-base-upload-manager";
 import KnowledgeBaseManagedUploadRecovery from "./KnowledgeBaseManagedUploadRecovery";
-import { sanitizeKnowledgeBaseOutputMessages } from "../knowledge-conversation-state";
+import { sanitizeKnowledgeBaseOutputMessages, knowledgeBaseMessageIdentity } from "../knowledge-conversation-state";
 import {
   ChatInput,
   useConversation,
@@ -29,6 +29,8 @@ import {
   knowledgeExecutionItems,
 } from "../lib/knowledge-execution-presentation";
 export { default as KnowledgeComposer } from "./KnowledgeComposer";
+
+const readingPositions = new Map<string, { top: number; presentationId?: string }>();
 
 /** Public knowledge build/conversation UI, shared by main and module domains. */
 export default function KnowledgeConversation(props: BrandHomeProps) {
@@ -92,8 +94,13 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
         conversation?.knowledgeBase?.presentationKey,
   );
   const presentationId = currentPresentation?.id;
+  const readingKey = `${scope}:${props.knowledgeBaseProgress?.build.id ?? messages.findLast(message => message.knowledgeBase?.buildId)?.knowledgeBase?.buildId ?? "pending"}:${props.knowledgeBaseResetRevision ?? 0}:${conversation?.knowledgeBase?.generation ?? props.knowledgeBaseProgress?.workbench?.generation ?? "unknown"}`;
+  useLayoutEffect(() => {
+    const saved = readingPositions.get(readingKey);
+    if (saved && viewport.current) viewport.current.scrollTop = saved.top;
+  }, [readingKey]);
   useEffect(() => {
-    if (!presentationId) return;
+    if (!presentationId || readingPositions.get(readingKey)?.presentationId === presentationId) return;
     const frame = requestAnimationFrame(() => {
       const element = messageElements.current.get(presentationId);
       const container = viewport.current;
@@ -104,14 +111,15 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
         container.getBoundingClientRect().top -
         16;
       container.scrollTop = Math.max(0, top);
+      readingPositions.set(readingKey, { top: container.scrollTop, presentationId });
       element.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [conversation?.id, presentationId]);
+  }, [readingKey, presentationId]);
 
   const renderMessage = (message: (typeof messages)[number]) => (
     <article
-      key={message.id}
+      key={knowledgeBaseMessageIdentity(message)}
       tabIndex={-1}
       ref={(element) => {
         if (element) messageElements.current.set(message.id, element);
@@ -136,6 +144,7 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
         )}
         thinkingDisplay="inline"
         hideSuccessfulResults
+        hideToolDetails
       />
       <BrandConversationMessage
         message={message}
@@ -165,6 +174,7 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
         placement="after"
         thinkingDisplay="inline"
         hideSuccessfulResults
+        hideToolDetails
       />
     </article>
   );
@@ -173,7 +183,7 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
   );
   const foldResearch = !running && firstNodeIndex > 0;
   const sourceEvidence = props.knowledgeBaseProgress?.resultQuality?.sourceEvidence;
-  if (!context.hydrated)
+  if (!context.hydrated && !hasKnownBuild && !messages.length)
     return (
       <p role="status">
         {context.loading
@@ -227,7 +237,7 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
       aria-label="知识库构建与恢复"
     >
       {context.syncError && <p role="alert">{context.syncError}</p>}
-      {keepLocalStarter || (!hasStarted && !props.knowledgeBaseProgress) ? (
+      {keepLocalStarter || (!hasStarted && !hasKnownBuild && !messages.length && !props.knowledgeBaseProgress) ? (
         <EmptyConversationHint
           uploadScopeKey={scope}
           resetRevision={props.knowledgeBaseResetRevision ?? 0}
@@ -248,6 +258,10 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
         <>
           <div
             ref={viewport}
+            onScroll={(event) => {
+              readingPositions.set(readingKey, { top: event.currentTarget.scrollTop, presentationId });
+              if (readingPositions.size > 100) readingPositions.delete(readingPositions.keys().next().value!);
+            }}
             className="brand-knowledge-transcript"
             data-testid="chat-messages-viewport"
           >

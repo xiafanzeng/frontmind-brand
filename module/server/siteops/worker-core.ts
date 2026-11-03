@@ -9,6 +9,7 @@ export interface SiteOpsWorkerCore {
   messages: any;
   getDb(): Promise<MySql2Database<any> | null>;
   runWithStoredEnterpriseProjectScope<T>(userId: number, projectId: string | null, action: () => Promise<T>): Promise<T>;
+  runWithStoredEnterpriseProjectCleanupScope<T>(userId: number, projectId: string | null, action: (archived: boolean) => Promise<T>): Promise<T>;
   enterpriseAccountOwnerPredicate(table: any, userId: number): SQL;
   enterpriseOwnerPredicate(table: any, userId: number): SQL;
   enterpriseSiteProfileTable(): BrandSchema["enterpriseProjectSiteProfiles"] | BrandSchema["workspaceSiteProfiles"];

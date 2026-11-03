@@ -201,80 +201,47 @@ export function diagnosticSampleFromResult(
   };
 }
 
-export function diagnosticMonitorClient(
-  environment: Readonly<Record<string, string | undefined>>,
-) {
-  const token = (
-    environment.MOLI_API_TOKEN ??
-    environment.MOLIZHISHU_TOKEN ??
-    environment.MOLIZHISHU_API_KEY ??
-    ""
-  ).trim();
-  const origin = (
-    environment.MOLI_API_ORIGIN ??
-    environment.MOLIZHISHU_API_BASE_URL ??
-    "https://business-api.molizhishu.com"
-  ).replace(/\/+$/, "");
-  async function request(path: string, body?: unknown) {
-    if (!token)
-      throw new DiagnosticMonitorError(
-        "MONITOR_NOT_CONFIGURED",
-        "诊断采集服务尚未配置，请联系维护人员。",
-      );
-    let response: Response;
-    try {
-      response = await fetch(`${origin}${path}`, {
-        method: body ? "POST" : "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(25_000),
-      });
-    } catch {
-      throw new DiagnosticMonitorError(
-        "MONITOR_NETWORK",
-        "采集服务连接暂未确认，将使用原任务标识恢复。",
-        !!body,
-      );
-    }
-    const raw = await response.text();
-    let envelope: any;
-    try {
-      envelope = JSON.parse(raw);
-    } catch {
-      throw new DiagnosticMonitorError(
-        "MONITOR_RESPONSE",
-        "采集服务返回格式异常，请稍后恢复。",
-        !!body,
-      );
-    }
-    if (
-      !response.ok ||
-      envelope.success === false ||
-      (envelope.code !== undefined &&
-        ![0, 200, "0", "200", "SUCCESS", "success"].includes(envelope.code))
-    )
-      throw new DiagnosticMonitorError(
-        "MONITOR_REJECTED",
-        `采集服务未完成请求（HTTP ${response.status}），请检查服务状态后重试。`,
-        !!body && response.status >= 500,
-      );
-    return envelope.data ?? envelope;
+/** Host-owned transport: credentials never cross the module or browser boundary. */
+export type DiagnosticCollectionBinding = {
+  contractVersion: "brand_single_sample_v1";
+  credentialId: string;
+  credentialVersion: number;
+  baseUrl: string;
+};
+export function sameDiagnosticCollectionBinding(a: DiagnosticCollectionBinding, b?: DiagnosticCollectionBinding): boolean {
+  return !!b && a.contractVersion === b.contractVersion && a.credentialId === b.credentialId &&
+    a.credentialVersion === b.credentialVersion && a.baseUrl === b.baseUrl;
+}
+export interface DiagnosticCollectionPort {
+  availability(): { ready: boolean; reason?: string; platforms: string[]; binding?: DiagnosticCollectionBinding };
+  request(binding: DiagnosticCollectionBinding, method: "submit" | "status" | "result" | "stop", input: { taskId?: string; payload?: {
+    monitorKeywords: string; monitorKeywordAliases: string[]; competitors: string[];
+    prompts: string[]; platforms: Array<{ platform: string; mode: "search"; screenshot: 0 }>;
+    consumerTaskId: string;
+  } }): Promise<unknown>;
+}
+export function diagnosticMonitorClient(port?: DiagnosticCollectionPort, binding?: DiagnosticCollectionBinding) {
+  const available = port?.availability();
+  const selected = binding ?? available?.binding;
+  async function request(method: "submit" | "status" | "result" | "stop", input: Parameters<DiagnosticCollectionPort["request"]>[2]) {
+    if (!port || !selected || !available?.ready)
+      throw new DiagnosticMonitorError("MONITOR_NOT_CONFIGURED", available?.reason ?? "诊断采集服务尚未配置，请联系维护人员。");
+    if (!sameDiagnosticCollectionBinding(selected, available.binding))
+      throw new DiagnosticMonitorError("MONITOR_BINDING_CHANGED", "采集配置已变更，正在等待核对原任务配置；已有回答已保留。");
+    return port.request(selected, method, input);
   }
   return {
-    configured: !!token,
+    configured: !!available?.ready && !!selected,
     async submit(a: DiagnosticMonitorAttempt, brandName: string) {
-      const data = await request("/api/business/monitor/task/batch/shared", {
+      const raw = await request("submit", { payload: {
         monitorKeywords: brandName,
         monitorKeywordAliases: [],
         competitors: [],
         prompts: [a.question],
         platforms: [{ platform: a.platform, mode: "search", screenshot: 0 }],
         consumerTaskId: a.consumerTaskId,
-      });
+      } });
+      const data = record(raw);
       const id = String(data.taskId ?? data.id ?? data.monitorTaskId ?? "");
       if (!id)
         throw new DiagnosticMonitorError(
@@ -284,15 +251,14 @@ export function diagnosticMonitorClient(
         );
       return id;
     },
+    async stop(taskId: string) { await request("stop", { taskId }); },
     async poll(a: DiagnosticMonitorAttempt, brandName: string) {
       if (!a.taskId)
         throw new DiagnosticMonitorError(
           "MONITOR_TASK_MISSING",
           "采集任务标识不存在。",
         );
-      const state = await request(
-        `/api/business/monitor/task/status/${encodeURIComponent(a.taskId)}`,
-      );
+      const state = record(await request("status", { taskId: a.taskId }));
       const status = String(
         state.status ?? state.taskStatus ?? "",
       ).toLowerCase();
@@ -310,9 +276,7 @@ export function diagnosticMonitorClient(
       return diagnosticSampleFromResult(
         a,
         brandName,
-        await request(
-          `/api/business/monitor/task/result/${encodeURIComponent(a.taskId)}`,
-        ),
+        await request("result", { taskId: a.taskId }),
       );
     },
   };

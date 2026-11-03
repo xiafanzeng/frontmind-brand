@@ -143,6 +143,18 @@ Read the complete corresponding PDF chapter before drafting its nodes. Map each
 node to the actual retained source passages and printed page or section locators.
 Preserve original wording, table headings, units and the year to which each fact
 belongs. A rewritten digest cannot be labeled as an original source excerpt.
+Separate each evidence file into `## 原文引用` (verbatim only, with a page/section
+locator per passage) and `## 整理摘要` (explicit paraphrase). In the original
+section, start each separate passage with `定位：第 12 页` or a specific named
+section such as `定位：“师资队伍”节`; preserve the actual location, never invent
+one. Only these located original passages count as evidence length or numeric
+support. Generated summaries cannot verify their own facts. A missing original
+section or unlocated passage is `EVIDENCE_ORIGINAL_QUOTE_REQUIRED`. Never concatenate
+sentences from different pages into one purported quotation. Preserve tables'
+headers and units. Record acquisition time only from the actual tool response
+or retained collection log; source publication date is not acquisition time.
+When no trustworthy acquisition timestamp is available, set ledger `retrievedAt`
+to null and mark `采集时间：未知` in evidence. Never invent a common timestamp.
 A shared source document may support several topics, but each topic must retain
 its own supporting passages. Do not fall back to one generic paragraph when a
 topic lookup fails. Record the missing support and retrieve the appropriate
@@ -237,7 +249,11 @@ source_limited alone never exempts a node. All of these conditions are required:
 
 Keep this section last in the evidence file. It is excluded from source size,
 source reuse and numeric-support checks. Unexplained short nodes produce
-SUBSTANTIVE_BODY_TOO_SHORT. Both insufficient depth and repeated templates must
+SUBSTANTIVE_BODY_TOO_SHORT. Template comparison removes each leaf's literal title
+before comparing paragraphs across topics. Inserting the title into otherwise
+identical advice does not add substantive content; reused paragraphs are deducted
+in full. Supply distinct supported facts, process details and applicability for
+each node, or use the documented leaf-specific sparse-evidence exception. Both insufficient depth and repeated templates must
 be fixed together in the single permitted correction pass. If the supported
 material remains inadequate and the exception cannot be established, stop with
 an explicit incomplete result. Previously frozen Skill revisions retain their
