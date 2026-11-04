@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the portable v5 working-set or leaf-patch ZIP contract."""
+"""Validate a frozen working set and one bounded v6 depth correction."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import sys
 import unicodedata
 import urllib.parse
 import zipfile
+from collections import deque
 
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,190}$")
@@ -68,6 +69,314 @@ ASSET_DISPLAY_ROLES = {"hero", "inline", "badge"}
 
 def fail(message: str) -> None:
     raise ValueError(message)
+
+
+def visible_text(markdown: str) -> str:
+    text = re.sub(r"^\s*#\s+[^\n]*(?:\n|$)", "", markdown)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"https?://[^\s\u4e00-\u9fff，。！？；、）】》]+", "", text)
+    return re.sub(r"[\s#>*_`~]", "", text)
+
+
+def visible_characters(markdown: str) -> int:
+    return len(visible_text(markdown))
+
+
+def source_text(markdown: str, exclude_gap: bool = False) -> str:
+    source = re.sub(r"^## 节点资料缺口\s*\n[\s\S]*$", "", markdown, flags=re.MULTILINE) if exclude_gap else markdown
+    text = unicodedata.normalize("NFKC", source)
+    text = re.sub(r"^\s*#{1,6}\s+.*$", "", text, flags=re.MULTILINE)
+    return re.sub(r"^\s*(?:来源(?:地址)?|源文件|抓取时间|检索时间|获取时间|定位|页码|Source|Retrieved(?:At)?)\s*[:：].*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
+
+
+def original_passages(markdown: str) -> dict:
+    """Only located, declared original passages can support a new build's facts."""
+    headings = list(re.finditer(r"^##[ \t]+原文引用[ \t]*\r?$", markdown, flags=re.MULTILINE))
+    if len(headings) != 1:
+        return {"text": "", "valid": False}
+    tail = re.sub(r"^\r?\n", "", markdown[headings[0].end():])
+    boundary = re.search(r"^#{1,2}[ \t]+", tail, flags=re.MULTILINE)
+    section = tail[:boundary.start()] if boundary else tail
+    locators = list(re.finditer(r"^(?:定位|页码)[ \t]*[:：][ \t]*([^\n]+)\r?$", section, flags=re.MULTILINE))
+    location = r"(?:第\s*)?[0-9一二三四五六七八九十百]+(?:\s*[-—–至~]\s*[0-9一二三四五六七八九十百]+)?\s*[页章节段表]|[“「《][^”」》\n]{2,}[”」》]\s*[章节段表]|(?:page|chapter|section)\s+[0-9ivx]+\b"
+    valid = bool(locators) and not section[:locators[0].start()].strip()
+    passages = []
+    for index, locator in enumerate(locators):
+        passage = section[locator.end():locators[index + 1].start() if index + 1 < len(locators) else len(section)].strip()
+        if not re.search(location, locator.group(1), flags=re.IGNORECASE) or not visible_characters(source_text(passage)):
+            valid = False
+        passages.append(passage)
+    return {"text": "\n\n".join(passages), "valid": valid}
+
+
+def numeric_text(markdown: str, exclude_gap: bool = False) -> str:
+    text = source_text(markdown, exclude_gap)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"(?:https?://|upload://)[^\s\u4e00-\u9fff，。！？；、）】》]+", "", text)
+    text = re.sub(r"(?:第\s*)?[0-9]+(?:\s*[-—–至~]\s*[0-9]+)?\s*页", "", text)
+    text = re.sub(r"(?:版本|编号|version|\bv)\s*[A-Za-z0-9._-]+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*[0-9]+(?:[.、)）]\s*)?\s*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[0-9]+(?:\.[0-9]+)*[.、)）]\s+", "", text, flags=re.MULTILINE)
+    return re.sub(r"\s", "", text)
+
+
+def normalized_number(value: str, power: int = 0) -> str:
+    parts = value.replace(",", "").split(".")
+    whole, fraction = parts[0], parts[1] if len(parts) > 1 else ""
+    digits = (whole + fraction).lstrip("0")
+    if not digits:
+        return "0"
+    trailing = len(digits) - len(digits.rstrip("0"))
+    return f"{digits[:len(digits) - trailing]}e{power - len(fraction) + trailing}"
+
+
+def numeric_claims(text: str, exclude_gap: bool = False) -> list[dict]:
+    units = "|".join(WORKING_SET_POLICY["depth"]["evidenceTraceability"]["quantityUnits"])
+    pattern = rf"(?<![0-9.])([0-9]+(?:,[0-9]{{3}})*(?:\.[0-9]+)?)(亿|万)?(?:余|多)?({units})"
+    aliases = WORKING_SET_POLICY["depth"]["evidenceTraceability"]["quantityUnitAliases"]
+    return [{"label": match.group(0), "literal": normalized_number(match.group(1)),
+             "quantity": normalized_number(match.group(1), 8 if match.group(2) == "亿" else 4 if match.group(2) == "万" else 0) + ":" + aliases.get(match.group(3), match.group(3))}
+            for match in re.finditer(pattern, numeric_text(text, exclude_gap))]
+
+
+def substantive_markdown(markdown: str) -> str:
+    return "\n\n".join(paragraph for paragraph in re.split(r"\n\s*\n", markdown)
+                       if not re.match(r"^\s*(?:>\s*)?资料不足[:：]", paragraph))
+
+
+def body_paragraphs(markdown: str) -> list[str]:
+    return [visible_text(unicodedata.normalize("NFKC", paragraph)) for paragraph in re.split(r"\n\s*\n", substantive_markdown(markdown))
+            if visible_text(paragraph)]
+
+
+def body_fragments(markdown: str, title: str) -> dict:
+    """Index sentences and reflow-independent windows using Unicode code points."""
+    policy = WORKING_SET_POLICY["depth"]["bodySubstance"]["reflow"]
+    def normalize(value):
+        return "".join(char for char in value if not char.isspace() and unicodedata.category(char)[0] not in "PS")
+    literal_title = visible_text(unicodedata.normalize("NFKC", title))
+    paragraphs = [paragraph.replace(literal_title, "") if literal_title else paragraph
+                  for paragraph in body_paragraphs(markdown)]
+    text = "".join(normalize(paragraph) for paragraph in paragraphs)
+    fragments = []
+    start = 0
+    for paragraph in paragraphs:
+        paragraph_key = normalize(paragraph)
+        paragraph_end = start + len(paragraph_key)
+        if paragraph_end - start >= policy["minimumFragmentCharacters"]:
+            fragments.append({"key": paragraph_key, "start": start, "end": paragraph_end})
+        for sentence in re.split(r"[。！？!?；;\n]+", paragraph):
+            key = normalize(sentence)
+            end = start + len(key)
+            if end - start >= policy["minimumFragmentCharacters"]:
+                fragments.append({"key": key, "start": start, "end": end})
+            start = end
+    # Hashes select windows only; literal keys prevent hash-collision matches.
+    width = policy["minimumFragmentCharacters"]
+    span = policy["fingerprintWindow"]
+    queue = deque()
+    current_hash = 0
+    power = pow(257, width - 1, 2 ** 32)
+    last_selected = -1
+    for index, char in enumerate(text):
+        if index >= width:
+            current_hash = (current_hash - ord(text[index - width]) * power) & 0xffffffff
+        current_hash = (current_hash * 257 + ord(char)) & 0xffffffff
+        if index < width - 1:
+            continue
+        position = index - width + 1
+        while queue and queue[0][1] <= position - span:
+            queue.popleft()
+        while queue and queue[-1][0] >= current_hash:
+            queue.pop()
+        queue.append((current_hash, position))
+        if position < span - 1 and index < len(text) - 1:
+            continue
+        selected = queue[0][1]
+        if selected != last_selected:
+            fragments.append({"key": text[selected:selected + width], "start": selected, "end": selected + width})
+            last_selected = selected
+    return {"characters": len(text), "fragments": fragments}
+
+
+def covered_characters(fragments: list[dict]) -> int:
+    total = 0
+    end = 0
+    for fragment in sorted(fragments, key=lambda item: (item["start"], item["end"])):
+        total += max(0, fragment["end"] - max(end, fragment["start"]))
+        end = max(end, fragment["end"])
+    return total
+
+
+def has_sparse_evidence_exception(manifest: dict, leaf: dict, evidence: dict, evidence_sources: dict, markdown: str) -> bool:
+    """Validate the reviewable declaration, without asserting that its gap is true."""
+    coverage = manifest["researchCoverage"]
+    minimum = WORKING_SET_POLICY["depth"]["bodySubstance"]["minimumExceptionDetailCharacters"]
+    if (coverage.get("stopReason") != "source_limited"
+            or visible_characters(coverage.get("limitationReason", "")) < minimum
+            or not any(dimension["status"] == "gap" and leaf["leafId"] in dimension["leafIds"]
+                       for dimension in coverage["dimensions"])):
+        return False
+    notice_match = re.search(r"(?:^|\n)\s*(?:>\s*)?资料不足[:：]([^\n]+)", markdown)
+    notice = notice_match.group(1) if notice_match else ""
+    if visible_characters(notice) < minimum:
+        return False
+    for text in evidence.values():
+        section = re.search(r"^## 节点资料缺口\s*\n([\s\S]*)$", text, flags=re.MULTILINE)
+        if not section:
+            continue
+        fields = dict((match.group(1), match.group(2).strip()) for match in re.finditer(
+            r"^(节点|缺失事实|已读来源|已读定位|来源局限)[:：]\s*(.+)$", section.group(1), flags=re.MULTILINE))
+        missing = fields.get("缺失事实", "")
+        source = fields.get("已读来源", "")
+        bound_source = source in evidence_sources.get(text, set())
+        if (fields.get("节点") == leaf["leafId"] and bound_source and leaf["title"] in missing
+                and visible_characters(missing) >= minimum and missing in notice
+                and visible_characters(fields.get("已读定位", "")) >= 4
+                and re.search(r"页|章|节|表|段|page|chapter|section", fields.get("已读定位", ""), flags=re.IGNORECASE)
+                and visible_characters(fields.get("来源局限", "")) >= minimum):
+            return True
+    return False
+
+
+def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -> list[dict]:
+    if skill_version != "6":
+        return []
+    policy = WORKING_SET_POLICY["depth"]
+    traceability = policy["evidenceTraceability"]
+    new_bindings = manifest["skill"]["contentHash"] not in traceability["legacySkillContentHashes"]
+    substance = policy["bodySubstance"]
+    new_substance = manifest["skill"]["contentHash"] not in substance["legacySkillContentHashes"]
+    normalize_title = manifest["skill"]["contentHash"] not in substance["literalTitleNormalizationLegacyHashes"]
+    reflow = manifest["skill"]["contentHash"] not in substance["reflow"]["legacySkillContentHashes"]
+    quoted_only = manifest["skill"]["contentHash"] not in policy["quotedEvidence"]["legacySkillContentHashes"]
+    def retained_source(text):
+        if not quoted_only:
+            return text
+        original = original_passages(text)
+        return original["text"] if original["valid"] else ""
+    def paragraph_key(paragraph, title):
+        literal_title = visible_text(unicodedata.normalize("NFKC", title))
+        return paragraph.replace(literal_title, "") if normalize_title and literal_title else paragraph
+    ledger = {row["path"]: row for row in manifest["evidenceLedger"]}
+    shared = {}
+    paragraphs = {}
+    fragments = {}
+    records = []
+    for leaf in manifest["leaves"]:
+        unique = {}
+        evidence_sources = {}
+        for name in leaf["evidencePaths"]:
+            row = ledger.get(name)
+            if not row or row["leafId"] != leaf["leafId"] or not is_text_evidence_path(name):
+                continue
+            try:
+                payload = archive.read(name)
+                if hashlib.sha256(payload).hexdigest() != row["sha256"]:
+                    continue
+                text = payload.decode("utf-8")
+            except (KeyError, UnicodeDecodeError):
+                continue
+            if row.get("sourceUrl"):
+                evidence_sources.setdefault(text, set()).add(row["sourceUrl"])
+            identity = visible_text(source_text(retained_source(text), new_substance)) if new_bindings else re.sub(r"\s", "", text)
+            if identity:
+                unique[identity] = text
+            elif quoted_only:
+                unique[f"invalid:{name}"] = text
+        for identity in unique:
+            owners = shared.setdefault(identity, {"leaves": set(), "branches": set()})
+            owners["leaves"].add(leaf["leafId"])
+            owners["branches"].add(leaf["branchId"])
+        markdown = archive.read(leaf["contentPath"]).decode("utf-8")
+        leaf_paragraphs = body_paragraphs(markdown)
+        for paragraph in leaf_paragraphs:
+            if len(paragraph) < substance["minimumSharedParagraphCharacters"]:
+                continue
+            owners = paragraphs.setdefault(paragraph_key(paragraph, leaf["title"]), {"leaves": set(), "branches": set()})
+            owners["leaves"].add(leaf["leafId"])
+            owners["branches"].add(leaf["branchId"])
+        leaf_fragments = body_fragments(markdown, leaf["title"]) if reflow else None
+        for fragment in leaf_fragments["fragments"] if leaf_fragments else []:
+            owners = fragments.setdefault(fragment["key"], {"leaves": set(), "branches": set()})
+            owners["leaves"].add(leaf["leafId"])
+            owners["branches"].add(leaf["branchId"])
+        records.append((leaf, unique, evidence_sources, markdown, leaf_paragraphs, leaf_fragments))
+    issues = []
+    for leaf, unique, evidence_sources, markdown, leaf_paragraphs, leaf_fragments in records:
+        texts = list(unique.values())
+        evidence = sum(visible_characters(source_text(retained_source(text), new_substance) if new_bindings else text) for text in texts)
+        body_text = visible_text(markdown)
+        body = len(body_text)
+        minimum = traceability["minimumBodyCharacters"] if new_bindings else policy["minimumBodyCharacters"]
+        issue = {"leafId": leaf["leafId"], "title": leaf["title"], "evidenceCharacters": evidence,
+                 "bodyCharacters": body, "minimumBodyCharacters": minimum}
+        # A complete gap notice does not need an invented quote; prose claims still do.
+        gap_only = (quoted_only and visible_characters(substantive_markdown(markdown)) == 0
+                    and has_sparse_evidence_exception(manifest, leaf, unique, evidence_sources, markdown))
+        if quoted_only and not gap_only and any(not original_passages(text)["valid"] for text in texts):
+            issues.append({**issue, "reason": "EVIDENCE_ORIGINAL_QUOTE_REQUIRED"})
+            continue
+        independence = policy["evidenceIndependence"]
+        legacy = manifest["skill"]["contentHash"] in independence["legacySkillContentHashes"]
+        copied = bool(texts) and all(body_text in visible_text(retained_source(text))
+            and len(visible_text(retained_source(text))) - body <= independence["maximumExtraCharacters"] for text in texts)
+        if not legacy and body >= independence["minimumBodyCharacters"] and copied:
+            issues.append({**issue, "reason": "EVIDENCE_COPIES_NODE_BODY"})
+            continue
+        if new_bindings:
+            reused = bool(unique) and all(len(shared[identity]["leaves"]) >= traceability["minimumSharedLeaves"]
+                and len(shared[identity]["branches"]) >= traceability["minimumSharedBranches"] for identity in unique)
+            source_claims = [claim for text in texts for claim in numeric_claims(retained_source(text), new_substance)]
+            source_quantities = {claim["quantity"] for claim in source_claims}
+            typed_source_numbers = {claim["literal"] for claim in source_claims}
+            source_numbers = {normalized_number(match.group(0)) for text in texts
+                for match in re.finditer(r"(?<![0-9.])[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?(?![0-9.])", numeric_text(retained_source(text), new_substance))}
+            missing = list(dict.fromkeys(claim["label"] for claim in numeric_claims(substantive_markdown(markdown) if new_substance else markdown)
+                if claim["quantity"] not in source_quantities and (claim["literal"] not in source_numbers or claim["literal"] in typed_source_numbers)))
+            if reused or missing:
+                issues.append({**issue, "reason": "EVIDENCE_REUSED_ACROSS_TOPICS" if reused else "NUMERIC_CLAIMS_UNVERIFIED",
+                               **({"unverifiedNumericClaims": missing} if missing else {})})
+                continue
+        if new_substance:
+            template = covered_characters([fragment for fragment in leaf_fragments["fragments"]
+                if len(fragments[fragment["key"]]["leaves"]) >= substance["minimumSharedLeaves"]
+                and len(fragments[fragment["key"]]["branches"]) >= substance["minimumSharedBranches"]]) if leaf_fragments else sum(len(paragraph) for paragraph in leaf_paragraphs if paragraph_key(paragraph, leaf["title"]) in paragraphs
+                           and len(paragraphs[paragraph_key(paragraph, leaf["title"])]["leaves"]) >= substance["minimumSharedLeaves"]
+                           and len(paragraphs[paragraph_key(paragraph, leaf["title"])]["branches"]) >= substance["minimumSharedBranches"])
+            effective = (leaf_fragments["characters"] if leaf_fragments else sum(len(paragraph) for paragraph in leaf_paragraphs)) - template
+            substantive_issue = {**issue, "minimumBodyCharacters": substance["minimumBodyCharacters"],
+                                 "effectiveBodyCharacters": effective, "templateCharacters": template}
+            if template and (not leaf_fragments or effective < substance["minimumBodyCharacters"]):
+                issues.append({**substantive_issue, "reason": "BODY_TEMPLATE_REUSED"})
+            elif effective < substance["minimumBodyCharacters"] and not has_sparse_evidence_exception(manifest, leaf, unique, evidence_sources, markdown):
+                issues.append({**substantive_issue, "reason": "SUBSTANTIVE_BODY_TOO_SHORT"})
+        elif evidence >= policy["evidenceThreshold"] and body < minimum:
+            issues.append(issue)
+    return issues
+
+
+def record_depth_check(archive_path: pathlib.Path, operation_id: str, issues: list[dict]) -> None:
+    identity = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()[:24]
+    state_path = archive_path.parent / f".frontmind-depth-{identity}.json"
+    previous = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else None
+    archive_hash = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    if previous and previous["status"] == "exhausted":
+        fail("DEPTH_REWRITE_EXHAUSTED: 本次操作已用完一次集中补写。")
+    if not issues:
+        if previous:
+            state_path.write_text(json.dumps({**previous, "status": "validated", "validatedHash": archive_hash}), encoding="utf-8")
+        return
+    if previous and previous["sourceHash"] != archive_hash:
+        state_path.write_text(json.dumps({**previous, "status": "exhausted"}), encoding="utf-8")
+        fail("DEPTH_REWRITE_EXHAUSTED: 已使用一次集中补写，仍有证据绑定、数值可追溯性或正文深度未通过的节点；停止提交。" + json.dumps(issues, ensure_ascii=False))
+    if not previous:
+        state_path.write_text(json.dumps({"version": 1, "operationId": operation_id,
+            "sourceHash": archive_hash, "status": "rewrite_required", "rewritePasses": 1,
+            "issues": issues}, ensure_ascii=False), encoding="utf-8")
+    fail("DEPTH_REWRITE_REQUIRED: 仅集中修正以下节点一次。EVIDENCE_COPIES_NODE_BODY 须恢复已采集的来源原文，不得改写节点正文充当证据；跨主题重复证据须按原文段落重绑；缺失数值须核对或标明待核验；清除跨节点模板后按有效正文补写，资料确实不足须逐叶留存可审核例外。复用已有采集，更新文件与哈希后再次校验。" + json.dumps(issues, ensure_ascii=False))
 
 
 def normalized_media_type(value: object) -> str | None:
@@ -678,7 +987,7 @@ def validate_bundle(
     skill = manifest.get("skill")
     expected_skill = {
         "name": "socratic-kb-builder",
-        "version": "5",
+        "version": expected.get("skill_version") or ("6" if isinstance(skill, dict) and skill.get("version") == "6" else "5"),
         "contentHash": expected["skill_content_hash"],
     }
     if skill != expected_skill:
@@ -1036,6 +1345,7 @@ def main() -> None:
     parser.add_argument("--expected-generation", type=int)
     parser.add_argument("--expected-content-version", type=int)
     parser.add_argument("--expected-skill-content-hash")
+    parser.add_argument("--expected-skill-version", choices=("5", "6"))
     parser.add_argument("--expected-tree-policy-version", type=int)
     parser.add_argument("--expected-company-base64url")
     parser.add_argument("--expected-uploads-read", type=int)
@@ -1051,6 +1361,7 @@ def main() -> None:
         "generation": args.expected_generation,
         "content_version": args.expected_content_version,
         "skill_content_hash": args.expected_skill_content_hash,
+        "skill_version": args.expected_skill_version,
         "tree_policy_version": args.expected_tree_policy_version,
         "company_identity": expected_company_identity(args.expected_company_base64url)
         if args.expected_company_base64url
@@ -1123,6 +1434,9 @@ def main() -> None:
         if "BUNDLE.json" in names and "PATCH.json" not in names:
             manifest = read_json(archive, "BUNDLE.json")
             declared = validate_bundle(archive, manifest, expected, diagnostics)
+            version = expected["skill_version"] or manifest.get("skill", {}).get("version", "5")
+            if version == "6":
+                record_depth_check(archive_path, expected["operation_id"], depth_issues(archive, manifest, version))
             label = "frontmind.kb-working-set.v1"
         elif "PATCH.json" in names and "BUNDLE.json" not in names:
             manifest = read_json(archive, "PATCH.json")

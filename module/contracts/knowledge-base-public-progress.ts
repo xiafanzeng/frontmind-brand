@@ -252,6 +252,13 @@ export type KnowledgeBaseResultQualityWarningCode =
 
 export interface KnowledgeBaseResultQualityDto {
   completeness: "complete" | "partial";
+  sourceEvidence?: {
+    providerDeclaredOfficialPages: number | null;
+    providerDeclaredPublicQueries: number | null;
+    retainedEvidenceFiles: number;
+    retainedDistinctSourceUrls?: number;
+    externalFactVerification: "not_established";
+  };
   stats?: {
     acceptedCount: number;
     expectedCount?: number;
@@ -393,6 +400,9 @@ export interface KnowledgeBaseActiveTurnDto {
  */
 export interface KnowledgeBaseCompletedTurnDto {
   turnId: string;
+  operationKey?: string;
+  /** Persisted operation kind, including local materialized confirmations. */
+  operationType?: string;
   clientRequestId: string;
   messageSequence: number;
 }

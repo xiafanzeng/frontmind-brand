@@ -123,7 +123,6 @@
 button.aqwp-side-link { cursor: default; }
 button.aqwp-side-link.is-active { cursor: pointer; }
 .aqwp-side-link.is-active { color: #641994; background: #eee7f6; }
-.aqwp-side-link--agent { margin-top: 28px; color: #697594; font-weight: 450; }
 .aqwp-sidebar__bottom { margin-top: auto; }
 .aqwp-project-card {
   display: flex;

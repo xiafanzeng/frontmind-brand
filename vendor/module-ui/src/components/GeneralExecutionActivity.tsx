@@ -8,6 +8,7 @@ import {
   generalToolStatusText,
 } from "@frontmind/module-contracts/execution";
 import type { GeneralExecutionEntry } from "@frontmind/module-contracts/execution";
+import MarkdownRenderer from "./MarkdownRenderer";
 type ExecutionDisplayEntry = Exclude<GeneralExecutionEntry, {kind:"message"}> & {animate?:boolean;isCurrent?:boolean};
 import "./GeneralExecutionActivity.css";
 
@@ -114,16 +115,14 @@ function ThinkingBlock({
   );
   if (display === "inline") {
     return (
-      <div className="general-execution__thinking" aria-label="公开过程摘要">
-        <div className="general-execution__thinking-heading">{heading}</div>
-        <div className="general-execution__details">
-          <p
-            className="general-execution__thinking-text"
-            aria-live={live ? "polite" : undefined}
-          >
-            {text}
-          </p>
-        </div>
+      <div className="general-execution__thinking" aria-label="公开过程摘要" aria-live={live ? "polite" : undefined}>
+        {item.publicSummaryTitle && <strong className="general-execution__thinking-title">{item.publicSummaryTitle}</strong>}
+        <MarkdownRenderer
+          content={text}
+          className="general-execution__thinking-text"
+          allowCopy={false}
+          generalChatLinks
+        />
       </div>
     );
   }
@@ -145,7 +144,7 @@ function ThinkingBlock({
       </button>
       {expanded && (
         <div id={detailsId} className="general-execution__details">
-          <p className="general-execution__thinking-text">{text}</p>
+          <MarkdownRenderer content={text} className="general-execution__thinking-text" allowCopy={false} generalChatLinks />
         </div>
       )}
     </section>
@@ -175,11 +174,15 @@ function TurnActivity({
   expandedGroups,
   onToggleGroup,
   thinkingDisplay,
+  hideSuccessfulResults,
+  hideToolDetails,
 }: {
   items: ActivityItem[];
   expandedGroups?: ReadonlySet<string>;
   onToggleGroup?: (id: string) => void;
   thinkingDisplay?: "disclosure" | "inline";
+  hideSuccessfulResults?: boolean;
+  hideToolDetails?: boolean;
 }) {
   const calls = [
     ...new Map(
@@ -248,11 +251,11 @@ function TurnActivity({
             />
           );
         } else if (item.kind === "tool") {
-          if (
-            item.resultOnly ||
+          if (!hideToolDetails && (
+            (item.resultOnly && !(hideSuccessfulResults && ["completed", "returned"].includes(item.status))) ||
             ["failed", "unconfirmed"].includes(item.status) ||
             (item.status === "waiting" && item.isCurrent !== false)
-          )
+          ))
             detail = <ActivityLine>{activityTitle(item)}</ActivityLine>;
         } else if (
           item.status === "error" ||
@@ -288,12 +291,16 @@ export function GeneralExecutionActivity({
   onToggleGroup,
   placement = "before",
   thinkingDisplay = "disclosure",
+  hideSuccessfulResults = false,
+  hideToolDetails = false,
 }: {
   items?: ActivityItem[];
   expandedGroups?: ReadonlySet<string>;
   onToggleGroup?: (id: string) => void;
   placement?: "before" | "after";
   thinkingDisplay?: "disclosure" | "inline";
+  hideSuccessfulResults?: boolean;
+  hideToolDetails?: boolean;
 }) {
   if (
     !items?.some(
@@ -327,6 +334,8 @@ export function GeneralExecutionActivity({
           expandedGroups={expandedGroups}
           onToggleGroup={onToggleGroup}
           thinkingDisplay={thinkingDisplay}
+          hideSuccessfulResults={hideSuccessfulResults}
+          hideToolDetails={hideToolDetails}
         />
       ))}
     </div>

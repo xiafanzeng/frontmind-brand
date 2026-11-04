@@ -98,6 +98,7 @@ import {
   type SiteContentPlanV2,
 } from "../../contracts/siteops-content-plan.js";
 import { createHostOwnedSiteDesignResultV2 } from "../../contracts/siteops-host-design.js";
+import { missingFeaturedRouteIds } from "./site-design-runtime.js";
 import { managedAgentProfileSchema } from "@frontmind/module-contracts/agent-profile";
 import {
   canonicalJson,
@@ -160,6 +161,10 @@ import {
   type SupplementalKnowledgeMedia,
 } from "./site-content-plan.js";
 import {
+  deriveSiteDocumentViewPlanV1,
+  siteDocumentViewPlanAttachment,
+} from "./site-document-view-plan.js";
+import {
   pageContentResultFromWire,
   pageContentResultV2FromWire,
   pageContentWireOutputSchema,
@@ -219,11 +224,16 @@ import {
   TWENTY_FIRST_NATIVE_TEMPLATE_V2_7_SYSTEM_PROMPT,
   TWENTY_FIRST_STATIC_TEMPLATE_V2_8_SYSTEM_PROMPT,
   auditNativeRuntimeContractV1,
+  lenientSourceReceiptWireSchema,
   readNativeSourceAttachment,
   siteSourceReceiptV1Schema,
   validateNativeReactSourceArchive,
   type NativeRuntimeAudit,
 } from "./native-react-source.js";
+
+/** Provider-model plan compliance is nondeterministic; allow one extra
+ * targeted repair before declaring the plan stage exhausted. */
+const SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS = 2 as const;
 import {
   SITEOPS_NATIVE_TEMPLATE_WORKFLOW_VERSION,
   SITEOPS_NATIVE_VISUAL_WORKFLOW_VERSION,
@@ -709,7 +719,7 @@ const providerStateV2Schema = providerStateV1Schema
     nativeSourceContractVersion: z.literal(2).optional(),
     nativeSourceRuntimeCoordinates:
       nativeSourceRuntimeCoordinatesSchema.optional(),
-    contentPlanAttempt: z.number().int().min(0).max(1).optional(),
+    contentPlanAttempt: z.number().int().min(0).max(SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS).optional(),
     contentPlanOperationToken: z.string().min(1).max(512).optional(),
     contentPlanInventorySha256: z
       .string()
@@ -722,6 +732,9 @@ const providerStateV2Schema = providerStateV1Schema
       .optional(),
     nativeRepairInput: nativeSourceRepairInputSchema.optional(),
     nativeSourceFileId: z.string().min(1).max(512).optional(),
+    // Consecutive unclassified materialization/persistence failures; bounds
+    // the previously unbounded silent 10 s retry loop.
+    nativeUnclassifiedFailureCount: z.number().int().min(0).max(99).optional(),
     nativeSourceAttachmentEventId: z.string().min(1).max(512).optional(),
     nativeSourceAttachmentIdentity: z.string().min(1).max(768).optional(),
     nativeSourceAttachmentScope: nativeSourceAttachmentScopeSchema.optional(),
@@ -2352,6 +2365,13 @@ export function safePublicDocuments(
       id: String(document.id || document.path).slice(0, 191),
       path: document.path.slice(0, 512),
       title: document.title.slice(0, 255),
+      // Knowledge nodes are short facts; branchId/branchTitle/order let the
+      // native doc view reassemble each branch into one complete document.
+      branchId: document.branchId ? String(document.branchId).slice(0, 191) : undefined,
+      branchTitle: document.branchTitle
+        ? String(document.branchTitle).slice(0, 255)
+        : undefined,
+      order: typeof document.order === "number" ? document.order : undefined,
       content: document.content,
       kind: document.kind,
       customerVisible: true as const,
@@ -4667,6 +4687,12 @@ const staticNativeTemplateCoordinateV1Schema = z
 const FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME =
   "frontmind-selected-template-coordinate-v1.json";
 
+export const NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS = {
+  staticCatalog: `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是唯一模板坐标；只用其 catalogCandidateId、providerSlug、sourceSubdirectory、sourceAssetId、sourceArchiveSha256，并从源码确定入口；不得改选或重设计。`,
+  providerArchive: `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是唯一模板坐标；只用 providerSlug、sourceSubdirectory、entrypoint；忽略 ZIP 内其他模板及默认首页，不得改选。`,
+  normalized: `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是唯一模板坐标；ZIP 已按该精确模板标准化并通过 production build；只用 providerSlug、sourceDirectory、entrypoint，不得改选或重设计。`,
+} as const;
+
 /**
  * Bind a selected Marketplace template to its exact entrypoint without
  * mutating the untouched Provider archive. This matters for registry repos
@@ -4689,7 +4715,8 @@ export function nativeTemplateCoordinateDirective(source: NativeSelection) {
     const bytes = Buffer.from(`${canonicalJson(manifest)}\n`, "utf8");
     return {
       manifest,
-      promptInstruction: `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是唯一模板坐标；严格使用其 catalogCandidateId、providerSlug、sourceSubdirectory、sourceAssetId、sourceArchiveSha256，从源码确定入口，禁止改选或重设计。`,
+      promptInstruction:
+        NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS.staticCatalog,
       attachment: {
         filename: FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME,
         mime_type: "application/json",
@@ -4740,8 +4767,8 @@ export function nativeTemplateCoordinateDirective(source: NativeSelection) {
     manifest,
     promptInstruction:
       manifest.sourceFormat === "provider_archive_v1"
-        ? `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是所选完整 Template 的唯一执行坐标。必须只使用其中指定的 providerSlug、sourceSubdirectory 和 entrypoint；即使源码 ZIP 同时包含同一仓库的其他模板，也必须全部忽略，不得自行选择相邻模板或仓库默认首页。`
-        : `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是所选完整 Template 的唯一执行坐标。源码 ZIP 已由 FrontMind 从该精确模板完成标准化和 production build 验证；必须使用其中指定的 providerSlug、sourceDirectory 和 entrypoint，不得改选其他模板或重新设计。`,
+        ? NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS.providerArchive
+        : NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS.normalized,
     attachment: {
       filename: FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME,
       mime_type: "application/json",
@@ -4810,12 +4837,15 @@ export function nativeSourceSystemPromptForWorkflow(workflowVersion: string) {
     return `你是生产级企业官网的前端、内容与构建工程师。返回完整可构建源码 ZIP，不返回 diff、解释或思考过程。
 
 执行合同：
-1. Template ZIP 是唯一源码与视觉基线；保留组件、布局和响应式风格，只做内容与静态运行所需修改，不得重设计。
-2. ${SITEOPS_CONTENT_PLAN_V2_FILENAME} 给出完整 route manifest 与内容坐标；按其 routes.path 生成页面。企业事实只取 dossier、冻结计划、客户反馈和已验证媒体，删除模板品牌、演示文案、占位资源及外部链接，不得编造。
-3. 导航和有目标 CTA 使用计划内规范路径的真实 <a href>，可见链接文字必须包含计划 cta.label。计划图片使用可信 publicUrl 和非空 alt。
+1. Template ZIP 是唯一源码/视觉基线；保留组件、布局和响应式，仅改内容与静态运行，不得重设计。
+2. ${SITEOPS_CONTENT_PLAN_V2_FILENAME} 冻结 route/内容坐标；按 routes.path 生成。事实只用 dossier、计划、客户反馈与验证媒体；删除模板品牌、演示/占位内容和外链，不编造。
+3. 导航和有目标 CTA 使用计划内规范路径的真实 <a href>，可见链接文字必须包含计划 cta.label。普通无修饰键的鼠标主键点击按第 7 条打开文档并 preventDefault；Ctrl/Meta/Shift/Alt 修饰键、中键或新窗口语义仍保留 href 的浏览器行为。计划图片使用可信 publicUrl 和非空 alt。
 4. 不得加入认证、支付、数据库、后台、统计、webhook、外部脚本、远程请求、远程资源、动态执行或动态 import。
-5. 输出 FrontMind Vite SPA；保留 execution shell，在 ${NATIVE_RUNTIME_ROUTE_MODULE} 用 eager static import 导出 ${NATIVE_RUNTIME_ROUTE_MANIFEST_EXPORT}。多页初始化与 popstate 调用 window.canonicalSitePathname()；仅函数不存在时回退 window.location.pathname。每个包含 JSX 的模块都必须显式绑定或 import React。
-6. 运行 production build 和 ${NATIVE_SOURCE_PREFLIGHT_V2_FILENAME}，逐路由确认无 pageerror、console.error 和空白 root。只交付 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME}。`;
+5. 输出 FrontMind Vite SPA；保留 execution shell，${NATIVE_RUNTIME_ROUTE_MODULE} 用 eager static import 导出 ${NATIVE_RUNTIME_ROUTE_MANIFEST_EXPORT}。初始化/popstate 优先 window.canonicalSitePathname()，否则 window.location.pathname；JSX 模块显式绑定/import React。
+6. 站内搜索必须覆盖全站：匹配全部 routes 的 section 标题/正文与 userQuestions，不得只过滤当前页面；按栏目分组并链接 route/hash，无结果提示 AI 助手或联系 CTA。
+7. 逐项读取 frontmind-site-document-view-plan-v1.json，不得猜测按钮映射。对 branchIds 非空的 route/section，每一个可点击的内容元素都设 data-frontmind-document-branches=英文逗号连接的 branchIds；区块根设 data-frontmind-section=sectionId，导航/页脚用目标 route 绑定，其他用所在 section 绑定。branchIds=[] 时不得设置空属性、编造文档或弹层。使用 document-level 委托点击处理；普通主键点击打开完整文档模态弹层，不得以页面跳转代替文档打开，<a href> 仅此时 preventDefault，修饰键/中键/新窗口保留。模态根用 role="dialog"+data-frontmind-document-dialog，分支/节点/关闭控件分别用 data-frontmind-document-branch/data-frontmind-document-node/data-frontmind-document-close；多分支同一 dialog 完整展示且可关闭再打开。严禁为了承载文档入口而新增聚合模块或聚合区块；route manifest、路由路径与页面结构必须与冻结内容计划完全一致，不得为对齐知识分支而增删或改名路由，禁止新增 route manifest 路由。文档大标题用 branch.title，按合同顺序完整展示 nodes，不得只展示被引用的节点，不得摘要化、改写或省略任何节点，也不得追加来源外文字。按 plan.branches[].nodes[].id 与 nodeContentSource/splitDossierRule 从 dossier/parts 拼接完整 content，节点只含 title+content，dossier 是弹层正文的唯一来源。文中网址去掉 http(s):// 前缀，禁止完整 URL 或 // 地址。
+“查看文档原文”入口也必须遵守第 7 条。
+8. 运行 production build 和 ${NATIVE_SOURCE_PREFLIGHT_V2_FILENAME}，逐路由确认无 pageerror、console.error 和空白 root。只交付 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME}。`;
   }
   if (workflowVersion === SITEOPS_STATIC_TEMPLATE_WORKFLOW_VERSION) {
     return TWENTY_FIRST_STATIC_TEMPLATE_V2_8_SYSTEM_PROMPT;
@@ -4848,6 +4878,7 @@ SiteContentPlanWireV2 必须是以下精确扁平形状，不得省略任何字�
 - 顶层仅允许 wireSchemaVersion、operationToken、inventorySha256、routes、sections、navigation、coverage。wireSchemaVersion 必须为 2，operationToken 必须精确为 ${input.operationToken}，inventorySha256 必须精确为 ${input.inventorySha256}。
 - routes 每项仅允许 routeId、path、title、navigation、parentPath、detailOfPath、purpose、userQuestions、h1、summary、ctaLabel、ctaTargetPath；routes 内绝对不得嵌套 sections。无父级/详情归属/CTA 时相应字段显式为 null。
 - sections 是独立顶层数组，每项仅允许 routeId、sectionId、blockKind、heading、purpose、body、sourceDocumentIds、evidenceExcerpts、mediaIds、entityIds、faqIds。sourceDocumentIds 与 evidenceExcerpts 按下标一一对应。
+- routes 中每个路由的 routeId 必须至少被一个 section 引用；没有任何内容区块可绑定的路由必须并入相邻路由或从 routes 中删除，绝不能留下零 section 的路由。
 - 每个 section（包括 hero、CTA 和纯结构区块）的 sourceDocumentIds 与 evidenceExcerpts 都必须至少各有一项；若区块无法绑定逐字来源，就合并进有来源的区块或省略该区块，绝不能输出空来源数组。
 - navigation 每项仅允许 label、targetPath。coverage 每项仅允许 sourceDocumentId、status、routeIds、omissionReason；used 时 routeIds 非空且 omissionReason=null，omitted 时 routeIds=[] 且 omissionReason 为具体字符串。
 
@@ -4858,7 +4889,7 @@ SiteContentPlanWireV2 必须是以下精确扁平形状，不得省略任何字�
   );
 }
 
-function siteContentPlanSchemaRepairIssues(error: unknown) {
+export function siteContentPlanSchemaRepairIssues(error: unknown) {
   if (!(error instanceof z.ZodError)) return [];
   return [
     ...new Set(
@@ -4867,7 +4898,14 @@ function siteContentPlanSchemaRepairIssues(error: unknown) {
           .map((segment) => String(segment).replace(/[^A-Za-z0-9_-]/gu, ""))
           .filter(Boolean)
           .join(".");
-        return `CONTENT_PLAN_SCHEMA_${issue.code.toUpperCase()}@${path || "root"}`;
+        // A bare code@path token (e.g. ...CUSTOM@routes.4.routeId) gives the
+        // repair model no way to tell WHICH route failed; the schema's custom
+        // messages carry the offending entity identity, so forward them.
+        const detail =
+          issue.code === "custom" && typeof issue.message === "string"
+            ? `: ${issue.message.replace(/\s+/gu, " ").trim().slice(0, 240)}`
+            : "";
+        return `CONTENT_PLAN_SCHEMA_${issue.code.toUpperCase()}@${path || "root"}${detail}`;
       }),
     ),
   ];
@@ -4948,6 +4986,17 @@ function nativeRuntimeDiagnosticsAttachment(repair: NativeSourceRepairInput) {
   } as const;
 }
 
+export function nativeSourceRepairSystemPromptForWorkflow(
+  workflowVersion: string,
+) {
+  if (workflowVersion === SITEOPS_MATERIALIZER_V2_9.frontMindVersion) {
+    return `继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不重新设计；原任务的视觉、冻结计划、内容和事实边界继续有效。一次修完诊断附件全部问题。全局导航和有目标 CTA 必须是真实规范 <a href>，可见链接文字须包含计划标签且允许保留不改变含义的模板装饰。
+必须重新逐项读取 frontmind-site-document-view-plan-v1.json 并保持文档按钮合同：触发元素 data-frontmind-document-branches，区块根 data-frontmind-section，dialog 的 role=dialog 与 data-frontmind-document-dialog，分支 data-frontmind-document-branch，节点 data-frontmind-document-node，关闭 data-frontmind-document-close。使用 document-level 委托；<a href> 仅在普通无修饰键主键点击时 preventDefault 并打开对应完整文档，修饰键、中键和新窗口语义保留。文档绑定仅适用于合同 branchIds 非空的 route/section；branchIds=[] 时不得设置空 data-frontmind-document-branches，不得编造文档或弹层。按 nodes.id 与 nodeContentSource/splitDossierRule 从 dossier/parts 拼接完整 content；节点只含 title+content，不得追加来源外文字。不得新增聚合区块或路由。
+多页初始化与 popstate 必须优先调用宿主 canonicalSitePathname，函数不存在时才回退 window.location.pathname。`;
+  }
+  return "继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不是重新设计；原任务中的视觉、内容和事实边界继续有效。";
+}
+
 export function nativeSourcePrompt(input: {
   operationToken: string;
   baseSourceSha256: string;
@@ -4966,35 +5015,33 @@ export function nativeSourcePrompt(input: {
     throw new Error("NATIVE_SOURCE_RUNTIME_COORDINATES_MISSING");
   }
   const systemPrompt = input.repair
-    ? input.workflowVersion === SITEOPS_MATERIALIZER_V2_9.frontMindVersion
-      ? "继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不重新设计；原任务的视觉、冻结计划、内容和事实边界继续有效。一次修完诊断附件全部问题。全局导航和有目标 CTA 必须是真实规范 <a href>，可见链接文字须包含计划标签且允许保留不改变含义的模板装饰。多页初始化与 popstate 必须优先调用宿主 canonicalSitePathname，函数不存在时才回退 window.location.pathname。"
-      : "继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不是重新设计；原任务中的视觉、内容和事实边界继续有效。"
+    ? nativeSourceRepairSystemPromptForWorkflow(input.workflowVersion)
     : nativeSourceSystemPromptForWorkflow(input.workflowVersion);
   const repair = input.repair
     ? `\n\n上一份源码未通过${input.repair.kind === "compile" ? "本地编译" : "运行合同或硬安全检查"}。只按 ${NATIVE_RUNTIME_DIAGNOSTICS_FILENAME} 一次性修复全部坐标；不得重新设计或复用失败输出。以本消息重新附加的源码与执行基线为准，重跑 preflight 和 production build，并逐条打开 route manifest 的全部路由确认无 pageerror、console.error 或空白 root；execution shell 未声明 automatic JSX runtime 时，每个包含 JSX 的模块都必须显式绑定或 import React。返回完整源码 ZIP。`
     : "";
   const deliveryContract =
     input.contractVersion === 2
-      ? "Receipt 必须符合 Structured Output schema 且 preflightStatus=passed；archiveSha256 必须对应最终 ZIP；fileCount 必须填写最终 ZIP 的非目录文件条目数（不计目录项）。"
+      ? "Receipt 须符合 schema 且 preflightStatus=passed；archiveSha256 对应最终 ZIP，fileCount 为非目录文件数。"
       : `交付前必须运行 ${NATIVE_SOURCE_PREFLIGHT_FILENAME} 并通过 package、文件类型、依赖、源码语法和 production build 自检。Receipt 必须严格包含当前 operationToken、baseSourceSha256=${input.baseSourceSha256}、最终 ZIP 的 archiveSha256、实际 fileCount、preflightVersion=${NATIVE_SOURCE_PREFLIGHT_VERSION}、preflightStatus=passed、preflightSha256=${NATIVE_SOURCE_PREFLIGHT_SHA256}。`;
   return promptWithMarker(
     `${systemPrompt}
 
-frontmind-siteops-source-dossier-v1.json 是唯一企业事实来源；源码 ZIP 是唯一视觉与组件基线，baseSourceSha256=${input.baseSourceSha256}。不得采用附件之外的企业事实、媒体、依赖或外部资源。
+frontmind-siteops-source-dossier-v1.json 是唯一事实源；源码 ZIP 是唯一视觉/组件基线，baseSourceSha256=${input.baseSourceSha256}。禁用附件外事实、媒体、依赖及外部资源。
 
 ${input.templateCoordinateInstruction ?? ""}
 
-${input.hasCustomerFeedback ? "客户要求见 frontmind-customer-feedback-v1.json；仅在知识与原生样式边界内实现。" : ""}
+${input.hasCustomerFeedback ? "客户要求见 frontmind-customer-feedback-v1.json；严守事实/样式边界。" : ""}
 
-${input.hasRevisionMedia ? "本轮图片见 frontmind-user-media-manifest-v1.json，且已由 FrontMind 写入源码 public/frontmind-user-media。必须在客户要求指定的页面中使用清单 publicUrl；不得改写、转码或引用外部副本。" : ""}
+${input.hasRevisionMedia ? "用户图见 frontmind-user-media-manifest-v1.json；按 publicUrl 用于指定页，不转码/外引。" : ""}
 
-${input.hasRevisionBaseline ? "这是连续修订：frontmind-parent-content-plan-v1.json 是父版本完整内容计划基线。只修改客户明确要求的部分，未涉及的路由、事实、内容结构与媒体必须原样保留；交付仍须形成一份完整网站。" : ""}
+${input.hasRevisionBaseline ? "修订基线见 frontmind-parent-content-plan-v1.json；仅改明确要求，其余保持，交付完整站。" : ""}
 
-${input.hasKnowledgeMedia ? "内容计划选中的知识库图片见 frontmind-knowledge-media-manifest-v1.json，且可信原始字节已由 FrontMind 写入源码 public/frontmind-knowledge-media。必须按计划页面使用清单 publicUrl 与非空 alt；不得改写、转码或引用外部副本。" : ""}
+${input.hasKnowledgeMedia ? "知识图见 frontmind-knowledge-media-manifest-v1.json；按计划用 publicUrl+非空 alt，不转码/外引。" : ""}
 
-${input.contentPlanSha256 ? `${SITEOPS_CONTENT_PLAN_V2_FILENAME} 已由 Dashboard 冻结，sha256=${input.contentPlanSha256}；它是唯一信息架构与内容覆盖合同。必须先逐项读取，再适配源码，route manifest 必须与其 routes.path 完全一致。` : ""}
+${input.contentPlanSha256 ? `${SITEOPS_CONTENT_PLAN_V2_FILENAME} 已冻结，sha256=${input.contentPlanSha256}，是唯一信息架构/覆盖合同；逐项读取后适配，route manifest 必须等于 routes.path。` : ""}
 
-${deliveryContract}只返回 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME} 各一份后结束；不得解释、浏览或更新计划。${repair}`,
+${deliveryContract}只返回 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME} 各一份；不解释、浏览或改计划。${repair}`,
     input.operationToken,
   );
 }
@@ -6435,20 +6482,46 @@ async function handleNativeReactSiteBuild(input: {
           : [],
         requiredMediaIds: currentRevisionMediaPlanIds,
       });
+      // A dynamic information architecture plan freely defines its own routes
+      // and the plan generator never sees the owner's column selection, so a
+      // fresh plan legitimately supersedes ids selected against an older
+      // brief. Do not reject: log the superseded columns and remap/drop the
+      // selection when the effective brief is built below.
+      const missingFeatured = missingFeaturedRouteIds(
+        input.brief.designPreferences ?? null,
+        siteContentPlanRoutes(frozenContentPlan).map((route) => route.id),
+      );
+      if (missingFeatured.length > 0) {
+        console.warn(
+          "[siteops-manus] featured_routes_superseded_by_plan",
+          JSON.stringify({
+            operationId: input.operation.id,
+            missingFeatured: missingFeatured.slice(0, 16),
+          }),
+        );
+      }
     } catch (error) {
       const issues =
         error instanceof SiteContentPlanValidationError
           ? error.issues
           : ["CONTENT_PLAN_SCHEMA_INVALID"];
-      if (planAttempt >= 1) {
+      console.warn(
+        "[siteops-manus] content_plan_rejected",
+        JSON.stringify({
+          operationId: input.operation.id,
+          attempt: planAttempt,
+          issues: issues.slice(0, 12),
+        }),
+      );
+      if (planAttempt >= SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS) {
         throw new SiteOpsManusFailure(
           "SITEOPS_CONTENT_PLAN_REPAIR_EXHAUSTED",
-          "AI 信息架构计划在一次定向修复后仍未通过来源与覆盖校验。",
+          `AI 信息架构计划在 ${SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS} 次定向修复后仍未通过来源与覆盖校验。`,
           "failed",
           providerStateV2(currentState),
         );
       }
-      const repairAttempt = 1;
+      const repairAttempt = planAttempt + 1;
       const repairToken = `siteops-content-plan:${input.operation.id}:${repairAttempt}`;
       const unknownState = transitionProviderState(currentState, {
         stage: "content_plan_repair_send_unknown",
@@ -6612,12 +6685,51 @@ async function handleNativeReactSiteBuild(input: {
       );
     }
   }
-  const effectiveBrief = frozenContentPlan
-    ? siteBriefSchema.parse({
+  const effectiveBrief = (() => {
+    if (!frozenContentPlan) return input.brief;
+    const planRoutes = siteContentPlanRoutes(frozenContentPlan);
+    const preferences = input.brief.designPreferences ?? null;
+    if (!preferences) {
+      return siteBriefSchema.parse({
         ...input.brief,
-        routes: siteContentPlanRoutes(frozenContentPlan),
-      })
-    : input.brief;
+        routes: planRoutes,
+      });
+    }
+    // Project the owner's column selection onto the plan's information
+    // architecture by id, then by the column's brief path; selections from a
+    // superseded architecture map to nothing and are dropped. An empty
+    // projection falls back to the full plan navigation instead of an empty
+    // menu, and materialization can never hit a missing featured route.
+    const planRouteById = new Map(planRoutes.map((route) => [route.id, route]));
+    const briefRouteById = new Map(
+      input.brief.routes.map((route) => [route.id, route] as const),
+    );
+    const normalizePath = (slug: string) =>
+      slug === "/" ? "/" : `/${slug.replace(/^\/+|\/+$/gu, "")}/`;
+    const projected = preferences.featuredRouteIds.flatMap((routeId) => {
+      if (planRouteById.has(routeId)) return [routeId];
+      const briefRoute = briefRouteById.get(routeId);
+      if (!briefRoute) return [];
+      const match = planRoutes.find(
+        (route) => normalizePath(route.slug) === normalizePath(briefRoute.slug),
+      );
+      return match ? [match.id] : [];
+    });
+    const { designPreferences: _superseded, ...briefWithoutPreferences } =
+      input.brief;
+    return siteBriefSchema.parse({
+      ...briefWithoutPreferences,
+      routes: planRoutes,
+      ...(projected.length > 0
+        ? {
+            designPreferences: {
+              ...preferences,
+              featuredRouteIds: projected,
+            },
+          }
+        : {}),
+    });
+  })();
   const expectedContentPlanSha256 = dynamicInformationArchitecture
     ? (frozenContentPlanCoordinates?.sha256 ??
       (currentState?.schemaVersion === 2
@@ -6632,6 +6744,17 @@ async function handleNativeReactSiteBuild(input: {
       providerStateV2(currentState),
     );
   }
+  const documentViewPlan = frozenContentPlan
+    ? deriveSiteDocumentViewPlanV1({
+        contentPlan: frozenContentPlan,
+        // Customer-revision instructions shape the generated site but are not
+        // public knowledge documents and must never be exposed in its viewer.
+        documents: input.documents,
+        ignoredSourceDocumentIds: revisionDocuments.map(
+          (document) => document.id,
+        ),
+      })
+    : undefined;
   const providerSourceAttachment = async (
     sourceClient: DashboardAgentClient,
   ): Promise<ManusV2Attachment> => {
@@ -6736,7 +6859,10 @@ async function handleNativeReactSiteBuild(input: {
       },
       brief: briefWithoutBrandAssets(dynamicPlanningBrief),
       visualEvidence: runtimeVisual,
-      documents: generationDocuments,
+      // Revision instructions shape the frozen plan and are supplied through
+      // their dedicated feedback/baseline inputs. They are not public facts
+      // and must never be copied into generated client source or doc dialogs.
+      documents: input.documents,
     }),
     await providerSourceAttachment(sourceClient),
     ...(revisionSource?.attachments ?? []),
@@ -6753,6 +6879,9 @@ async function handleNativeReactSiteBuild(input: {
     ...(templateCoordinate ? [templateCoordinate.attachment] : []),
     ...(frozenContentPlan
       ? [siteContentPlanAttachment(frozenContentPlan)]
+      : []),
+    ...(documentViewPlan
+      ? [siteDocumentViewPlanAttachment(documentViewPlan)]
       : []),
     ...nativeBrandAttachment(input.brandAsset),
     ...(input.input.feedback
@@ -7863,7 +7992,29 @@ async function handleNativeReactSiteBuild(input: {
         acceptCurrentPhaseWhileRunning: true,
         signal: input.signal,
         validateCandidate: (value) => {
-          contextualSourceReceiptSchema.parse(value);
+          const parsed = contextualSourceReceiptSchema.safeParse(value);
+          if (parsed.success) return;
+          // The strict schema pins self-reported hash copies (preflight sha,
+          // content plan sha, …) and rejects unknown fields; the provider
+          // model writes those by hand and typos used to end the build with
+          // no repair path. Recover structurally-sound receipts: identity
+          // (operation token), baseline hash and preflight status stay
+          // mandatory, and every relaxed claim is logged and re-derived from
+          // the actual archive by validateNativeReactSourceArchive.
+          const lenient = lenientSourceReceiptWireSchema.safeParse(value);
+          if (!lenient.success) {
+            throw new z.ZodError(parsed.error.issues.slice(0, 16));
+          }
+          console.warn(
+            "[siteops-manus] source_receipt_lenient_accept",
+            JSON.stringify({
+              operationId: input.operation.id,
+              issues: parsed.error.issues.slice(0, 8).map((issue) => ({
+                path: issue.path.join("."),
+                code: issue.code,
+              })),
+            }),
+          );
         },
       });
   if (receiptResolution.invalid) {
@@ -8566,6 +8717,11 @@ async function handleNativeReactSiteBuild(input: {
         (currentState?.schemaVersion === 2
           ? currentState.contentPlanSha256
           : undefined),
+      documentViewPlan,
+      documentViewForbiddenSources: revisionDocuments.map((document) => ({
+        id: document.id,
+        content: document.content,
+      })),
       runtimeAudit:
         nativeSourceContractVersion === 2
           ? nativeSourceRuntime!.audit
@@ -8590,6 +8746,7 @@ async function handleNativeReactSiteBuild(input: {
         "NATIVE_BUILD_RENDER_FAILED",
         "NATIVE_BUILD_USER_MEDIA_INVALID",
         "NATIVE_BUILD_CONTENT_PLAN_INVALID",
+        "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
       ].includes(error.code)
     ) {
       const signature = nativeCompileSignature(error);
@@ -8693,6 +8850,33 @@ async function handleNativeReactSiteBuild(input: {
     ) {
       throw error;
     }
+    // Unclassified materialization failures previously returned a silent
+    // 10 s pending forever (e.g. SITE_DESIGN_FEATURED_ROUTE_MISSING). Log the
+    // error identity and bound the retries so builds end in a visible state.
+    const unclassifiedStreak =
+      (currentState?.nativeUnclassifiedFailureCount ?? 0) + 1;
+    console.error("[siteops-manus] materialize_unclassified_failure", {
+      operationId: input.operation.id,
+      buildId: input.context.build.id,
+      errorName: error instanceof Error ? error.name : typeof error,
+      code:
+        error instanceof Error
+          ? error.message.slice(0, 120)
+          : String(error).slice(0, 120),
+      streak: unclassifiedStreak,
+    });
+    if (unclassifiedStreak > 3) {
+      throw new SiteOpsManusFailure(
+        "SITEOPS_MATERIALIZATION_UNCLASSIFIED",
+        `网站构建在物化阶段连续失败（${error instanceof Error ? error.message.slice(0, 80) : "未知错误"}）；请重置后重新开始。`,
+        "attention_required",
+        providerStateV2(currentState),
+      );
+    }
+    currentState = transitionProviderState(currentState, {
+      stage: providerStateV2(currentState).stage,
+      nativeUnclassifiedFailureCount: unclassifiedStreak,
+    });
     return pending(providerStateV2(currentState), taskId, "qa_running", 10_000);
   }
   logManusBuildStage({
@@ -8709,6 +8893,7 @@ async function handleNativeReactSiteBuild(input: {
     taskId,
     buildPhase: "persisting_preview",
     buildCheckpoint: "compile_started",
+    nativeUnclassifiedFailureCount: 0,
   });
   try {
     await persistOperationProgress(
@@ -8745,6 +8930,32 @@ async function handleNativeReactSiteBuild(input: {
     ) {
       throw error;
     }
+    // Same bounded-retry treatment as materialization: transient persistence
+    // errors retry, but never silently forever.
+    const persistStreak =
+      (currentState?.nativeUnclassifiedFailureCount ?? 0) + 1;
+    console.error("[siteops-manus] persist_artifacts_failure", {
+      operationId: input.operation.id,
+      buildId: input.context.build.id,
+      errorName: error instanceof Error ? error.name : typeof error,
+      code:
+        error instanceof Error
+          ? error.message.slice(0, 120)
+          : String(error).slice(0, 120),
+      streak: persistStreak,
+    });
+    if (persistStreak > 3) {
+      throw new SiteOpsManusFailure(
+        "SITEOPS_ARTIFACT_PERSIST_RETRY_EXHAUSTED",
+        "网站构建产物保存连续失败；请重置后重新开始。",
+        "attention_required",
+        providerStateV2(currentState),
+      );
+    }
+    currentState = transitionProviderState(currentState, {
+      stage: providerStateV2(currentState).stage,
+      nativeUnclassifiedFailureCount: persistStreak,
+    });
     return pending(providerStateV2(currentState), taskId, "qa_running", 10_000);
   }
   const artifactBindings = buildArtifactBindingsSchema.parse({

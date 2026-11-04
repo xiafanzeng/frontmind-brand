@@ -12,7 +12,6 @@ export default function KnowledgeWorkspaceStatus({ progress }: { progress: Knowl
   const partial = progress.contentAvailability === "partial" || progress.resultQuality?.completeness === "partial";
   const reset = progress.operationState === "reset_required" || partial || progress.build.status === "protocol_error";
   const running = ["creating", "waiting_output", "normalizing"].includes(progress.operationState ?? "") || progress.build.awaitingResponseSince != null;
-  const current = progress.branches.flatMap((branch) => branch.leaves).find((leaf) => leaf.id === progress.build.currentLeafId);
   const firstPublication = progress.build.hasPublishedSnapshot === false;
   const message = reset
     ? partial ? "内容不完整，已保留的节点可预览。请确认重置后重新上传资料。" : "当前构建无法继续，请确认重置后重新上传资料并创建全新任务。"
@@ -25,7 +24,7 @@ export default function KnowledgeWorkspaceStatus({ progress }: { progress: Knowl
     // timeline. Keeping it out of this strip avoids a redundant status row.
     : running ? null
     : progress.build.status === "failed" ? "本轮已停止。可以重新读取状态，或确认重置后开始全新任务。"
-    : current ? `请处理当前节点：${current.title}` : null;
+    : null;
   if (!message && !progress.billingPause) return null;
   return <div className="knowledge-workspace-status" aria-live="polite">
     {progress.billingPause && <KnowledgeBillingResume key={progress.billingPause.turnId} buildId={progress.build.id} turnId={progress.billingPause.turnId} reason={progress.billingPause.reason} />}

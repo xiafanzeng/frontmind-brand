@@ -18,7 +18,7 @@ const sourceRoot = path.join(
 const outputPath = path.join(
   projectRoot,
   "dist/workflows/knowledge-base",
-  "socratic-kb-builder-v5.skill",
+  "socratic-kb-builder-v6.skill",
 );
 const fixedDate = new Date("2000-01-01T00:00:00.000Z");
 
@@ -93,10 +93,11 @@ async function preserveExistingSkillArchive(
   selectedOutputPath,
   archive,
   contentHash,
+  version,
 ) {
   const canonicalPath = path.join(
     path.dirname(selectedOutputPath),
-    `socratic-kb-builder-v5-${contentHash}.skill`,
+    `socratic-kb-builder-v${version}-${contentHash}.skill`,
   );
   const alreadyCanonical = await historicalArchiveExists(
     canonicalPath,
@@ -108,6 +109,8 @@ async function preserveExistingSkillArchive(
 }
 
 export async function packageSocraticKnowledgeBaseSkill(options = {}) {
+  const version = options.version ?? "6";
+  if (!["5", "6"].includes(version)) throw new Error("Unsupported knowledge Skill version");
   const selectedSourceRoot = options.sourceRoot || sourceRoot;
   const selectedOutputPath = options.outputPath || outputPath;
   await fs.mkdir(path.dirname(selectedOutputPath), { recursive: true });
@@ -163,12 +166,14 @@ export async function packageSocraticKnowledgeBaseSkill(options = {}) {
         selectedOutputPath,
         existing,
         existingContentHash,
+        version,
       );
     } else {
       await preserveExistingSkillArchive(
         selectedOutputPath,
         existing,
         existingContentHash,
+        version,
       );
       await fs.writeFile(selectedOutputPath, archive);
     }
@@ -176,11 +181,11 @@ export async function packageSocraticKnowledgeBaseSkill(options = {}) {
   await writeHistoricalArchiveNoClobber(
     path.join(
       path.dirname(selectedOutputPath),
-      `socratic-kb-builder-v5-${contentHash}.skill`,
+      `socratic-kb-builder-v${version}-${contentHash}.skill`,
     ),
     deployedArchive,
   );
-  await fs.writeFile(path.join(path.dirname(selectedOutputPath), "manifest.json"), JSON.stringify({formatVersion:1,version:"5",contentHash,filename:`socratic-kb-builder-v5-${contentHash}.skill`,archiveSha256:createHash("sha256").update(deployedArchive).digest("hex")},null,2)+"\n");
+  await fs.writeFile(path.join(path.dirname(selectedOutputPath), "manifest.json"), JSON.stringify({formatVersion:1,version,contentHash,filename:`socratic-kb-builder-v${version}-${contentHash}.skill`,archiveSha256:createHash("sha256").update(deployedArchive).digest("hex")},null,2)+"\n");
   return {
     outputPath: selectedOutputPath,
     bytes: deployedArchive.length,
@@ -192,6 +197,8 @@ export async function packageSocraticKnowledgeBaseSkill(options = {}) {
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (invokedPath === fileURLToPath(import.meta.url)) {
+  const legacy = await packageSocraticKnowledgeBaseSkill({ version: "5", sourceRoot: path.join(projectRoot, "workflows/socratic-kb-builder-v5"), outputPath: path.join(path.dirname(outputPath), "socratic-kb-builder-v5.skill") });
+  if (legacy.contentHash !== "f5562c0ca1d570a0714727453d44c7e85ed3020f73230dbf880bace94241ed7e") throw new Error("Historical v5 Skill changed");
   const result = await packageSocraticKnowledgeBaseSkill();
   console.log(
     `Packaged deterministic Skill: ${path.relative(projectRoot, result.outputPath)} ` +

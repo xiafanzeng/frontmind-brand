@@ -74,8 +74,7 @@ export function savedQuestionSelections(tables:Table[],input:z.infer<typeof ques
  });
 }
 
-export function createQuestionTemplateCatalogService(core:ModuleHttpCore,request:Request,ports:()=>BrandKeywordPorts=intentSkillPorts){
- return {async save(value:unknown){
+export async function assertQuestionTemplateAccess(core:ModuleHttpCore,request:Request,ports:()=>BrandKeywordPorts=intentSkillPorts){
   const context=core.context(request);
   const actor=(request as Request&{frontmindUser?:{id:number;role:string}}).frontmindUser;
   if(!actor||actor.id!==context.actorUserId)
@@ -89,6 +88,12 @@ export function createQuestionTemplateCatalogService(core:ModuleHttpCore,request
     throw new QuestionTemplateCatalogError(known.code??"FORBIDDEN",known.message??"当前账号暂无词库保存权限。",known.statusCode);
    throw error;
   }
+  return {context,actor,model};
+}
+
+export function createQuestionTemplateCatalogService(core:ModuleHttpCore,request:Request,ports:()=>BrandKeywordPorts=intentSkillPorts){
+ return {async save(value:unknown){
+  const {context,actor,model}=await assertQuestionTemplateAccess(core,request,ports);
   const input=questionTemplateSaveSchema.parse(value);
   for(let attempt=0;attempt<3;attempt++){
    const workspace=await model.getDashboardWorkspace(context.accountUserId);

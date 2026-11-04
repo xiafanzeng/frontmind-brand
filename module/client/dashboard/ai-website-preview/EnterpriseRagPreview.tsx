@@ -273,8 +273,6 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
   const [automaticStarting, setAutomaticStarting] = useState(false);
   const [automaticError, setAutomaticError] = useState("");
   const backgroundRef = useRef<HTMLDivElement>(null);
-  const evaluationOverviewRef = useRef<HTMLDivElement>(null);
-  const evaluationSummaryRef = useRef<HTMLElement>(null);
   const syncedLiveAnswer = useRef("");
   const fallbackAutomaticRequestIds = useRef(new Map<string, string>());
   const close = () => {
@@ -290,31 +288,6 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = original; };
   }, [drawer]);
-  useEffect(() => {
-    const overview = evaluationOverviewRef.current;
-    const summary = evaluationSummaryRef.current;
-    if (!overview || !summary) return;
-
-    const syncGaugeSize = () => {
-      const summaryBounds = summary.getBoundingClientRect();
-      const compact = summaryBounds.width > 0 && summaryBounds.width < 320;
-      const height = Math.max(120, Math.ceil(summaryBounds.height));
-      const width = compact ? 120 : height;
-      overview.style.setProperty("--rag-evaluation-card-width", `${width}px`);
-      overview.style.setProperty("--rag-evaluation-card-height", `${height}px`);
-    };
-
-    syncGaugeSize();
-    const observer = typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver(syncGaugeSize);
-    observer?.observe(summary);
-    window.addEventListener("resize", syncGaugeSize);
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener("resize", syncGaugeSize);
-    };
-  }, []);
   useEffect(() => {
     setHistory(loadHistory(historyStorageKey));
   }, [historyStorageKey]);
@@ -753,28 +726,30 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
             </span>
             <h2>本轮回答质量</h2>
           </div>
-          <div ref={evaluationOverviewRef} className="rag-evaluation-overview" data-testid="rag-evaluation-overview">
+          <div className="rag-evaluation-overview" data-testid="rag-evaluation-overview">
             <RagEvaluationGauge score={result.score} unavailable={tone === "danger"} />
-            <section ref={evaluationSummaryRef} className={`rag-verdict is-${tone}`} aria-label="当前评估摘要">
+            <section className={`rag-verdict is-${tone}`} aria-label="当前评估摘要">
               <div className="rag-evaluation-summary-flow" data-testid="rag-evaluation-summary-flow">
                 <h3 className="rag-evaluation-status-title">
                   <i className="rag-evaluation-status-orb" aria-hidden="true" data-testid="rag-evaluation-status-orb" />
                   <span className="rag-evaluation-status-title-text">{displayVerdictLabel}</span>
                 </h3>
                 <p className="rag-evaluation-summary-copy" data-testid="rag-evaluation-summary-copy">{evaluationSummary}</p>
-                {(automaticReport || (!result.complete && !checklistJudgments)) && <div className="rag-evaluation-secondary-meta">
-                  {automaticReport && <span>服务器留痕 · {automaticReport.evaluator.model}</span>}
-                  {!result.complete && !checklistJudgments && <span>可能分数 {Math.floor(result.lower)}–{Math.ceil(result.upper)}</span>}
-                </div>}
-                <div className="rag-status-row rag-evaluation-metrics" data-testid="rag-evaluation-metrics">
-                  <ShieldCheck size={14} aria-hidden="true" data-testid="rag-evaluation-metric-shield" />
-                  <span className="rag-evaluation-metric-copy">
-                    <span>关键风险{result.gateStatus === "passed" ? "已核验" : result.gateStatus === "failed" ? "已发现" : "待核验"}</span>
-                    <span>评审覆盖 {format(result.coverage)}%</span>
-                  </span>
-                </div>
               </div>
             </section>
+            <div className="rag-evaluation-supporting-meta" data-testid="rag-evaluation-supporting-meta">
+              {(automaticReport || (!result.complete && !checklistJudgments)) && <div className="rag-evaluation-secondary-meta">
+                {automaticReport && <span>服务器留痕 · {automaticReport.evaluator.model}</span>}
+                {!result.complete && !checklistJudgments && <span>可能分数 {Math.floor(result.lower)}–{Math.ceil(result.upper)}</span>}
+              </div>}
+              <div className="rag-status-row rag-evaluation-metrics" data-testid="rag-evaluation-metrics">
+                <ShieldCheck size={14} aria-hidden="true" data-testid="rag-evaluation-metric-shield" />
+                <span className="rag-evaluation-metric-copy">
+                  <span>关键风险{result.gateStatus === "passed" ? "已核验" : result.gateStatus === "failed" ? "已发现" : "待核验"}</span>
+                  <span>评审覆盖 {format(result.coverage)}%</span>
+                </span>
+              </div>
+            </div>
           </div>
           {automaticReport && automaticReport.evaluator.ruleVersion !== RAG_CHECKLIST_RULE_VERSION && <section className="sfp-notice" aria-label="历史评估规则">
             <p data-testid="rag-legacy-rule-notice">正在显示按 {automaticReport.evaluator.ruleVersion} 生成的历史报告，原评分和结论保持不变。需要主动按新规则复评才能生成新结论；页面不会自动发起模型评估。</p>

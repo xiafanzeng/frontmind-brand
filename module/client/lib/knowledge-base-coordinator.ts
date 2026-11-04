@@ -37,6 +37,7 @@ export const KNOWLEDGE_BASE_PENDING_REQUEST_GRACE_MS = 6 * 60 * 1000;
 export const KNOWLEDGE_BASE_FINAL_PACKAGE_MISSING_NOTICE_CODE =
   "FINAL_PACKAGE_MISSING";
 export const KNOWLEDGE_BASE_LATE_PACKAGE_POLL_GRACE_MS = 5 * 60 * 1000;
+export const KNOWLEDGE_BASE_SUMMARY_TAIL_MS = 75_000;
 
 export function getKnowledgeBasePollDelay(elapsedMs: number) {
   if (elapsedMs < 5 * 60 * 1000) return 3_000;
@@ -49,6 +50,13 @@ export function observationNeedsPolling(
   now = Date.now(),
 ): boolean {
   const state = observation.interaction?.interactionState;
+  const completedTurn = observation.completedTurn?.turnId;
+  const timeline = observation.execution?.timeline ??
+    (observation.progress ?? observation.interaction?.progress)?.execution?.timeline ?? [];
+  const researched = completedTurn && timeline.some((entry) => entry.turnId === completedTurn && entry.phase === "researching");
+  const finished = researched && timeline.find((entry) => entry.turnId === completedTurn && entry.kind === "status" && entry.phase === "published" && entry.status === "ended");
+  if (finished && ["awaiting_input", "ready_to_publish", "published"].includes(state ?? "") &&
+      now >= finished.timestamp && now - finished.timestamp < KNOWLEDGE_BASE_SUMMARY_TAIL_MS) return true;
   if (
     state === "ready_to_publish" &&
     (observation.packageState === "not_started" ||

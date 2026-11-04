@@ -15,6 +15,7 @@ import { GeneralExecutionActivity } from "./GeneralExecutionActivity";
 import { ExecutionDivider } from "./ExecutionDuration";
 import { conversationExecutionTimings } from "../lib/execution-duration";
 import { generalExecutionSlots } from "../lib/general-execution-display";
+import { isLocalKnowledgeConfirmation, knowledgeExecutionItems } from "../lib/knowledge-execution-presentation";
 
 export function knowledgeNodeConversationMessages(
   messages: LocalMessage[],
@@ -116,6 +117,8 @@ export default function KnowledgeNodeConversation({
   const displayedExecution = activeConversation.execution ?? progress.execution;
   const executionTimings = conversationExecutionTimings({ ...activeConversation, execution: displayedExecution }, messages);
   const executionSlots = generalExecutionSlots(messages, displayedExecution, running);
+  const localTurns = new Set(messages.filter(isLocalKnowledgeConfirmation)
+    .flatMap((message) => message.knowledgeBase?.turnId ? [message.knowledgeBase.turnId] : []));
   const hasTimeline = Boolean(displayedExecution?.timeline.length);
   const execution = (
     <KnowledgePublicExecution
@@ -135,7 +138,7 @@ export default function KnowledgeNodeConversation({
       </p>
       {messages.map((message) => (
         <Fragment key={message.id}>
-          <GeneralExecutionActivity items={executionSlots.before.get(message.id)} />
+          <GeneralExecutionActivity items={knowledgeExecutionItems(executionSlots.before.get(message.id), localTurns)} thinkingDisplay="inline" hideSuccessfulResults />
           {!hasTimeline && message.id === assistant?.id && execution}
           <MessageActions message={message} allowCopy={copyableIds.has(message.id)}>
             <div className={`knowledge-node-conversation__${message.role}`}>
@@ -145,8 +148,8 @@ export default function KnowledgeNodeConversation({
               }}>复制回答</button>}
             </div>
           </MessageActions>
-          {message.role === "user" && <ExecutionDivider timing={executionTimings.get(message.id)} />}
-          <GeneralExecutionActivity items={executionSlots.after.get(message.id)} placement="after" />
+          {message.role === "user" && <ExecutionDivider timing={isLocalKnowledgeConfirmation(message) ? undefined : executionTimings.get(message.id)} />}
+          <GeneralExecutionActivity items={knowledgeExecutionItems(executionSlots.after.get(message.id), localTurns)} placement="after" thinkingDisplay="inline" hideSuccessfulResults />
         </Fragment>
       ))}
       {!hasTimeline && !assistant && running && execution}

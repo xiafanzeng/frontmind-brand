@@ -52,9 +52,12 @@ import {
   siteDesignAccentCss,
   type SiteDesignRuntimeProjection,
 } from "./site-design-runtime.js";
+import type { SiteDocumentViewPlanV1 } from "./site-document-view-plan.js";
 
 const FIXED_ZIP_DATE = new Date("2000-01-01T00:00:00.000Z");
 const MAX_BUILD_LOG_BYTES = 256 * 1024;
+const MAX_DOCUMENT_VIEW_TRIGGERS_PER_ROUTE = 96;
+const MAX_DOCUMENT_VIEW_TRIGGERS_PER_BUILD = 720;
 const MAX_DIST_BYTES = 30 * 1024 * 1024;
 const MAX_DIST_FILES = 1_000;
 const MAX_DIST_FILE_BYTES = 10 * 1024 * 1024;
@@ -132,6 +135,15 @@ export type NativeReactBuildInput = {
    * local-asset bytes persisted by the provider. */
   contentPlan?: SiteContentPlanV2 | unknown;
   contentPlanSha256?: string | null;
+  /** Deterministic button-to-source bindings baked into a 2.9 generated site.
+   * When present, browser QA is mandatory and clicks the generated controls. */
+  documentViewPlan?: SiteDocumentViewPlanV1;
+  /** Internal generation instructions that may shape a revision but must never
+   * appear in a public document dialog. They are used only as QA evidence. */
+  documentViewForbiddenSources?: readonly {
+    id: string;
+    content: string;
+  }[];
   /** V2 tasks must replay the auditor frozen with their receipt coordinates.
    * Direct V1 rebuilds retain the historical host-owned validation path. */
   runtimeAudit?: (input: {
@@ -269,6 +281,7 @@ export type NativeReactBuildErrorCode =
   | "NATIVE_BUILD_LOCAL_ASSET_MISSING"
   | "NATIVE_BUILD_USER_MEDIA_INVALID"
   | "NATIVE_BUILD_CONTENT_PLAN_INVALID"
+  | "NATIVE_BUILD_DOCUMENT_VIEW_INVALID"
   | "NATIVE_BUILD_NETWORK_FORBIDDEN"
   | "NATIVE_BUILD_SECRET_FORBIDDEN";
 
@@ -1362,7 +1375,16 @@ function upsertHeadMarkup(html: string, markup: string) {
   return html.replace(/<html\b([^>]*)>/iu, `<html$1><head>${markup}</head>`);
 }
 
-function normalizeRoutePages(input: {
+function escapeHtmlText(value: string) {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&#39;");
+}
+
+export function normalizeRoutePages(input: {
   files: OutputFile[];
   routes: string[];
   mode: "preview" | "production";
@@ -1374,6 +1396,9 @@ function normalizeRoutePages(input: {
     knowledgeSnapshotId: string;
     knowledgeArchiveHash: string;
   } | null;
+  /** Per-route SEO copy from the frozen content plan; paths must be exact. */
+  routeMetadata?: ReadonlyMap<string, { title: string; description: string }>;
+  siteName?: string | null;
 }) {
   const fileMap = new Map(input.files.map((file) => [file.path, file.bytes]));
   const documentCsp = nativeDocumentCsp(input.assistantApiOrigin);
@@ -1406,6 +1431,8 @@ function normalizeRoutePages(input: {
     let html = rootHtml
       .replace(/<meta\s+name=["']robots["'][^>]*>/giu, "")
       .replace(/<link\s+rel=["']canonical["'][^>]*>/giu, "")
+      .replace(/<title>[^<]*<\/title>/giu, "")
+      .replace(/<meta\s+(?:name|property)=["'](?:description|og:[a-z_]+)["'][^>]*>/giu, "")
       .replace(
         /<meta\s+http-equiv=["']Content-Security-Policy["'][^>]*>/giu,
         "",
@@ -1426,6 +1453,60 @@ function normalizeRoutePages(input: {
         html,
         `<link rel="canonical" href="${canonical}">`,
       );
+    }
+    // Deterministic per-route SEO copy from the frozen plan; the provider
+    // source never supplies these tags itself.
+    const metadata = route ? input.routeMetadata?.get(route) : undefined;
+    const siteName = input.siteName?.trim() || null;
+    if (metadata) {
+      const pageTitle =
+        route === "/" && siteName
+          ? siteName
+          : [metadata.title, siteName].filter(Boolean).join(" · ");
+      if (pageTitle) {
+        html = upsertHeadMarkup(
+          html,
+          `<title>${escapeHtmlText(pageTitle)}</title>`,
+        );
+      }
+      if (metadata.description) {
+        html = upsertHeadMarkup(
+          html,
+          `<meta name="description" content="${escapeHtmlText(metadata.description)}">`,
+        );
+      }
+      if (input.mode !== "preview") {
+        const canonical = new URL(route!, input.canonicalOrigin!).toString();
+        const ogTitle = metadata.title || siteName || "";
+        if (ogTitle) {
+          html = upsertHeadMarkup(
+            html,
+            `<meta property="og:title" content="${escapeHtmlText(ogTitle)}">`,
+          );
+        }
+        if (metadata.description) {
+          html = upsertHeadMarkup(
+            html,
+            `<meta property="og:description" content="${escapeHtmlText(metadata.description)}">`,
+          );
+        }
+        html = upsertHeadMarkup(
+          html,
+          '<meta property="og:type" content="website">',
+        );
+        html = upsertHeadMarkup(
+          html,
+          `<meta property="og:url" content="${canonical}">`,
+        );
+        if (siteName) {
+          html = upsertHeadMarkup(
+            html,
+            `<meta property="og:site_name" content="${escapeHtmlText(siteName)}">`,
+          );
+        }
+      }
+    } else if (siteName && output !== "404.html") {
+      html = upsertHeadMarkup(html, `<title>${escapeHtmlText(siteName)}</title>`);
     }
     fileMap.set(output, Buffer.from(html, "utf8"));
   }
@@ -1810,6 +1891,244 @@ async function assertNativeBrowserRouteRendered(
   }
 }
 
+export type NativeDocumentViewTriggerSnapshot = {
+  branchIds: string[];
+  sectionId: string | null;
+  isAnchor: boolean;
+  href: string | null;
+};
+
+export function containsForbiddenDocumentViewUrl(value: string) {
+  return (
+    /https?:\/\//iu.test(value) ||
+    /(?:^|[\s('"`=])\/\/(?=[A-Za-z0-9])/u.test(value)
+  );
+}
+
+export function normalizedDocumentViewText(value: string) {
+  return value
+    .replace(/https?:\/\//giu, "")
+    .replace(/[\p{P}\p{S}\s]+/gu, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+export function comparableDocumentViewText(value: string) {
+  return normalizedDocumentViewText(value).replace(/\s+/gu, "");
+}
+
+export function documentViewContentEvidence(value: string) {
+  const parts = value
+    .split(/\n+|(?<=[。！？.!?；;：:,，])\s*/u)
+    .map(normalizedDocumentViewText)
+    .filter(Boolean);
+  return [
+    ...new Set(
+      parts.flatMap((part) => {
+        const characters = Array.from(part);
+        if (characters.length <= 96) return [part];
+        const chunks: string[] = [];
+        for (let offset = 0; offset < characters.length; offset += 96) {
+          chunks.push(characters.slice(offset, offset + 96).join(""));
+        }
+        return chunks;
+      }),
+    ),
+  ];
+}
+
+export function containsDocumentViewSourceEvidence(
+  renderedValue: string,
+  sourceValue: string,
+  publicSourceValues: readonly string[] = [],
+) {
+  const rendered = comparableDocumentViewText(renderedValue);
+  const publicSources = publicSourceValues.map(comparableDocumentViewText);
+  const evidence = documentViewContentEvidence(sourceValue)
+    .map(comparableDocumentViewText)
+    .filter(
+      (part) =>
+        !publicSources.some((publicSource) => publicSource.includes(part)),
+    );
+  if (evidence.length === 0) return false;
+  if (
+    evidence.some(
+      (part) => Array.from(part).length >= 6 && rendered.includes(part),
+    )
+  ) {
+    return true;
+  }
+  let cursor = 0;
+  return evidence.every((part) => {
+    const index = rendered.indexOf(part, cursor);
+    if (index < 0) return false;
+    cursor = index + part.length;
+    return true;
+  });
+}
+
+export function documentViewSourceVisibleText(value: string) {
+  const decodedCodePoint = (raw: string, radix: 10 | 16) => {
+    const codePoint = Number.parseInt(raw, radix);
+    return Number.isSafeInteger(codePoint) &&
+      codePoint >= 0 &&
+      codePoint <= 0x10ffff &&
+      !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ? String.fromCodePoint(codePoint)
+      : " ";
+  };
+  const decodedEntities = value
+    .replace(/&nbsp;/giu, " ")
+    .replace(/&amp;/giu, "&")
+    .replace(/&lt;/giu, "<")
+    .replace(/&gt;/giu, ">")
+    .replace(/&quot;/giu, '"')
+    .replace(/&#(?:39|x27);/giu, "'")
+    .replace(/&#(\d+);/gu, (_match, decimal: string) =>
+      decodedCodePoint(decimal, 10),
+    )
+    .replace(/&#x([a-f0-9]+);/giu, (_match, hex: string) =>
+      decodedCodePoint(hex, 16),
+    );
+  return decodedEntities
+    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
+    .replace(/\[([^\]]+)\]\[[^\]]*\]/gu, "$1")
+    .replace(/<((?:https?:\/\/|mailto:)[^>]+)>/giu, "$1")
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/^\s*```[^\n]*$/gmu, " ")
+    .replace(/^\s*[-*+]\s+\[[ xX]\]\s+/gmu, "")
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gmu, "");
+}
+
+export function expectedDocumentViewNodeText(input: {
+  title: string;
+  content: string;
+}) {
+  return comparableDocumentViewText(
+    `${input.title}\n${documentViewSourceVisibleText(input.content)}`,
+  );
+}
+
+/** Pure half of the document-view browser contract. Keeping the coverage
+ * audit independent from Playwright makes missing/unknown bindings produce
+ * stable diagnostics instead of timing-dependent click failures. */
+export function auditSiteDocumentViewRouteBindings(input: {
+  plan: SiteDocumentViewPlanV1;
+  routePath: string;
+  triggers: readonly NativeDocumentViewTriggerSnapshot[];
+}): NativeReactBuildDiagnostic[] {
+  const diagnostics: NativeReactBuildDiagnostic[] = [];
+  const route = input.plan.routes.find((item) => item.path === input.routePath);
+  if (!route) {
+    return [
+      {
+        code: "DOCUMENT_VIEW_PLAN_ROUTE_MISSING",
+        file: input.routePath,
+        line: null,
+        column: null,
+      },
+    ];
+  }
+  const knownBranchIds = new Set(input.plan.branches.map((branch) => branch.id));
+  const coveredRouteBranches = new Set<string>();
+  const coveredSectionBranches = new Map<string, Set<string>>();
+  for (const [index, trigger] of input.triggers.entries()) {
+    const location = `${input.routePath}#trigger-${index + 1}`;
+    if (trigger.branchIds.length === 0) {
+      diagnostics.push({
+        code: "DOCUMENT_VIEW_TRIGGER_EMPTY",
+        file: location,
+        line: null,
+        column: null,
+      });
+    }
+    if (trigger.isAnchor && !trigger.href) {
+      diagnostics.push({
+        code: "DOCUMENT_VIEW_ANCHOR_HREF_REQUIRED",
+        file: location,
+        line: null,
+        column: null,
+      });
+    }
+    if (trigger.sectionId) {
+      const section = route.sections.find(
+        (item) => item.sectionId === trigger.sectionId,
+      );
+      if (!section) {
+        diagnostics.push({
+          code: "DOCUMENT_VIEW_TRIGGER_SECTION_UNKNOWN",
+          file: `${location}:${trigger.sectionId}`,
+          line: null,
+          column: null,
+        });
+      } else if (section.branchIds.length === 0) {
+        diagnostics.push({
+          code: "DOCUMENT_VIEW_SECTION_BINDING_UNEXPECTED",
+          file: `${location}:${trigger.sectionId}`,
+          line: null,
+          column: null,
+        });
+      } else if (
+        trigger.branchIds.length !== section.branchIds.length ||
+        trigger.branchIds.some(
+          (branchId, branchIndex) =>
+            branchId !== section.branchIds[branchIndex],
+        )
+      ) {
+        diagnostics.push({
+          code: "DOCUMENT_VIEW_SECTION_BINDING_MISMATCH",
+          file: `${location}:${trigger.sectionId}`,
+          line: null,
+          column: null,
+        });
+      }
+    }
+    for (const branchId of trigger.branchIds) {
+      if (!knownBranchIds.has(branchId)) {
+        diagnostics.push({
+          code: "DOCUMENT_VIEW_UNKNOWN_BRANCH",
+          file: `${location}:${branchId}`,
+          line: null,
+          column: null,
+        });
+        continue;
+      }
+      coveredRouteBranches.add(branchId);
+      if (trigger.sectionId) {
+        const covered =
+          coveredSectionBranches.get(trigger.sectionId) ?? new Set();
+        covered.add(branchId);
+        coveredSectionBranches.set(trigger.sectionId, covered);
+      }
+    }
+  }
+  for (const branchId of route.branchIds) {
+    if (!coveredRouteBranches.has(branchId)) {
+      diagnostics.push({
+        code: "DOCUMENT_VIEW_ROUTE_BINDING_MISSING",
+        file: `${input.routePath}#${branchId}`,
+        line: null,
+        column: null,
+      });
+    }
+  }
+  for (const section of route.sections) {
+    const covered = coveredSectionBranches.get(section.sectionId) ?? new Set();
+    for (const branchId of section.branchIds) {
+      if (!covered.has(branchId)) {
+        diagnostics.push({
+          code: "DOCUMENT_VIEW_SECTION_BINDING_MISSING",
+          file: `${input.routePath}#${section.sectionId}:${branchId}`,
+          line: null,
+          column: null,
+        });
+      }
+    }
+  }
+  return diagnostics;
+}
+
 async function runBrowserQaStrict(input: {
   files: OutputFile[];
   routes: string[];
@@ -1829,6 +2148,11 @@ async function runBrowserQaStrict(input: {
   }[];
   contentPlan: SiteContentPlanV2 | null;
   contentPlanSha256: string | null;
+  documentViewPlan: SiteDocumentViewPlanV1 | null;
+  documentViewForbiddenSources: readonly {
+    id: string;
+    content: string;
+  }[];
 }) {
   const privatePreviewPrefix = "/__frontmind-siteops-preview-qa__/";
   const privatePreviewQa =
@@ -1921,8 +2245,14 @@ async function runBrowserQaStrict(input: {
       const runtimeFailureCodes = new Set<NativeBrowserRuntimeFailureCode>();
       let externalRequestDetected = false;
       let cspViolationDetected = false;
+      let popupDetected = false;
+      let auditedDocumentViewTriggers = 0;
       page.on("pageerror", () => {
         runtimeFailureCodes.add("NATIVE_BROWSER_PAGE_ERROR");
+      });
+      page.on("popup", (popup) => {
+        popupDetected = true;
+        void popup.close().catch(() => undefined);
       });
       await page.exposeBinding("__frontmindNativeConsoleError", () => {
         runtimeFailureCodes.add("NATIVE_BROWSER_CONSOLE_ERROR");
@@ -2031,7 +2361,7 @@ async function runBrowserQaStrict(input: {
           const candidateElements: Element[] = [];
           const seenCandidates = new Set<Element>();
           for (const element of document.querySelectorAll(
-            "[data-siteops-section-id], [data-section-id], section, article",
+            "[data-frontmind-section], [data-siteops-section-id], [data-section-id], section, article",
           )) {
             if (seenCandidates.has(element)) continue;
             seenCandidates.add(element);
@@ -2117,6 +2447,7 @@ async function runBrowserQaStrict(input: {
           for (const element of candidateElements) {
             sectionCandidates.push({
               id:
+                element.getAttribute("data-frontmind-section")?.trim() ||
                 element.getAttribute("data-siteops-section-id")?.trim() ||
                 element.getAttribute("data-section-id")?.trim() ||
                 element.id.trim() ||
@@ -2139,6 +2470,784 @@ async function runBrowserQaStrict(input: {
           } satisfies NativeContentPlanDomSnapshot;
         }, route);
       };
+      const auditDocumentViewRoute = async (routePath: string) => {
+        if (!input.documentViewPlan) return;
+        const plan = input.documentViewPlan;
+        const routePlan = plan.routes.find((route) => route.path === routePath);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => resolve()),
+              );
+            }),
+        );
+        const bindingSnapshot = await page.evaluate(
+          ({
+            routeBindingsWithBranches,
+            currentSectionIds,
+            currentSectionBindings,
+            privatePrefix,
+          }) => {
+            const visible = (element: Element) => {
+              const bounds = element.getBoundingClientRect();
+              if (bounds.width <= 0 || bounds.height <= 0) return false;
+              let current: Element | null = element;
+              while (current) {
+                const style = window.getComputedStyle(current);
+                if (
+                  style.display === "none" ||
+                  style.visibility === "hidden" ||
+                  style.contentVisibility === "hidden" ||
+                  Number.parseFloat(style.opacity) === 0
+                ) {
+                  return false;
+                }
+                current = current.parentElement;
+              }
+              return true;
+            };
+            const excluded = (element: Element) =>
+              Boolean(
+                element.closest(
+                  '[role="dialog"], .fma-root, [data-frontmind-site-assistant]',
+                ),
+              );
+            for (const element of document.querySelectorAll(
+              "[data-frontmind-qa-trigger-index]",
+            )) {
+              element.removeAttribute("data-frontmind-qa-trigger-index");
+            }
+            const triggers = [
+              ...document.querySelectorAll(
+                "[data-frontmind-document-branches]",
+              ),
+            ]
+              .filter(visible)
+              .filter((element) => !excluded(element))
+              .map((element, index) => {
+                element.setAttribute(
+                  "data-frontmind-qa-trigger-index",
+                  String(index),
+                );
+                return {
+                  branchIds: [
+                    ...new Set(
+                      (
+                        element.getAttribute(
+                          "data-frontmind-document-branches",
+                        ) ?? ""
+                      )
+                        .split(",")
+                        .map((value) => value.trim())
+                        .filter(Boolean),
+                    ),
+                  ],
+                  sectionId:
+                    element
+                      .closest("[data-frontmind-section]")
+                      ?.getAttribute("data-frontmind-section")
+                      ?.trim() || null,
+                  isAnchor: element instanceof HTMLAnchorElement,
+                  href:
+                    element instanceof HTMLAnchorElement
+                      ? element.getAttribute("href")?.trim() || null
+                      : null,
+                };
+              });
+            const canonicalPath = (rawPath: string) => {
+              const withoutPrivatePrefix = rawPath.startsWith(privatePrefix)
+                ? `/${rawPath.slice(privatePrefix.length)}`
+                : rawPath;
+              return withoutPrivatePrefix === "/"
+                ? "/"
+                : `/${withoutPrivatePrefix.replace(/^\/+|\/+$/gu, "")}/`;
+            };
+            const plannedRoutes = new Map(
+              routeBindingsWithBranches.map((route) => [
+                canonicalPath(route.path),
+                route.branchIds,
+              ]),
+            );
+            const operationalControl = (element: Element) => {
+              if (
+                element.matches(
+                  ':disabled, [aria-disabled=true], [aria-haspopup="menu"], [aria-haspopup="listbox"], [aria-haspopup="true"], input, textarea, select, option, [contenteditable=true]',
+                ) ||
+                element.closest("form, [role=search]")
+              ) {
+                return true;
+              }
+              const controlName = (
+                element.getAttribute("aria-label") ||
+                element.textContent ||
+                ""
+              )
+                .replace(/\s+/gu, " ")
+                .trim();
+              return /^(?:menu|open menu|toggle menu|navigation menu|close|previous|next|search|菜单|打开菜单|切换菜单|导航菜单|关闭|上一(?:个|页|张)?|下一(?:个|页|张)?|搜索)$/iu.test(
+                controlName,
+              );
+            };
+            const contentClickables = (
+              root: Element,
+              includePointerCards: boolean,
+            ) => {
+              const elements = new Set<Element>(
+                root.querySelectorAll(
+                  'a[href], button, [role="button"], summary, [tabindex]:not([tabindex="-1"]), [onclick]',
+                ),
+              );
+              if (includePointerCards) {
+                const pointerElements = [root, ...root.querySelectorAll("*")].filter(
+                  (element) =>
+                    visible(element) &&
+                    !excluded(element) &&
+                    window.getComputedStyle(element).cursor === "pointer",
+                );
+                const pointerSet = new Set(pointerElements);
+                for (const element of pointerElements) {
+                  let parent = element.parentElement;
+                  let hasPointerAncestor = false;
+                  while (parent && root.contains(parent)) {
+                    if (pointerSet.has(parent)) {
+                      hasPointerAncestor = true;
+                      break;
+                    }
+                    parent = parent.parentElement;
+                  }
+                  if (!hasPointerAncestor) elements.add(element);
+                }
+              }
+              return [...elements].filter(
+                (element) =>
+                  visible(element) &&
+                  !excluded(element) &&
+                  !operationalControl(element),
+              );
+            };
+            const candidates = new Map<Element, string[] | null>();
+            const unexpectedBindings: string[] = [];
+            for (const anchor of document.querySelectorAll("a[href]")) {
+              if (!visible(anchor) || excluded(anchor)) continue;
+              let pathname: string;
+              try {
+                pathname = new URL(
+                  (anchor as HTMLAnchorElement).href,
+                  document.baseURI,
+                ).pathname;
+              } catch {
+                continue;
+              }
+              const expectedBranchIds = plannedRoutes.get(
+                canonicalPath(pathname),
+              );
+              if (expectedBranchIds && expectedBranchIds.length > 0) {
+                candidates.set(anchor, expectedBranchIds);
+              } else if (
+                expectedBranchIds &&
+                (
+                  anchor.getAttribute("data-frontmind-document-branches") ?? ""
+                ).trim()
+              ) {
+                unexpectedBindings.push(
+                  (anchor.textContent || anchor.getAttribute("href") || "anchor")
+                    .replace(/\s+/gu, " ")
+                    .trim()
+                    .slice(0, 80),
+                );
+              }
+            }
+            const globalControlsWithoutRoute = new Set<string>();
+            for (const scope of document.querySelectorAll(
+              "header, nav, footer, [role=navigation]",
+            )) {
+              if (!visible(scope) || excluded(scope)) continue;
+              for (const element of contentClickables(scope, false)) {
+                if (
+                  element instanceof HTMLAnchorElement ||
+                  element.closest("[data-frontmind-section]")
+                ) {
+                  continue;
+                }
+                globalControlsWithoutRoute.add(
+                  (
+                    element.getAttribute("aria-label") ||
+                    element.textContent ||
+                    element.tagName.toLocaleLowerCase()
+                  )
+                    .replace(/\s+/gu, " ")
+                    .trim()
+                    .slice(0, 80),
+                );
+              }
+            }
+            const unknownSections: string[] = [];
+            for (const section of document.querySelectorAll(
+              "[data-frontmind-section]",
+            )) {
+              if (!visible(section) || excluded(section)) continue;
+              const sectionId =
+                section.getAttribute("data-frontmind-section")?.trim() ?? "";
+              if (!currentSectionIds.includes(sectionId)) {
+                unknownSections.push(sectionId || "missing");
+                continue;
+              }
+              const expectedBranchIds = currentSectionBindings.find(
+                (binding) => binding.sectionId === sectionId,
+              )?.branchIds;
+              if (!expectedBranchIds) {
+                for (const element of contentClickables(section, true)) {
+                  candidates.delete(element);
+                }
+                continue;
+              }
+              for (const element of contentClickables(section, true)) {
+                candidates.set(element, expectedBranchIds);
+              }
+            }
+            const missingBindings: string[] = [];
+            const mismatchedBindings: string[] = [];
+            for (const [
+              index,
+              [element, expectedBranchIds],
+            ] of [...candidates].entries()) {
+              const sectionId =
+                element
+                  .closest("[data-frontmind-section]")
+                  ?.getAttribute("data-frontmind-section")
+                  ?.trim() || "global";
+              const label = (
+                element.getAttribute("aria-label") ||
+                element.textContent ||
+                element.getAttribute("href") ||
+                `${element.tagName.toLocaleLowerCase()}-${index + 1}`
+              )
+                .replace(/\s+/gu, " ")
+                .trim()
+                .slice(0, 80);
+              const coordinate = `${sectionId}:${label}`;
+              const actualBranchIds = (
+                element.getAttribute("data-frontmind-document-branches") ?? ""
+              )
+                .split(",")
+                .map((value) => value.trim())
+                .filter(Boolean);
+              if (actualBranchIds.length === 0) {
+                missingBindings.push(coordinate);
+              } else if (
+                expectedBranchIds &&
+                (actualBranchIds.length !== expectedBranchIds.length ||
+                  actualBranchIds.some(
+                    (branchId, branchIndex) =>
+                      branchId !== expectedBranchIds[branchIndex],
+                  ))
+              ) {
+                mismatchedBindings.push(coordinate);
+              }
+            }
+            return {
+              triggers,
+              missingBindings,
+              mismatchedBindings,
+              unexpectedBindings,
+              unknownSections,
+              globalControlsWithoutRoute: [...globalControlsWithoutRoute],
+            };
+          },
+          {
+            routeBindingsWithBranches: plan.routes.map((route) => ({
+              path: route.path,
+              branchIds: route.branchIds,
+            })),
+            currentSectionIds:
+              routePlan?.sections.map((section) => section.sectionId) ?? [],
+            currentSectionBindings:
+              routePlan?.sections
+                .filter((section) => section.branchIds.length > 0)
+                .map((section) => ({
+                  sectionId: section.sectionId,
+                  branchIds: section.branchIds,
+                })) ?? [],
+            privatePrefix: privatePreviewPrefix,
+          },
+        );
+        const snapshots = bindingSnapshot.triggers;
+        const diagnostics = auditSiteDocumentViewRouteBindings({
+          plan,
+          routePath,
+          triggers: snapshots,
+        });
+        diagnostics.push(
+          ...bindingSnapshot.missingBindings.map((binding) => ({
+            code: "DOCUMENT_VIEW_CLICKABLE_BINDING_MISSING",
+            file: `${routePath}#${binding}`,
+            line: null,
+            column: null,
+          })),
+        );
+        diagnostics.push(
+          ...bindingSnapshot.mismatchedBindings.map((binding) => ({
+            code: "DOCUMENT_VIEW_CLICKABLE_BINDING_MISMATCH",
+            file: `${routePath}#${binding}`,
+            line: null,
+            column: null,
+          })),
+        );
+        diagnostics.push(
+          ...bindingSnapshot.unexpectedBindings.map((binding) => ({
+            code: "DOCUMENT_VIEW_ROUTE_BINDING_UNEXPECTED",
+            file: `${routePath}#${binding}`,
+            line: null,
+            column: null,
+          })),
+        );
+        diagnostics.push(
+          ...bindingSnapshot.unknownSections.map((sectionId) => ({
+            code: "DOCUMENT_VIEW_SECTION_COORDINATE_UNKNOWN",
+            file: `${routePath}#${sectionId}`,
+            line: null,
+            column: null,
+          })),
+        );
+        diagnostics.push(
+          ...bindingSnapshot.globalControlsWithoutRoute.map((control) => ({
+            code: "DOCUMENT_VIEW_GLOBAL_CONTROL_TARGET_REQUIRED",
+            file: `${routePath}#${control || "unlabelled-control"}`,
+            line: null,
+            column: null,
+          })),
+        );
+        if (diagnostics.length > 0) {
+          throw new NativeReactBuildError(
+            "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+            diagnostics.slice(0, 64),
+          );
+        }
+        const branchById = new Map(
+          plan.branches.map((branch) => [branch.id, branch] as const),
+        );
+        const publicDocumentSourceValues = plan.branches.flatMap((branch) =>
+          branch.nodes.flatMap((node) => [
+            node.title,
+            documentViewSourceVisibleText(node.content),
+          ]),
+        );
+        auditedDocumentViewTriggers += snapshots.length;
+        if (
+          snapshots.length > MAX_DOCUMENT_VIEW_TRIGGERS_PER_ROUTE ||
+          auditedDocumentViewTriggers > MAX_DOCUMENT_VIEW_TRIGGERS_PER_BUILD
+        ) {
+          throw new NativeReactBuildError(
+            "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+            [
+              {
+                code:
+                  snapshots.length > MAX_DOCUMENT_VIEW_TRIGGERS_PER_ROUTE
+                    ? "DOCUMENT_VIEW_TRIGGER_LIMIT_EXCEEDED"
+                    : "DOCUMENT_VIEW_BUILD_TRIGGER_LIMIT_EXCEEDED",
+                file: routePath,
+                line: null,
+                column: null,
+              },
+            ],
+          );
+        }
+        for (const index of snapshots.keys()) {
+          assertNotAborted(input.abortSignal);
+          const expectedBranchIds = snapshots[index]!.branchIds;
+          const beforeUrl = page.url();
+          popupDetected = false;
+          try {
+            await page
+              .locator(`[data-frontmind-qa-trigger-index="${index}"]`)
+              .click({
+                noWaitAfter: true,
+                timeout: 5_000,
+              });
+          } catch {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              [
+                {
+                  code: "DOCUMENT_VIEW_TRIGGER_NOT_CLICKABLE",
+                  file: `${routePath}#trigger-${index + 1}`,
+                  line: null,
+                  column: null,
+                },
+              ],
+            );
+          }
+          try {
+            await page.waitForSelector(
+              '[role="dialog"][data-frontmind-document-dialog]',
+              { state: "visible", timeout: 1_000 },
+            );
+          } catch {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              [
+                {
+                  code: "DOCUMENT_VIEW_DIALOG_MISSING",
+                  file: `${routePath}#trigger-${index + 1}`,
+                  line: null,
+                  column: null,
+                },
+              ],
+            );
+          }
+          if (externalRequestDetected || cspViolationDetected) {
+            throw new NativeReactBuildError("NATIVE_BUILD_NETWORK_FORBIDDEN");
+          }
+          if (runtimeFailureCodes.size > 0) {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              [
+                {
+                  code: "DOCUMENT_VIEW_INTERACTION_RUNTIME_ERROR",
+                  file: `${routePath}#trigger-${index + 1}`,
+                  line: null,
+                  column: null,
+                },
+              ],
+            );
+          }
+          if (popupDetected) {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              [
+                {
+                  code: "DOCUMENT_VIEW_POPUP_OPENED",
+                  file: `${routePath}#trigger-${index + 1}`,
+                  line: null,
+                  column: null,
+                },
+              ],
+            );
+          }
+          if (page.url() !== beforeUrl) {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              [
+                {
+                  code: "DOCUMENT_VIEW_URL_CHANGED",
+                  file: `${routePath}#trigger-${index + 1}`,
+                  line: null,
+                  column: null,
+                },
+              ],
+            );
+          }
+          const visibleDialogs = page.locator(
+            '[role="dialog"][data-frontmind-document-dialog]:visible',
+          );
+          if ((await visibleDialogs.count()) !== 1) {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              [
+                {
+                  code: "DOCUMENT_VIEW_DIALOG_MISSING",
+                  file: `${routePath}#trigger-${index + 1}`,
+                  line: null,
+                  column: null,
+                },
+              ],
+            );
+          }
+          const dialog = visibleDialogs.first();
+          const dialogSnapshot = await dialog.evaluate((element) => {
+            const visibleDocumentContent = (candidate: Element) => {
+              let current: Element | null = candidate;
+              while (current) {
+                const style = window.getComputedStyle(current);
+                if (
+                  (current instanceof HTMLElement && current.hidden) ||
+                  current.getAttribute("aria-hidden") === "true" ||
+                  style.display === "none" ||
+                  style.visibility === "hidden" ||
+                  style.contentVisibility === "hidden" ||
+                  Number.parseFloat(style.opacity) <= 0.01
+                ) {
+                  return false;
+                }
+                current = current.parentElement;
+              }
+              if (
+                [...candidate.getClientRects()].some(
+                  (rect) => rect.width > 0 && rect.height > 0,
+                )
+              ) {
+                return true;
+              }
+              const range = document.createRange();
+              range.selectNodeContents(candidate);
+              const rangeRect = range.getBoundingClientRect();
+              return rangeRect.width > 0 && rangeRect.height > 0;
+            };
+            return {
+              text:
+                (element as HTMLElement).innerText
+                  ?.replace(/\s+/gu, " ")
+                  .trim() ?? "",
+              branches: [
+                ...element.querySelectorAll("[data-frontmind-document-branch]"),
+              ].map((branch) => ({
+                id:
+                  branch
+                    .getAttribute("data-frontmind-document-branch")
+                    ?.trim() ?? "",
+                visible: visibleDocumentContent(branch),
+              })),
+              nodes: [
+                ...element.querySelectorAll("[data-frontmind-document-node]"),
+              ].map((node) => ({
+                id:
+                  node.getAttribute("data-frontmind-document-node")?.trim() ??
+                  "",
+                text:
+                  (node as HTMLElement).innerText
+                    ?.replace(/\s+/gu, " ")
+                    .trim() ?? "",
+                visible: visibleDocumentContent(node),
+              })),
+              hasClose: Boolean(
+                element.querySelector("[data-frontmind-document-close]"),
+              ),
+            };
+          });
+          const dialogBranchIdsInOrder = dialogSnapshot.branches.map(
+            (branch) => branch.id,
+          );
+          const dialogBranchIds = new Set(dialogBranchIdsInOrder);
+          const dialogNodeById = new Map(
+            dialogSnapshot.nodes.map((node) => [node.id, node] as const),
+          );
+          const clickDiagnostics: NativeReactBuildDiagnostic[] = [];
+          if (containsForbiddenDocumentViewUrl(dialogSnapshot.text)) {
+            clickDiagnostics.push({
+              code: "DOCUMENT_VIEW_URL_SCHEME_FORBIDDEN",
+              file: `${routePath}#trigger-${index + 1}`,
+              line: null,
+              column: null,
+            });
+          }
+          const expectedBranchIdSet = new Set(expectedBranchIds);
+          const expectedNodeIds = new Set(
+            expectedBranchIds.flatMap(
+              (branchId) => branchById.get(branchId)!.nodes.map((node) => node.id),
+            ),
+          );
+          const expectedNodeOrder = expectedBranchIds.flatMap((branchId) =>
+            branchById.get(branchId)!.nodes.map((node) => node.id),
+          );
+          if (
+            dialogBranchIdsInOrder.length !== expectedBranchIds.length ||
+            dialogBranchIdsInOrder.some(
+              (branchId, branchIndex) =>
+                branchId !== expectedBranchIds[branchIndex],
+            )
+          ) {
+            clickDiagnostics.push({
+              code: "DOCUMENT_VIEW_BRANCH_ORDER_INVALID",
+              file: `${routePath}#trigger-${index + 1}`,
+              line: null,
+              column: null,
+            });
+          }
+          if (
+            dialogSnapshot.nodes.length !== expectedNodeOrder.length ||
+            dialogSnapshot.nodes.some(
+              (node, nodeIndex) => node.id !== expectedNodeOrder[nodeIndex],
+            )
+          ) {
+            clickDiagnostics.push({
+              code: "DOCUMENT_VIEW_NODE_ORDER_INVALID",
+              file: `${routePath}#trigger-${index + 1}`,
+              line: null,
+              column: null,
+            });
+          }
+          for (const branchId of dialogBranchIds) {
+            if (!expectedBranchIdSet.has(branchId)) {
+              clickDiagnostics.push({
+                code: "DOCUMENT_VIEW_UNEXPECTED_BRANCH",
+                file: `${routePath}#${branchId}`,
+                line: null,
+                column: null,
+              });
+            }
+          }
+          for (const nodeId of dialogNodeById.keys()) {
+            if (!expectedNodeIds.has(nodeId)) {
+              clickDiagnostics.push({
+                code: "DOCUMENT_VIEW_UNEXPECTED_NODE",
+                file: `${routePath}#${nodeId}`,
+                line: null,
+                column: null,
+              });
+            }
+          }
+          const normalizedDialogText = normalizedDocumentViewText(
+            dialogSnapshot.text,
+          );
+          for (const source of input.documentViewForbiddenSources) {
+            if (
+              containsDocumentViewSourceEvidence(
+                dialogSnapshot.text,
+                source.content,
+                publicDocumentSourceValues,
+              )
+            ) {
+              clickDiagnostics.push({
+                code: "DOCUMENT_VIEW_PRIVATE_SOURCE_EXPOSED",
+                file: `${routePath}#${source.id}`,
+                line: null,
+                column: null,
+              });
+            }
+          }
+          for (const branchId of expectedBranchIds) {
+            const branch = branchById.get(branchId)!;
+            if (!dialogBranchIds.has(branchId)) {
+              clickDiagnostics.push({
+                code: "DOCUMENT_VIEW_BRANCH_MISSING",
+                file: `${routePath}#${branchId}`,
+                line: null,
+                column: null,
+              });
+            } else if (
+              !dialogSnapshot.branches.find(
+                (renderedBranch) => renderedBranch.id === branchId,
+              )?.visible
+            ) {
+              clickDiagnostics.push({
+                code: "DOCUMENT_VIEW_BRANCH_HIDDEN",
+                file: `${routePath}#${branchId}`,
+                line: null,
+                column: null,
+              });
+            }
+            if (
+              !normalizedDialogText.includes(
+                normalizedDocumentViewText(branch.title),
+              )
+            ) {
+              clickDiagnostics.push({
+                code: "DOCUMENT_VIEW_BRANCH_TITLE_MISSING",
+                file: `${routePath}#${branchId}`,
+                line: null,
+                column: null,
+              });
+            }
+            for (const node of branch.nodes) {
+              const renderedNode = dialogNodeById.get(node.id);
+              if (!renderedNode) {
+                clickDiagnostics.push({
+                  code: "DOCUMENT_VIEW_NODE_MISSING",
+                  file: `${routePath}#${branchId}:${node.id}`,
+                  line: null,
+                  column: null,
+                });
+                continue;
+              }
+              if (!renderedNode.visible) {
+                clickDiagnostics.push({
+                  code: "DOCUMENT_VIEW_NODE_HIDDEN",
+                  file: `${routePath}#${branchId}:${node.id}`,
+                  line: null,
+                  column: null,
+                });
+              }
+              const normalizedNodeText = comparableDocumentViewText(
+                renderedNode.text,
+              );
+              if (
+                normalizedNodeText !==
+                expectedDocumentViewNodeText({
+                  title: node.title,
+                  content: node.content,
+                })
+              ) {
+                clickDiagnostics.push({
+                  code: "DOCUMENT_VIEW_NODE_CONTENT_MISMATCH",
+                  file: `${routePath}#${branchId}:${node.id}`,
+                  line: null,
+                  column: null,
+                });
+              }
+            }
+          }
+          if (!dialogSnapshot.hasClose) {
+            clickDiagnostics.push({
+              code: "DOCUMENT_VIEW_CLOSE_MISSING",
+              file: `${routePath}#trigger-${index + 1}`,
+              line: null,
+              column: null,
+            });
+          }
+          if (clickDiagnostics.length > 0) {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              clickDiagnostics.slice(0, 64),
+            );
+          }
+          await dialog
+            .locator("[data-frontmind-document-close]")
+            .first()
+            .click({ timeout: 5_000 });
+          try {
+            await page.waitForSelector(
+              '[role="dialog"][data-frontmind-document-dialog]',
+              { state: "hidden", timeout: 1_000 },
+            );
+          } catch {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              [
+                {
+                  code: "DOCUMENT_VIEW_CLOSE_FAILED",
+                  file: `${routePath}#trigger-${index + 1}`,
+                  line: null,
+                  column: null,
+                },
+              ],
+            );
+          }
+          if (externalRequestDetected || cspViolationDetected) {
+            throw new NativeReactBuildError("NATIVE_BUILD_NETWORK_FORBIDDEN");
+          }
+          if (runtimeFailureCodes.size > 0) {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              [
+                {
+                  code: "DOCUMENT_VIEW_INTERACTION_RUNTIME_ERROR",
+                  file: `${routePath}#trigger-${index + 1}`,
+                  line: null,
+                  column: null,
+                },
+              ],
+            );
+          }
+          if (
+            (await page
+              .locator('[role="dialog"][data-frontmind-document-dialog]:visible')
+              .count()) > 0
+          ) {
+            throw new NativeReactBuildError(
+              "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+              [
+                {
+                  code: "DOCUMENT_VIEW_CLOSE_FAILED",
+                  file: `${routePath}#trigger-${index + 1}`,
+                  line: null,
+                  column: null,
+                },
+              ],
+            );
+          }
+        }
+      };
       for (const [routeIndex, route] of input.routes.entries()) {
         if (privatePreviewQa) {
           await navigateAndAssertRendered(route, false, false);
@@ -2149,6 +3258,7 @@ async function runBrowserQaStrict(input: {
           true,
         );
         if (input.contentPlan) contentPlanSnapshots.push(snapshot);
+        await auditDocumentViewRoute(route);
         if (routeIndex >= 3) continue;
         const axe = await new AxeBuilder({ page })
           .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
@@ -2213,6 +3323,12 @@ async function runBrowserQaStrict(input: {
         ),
       });
       await page.setViewportSize({ width: 390, height: 844 });
+      for (const route of input.routes) {
+        assertNotAborted(input.abortSignal);
+        await navigateAndAssertRendered(route, privatePreviewQa, false);
+        await auditDocumentViewRoute(route);
+      }
+      await navigateAndAssertRendered("/", privatePreviewQa, false);
       screenshots.push({
         path: "screenshots/home-390.png",
         bytes: Buffer.from(
@@ -2258,6 +3374,19 @@ async function runBrowserQaStrict(input: {
         await closeServer();
         throw error;
       }
+    } else if (input.documentViewPlan) {
+      await closeServer();
+      throw new NativeReactBuildError(
+        "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+        [
+          {
+            code: "DOCUMENT_VIEW_BROWSER_AUDIT_UNAVAILABLE",
+            file: null,
+            line: null,
+            column: null,
+          },
+        ],
+      );
     } else if (input.contentPlan && input.contentPlanSha256) {
       if (input.requiredUserMedia.length > 0) {
         await closeServer();
@@ -2410,6 +3539,19 @@ async function runBrowserQa(input: Parameters<typeof runBrowserQaStrict>[0]) {
       throw new NativeReactBuildError("NATIVE_BUILD_ABORTED");
     }
     if (error instanceof NativeReactBuildError) throw error;
+    if (input.documentViewPlan) {
+      throw new NativeReactBuildError(
+        "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+        [
+          {
+            code: "DOCUMENT_VIEW_BROWSER_AUDIT_UNAVAILABLE",
+            file: null,
+            line: null,
+            column: null,
+          },
+        ],
+      );
+    }
     if (input.requiredUserMedia.length > 0) {
       throw new NativeReactBuildError("NATIVE_BUILD_USER_MEDIA_INVALID", [
         {
@@ -2530,6 +3672,50 @@ export async function materializeNativeReactSource(
   const routes = planRoutes ?? briefRoutes;
   if (new Set(routes).size !== routes.length) {
     throw new NativeReactBuildError("NATIVE_BUILD_INPUT_INVALID");
+  }
+  const documentViewPlan = input.documentViewPlan ?? null;
+  const documentViewForbiddenSources =
+    input.documentViewForbiddenSources ?? [];
+  if (
+    documentViewPlan &&
+    (!frozenContentPlan?.plan ||
+      documentViewPlan.schemaVersion !== 1 ||
+      documentViewPlan.routes.length !== routes.length ||
+      documentViewPlan.routes.some(
+        (route, index) => route.path !== routes[index],
+      ))
+  ) {
+    throw new NativeReactBuildError(
+      "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+      [
+        {
+          code: "DOCUMENT_VIEW_PLAN_ROUTE_MANIFEST_MISMATCH",
+          file: null,
+          line: null,
+          column: null,
+        },
+      ],
+    );
+  }
+  if (
+    (documentViewForbiddenSources.length > 0 && !documentViewPlan) ||
+    new Set(documentViewForbiddenSources.map((source) => source.id)).size !==
+      documentViewForbiddenSources.length ||
+    documentViewForbiddenSources.some(
+      (source) => !source.id.trim() || !source.content.trim(),
+    )
+  ) {
+    throw new NativeReactBuildError(
+      "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+      [
+        {
+          code: "DOCUMENT_VIEW_FORBIDDEN_SOURCE_INVALID",
+          file: null,
+          line: null,
+          column: null,
+        },
+      ],
+    );
   }
   const canonicalOrigin = validateCanonicalOrigin(
     input.mode,
@@ -2664,6 +3850,21 @@ export async function materializeNativeReactSource(
             knowledgeArchiveHash: build.knowledgeArchiveHash,
           }
         : null,
+      routeMetadata: frozenContentPlan?.plan
+        ? new Map(
+            frozenContentPlan.plan.routes.map((route) => [
+              routePath(route.path),
+              {
+                title: route.title,
+                description: route.summary || route.purpose,
+              },
+            ]),
+          )
+        : undefined,
+      siteName:
+        (brief as { designPreferences?: { siteName?: string | null } })
+          .designPreferences?.siteName
+        ?? brief.companyName,
     });
     const checks = assertStaticHardSafety({
       files,
@@ -2713,6 +3914,19 @@ export async function materializeNativeReactSource(
           },
         ]);
       }
+      if (documentViewPlan) {
+        throw new NativeReactBuildError(
+          "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
+          [
+            {
+              code: "DOCUMENT_VIEW_BROWSER_AUDIT_REQUIRED",
+              file: null,
+              line: null,
+              column: null,
+            },
+          ],
+        );
+      }
     }
     const browserQa =
       input.browserQa === false
@@ -2758,6 +3972,8 @@ export async function materializeNativeReactSource(
             requiredKnowledgeMedia,
             contentPlan: frozenContentPlan?.plan ?? null,
             contentPlanSha256: frozenContentPlan?.sha256 ?? null,
+            documentViewPlan,
+            documentViewForbiddenSources,
           });
     if (frozenContentPlan?.plan && !browserQa.contentReceipt) {
       throwContentPlanInvalid("CONTENT_PLAN_BROWSER_RECEIPT_MISSING");

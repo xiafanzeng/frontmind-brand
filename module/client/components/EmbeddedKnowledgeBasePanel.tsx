@@ -1017,10 +1017,17 @@ function RealBuildFlow({
     : undefined;
   const authoritativeConversationId =
     latestProgressQuery.data?.progress?.build.conversationId;
+  const pendingBuildConversation = historyTasks
+    .filter((item) =>
+      ["pending", "running"].includes(item.status) &&
+      (item.knowledgeBase?.initialized || item.messages.some((message) =>
+        message.knowledgeBase?.kind === "pending_user")))
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0];
   const expectedConversationId =
     historicalId ??
     requestedFreshConversationRef.current ??
     authoritativeConversationId ??
+    pendingBuildConversation?.id ??
     conversationId;
   const activeMatchesExpected = expectedConversationId
     ? activeConversation?.id === expectedConversationId
@@ -1030,7 +1037,8 @@ function RealBuildFlow({
   // shell mount while Home is actually pointing at an unrelated conversation.
   const lastGoodConversation =
     activeMatchesExpected &&
-    hasLastGoodKnowledgeBasePresentation(activeConversation)
+    (hasLastGoodKnowledgeBasePresentation(activeConversation) ||
+      activeConversation?.id === pendingBuildConversation?.id)
       ? activeConversation
       : undefined;
   const displayedConversation =
@@ -1039,6 +1047,10 @@ function RealBuildFlow({
       ? scopedConversation
       : undefined);
   const [recoveryTimedOut, setRecoveryTimedOut] = useState(false);
+  useEffect(() => {
+    void latestProgressQuery.refetch();
+    void refreshConversations();
+  }, []);
   const recoveryPending = Boolean(
     !lastGoodConversation &&
       !syncError &&
@@ -1151,6 +1163,12 @@ function RealBuildFlow({
       }
       return;
     }
+    if (!latestConversationId && pendingBuildConversation) {
+      setConversationId(pendingBuildConversation.id);
+      if (activeConversation?.id !== pendingBuildConversation.id)
+        setActive(pendingBuildConversation.id);
+      return;
+    }
     if (!conversationId && !latestConversationId && !fallbackSnapshot) {
       const initialConversation = historyTasks
         .filter(
@@ -1191,6 +1209,7 @@ function RealBuildFlow({
     latestProgressQuery.isError,
     latestProgressQuery.isLoading,
     scopedConversation,
+    pendingBuildConversation,
     setActive,
     state.conversations,
     syncError,
@@ -1272,14 +1291,14 @@ function RealBuildFlow({
       return;
     if (candidate !== undefined) {
       setLiveProgress((current) => {
-        if (candidate === null) return null;
+        if (candidate === null) return pendingBuildConversation ? current : null;
         if (isKnowledgeBaseProgressProjectionOlder(candidate, current)) {
           return current;
         }
         return candidate;
       });
     }
-  }, [progressQuery.data?.progress, expectedConversationId]);
+  }, [progressQuery.data?.progress, expectedConversationId, pendingBuildConversation]);
 
   const latestScopedProgress =
     latestProgressQuery.data?.progress?.build.conversationId ===
@@ -1349,15 +1368,20 @@ function RealBuildFlow({
             trpcUtils.workspace.knowledgeProgress.setData(
               { conversationId },
               (current) =>
-                current &&
                 !isKnowledgeBaseProgressProjectionOlder(
                   detail.progress,
-                  current.progress ?? null,
+                  current?.progress ?? null,
                 )
                   ? { ...current, progress: detail.progress }
                   : current,
             );
           }
+          trpcUtils.workspace.knowledgeProgress.setData(undefined, (current) =>
+            !current?.progress ||
+            !isKnowledgeBaseProgressProjectionOlder(detail.progress, current.progress)
+              ? { ...current, progress: detail.progress }
+              : current,
+          );
         }
         // The event carries the complete authoritative progress projection.
         // Updating local state and the query cache is sufficient; refetching it
@@ -1752,7 +1776,7 @@ function KnowledgeWorkspaceSurfaces({
         auxiliary={
           <div className="knowledge-workbench-auxiliary">
             {resourceActions}
-            <div className="knowledge-workbench-tree">{knowledge}</div>
+            <div id={`knowledge-cards-${projectId}`} className="knowledge-workbench-tree">{knowledge}</div>
           </div>
         }
         resultTitle="知识内容"

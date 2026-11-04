@@ -1632,7 +1632,7 @@ export function knowledgeBaseBuildRequiresApprovedReset(
 ) {
   return (
     build.executionMode !== "materialized_bundle_v1" ||
-    build.skillVersion !== "5" ||
+    (build.skillVersion !== "5" && build.skillVersion !== "6") ||
     !knowledgeBaseBuildSkillPinSupported(build) ||
     build.providerProtocol !== "manus_v2" ||
     build.contentVersion === null ||
@@ -1755,7 +1755,7 @@ function buildDto(
     knowledgeBasePackageProjectionCompatibility(build);
   const materializedV5 =
     build.executionMode === "materialized_bundle_v1" &&
-    build.skillVersion === "5";
+    (build.skillVersion === "5" || build.skillVersion === "6");
   const hasDisplayableContent = rows.some(
     (row) =>
       typeof row.contentMarkdown === "string" && row.contentMarkdown.trim(),
@@ -2271,7 +2271,7 @@ export async function getKnowledgeBaseProgress(input: {
   progress.execution = await loadKnowledgeBaseExecution({ userId: input.userId, buildId: build.id, generation: build.generation, executor: db });
   if (
     build.executionMode !== "materialized_bundle_v1" ||
-    build.skillVersion !== "5"
+    (build.skillVersion !== "5" && build.skillVersion !== "6")
   ) {
     return progress;
   }
@@ -2501,10 +2501,13 @@ async function readKnowledgeBaseObservationProjection(
     null;
   if (
     !build.activeTurnId &&
-    !currentRow &&
-    (build.status === "ready_to_publish" || build.status === "published")
+    (build.lastAppliedOperationKey ||
+      (!currentRow && (build.status === "ready_to_publish" || build.status === "published")))
   ) {
     if (build.lastAppliedOperationKey) {
+      // A pre-generated next node still points to its initial research turn.
+      // Acknowledge the operation that advanced the build independently of
+      // that content provenance, including intermediate local confirmations.
       // This is the exact durable operation that advanced the build. Do not
       // guess from second-resolution timestamps: two turns can complete in the
       // same second, and a later maintenance turn must not acknowledge the
@@ -2560,7 +2563,7 @@ async function readKnowledgeBaseObservationProjection(
   const terminalFailedTurnRow =
     !build.activeTurnId &&
     build.executionMode === "materialized_bundle_v1" &&
-    build.skillVersion === "5" &&
+    (build.skillVersion === "5" || build.skillVersion === "6") &&
     (build.status === "protocol_error" || build.status === "failed")
       ? await db
           .select()
@@ -2926,6 +2929,8 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     typeof conversationTurns.$inferSelect,
     | "id"
     | "clientRequestId"
+    | "operationKey"
+    | "operationType"
     | "expectedLeafId"
     | "attachmentFileIds"
     | "metadata"
@@ -2933,7 +2938,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
   > | null;
   terminalCompletedTurnRow: Pick<
     typeof conversationTurns.$inferSelect,
-    "id" | "clientRequestId" | "status"
+    "id" | "clientRequestId" | "status" | "operationKey" | "operationType"
   > | null;
   terminalFailedTurnRow: Pick<
     typeof conversationTurns.$inferSelect,
@@ -3073,10 +3078,10 @@ function projectKnowledgeBaseObservationSnapshot(input: {
   const completedTurnRow =
     activeTurnRow?.status === "completed"
       ? activeTurnRow
-      : presentationTurnRow?.status === "completed"
-        ? presentationTurnRow
-        : terminalCompletedTurnRow?.status === "completed"
-          ? terminalCompletedTurnRow
+      : terminalCompletedTurnRow?.status === "completed"
+        ? terminalCompletedTurnRow
+        : presentationTurnRow?.status === "completed"
+          ? presentationTurnRow
           : null;
   const completedMessageSequence = messageSequence(
     completedTurnRow?.id,
@@ -3086,6 +3091,8 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     completedTurnRow?.clientRequestId && completedMessageSequence !== undefined
       ? {
           turnId: completedTurnRow.id,
+          operationKey: completedTurnRow.operationKey ?? undefined,
+          operationType: completedTurnRow.operationType ?? undefined,
           clientRequestId: completedTurnRow.clientRequestId,
           messageSequence: completedMessageSequence,
         }

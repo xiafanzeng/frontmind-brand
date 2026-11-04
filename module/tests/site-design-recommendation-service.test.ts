@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   finalizeSiteDesignPreferencesDraft,
@@ -10,6 +10,7 @@ import {
   requireSiteDesignTemplateCoordinateMatchesSelection,
   requireSiteDesignTemplateMatchesSelection,
   requireSiteDesignRecommendationTemplate,
+  resolveSiteDesignRecommendationTemplate,
   siteBriefForRevision,
   SiteOpsServiceError,
 } from "../server/siteops/service.js";
@@ -312,6 +313,46 @@ describe("read-only site-design recommendation service boundary", () => {
         statusCode: 409,
       }),
     );
+  });
+
+  it("keeps an owned admitted template pinned after the active catalog advances", async () => {
+    const coordinate = { id: "static-template-22-hirael-agency-landing", version: "21st-included-recommended-20260828-v2" };
+    const entry = { candidateId: coordinate.id, executionAdmission: { status: "admitted" as const } };
+    const activeCatalog = { catalogVersion: "frontmind-curated-20261025-v7", entries: [] };
+    const loadVersion = vi.fn(async () => ({ catalogVersion: coordinate.version, entries: [entry] }));
+    const result = await resolveSiteDesignRecommendationTemplate({ coordinate, activeCatalog,
+      frozenCandidates: [{ templateCoordinate: coordinate, executionAdmitted: true }], loadVersion });
+    expect(result).toBe(entry);
+    expect(loadVersion).toHaveBeenCalledWith(coordinate.version);
+    expect(activeCatalog.catalogVersion).toBe("frontmind-curated-20261025-v7");
+  });
+
+  it.each(["missing", "different-template", "different-version", "not-admitted"])(
+    "rejects %s frozen candidates before reading an arbitrary historical catalog", async reason => {
+      const coordinate = { id: "static-template-22-hirael-agency-landing", version: "21st-included-recommended-20260828-v2" };
+      const loadVersion = vi.fn();
+      const frozenCandidates = reason === "missing" ? [] : [{
+        templateCoordinate: {
+          id: reason === "different-template" ? "static-template-other" : coordinate.id,
+          version: reason === "different-version" ? "other-version" : coordinate.version,
+        },
+        executionAdmitted: reason !== "not-admitted",
+      }];
+      await expect(resolveSiteDesignRecommendationTemplate({ coordinate,
+        activeCatalog: { catalogVersion: "frontmind-curated-20261025-v7", entries: [] },
+        frozenCandidates, loadVersion,
+      })).rejects.toMatchObject({ code: "REVISION_CONFLICT", statusCode: 409 });
+      expect(loadVersion).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still verifies the archived catalog admission instead of trusting candidate status alone", async () => {
+    const coordinate = { id: "static-template-22-hirael-agency-landing", version: "21st-included-recommended-20260828-v2" };
+    await expect(resolveSiteDesignRecommendationTemplate({ coordinate, activeCatalog: null,
+      frozenCandidates: [{ templateCoordinate: coordinate, executionAdmitted: true }],
+      loadVersion: async () => ({ catalogVersion: coordinate.version,
+        entries: [{ candidateId: coordinate.id, executionAdmission: { status: "unavailable" } }] }),
+    })).rejects.toMatchObject({ code: "STATE_CONFLICT", statusCode: 409 });
   });
 
   it("projects storage IDs to stable opaque coordinates and rejects fake core evidence", () => {

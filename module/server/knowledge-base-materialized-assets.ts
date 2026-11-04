@@ -35,6 +35,7 @@ type ActiveWorkingSetBuild = Pick<
   | "contentVersion"
   | "activeWorkingSetId"
   | "skillContentHash"
+  | "skillVersion"
   | "companyName"
   | "executionMode"
 >;
@@ -220,7 +221,15 @@ function knowledgeBaseWorkingSetLeafLocalUrls(input: {
 async function readValidatedActiveKnowledgeBaseWorkingSet(input: {
   db: any;
   build: ActiveWorkingSetBuild;
+  frozenSelection?: { id: string; generation: number; contentVersion: number; packageSha256: string };
 }) {
+  if (input.frozenSelection) input = {
+    ...input,
+    build: { ...input.build, executionMode: "materialized_bundle_v1",
+      activeWorkingSetId: input.frozenSelection.id,
+      generation: input.frozenSelection.generation,
+      contentVersion: input.frozenSelection.contentVersion },
+  };
   const contentVersion = input.build.contentVersion;
   if (
     input.build.executionMode !== "materialized_bundle_v1" ||
@@ -243,7 +252,7 @@ async function readValidatedActiveKnowledgeBaseWorkingSet(input: {
           eq(knowledgeBaseWorkingSets.buildId, input.build.id),
           eq(knowledgeBaseWorkingSets.generation, input.build.generation),
           eq(knowledgeBaseWorkingSets.contentVersion, contentVersion),
-          eq(knowledgeBaseWorkingSets.status, "active"),
+          input.frozenSelection ? undefined : eq(knowledgeBaseWorkingSets.status, "active"),
         ),
       )
       .limit(1)
@@ -253,6 +262,9 @@ async function readValidatedActiveKnowledgeBaseWorkingSet(input: {
       "WORKING_SET_NOT_FOUND",
       "Active Working Set row is unavailable",
     );
+  }
+  if (input.frozenSelection && row.packageSha256 !== input.frozenSelection.packageSha256) {
+    return resourceError("WORKING_SET_RESOURCE_INTEGRITY_MISMATCH", "Frozen diagnostic package digest changed");
   }
   if (
     !SHA256_RE.test(row.packageSha256) ||
@@ -276,6 +288,7 @@ async function readValidatedActiveKnowledgeBaseWorkingSet(input: {
       generation: input.build.generation,
       contentVersion,
       skillContentHash: input.build.skillContentHash || undefined,
+      skillVersion: input.build.skillVersion === "6" ? "6" : "5",
       companyName: input.build.companyName,
     });
   } catch (error) {

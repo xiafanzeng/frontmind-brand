@@ -50,6 +50,26 @@ describe("approved RAG evaluation gauge", () => {
     expect(screen.getByTestId("rag-gauge-max").getAttribute("x")).toBe("81.81");
   });
 
+  it("displays a conservative whole-number score while keeping the marker on the exact value", () => {
+    const { rerender } = render(
+      <RagEvaluationGauge score={98.5} />,
+    );
+
+    expect(screen.getByTestId("rag-gauge-value").textContent).toBe("98");
+    expect(screen.getByRole("img", { name: /六维诊断分 98，/ })).toBeTruthy();
+
+    const exactPoint = ragGaugePoint(98.5);
+    const marker = screen.getByTestId("rag-gauge-marker");
+    expect(marker.getAttribute("cx")).toBe(String(exactPoint.x));
+    expect(marker.getAttribute("cy")).toBe(String(exactPoint.y));
+
+    rerender(<RagEvaluationGauge score={99.99} />);
+    expect(screen.getByTestId("rag-gauge-value").textContent).toBe("99");
+
+    rerender(<RagEvaluationGauge score={100} />);
+    expect(screen.getByTestId("rag-gauge-value").textContent).toBe("100");
+  });
+
   it("keeps zero valid while refusing to turn missing or invalid values into a score", () => {
     const { rerender } = render(
       <RagEvaluationGauge score={0} />,

@@ -61,6 +61,7 @@ export function useJudgeEvaluation(input: {
   const [state, dispatch] = useReducer(judgeEvaluationReducer, initialJudgeLifecycleState);
   const pollAbortRef = useRef<AbortController | null>(null);
   const pollCountRef = useRef(0);
+  const attemptRef = useRef<{contextKey: string; taskId: string; attempt: number} | null>(null);
   // Mirrors the dispatched phase so a second click within the same render
   // frame is rejected before any fetch is issued.
   const phaseRef = useRef<JudgePhase>(initialJudgeLifecycleState.phase);
@@ -72,12 +73,15 @@ export function useJudgeEvaluation(input: {
     input.sourceFingerprint,
     input.questionBasis,
   );
+  const contextRef = useRef(contextKey);
+  contextRef.current = contextKey;
 
   // On context change: cancel polling, reset state
   useEffect(() => {
     pollAbortRef.current?.abort();
     pollAbortRef.current = null;
     pollCountRef.current = 0;
+    attemptRef.current = null;
     dispatch({ type: "context-change", contextKey });
   }, [contextKey]);
 
@@ -86,13 +90,17 @@ export function useJudgeEvaluation(input: {
     return () => { pollAbortRef.current?.abort(); };
   }, []);
 
-  const start = useCallback(async (): Promise<void> => {
+  const start = useCallback(async (options?: {retry?: boolean}): Promise<void> => {
     // Prevent duplicate starts for the same context, including clicks that
     // land before React re-renders with the updated phase.
     if (judgeStartBlocked(phaseRef.current)) return;
     phaseRef.current = "starting";
 
     const expectedContext = contextKey;
+    const previous = attemptRef.current;
+    const retry = options?.retry && state.phase === "failed" &&
+      state.errorCode === "RESPONSE_LOGIC_JUDGE_TASK_FAILED" && previous?.contextKey === expectedContext &&
+      previous.taskId === state.taskId ? {taskId: previous.taskId, attempt: previous.attempt} : undefined;
     pollCountRef.current = 0;
     dispatch({ type: "start", contextKey: expectedContext });
 
@@ -100,8 +108,11 @@ export function useJudgeEvaluation(input: {
       const started = await startJudgeEvaluation({
         questionId: input.questionId,
         expectedRevision: input.recordRevision,
+        ...(retry ? {retry} : {}),
       });
       // Context check: if changed while starting, discard
+      if (contextRef.current !== expectedContext) return;
+      attemptRef.current = {contextKey: expectedContext, taskId: started.taskId, attempt: started.attempt};
       dispatch({ type: "start-succeeded", taskId: started.taskId, contextKey: expectedContext });
 
       // Start polling
@@ -123,7 +134,7 @@ export function useJudgeEvaluation(input: {
         contextKey: expectedContext,
       });
     }
-  }, [contextKey, input.questionId, input.recordRevision]);
+  }, [contextKey, input.questionId, input.recordRevision, state.phase, state.errorCode, state.taskId]);
 
   const pollJudgeLoop = useCallback(async (args: {
     taskId: string;
@@ -172,6 +183,7 @@ export function useJudgeEvaluation(input: {
     pollAbortRef.current?.abort();
     pollAbortRef.current = null;
     pollCountRef.current = 0;
+    attemptRef.current = null;
     dispatch({ type: "reset" });
   }, []);
 

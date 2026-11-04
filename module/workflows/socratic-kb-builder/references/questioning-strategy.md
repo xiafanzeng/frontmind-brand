@@ -1,6 +1,6 @@
 # Evidence and gap strategy for materialized builds
 
-The v5 task does not conduct a turn-by-turn interview. It resolves all usable
+The v6 task does not conduct a turn-by-turn interview. It resolves all usable
 evidence in one isolated operation and records remaining gaps inside the
 complete Working Set.
 

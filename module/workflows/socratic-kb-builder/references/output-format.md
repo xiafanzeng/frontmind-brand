@@ -1,6 +1,6 @@
 # Dashboard-owned final-package compatibility
 
-This reference describes content invariants only. The v5 Manus task never
+This reference describes content invariants only. The v6 Manus task never
 creates the final customer archive. Dashboard creates that archive locally
 after every materialized node has been confirmed.
 
@@ -24,7 +24,7 @@ evidence provenance, Logo state and safe image assets. It must not emit a
 customer package manifest, provider finalization input or a second ZIP.
 
 Dashboard remains authoritative for the established customer-package schema,
-viewer, manifest, SHA-256 readback and publication validation. A v5 task must
+viewer, manifest, SHA-256 readback and publication validation. A v6 task must
 not rename, reinterpret or synthesize those downstream fields.
 
 ## Assets

@@ -3,7 +3,7 @@ name: socratic-kb-builder
 description: Materialize or revise a deep Chinese enterprise knowledge base as a complete hash-addressed ZIP working set. Use for a new FrontMind Dashboard knowledge-base build or a single-leaf revision; never use it to continue a previous task or to advance a confirmed node.
 ---
 
-# Socratic Enterprise Knowledge Base Builder v5
+# Socratic Enterprise Knowledge Base Builder v6
 
 Create an evidence-grounded enterprise encyclopedia as an immutable working
 set. Dashboard, not the model task, owns traversal, confirmation and final
@@ -90,7 +90,7 @@ consumes the ZIP only and does not consume this sentence.
 
 ## Task isolation
 
-- Every operation is a new top-level Manus v2 task.
+- Every operation is a new top-level task under the server-frozen model policy.
 - Do not request, infer or reuse a parent task, previous task, chat history,
   previous Provider file ID or previous signed URL.
 - Do not ask the user to confirm content inside the task.
@@ -130,18 +130,177 @@ a non-empty body. Do not emit formal-content markers, `## 资料元数据`,
 or metadata keys in node Markdown. Preserve sources, excerpts, crawl notes,
 conflicts and verification gaps as declared evidence files instead.
 
-Use these evidence-adaptive minimums:
+## Depth and one correction pass
 
-- overview with evidence:
-  `max(120, min(target, floor(evidenceCharacters * 0.25)))`, where target is
-  5,000 for product/service branches and 2,500 otherwise;
-- leaf with evidence:
-  `max(80, min(500, floor(evidenceCharacters * 0.20)))`;
-- zero-evidence overview: 60; zero-evidence leaf: 40. State only the supported
-  facts in node prose and retain the specific gap in leaf-scoped evidence.
+Save source material before drafting nodes. For each successfully read public
+page or document, retain the relevant original passages with their headings,
+date, source identity and page/section locator. Search-result snippets remain
+snippets and cannot prove that the underlying page was read. Use the existing
+evidence ledger to associate these passages with each relevant leaf. Preserve
+the complete relevant passage even when it is longer than the eventual node.
 
-Never pad one topic with another topic's facts. Do not expose source appendices
-inside customer-visible prose.
+Read the complete corresponding PDF chapter before drafting its nodes. Map each
+node to the actual retained source passages and printed page or section locators.
+Preserve original wording, table headings, units and the year to which each fact
+belongs. A rewritten digest cannot be labeled as an original source excerpt.
+Separate each evidence file into `## 原文引用` (verbatim only, with a page/section
+locator per passage) and `## 整理摘要` (explicit paraphrase). In the original
+section, start each separate passage with `定位：第 12 页` or a specific named
+section such as `定位：“师资队伍”节`; preserve the actual location, never invent
+one. For a PDF, distinguish its one-based physical page index from a printed
+page label: use `定位：PDF 第 13 页（印刷页码 1）` when both are visible.
+Confirm this mapping against the retained page itself; front matter and covers
+often make these numbers different. If the printed label is unavailable, say so
+and retain the physical page index. Copy quotations from that page's extracted
+text, keeping separate passages separate; never reconstruct a quotation from
+memory or from the summary you have just written.
+Only these located original passages count as evidence length or numeric
+support. Generated summaries cannot verify their own facts. A missing original
+section or unlocated passage is `EVIDENCE_ORIGINAL_QUOTE_REQUIRED`. Never concatenate
+sentences from different pages into one purported quotation. Preserve tables'
+headers and units. Record acquisition time only from the actual tool response
+or retained collection log; source publication date is not acquisition time.
+When no trustworthy acquisition timestamp is available, set ledger `retrievedAt`
+to null and mark `采集时间：未知` in evidence. Never invent a common timestamp.
+A shared source document may support several topics, but each topic must retain
+its own supporting passages. Do not fall back to one generic paragraph when a
+topic lookup fails. Record the missing support and retrieve the appropriate
+passage from the already available source. A complete document or a generic
+excerpt copied across different branches does not establish node-level support.
+
+When no source passage supports a node, do not invent one to satisfy the validator.
+A node containing only its title and the specific `资料不足：` notice may use the
+complete per-leaf sparse-evidence exception below. Keep its source inspection log
+and `## 节点资料缺口` record; neither is counted as original evidence. This exception
+does not allow factual prose or numeric claims without their original support.
+
+Check each explicit quantity, amount and percentage against this node's retained
+passages. Preserve years and units. For a transparent unit conversion, retain
+the original amount and state the conversion. Missing numeric support is
+NUMERIC_CLAIMS_UNVERIFIED and requires verification or evidence rebinding. It
+is not a finding that the underlying fact is false. Page numbers, identifiers
+and version numbers are not factual quantity claims.
+
+The validator reports EVIDENCE_REUSED_ACROSS_TOPICS when all evidence for a node
+is reused across at least five nodes and three branches. Titles, source labels,
+retrieval times and page locator wrappers do not make a repeated passage unique.
+Rebind the affected topics to their actual source passages, then check quantities
+and body depth together in the one permitted correction pass.
+
+Do not write a node and then copy it into its evidence file. Do not replace
+source passages with your own conclusion, a rewritten digest or generic
+verification disclaimers. The validator reports EVIDENCE_COPIES_NODE_BODY when
+all of a leaf's evidence repeats its body with only a short wrapper. Restore
+the independently captured source material before validating again.
+
+If a source cannot be read, record that specific limitation and the affected
+facts. Mark affected research dimensions as gap and use source_limited or
+budget_reached as appropriate. Do not report coverage_complete from search
+snippets or count repeated leaf copies as separately visited official pages.
+
+For new v6 bundles, ordinary leaf bodies target 600–1,200 Chinese characters,
+core product/service/capability leaves target 800–1,800, and branch overviews
+target 1,200–2,500. These are evidence-adaptive drafting targets. Develop the
+supported scope, capabilities, delivery or usage, concrete examples and limits
+as applicable. Do not replace a chapter with a one-paragraph stage summary.
+When the evidence base is one annual report, prefer 30–40 complete business
+themes within the existing 30–115 node contract. Combine related facts instead
+of fragmenting them into many short summaries. The actual count follows the
+evidence and this preference adds no hard node-count restriction. Do not add
+inferences or repetitive prose to meet a character target.
+
+Write nodes in batches of five to eight, completing and checking each batch
+before moving on. Never use one script to produce a short summary for every node
+in the full package. Freeze each batch's
+source passages, page locators and numeric excerpts before expanding its nodes.
+First make a leaf-specific fact inventory: concrete entities, facts, procedures,
+conditions, examples and boundaries, each paired with its original source
+passage. Write each leaf independently from that inventory. Scripts may package
+already drafted content; never generate node prose through a loop that inserts
+a title or topic into shared template paragraphs. If the inventory cannot
+support the topic, record its concrete gap instead of expanding generic advice.
+Do not shorten every node to fit the entire package into one script or response.
+
+Treat each declared overview as a customer node with a clear overview title;
+keep its prose distinct from the detailed leaves. Store every body in the
+existing leaf/node contract, without inventing new manifest fields.
+
+Never pad sparse evidence, reuse unrelated facts, manufacture examples or
+repeat a disclaimer to reach a length target. A short, honest node is valid
+when relevant evidence is insufficient. Retain the specific gap in evidence.
+
+Always pass `--expected-skill-version 6` to the initial bundle validator.
+Every newly pinned ordinary node must contain at least 600 effective visible
+body characters. The type-specific drafting targets above remain applicable.
+This minimum is checked even when the writer retained only a short excerpt.
+Shared sentences and continuous text of at least 40 characters appearing in
+at least five nodes and three branches do not count toward body depth. The
+validator strips literal leaf titles, punctuation and layout before comparing
+text, and counts overlapping matches only once. Fewer than 600 remaining
+substantive characters produces BODY_TEMPLATE_REUSED when shared text was
+deducted. Shared enterprise names or facts do not invalidate a node that still
+has sufficient independent content. Move a genuinely shared usage or date disclaimer into the
+package-level explanation. Keep each node's supported facts, explanation,
+examples and boundaries specific to its own subject.
+
+A truly sparse topic may use a reviewable exception after the corresponding
+source chapter and available official material have been read. Global
+source_limited alone never exempts a node. All of these conditions are required:
+
+- researchCoverage.stopReason is source_limited and limitationReason explains
+  the specific exhausted sources and missing material.
+- A researchCoverage.dimensions entry has status gap and explicitly includes
+  this leafId. Preserve the actual gap instead of marking every dimension covered.
+- Append the fixed section below to this node's own hash-bound evidence file.
+  Use its exact leafId, a missing-fact description containing the node title,
+  the sourceUrl from this file's evidenceLedger entry, a concrete page/section
+  locator and a source-specific limitation. Both detail descriptions need at
+  least 20 visible characters. The validator checks declaration completeness,
+  while the saved source remains available for review.
+- Include a short visible paragraph beginning 资料不足： in the node body, with
+  the exact missing-fact description. This notice does not count toward body
+  depth. Preserve the supported facts and avoid speculative padding.
+
+```markdown
+## 节点资料缺口
+节点：<exact leafId>
+缺失事实：<node title and specific missing facts>
+已读来源：<this evidence file's exact sourceUrl>
+已读定位：<printed page and section or table>
+来源局限：<what the read source omits and which relevant source is unavailable>
+```
+
+Keep this section last in the evidence file. It is excluded from source size,
+source reuse and numeric-support checks. Unexplained short nodes produce
+SUBSTANTIVE_BODY_TOO_SHORT. Inserting a leaf title, joining paragraphs, changing
+line breaks or punctuation, or paraphrasing generic disclaimers does not add
+substantive content. Do not use these transformations to evade the correction
+list. Shared text is deducted regardless of paragraph layout. Supply distinct supported facts, process details and applicability for
+each node, or use the documented leaf-specific sparse-evidence exception. Both insufficient depth and repeated templates must
+be fixed together in the single permitted correction pass. If the supported
+material remains inadequate and the exception cannot be established, stop with
+an explicit incomplete result. Previously frozen Skill revisions retain their
+original read contracts.
+
+The same correction list identifies copied or incorrectly shared evidence. Correct that evidence
+from the already captured source passages first, then assess body depth. Do
+not paraphrase a copied evidence file just to evade the independence check.
+
+On that result, perform exactly one concentrated correction pass over the
+listed nodes. Reread their existing evidence files and expand only supported
+content toward the appropriate target. Reuse all valid research and other
+node bodies. Do not repeat web collection, add new model tasks, change IDs,
+delete evidence to evade the check or change unrelated nodes. Update exact
+body hashes and run the same validator again. Its hidden local state file
+records the one-pass budget and must remain outside the output ZIP. Do not
+remove or overwrite that state. `DEPTH_REWRITE_EXHAUSTED` requires stopping
+without submitting an invalid ZIP. Dashboard independently repeats the depth
+check against the server-frozen Skill version and rejects an unrepaired bundle.
+
+If a long evidence file is irrelevant, resolve its leaf association during the
+initial evidence review. The correction pass cannot silently remove supporting
+material merely to reduce the evidence count. Citation text is evidence, not
+proof that an external assertion is true.
 
 ## Logo and image rules
 
@@ -178,7 +337,9 @@ decoded bytes and original upload SHA.
 - 30 MiB total image bytes
 
 Stop duplicate SKUs, pagination, translated copies and low-value news before
-they displace uncovered business dimensions. Maintain actual counters; never
+they displace uncovered business dimensions. Counters for official-page reads and public queries are task-declared observations.
+The evidence file count and hashes are independently checked by Dashboard; this
+check does not establish external factual truth. Maintain actual counters; never
 invent sources, facts, images or completeness values.
 
 ## Output discipline

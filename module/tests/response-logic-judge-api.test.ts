@@ -117,6 +117,7 @@ type MockOptions = {
   upstreamError?: Error;
   knowledgeSnapshot?: { version: number; sourceFileName: string; documents: Array<{ path: string; title: string; content: string; kind?: string }> } | null;
   recordUpstreamResourceError?: Error;
+  attemptTasks?: Map<string, {id: string; status: string; prompt: string}>;
 };
 
 async function makeApp(options: MockOptions = {}) {
@@ -159,13 +160,29 @@ async function makeApp(options: MockOptions = {}) {
     getResponseLogicEntry: async () => (options.record === undefined ? baseRecord : options.record),
     credentialForRequest: (req: Request) => (options.hasCredential === false ? undefined : mockCredential),
     getFrontMindCredentials: () => (options.hasCredential === false ? {} : { credentialRef: "test-ref" }),
-    createCredentialAgentClient: () => client,
+    createCredentialAgentClient: (_credential: unknown, clientOptions?: {intentId?: string}) => !options.attemptTasks ? client : {
+      ...client,
+      findCreatedTask: async () => ({unique: options.attemptTasks!.get(clientOptions?.intentId ?? "") ?? null}),
+      createTask: async (input: {prompt: string}) => {
+        const key = clientOptions?.intentId ?? "";
+        let task = options.attemptTasks!.get(key);
+        if (!task) {
+          task = {id: `task-judge-${options.attemptTasks!.size + 1}`, status: "running", prompt: input.prompt};
+          options.attemptTasks!.set(key, task);
+        }
+        return {taskId: task.id, raw: {}};
+      },
+      listAllMessages: async ({taskId}: {taskId: string}) => {
+        const task = [...options.attemptTasks!.values()].find(task => task.id === taskId);
+        return task ? [{id: "state", type: "status_update", timestamp: Date.now(), status_update: {agent_status: task.status}}] : [];
+      },
+    },
     getUpstreamBaseUrl: () => "https://upstream.example.com",
     toUpstreamAgentProfile: (p: string) => p,
     getCredentialForUpstreamResource: async (userId: number, kind: string, id: string) => {
       // kind is "task" (MySQL ENUM in upstream_resources only accepts
       // "task" | "file"); ownership is userId + taskId based
-      if (id === "task-judge-001" && kind === "task") return mockCredential;
+      if (kind === "task" && (id === "task-judge-001" || [...(options.attemptTasks?.values() ?? [])].some(task => task.id === id))) return mockCredential;
       return null;
     },
     recordUpstreamResource: async () => {
@@ -229,6 +246,69 @@ async function getStatus(url: string, taskId: string, query = "questionId=q1&exp
 }
 
 describe("judge API: POST / (start)", () => {
+  it("retries an explicitly failed task once under concurrency and restores the latest attempt on refresh", async () => {
+    const attemptTasks: NonNullable<MockOptions["attemptTasks"]> = new Map();
+    const {url} = await makeApp({attemptTasks});
+    const first = await (await postStart(url, {questionId: "q1", expectedRevision: 3})).json();
+    const original = [...attemptTasks.values()][0];
+    original.status = "error";
+    const restoredFailure = await (await postStart(url, {questionId: "q1", expectedRevision: 3})).json();
+    expect(restoredFailure).toMatchObject({taskId: first.taskId, attempt: 0});
+    expect(attemptTasks.size).toBe(1);
+    const body = {questionId: "q1", expectedRevision: 3, retry: {taskId: first.taskId, attempt: 0}};
+    const responses = await Promise.all([postStart(url, body), postStart(url, body)]);
+    expect(responses.map(response => response.status)).toEqual([200, 200]);
+    const [second, repeated] = await Promise.all(responses.map(response => response.json()));
+    expect(second.taskId).not.toBe(first.taskId);
+    expect(second).toMatchObject({attempt: 1, recordRevision: 3});
+    expect(repeated).toMatchObject({taskId: second.taskId, attempt: 1});
+    expect(attemptTasks.size).toBe(2);
+    expect(original.status).toBe("error");
+    const retryTask = [...attemptTasks.values()][1];
+    expect(retryTask.prompt).toContain(`"retryOfTaskId":"${first.taskId}"`);
+    expect(retryTask.prompt).toContain('"attempt":1');
+    const refreshed = await (await postStart(url, {questionId: "q1", expectedRevision: 3})).json();
+    expect(refreshed).toMatchObject({taskId: second.taskId, attempt: 1});
+    expect(attemptTasks.size).toBe(2);
+    retryTask.status = "error";
+    const third = await (await postStart(url, {questionId: "q1", expectedRevision: 3,
+      retry: {taskId: second.taskId, attempt: 1}})).json();
+    expect(third).toMatchObject({attempt: 2});
+    expect(third.taskId).not.toBe(second.taskId);
+    expect((await (await postStart(url, {questionId: "q1", expectedRevision: 3})).json()).taskId).toBe(third.taskId);
+    expect(attemptTasks.size).toBe(3);
+  });
+
+  it.each(["running", "stopped", "waiting", "unknown"])("does not create a retry for a %s task", async status => {
+    const attemptTasks: NonNullable<MockOptions["attemptTasks"]> = new Map();
+    const {url} = await makeApp({attemptTasks});
+    const first = await (await postStart(url, {questionId: "q1", expectedRevision: 3})).json();
+    [...attemptTasks.values()][0].status = status;
+    const result = await postStart(url, {questionId: "q1", expectedRevision: 3, retry: {taskId: first.taskId, attempt: 0}});
+    expect(result.status).toBe(409);
+    expect((await result.json()).error.code).toBe("RESPONSE_LOGIC_JUDGE_RETRY_NOT_FAILED");
+    expect(attemptTasks.size).toBe(1);
+  });
+
+  it("rejects retries belonging to another context or account without dispatch", async () => {
+    const attemptTasks: NonNullable<MockOptions["attemptTasks"]> = new Map();
+    const options: MockOptions = {attemptTasks};
+    const {url} = await makeApp(options);
+    const first = await (await postStart(url, {questionId: "q1", expectedRevision: 3})).json();
+    [...attemptTasks.values()][0].status = "error";
+    const foreign = await postStart(url, {questionId: "q1", expectedRevision: 3, retry: {taskId: "foreign-task", attempt: 0}});
+    expect(foreign.status).toBe(403);
+    const skipped = await postStart(url, {questionId: "q1", expectedRevision: 3, retry: {taskId: first.taskId, attempt: 5}});
+    expect(skipped.status).toBe(409);
+    options.knowledgeSnapshot = {version: 2, sourceFileName: "new-knowledge", documents: [{path: "knowledge.md", title: "新知识", content: "更新的知识依据"}]};
+    const changed = await postStart(url, {questionId: "q1", expectedRevision: 3, retry: {taskId: first.taskId, attempt: 0}});
+    expect(changed.status).toBe(409);
+    expect((await changed.json()).error.code).toBe("RESPONSE_LOGIC_JUDGE_RETRY_CONTEXT_CHANGED");
+    const stale = await postStart(url, {questionId: "q1", expectedRevision: 2, retry: {taskId: first.taskId, attempt: 0}});
+    expect(stale.status).toBe(409);
+    expect(attemptTasks.size).toBe(1);
+  });
+
   it("creates a judge task and returns running", async () => {
     const { url } = await makeApp({});
     const res = await postStart(url, { questionId: "q1" });

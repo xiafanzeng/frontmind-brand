@@ -19,6 +19,7 @@ export const knowledgeBaseMessageSchema = z.object({
   kind: z.enum(["pending_user", "presentation", "completion"]),
   buildId: z.string().min(1).max(128).optional(),
   operationKey: z.string().min(1).max(128).optional(),
+  operationType: z.string().min(1).max(32).optional(),
   clientRequestId: z.string().min(1).max(128).optional(),
   turnId: z.string().min(1).max(128).optional(),
   presentationKey: z.string().min(1).max(191).optional(),

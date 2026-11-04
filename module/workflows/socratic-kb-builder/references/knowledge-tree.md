@@ -71,7 +71,7 @@ Create one branch overview plus the associated leaf documents. The overview:
 
 Assess evidence sufficiency while drafting, but do not serialize internal
 status or evidence metadata into customer node Markdown. Use the
-evidence-proportional formula in `SKILL.md`; do not delete applicable business
+evidence-adaptive v6 targets and one correction pass in `SKILL.md`; do not delete applicable business
 breadth or pad a sparse branch merely to reach a writing target.
 A white-label or early-stage enterprise can legitimately have short prose
 after uploads, official pages, documents, and public sources have been checked.

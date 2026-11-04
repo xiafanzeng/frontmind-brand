@@ -33,7 +33,7 @@ test("knowledge Skill packages new resources deterministically and retains the o
   for (const entry of socraticKnowledgeBaseSkillEntries) old.file(entry, await fs.readFile(path.join(sourceRoot, entry)));
   const oldBytes = await old.generateAsync({ type: "nodebuffer" });
   const oldHash = await canonicalKnowledgeBaseSkillArchiveHash(oldBytes);
-  const outputPath = path.join(root, "runtime/socratic-kb-builder-v5.skill");
+  const outputPath = path.join(root, "runtime/socratic-kb-builder-v6.skill");
   await fs.mkdir(path.dirname(outputPath));
   await fs.writeFile(outputPath, oldBytes);
   const first = await packageSocraticKnowledgeBaseSkill({ sourceRoot, outputPath });
@@ -44,9 +44,9 @@ test("knowledge Skill packages new resources deterministically and retains the o
   assert.ok(archive.file("scripts/validate_archive.py"));
   assert.ok(Object.keys(archive.files).every(name => !name.includes("__pycache__")));
   assert.notEqual(first.contentHash, oldHash);
-  assert.deepEqual(await fs.readFile(path.join(root, "runtime", `socratic-kb-builder-v5-${oldHash}.skill`)), oldBytes);
+  assert.deepEqual(await fs.readFile(path.join(root, "runtime", `socratic-kb-builder-v6-${oldHash}.skill`)), oldBytes);
 
-  const secondOutput = path.join(root, "repeat/socratic-kb-builder-v5.skill");
+  const secondOutput = path.join(root, "repeat/socratic-kb-builder-v6.skill");
   const repeat = await packageSocraticKnowledgeBaseSkill({ sourceRoot, outputPath: secondOutput });
   assert.equal(repeat.contentHash, first.contentHash);
   assert.deepEqual(await fs.readFile(secondOutput), built);

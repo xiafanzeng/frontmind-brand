@@ -208,15 +208,19 @@ describe("enterprise RAG evidence-based review UI", () => {
     const gauge = panel.getByLabelText("六维诊断评分");
     const summary = panel.getByRole("region", { name: "当前评估摘要" });
     expect(overview.firstElementChild).toBe(gauge);
-    expect(overview.lastElementChild).toBe(summary);
+    expect(overview.children.item(1)).toBe(summary);
     const statusTitle = panel.getByRole("heading", { name: "待改进" });
     const summaryFlow = panel.getByTestId("rag-evaluation-summary-flow");
     const summaryCopy = panel.getByTestId("rag-evaluation-summary-copy");
+    const supportingMeta = panel.getByTestId("rag-evaluation-supporting-meta");
     const metrics = panel.getByTestId("rag-evaluation-metrics");
+    expect(overview.lastElementChild).toBe(supportingMeta);
     expect(summaryFlow.firstElementChild).toBe(statusTitle);
     expect(statusTitle.nextElementSibling).toBe(summaryCopy);
-    expect(summaryFlow.lastElementChild).toBe(metrics);
-    expect(summaryFlow.contains(metrics)).toBe(true);
+    expect(summaryFlow.lastElementChild).toBe(summaryCopy);
+    expect(supportingMeta.lastElementChild).toBe(metrics);
+    expect(summaryFlow.contains(metrics)).toBe(false);
+    expect(overview.contains(metrics)).toBe(true);
     expect(summaryCopy.textContent).toMatch(/核心能力有依据/);
     expect(metrics.textContent).toContain("关键风险已核验");
     expect(metrics.textContent).toContain("评审覆盖 100%");
@@ -366,10 +370,10 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByTestId("rag-task-status").textContent).toContain("通过");
   });
 
-  it("keeps the gauge card dimensions synchronized without compact-width feedback", () => {
-    let resize: ResizeObserverCallback | undefined;
+  it("uses stable CSS sizing without a ResizeObserver feedback loop", () => {
+    const resizeObserverConstructed = vi.fn();
     class TestResizeObserver {
-      constructor(callback: ResizeObserverCallback) { resize = callback; }
+      constructor() { resizeObserverConstructed(); }
       observe() {}
       unobserve() {}
       disconnect() {}
@@ -378,37 +382,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     showPage();
 
     const overview = screen.getByTestId("rag-evaluation-overview");
-    const summary = screen.getByRole("region", { name: "当前评估摘要" });
-    vi.spyOn(summary, "getBoundingClientRect").mockReturnValue({
-      bottom: 148,
-      height: 148,
-      left: 0,
-      right: 400,
-      top: 0,
-      width: 400,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
-
-    act(() => resize?.([], {} as ResizeObserver));
-    expect(overview.style.getPropertyValue("--rag-evaluation-card-width")).toBe("148px");
-    expect(overview.style.getPropertyValue("--rag-evaluation-card-height")).toBe("148px");
-
-    vi.mocked(summary.getBoundingClientRect).mockReturnValue({
-      bottom: 260,
-      height: 260,
-      left: 0,
-      right: 200,
-      top: 0,
-      width: 200,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
-    act(() => resize?.([], {} as ResizeObserver));
-    expect(overview.style.getPropertyValue("--rag-evaluation-card-width")).toBe("120px");
-    expect(overview.style.getPropertyValue("--rag-evaluation-card-height")).toBe("260px");
+    expect(resizeObserverConstructed).not.toHaveBeenCalled();
+    expect(overview.style.getPropertyValue("--rag-evaluation-card-width")).toBe("");
+    expect(overview.style.getPropertyValue("--rag-evaluation-card-height")).toBe("");
   });
 
   it("submits a live question without falling back to a synthetic answer", async () => {
@@ -1370,7 +1346,8 @@ describe("rag-eval-1.4 checklist and radar presentation", () => {
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
     await waitFor(() => expect(evaluation().getByText("待改进")).toBeTruthy());
     expect(screen.queryByTestId("rag-legacy-rule-notice")).toBeNull();
-    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("98.5");
+    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("98");
+    expect(screen.getByTestId("rag-evaluation-score").textContent).not.toContain("98.5");
     openQualityDetails();
     fireEvent.click(screen.getByRole("button", { name: /清晰可行动 90%/ }));
     expect(screen.getByText(/同一句说明重复一次/)).toBeTruthy();

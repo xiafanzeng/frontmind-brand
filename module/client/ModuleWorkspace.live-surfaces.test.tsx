@@ -2,16 +2,21 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  knowledgeProps: null as null | Record<string, unknown>,
+  diagnosticProps: null as null | Record<string, unknown>,
   ragProps: null as null | Record<string, unknown>,
   websiteProps: null as null | Record<string, unknown>,
   websiteSettingsProps: null as null | Record<string, unknown>,
 }));
 
 vi.mock("./components/EmbeddedKnowledgeBasePanel", () => ({
-  default: () => <div data-testid="knowledge-surface" />,
+  default: (props: Record<string, any>) => {
+    mocks.knowledgeProps = props;
+    return <div data-testid="knowledge-surface"><div data-testid="knowledge-conversation" /><aside data-testid="knowledge-right-column"><div data-testid="knowledge-cards" /></aside></div>;
+  },
 }));
-vi.mock("./BrandReportWorkspace", () => ({
-  default: () => <div data-testid="reports-surface" />,
+vi.mock("./BrandDiagnosticWorkspace", () => ({
+  default: (props: any) => { mocks.diagnosticProps=props; return <div data-testid="diagnostic-surface">{props.knowledgePanel}</div>; },
 }));
 vi.mock("./dashboard/IntentWorkbench", () => ({
   default: () => <div data-testid="intent-surface" />,
@@ -50,16 +55,37 @@ const keywordData = { tables: [], revision: null };
 
 afterEach(() => {
   cleanup();
+  history.replaceState({}, "", "/");
+  mocks.knowledgeProps = null;
+  mocks.diagnosticProps = null;
   mocks.ragProps = null;
   mocks.websiteProps = null;
   mocks.websiteSettingsProps = null;
 });
 
 describe("ModuleWorkspace redesigned live routes", () => {
+  it("keeps the original knowledge conversation and cards separate from diagnostics", () => {
+    history.replaceState({}, "", "/?view=knowledge&diagnosis=task&diagnosticView=expanded");
+    render(<ModuleWorkspace context={context} page="knowledge" keywordData={keywordData} />);
+    expect(mocks.knowledgeProps).toMatchObject({workbench: true, mode: "workspace", projectId: "workspace-1"});
+    expect(screen.getByTestId("knowledge-conversation")).toBeTruthy();
+    expect(screen.getByTestId("knowledge-right-column").children[0]).toBe(screen.getByTestId("knowledge-cards"));
+    expect(screen.queryByTestId("diagnostic-surface")).toBeNull();
+    expect(mocks.knowledgeProps).not.toHaveProperty("afterKnowledge");
+  });
+  it("opens a separate diagnostic page and can navigate back to knowledge confirmation", () => {
+    const onOpenKnowledge=vi.fn();
+    render(<ModuleWorkspace context={context} page="diagnostics" keywordData={keywordData} onOpenKnowledge={onOpenKnowledge} />);
+    expect(screen.getByTestId("diagnostic-surface")).toBeTruthy();
+    expect(screen.queryByTestId("knowledge-surface")).toBeNull();
+    expect(mocks.diagnosticProps?.onOpenKnowledge).toBe(onOpenKnowledge);
+    expect(mocks.diagnosticProps).not.toHaveProperty("embedded");
+  });
   it("scopes every Brand page inside the Apple theme boundary", () => {
     const pages: BrandPage[] = [
       "reports",
       "knowledge",
+      "diagnostics",
       "keywords",
       "intent",
       "response-logic",

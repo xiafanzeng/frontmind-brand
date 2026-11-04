@@ -532,6 +532,38 @@ describe("redesigned live website builder setup", () => {
     ) as HTMLInputElement).disabled).toBe(false);
   });
 
+  it("lists only source-backed routes as toggleable columns", async () => {
+    const current = recommendableObservation();
+    const withSourcelessRoute: SiteOpsObservationV1 = {
+      ...current,
+      brief: {
+        ...current.brief!,
+        routes: [
+          ...current.brief!.routes,
+          {
+            id: "news",
+            slug: "/news",
+            title: "企业动态",
+            sourceDocumentIds: [],
+          },
+        ],
+      },
+    };
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ observation: withSourcelessRoute, onAction: vi.fn() }}
+        storageScope="live:7:sourceless-routes"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("共 4 个栏目，4 个启用")).toBeTruthy(),
+    );
+    // 无知识来源的占位路由不是可选栏目，否则保存会被契约拒绝。
+    expect(screen.queryByLabelText("在网站中显示企业动态")).toBeNull();
+  });
+
   it("hydrates unsaved live route and template IDs, then lets persisted server design preferences win", async () => {
     const scope = "live:7:opaque-draft-hydration";
     const base = recommendableObservation();
@@ -609,6 +641,50 @@ describe("redesigned live website builder setup", () => {
       expect((screen.getByLabelText("在网站中显示关于我们") as HTMLInputElement).checked).toBe(false);
       expect(screen.getByText(/真实帮助中心模板 · 1 个主栏目/)).toBeTruthy();
     });
+  });
+
+  it("shows the real-build progress bar with stage and elapsed time while a build runs", () => {
+    const running = liveBuildObservation("awaiting_visual_selection");
+    const startedAt = new Date(Date.now() - 3 * 60_000).toISOString();
+    running.interactionState = "building";
+    running.builds = [{
+      id: "44444444-4444-4444-8444-444444444444",
+      ordinal: 2,
+      parentBuildId: null,
+      status: "building",
+      previewUrl: null,
+      sourceUrl: null,
+      buildDelivery: null,
+      buildPhase: "compiling",
+      needsHelp: false,
+      createdAt: startedAt,
+      updatedAt: startedAt,
+    }];
+    running.executionSteps = [{
+      id: "step-build-2",
+      operationKind: "build_revision",
+      buildId: "44444444-4444-4444-8444-444444444444",
+      stage: "content_building",
+      label: "生成内容",
+      status: "running",
+      startedAt,
+      completedAt: null,
+    }];
+
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ observation: running, onAction: vi.fn() }}
+        storageScope="live:7:build-progress"
+      />,
+    );
+
+    const bar = screen.getByTestId("siteops-build-progress");
+    expect(Number(bar.getAttribute("aria-valuenow"))).toBeGreaterThan(0);
+    expect(Number(bar.getAttribute("aria-valuenow"))).toBeLessThan(100);
+    // buildPhase 提供的阶段名优先于粗粒度执行步骤。
+    expect(screen.getByText("编译与质检网站")).toBeTruthy();
+    expect(screen.getByText(/已进行/)).toBeTruthy();
   });
 
   it("does not invent demo routes for an opaque live draft before the real brief arrives", () => {
@@ -2199,10 +2275,9 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    expect(screen.getByTestId("siteops-build-status").textContent).toContain("网站已通过构建检查");
-    expect(screen.getByTestId("siteops-preview-link").getAttribute("href")).toBe(
-      "/api/frontmind/v2/siteops/builds/preview-1",
-    );
+    expect(screen.getByText("网站已通过构建检查")).toBeTruthy();
+    expect(screen.getByText(/真实 SiteOps · 项目版本/)).toBeTruthy();
+    expect(screen.queryByTestId("siteops-build-status")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "进入发布确认" }));
     fireEvent.click(screen.getByRole("button", { name: /继续发布|确认继续发布/ }));

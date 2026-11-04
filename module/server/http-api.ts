@@ -2,18 +2,22 @@ import { Router, type Request, type Response } from "express";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import {z} from "zod";
 import {requestQuestionTemplate} from "./question-template-request.js";
-import {createQuestionTemplateCatalogService,QuestionTemplateCatalogError} from "./question-template-catalog-service.js";
+import {assertQuestionTemplateAccess,createQuestionTemplateCatalogService,QuestionTemplateCatalogError} from "./question-template-catalog-service.js";
 // 包名导入保持运行时从模块自身 dist 加载；相对导入会被 Dashboard 构建内联进 bundle，破坏 workflow 清单路径解析。
 import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
 import {assembleResponseLogicCore} from "@frontmind/module-brand/server/response-logic-runtime";
 import {createResponseLogicApi} from "@frontmind/module-brand/server/response-logic-api";
 import {createResponseLogicRecordRouter} from "@frontmind/module-brand/server/response-logic-record-api";
 import {createResponseLogicCredentialMiddleware} from "@frontmind/module-brand/server/response-logic-credential-middleware";
-import {createBrandReportRouter} from "@frontmind/module-brand/server/report-api";
+import {createDiagnosticRouter} from "@frontmind/module-brand/server/diagnostic-api";
+import type {IntentQuestion} from "../contracts/intent-workbench.js";
+import type {ResponseLogicHostPorts} from "./response-logic-runtime.js";
 import {
  createEnterpriseRagEvaluationService,
  EnterpriseRagEvaluationError,
 } from "@frontmind/module-brand/server/enterprise-rag-evaluation-service";
+
+import type { DiagnosticCollectionPort } from "./diagnostic-monitor.js";
 
 /** Supplied by the host after authentication; never derive ownership from request data. */
 export interface ModuleHttpCore {
@@ -21,12 +25,16 @@ export interface ModuleHttpCore {
  database():Promise<MySql2Database<any>>;
  /** Server-only runtime settings. Never return this object or secret values to the browser. */
  environment:Readonly<Record<string,string|undefined>>;
+ /** Host-owned formal questions are projected without replacing their authority. */
+ intentQuestionCatalog?(request:Request):Promise<IntentQuestion[]>;
+ responseLogicHost?:ResponseLogicHostPorts;
+ diagnosticCollection?:DiagnosticCollectionPort;
 }
 
 /** Add new module-owned APIs here. Mounted in both Dashboard and the development subdomain. */
 export function createModuleHttpApi(core:ModuleHttpCore):Router {
  const router=Router();
- router.use('/reports',createBrandReportRouter(core));
+ router.use('/diagnostics',createDiagnosticRouter(core));
  const ragEvaluationCoordinate=z.object({
   sourceQaTaskId:z.string().uuid(),
   turnId:z.string().uuid(),
@@ -110,7 +118,6 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  const recommendQuestionTemplates = (path:string) => async (req:Request,res:import("express").Response) => {
   res.setHeader("Cache-Control","no-store");
   const token=(core.environment.MOLIZHISHU_TOKEN ?? core.environment.MOLIZHISHU_API_KEY ?? "").trim();
-  if(!token){res.status(503).json({error:{code:"MOLIZHISHU_NOT_CONFIGURED",message:"模力指数 API 尚未配置，请由部署人员设置服务端 MOLIZHISHU_TOKEN。"}});return;}
   // 线上实测契约：两个 recommend 端点部署在 business.molizhishu.com，企业字段名为 brand。
   const brand=typeof req.body?.brand === "string" ? req.body.brand.trim() : "";
   if(!brand || brand.length>120){res.status(400).json({error:{code:"INVALID_BRAND",message:"请填写有效的企业名称。"}});return;}
@@ -121,12 +128,15 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   const base=(core.environment.MOLIZHISHU_API_BASE_URL ?? "https://business.molizhishu.com").replace(/\/+$/, "").trim();
   const normalizedBase=base;
   try{
+   await assertQuestionTemplateAccess(core,req);
+   if(!token){res.status(503).json({error:{code:"MOLIZHISHU_NOT_CONFIGURED",message:"模力指数 API 尚未配置，请由部署人员设置服务端 MOLIZHISHU_TOKEN。"}});return;}
    const response=await requestQuestionTemplate(normalizedBase,path,token,req.body);
    const text=await response.text();let payload:unknown;try{payload=JSON.parse(text);}catch{payload={message:"上游接口返回非 JSON 内容。"};}
    const record=payload&&typeof payload==="object"?payload as Record<string,unknown>:{};
    if(!response.ok||record.success===false){res.status(response.ok?502:response.status).json({error:{code:"MOLIZHISHU_UPSTREAM_ERROR",message:typeof record.message==="string"?record.message:"模力指数接口暂时无法完成请求。"}});return;}
    res.status(200).json(payload);
   }catch(error){
+   if(error instanceof QuestionTemplateCatalogError){res.status(error.status).json({error:{code:error.code,message:error.message}});return;}
    const timeout=error instanceof Error && error.name==="TimeoutError";
    res.status(timeout?504:502).json({error:{code:timeout?"MOLIZHISHU_TIMEOUT":"MOLIZHISHU_UNAVAILABLE",message:timeout?"模力指数生成超过2分钟仍未返回，请稍后重试。":"无法连接模力指数接口，请检查服务端网络与配置。"}});
   }
@@ -149,7 +159,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  // evaluation, judge, optimizer — all mounted via the original Intent
  // router factory (response-logic-api.ts, 2,236 lines) with runtime ports
  // assembled from BrandKeywordPorts + Brand ledger question resolver.
- const rlRuntime = assembleResponseLogicCore({ getDb: () => core.database(), environment: core.environment });
+ const rlRuntime = assembleResponseLogicCore({ getDb: () => core.database(), environment: core.environment, host: core.responseLogicHost });
  // The module namespace mount has no Core credential attachment middleware;
  // resolve the server-side credential (XTY-aware keyword chain) for the
  // response-logic routes before the handlers read it.
@@ -164,7 +174,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   const context=core.context(req);
   res.setHeader("Cache-Control","no-store");
   res.json({module:"brand",apiVersion:1,workspaceId:context.enterpriseProjectId,
-   features:["reports", "knowledge", "keywords", "intent-workbench", "response-logic", "enterprise-qa", "enterprise-rag-evaluation", "siteops"]});
+   features:["diagnostics", "knowledge", "keywords", "intent-workbench", "response-logic", "enterprise-qa", "enterprise-rag-evaluation", "siteops"]});
  });
  return router;
 }

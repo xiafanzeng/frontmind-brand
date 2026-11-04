@@ -1,4 +1,7 @@
-import {siteOpsRevisionLineageFromRows} from "./manus-provider.js";
+import {
+  safePublicDocuments,
+  siteOpsRevisionLineageFromRows,
+} from "./manus-provider.js";
 import type {BrandSchema} from '../../schema/index.js';
 import type {MySql2Database} from 'drizzle-orm/mysql2';
 import type {SQL} from 'drizzle-orm';
@@ -67,6 +70,10 @@ import { fetchPinnedPublicHttps } from "./remote-preview.js";
 import { rebuildNativeReactProductionFromSource } from "./native-react-build-runtime.js";
 import { validateNativeReactSourceArchive } from "./native-react-source.js";
 import {
+  deriveSiteDocumentViewPlanV1,
+  type SiteDocumentViewPlanV1,
+} from "./site-document-view-plan.js";
+import {
   isSiteOpsNativeVisualWorkflowVersion,
   SITEOPS_DYNAMIC_IA_WORKFLOW_VERSION,
 } from "./native-visual-source.js";
@@ -125,6 +132,7 @@ const productionMaterializationSchema = z
     provenanceLocalAssetId: z.string().uuid(),
     provenanceSha256: z.string().regex(/^[a-f0-9]{64}$/u),
     qaPolicyVersion: z.string().trim().min(1).max(64),
+    documentViewContractVersion: z.literal(1).optional(),
     materializedAt: z.string().datetime(),
   })
   .strict();
@@ -1330,7 +1338,8 @@ function assertFrozenProductionMaterialization(input: {
       (materialization.contentPlanLocalAssetId !==
         context.build.contentPlanLocalAssetId ||
         materialization.contentPlanSha256 !==
-          context.build.contentPlanSha256)) ||
+          context.build.contentPlanSha256 ||
+        materialization.documentViewContractVersion !== 1)) ||
     materialization.distLocalAssetId !== context.deployment.distLocalAssetId ||
     materialization.distSha256 !== context.deployment.distHash
   ) {
@@ -1411,6 +1420,11 @@ export async function materializeSiteOpsProductionSource(input: {
   sourceZip: Buffer;
   sourceSha256: string;
   contentPlan: SiteContentPlanV2 | unknown | undefined;
+  documentViewPlan?: SiteDocumentViewPlanV1;
+  documentViewForbiddenSources?: readonly {
+    id: string;
+    content: string;
+  }[];
   requiredUserMedia?: readonly {
     publicPath: string;
     contentSha256: string;
@@ -1480,6 +1494,8 @@ export async function materializeSiteOpsProductionSource(input: {
     brief: input.build.brief,
     contentPlan,
     contentPlanSha256: input.build.contentPlanSha256,
+    documentViewPlan: input.documentViewPlan,
+    documentViewForbiddenSources: input.documentViewForbiddenSources,
     requiredUserMedia: input.requiredUserMedia,
     requiredKnowledgeMedia: input.requiredKnowledgeMedia,
     canonicalOrigin: input.canonicalOrigin,
@@ -1606,6 +1622,8 @@ export async function loadFrozenProductionMediaRequirements(input: {
         contentSha256: string;
         routePaths: string[];
       }>,
+      documentViewPlan: undefined,
+      documentViewForbiddenSources: [],
     };
   }
   const failUserMedia = (): never => {
@@ -1616,6 +1634,11 @@ export async function loadFrozenProductionMediaRequirements(input: {
     );
   };
   let userMediaRows: Array<typeof siteBuildInputAssets.$inferSelect> = [];
+  let ignoredSourceDocumentIds: string[] = [];
+  let documentViewForbiddenSources: Array<{
+    id: string;
+    content: string;
+  }> = [];
   if (input.context.build.parentBuildId) {
     try {
       const builds = (await input.db
@@ -1643,7 +1666,7 @@ export async function loadFrozenProductionMediaRequirements(input: {
           .from(siteBuildInputAssets)
           .where(inArray(siteBuildInputAssets.buildId, buildIds)),
       ]);
-      userMediaRows = siteOpsRevisionLineageFromRows({
+      const lineage = siteOpsRevisionLineageFromRows({
         currentBuild: input.context.build,
         projectId: input.context.build.projectId,
         userId: input.operation.userId,
@@ -1653,7 +1676,15 @@ export async function loadFrozenProductionMediaRequirements(input: {
         operations,
         assets,
         includeCurrentBuild: true,
-      }).assets.map(({ row }) => row);
+      });
+      userMediaRows = lineage.assets.map(({ row }) => row);
+      ignoredSourceDocumentIds = lineage.documents.map(
+        (document) => document.id,
+      );
+      documentViewForbiddenSources = lineage.documents.map((document) => ({
+        id: document.id,
+        content: document.content,
+      }));
     } catch (error) {
       if (error instanceof EsaProviderFailure) throw error;
       failUserMedia();
@@ -1762,11 +1793,8 @@ export async function loadFrozenProductionMediaRequirements(input: {
       contentSha256: asset.contentSha256,
     };
   });
-  if (routePathsByMediaId.size === 0) {
-    return { requiredUserMedia, requiredKnowledgeMedia: [] };
-  }
   const snapshotRows = await input.db
-    .select({ assets: knowledgeBaseSnapshots.assets })
+    .select()
     .from(knowledgeBaseSnapshots)
     .where(
       and(
@@ -1775,7 +1803,37 @@ export async function loadFrozenProductionMediaRequirements(input: {
       ),
     )
     .limit(1);
-  const snapshotAssets = snapshotRows[0]?.assets;
+  const snapshot = snapshotRows[0];
+  if (!snapshot) {
+    throw new EsaProviderFailure(
+      "ESA_PRODUCTION_DOCUMENT_VIEW_INVALID",
+      "冻结知识快照缺失或无效，不能验证 production 文档按钮。",
+      "failed",
+    );
+  }
+  let documentViewPlan: SiteDocumentViewPlanV1;
+  try {
+    documentViewPlan = deriveSiteDocumentViewPlanV1({
+      contentPlan: input.contentPlan,
+      documents: safePublicDocuments(snapshot),
+      ignoredSourceDocumentIds,
+    });
+  } catch {
+    throw new EsaProviderFailure(
+      "ESA_PRODUCTION_DOCUMENT_VIEW_INVALID",
+      "冻结内容计划与知识文档映射无效，不能验证 production 文档按钮。",
+      "failed",
+    );
+  }
+  if (routePathsByMediaId.size === 0) {
+    return {
+      requiredUserMedia,
+      requiredKnowledgeMedia: [],
+      documentViewPlan,
+      documentViewForbiddenSources,
+    };
+  }
+  const snapshotAssets = snapshot.assets;
   if (!snapshotAssets) {
     throw new EsaProviderFailure(
       "ESA_PRODUCTION_CONTENT_PLAN_MEDIA_INVALID",
@@ -1816,7 +1874,12 @@ export async function loadFrozenProductionMediaRequirements(input: {
       };
     },
   );
-  return { requiredUserMedia, requiredKnowledgeMedia };
+  return {
+    requiredUserMedia,
+    requiredKnowledgeMedia,
+    documentViewPlan,
+    documentViewForbiddenSources,
+  };
 }
 
 async function ensureProductionMaterialization(input: {
@@ -1833,7 +1896,10 @@ async function ensureProductionMaterialization(input: {
   const existing = materializationFromVerification(
     input.context.deployment.verification,
   );
-  if (existing) {
+  const existingHasCurrentDocumentViewContract =
+    input.context.build.workflowVersion !== SITEOPS_DYNAMIC_IA_WORKFLOW_VERSION ||
+    existing?.documentViewContractVersion === 1;
+  if (existing && existingHasCurrentDocumentViewContract) {
     assertFrozenProductionMaterialization({
       context: input.context,
       materialization: existing,
@@ -1993,6 +2059,7 @@ async function ensureProductionMaterialization(input: {
       ? {
           contentPlanLocalAssetId: input.context.build.contentPlanLocalAssetId,
           contentPlanSha256: input.context.build.contentPlanSha256,
+          documentViewContractVersion: 1,
         }
       : {}),
     contractLocalAssetId: contractArtifact.id,

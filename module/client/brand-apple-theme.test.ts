@@ -66,8 +66,7 @@ describe("Brand Apple theme contract", () => {
     expect(moduleWorkspace).not.toContain("style={{");
   });
 
-  it("adapts report and knowledge surfaces inside their page boundaries", () => {
-    expect(css).toContain('.fm-brand-theme[data-brand-page="reports"] .brand-report');
+  it("adapts knowledge surfaces inside their page boundaries", () => {
     expect(css).toContain('.fm-brand-theme[data-brand-page="knowledge"] .knowledge-workspace');
     expect(css).toContain('input:not([type="checkbox"]):not([type="radio"])');
     expect(css).toContain(".knowledge-workbench-stage--resource");
@@ -116,17 +115,22 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain("transform: translateY(-1px);");
   });
 
-  it("sizes the left gauge card from the right summary on every viewport", () => {
+  it("uses stable CSS sizing for the gauge and summary without layout feedback", () => {
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview {");
-    expect(ragEvaluationCss).toContain("--rag-evaluation-card-width: 120px;");
-    expect(ragEvaluationCss).toContain("--rag-evaluation-card-height: 120px;");
+    expect(ragEvaluationCss).toContain("--rag-evaluation-card-width: 136px;");
     expect(ragEvaluationCss).toContain("grid-template-columns: var(--rag-evaluation-card-width) minmax(0, 1fr);");
     expect(ragEvaluationCss).toContain("align-items: start;");
-    expect(ragEvaluationCss).toContain("min-height: 120px;");
+    expect(ragEvaluationCss).toContain("min-height: var(--rag-evaluation-card-width);");
     expect(ragEvaluationCss).toContain("gap: 16px;");
+    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview > .rag-verdict {");
+    expect(ragEvaluationCss).toContain("padding: 16px;");
+    expect(ragEvaluationCss).toContain("grid-column: 2;");
+    expect(ragEvaluationCss).toContain("grid-column: 1;");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-gauge-card {");
     expect(ragEvaluationCss).toContain("width: var(--rag-evaluation-card-width);");
-    expect(ragEvaluationCss).toContain("height: var(--rag-evaluation-card-height);");
+    expect(ragEvaluationCss).toContain("height: auto;");
+    expect(ragEvaluationCss).toContain("aspect-ratio: 1 / 1;");
+    expect(ragEvaluationCss).toContain("align-self: start;");
     expect(ragEvaluationCss).toContain("aspect-ratio: 3 / 2;");
     expect(ragEvaluationCss).toContain("border-radius: 20px;");
     expect(ragEvaluationCss).toContain("background: rgba(255, 255, 255, 0.72);");
@@ -135,14 +139,17 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain("padding:24px 16px 16px;");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-summary-flow {");
     expect(ragEvaluationCss).toContain("flex-direction: column;");
-    expect(ragEvaluationCss).toContain("min-height: 100%;");
+    expect(ragEvaluationCss).toContain("min-height: 0;");
     expect(ragEvaluationCss).toContain("text-align: left;");
     expect(ragEvaluationCss).toContain("font-size: 16px;");
     expect(ragEvaluationCss).toContain("line-height: 20px;");
     expect(ragEvaluationCss).toContain("grid-template-columns: 20px minmax(0, 1fr);");
     expect(ragEvaluationCss).toContain("padding-inline-start: calc(20px + 8px);");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-metrics {");
-    expect(ragEvaluationCss).toContain("margin-top: auto;");
+    expect(ragEvaluationCss).toContain("margin-top: 0;");
+    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-supporting-meta {");
+    expect(ragEvaluationCss).toContain("grid-column: 2;");
+    expect(ragEvaluationCss).toContain("grid-row: 1;");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-metric-copy {");
     expect(ragEvaluationCss).toContain("gap: 8px 16px;");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-summary-copy {");
@@ -151,11 +158,17 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).not.toContain("@container rag-evaluation-summary");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-status-orb {");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-status-orb::after {");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview { gap: 8px; }");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview .rag-verdict { padding: 16px 8px 8px; }");
-    expect(enterpriseRagPreview).toContain("new ResizeObserver");
-    expect(enterpriseRagPreview).toContain('setProperty("--rag-evaluation-card-width"');
-    expect(enterpriseRagPreview).toContain('setProperty("--rag-evaluation-card-height"');
+    expect(ragEvaluationCss).toContain("--rag-evaluation-card-width: 120px;");
+    expect(ragEvaluationCss).toContain("height: var(--rag-evaluation-card-width);");
+    expect(ragEvaluationCss).toContain("justify-content: center;");
+    expect(ragEvaluationCss).toContain("grid-column: 1 / -1;");
+    expect(ragEvaluationCss).toContain("grid-row: 2;");
+    expect(ragEvaluationCss).toContain("font-size: 12px;");
+    expect(ragEvaluationCss).toContain("line-height: 16px;");
+    expect(enterpriseRagPreview).toContain('className="rag-evaluation-supporting-meta"');
+    expect(enterpriseRagPreview).not.toContain("new ResizeObserver");
+    expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-width"');
+    expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-height"');
   });
 
   it("separates answer quality and task completion into Apple material cards", () => {
@@ -255,7 +268,6 @@ describe("Brand Apple theme contract", () => {
     const contract = css.slice(start, end);
 
     for (const selector of [
-      ".brand-report__option",
       ".knowledge-node-workspace__error",
       ".iw-task",
       ".iw-intake-list > div",

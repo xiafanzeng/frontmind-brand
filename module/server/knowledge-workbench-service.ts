@@ -192,6 +192,53 @@ export async function readKnowledgeWorkbenchNodes(
   return { nodes, workingSet, manifest, nodesSha256 };
 }
 
+/** Validated complete draft access for diagnostics, independently of review. */
+export async function readDiagnosticKnowledgeWorkingSet(userId: number, conversationId: string) {
+  const db = await getDb();
+  if (!db) fail("DATABASE_UNAVAILABLE", "数据库暂不可用");
+  return db.transaction(async (tx: any) => {
+    const [build] = await tx.select().from(knowledgeBaseBuilds).where(and(
+      enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
+      eq(knowledgeBaseBuilds.conversationId, conversationId),
+    )).limit(1) as KnowledgeBaseBuild[];
+    if (!build || build.executionMode !== "materialized_bundle_v1" ||
+        !build.activeWorkingSetId || !build.contentVersion || build.activeTurnId ||
+        !["confirming", "ready_to_publish", "published"].includes(build.status)) {
+      return null;
+    }
+    const { nodes } = await readKnowledgeWorkbenchNodes(tx, build);
+    const physical = await readValidatedActiveKnowledgeBaseWorkingSet({ db: tx, build });
+    validateKnowledgeWorkbenchNodes(build, nodes, physical.validated.manifest);
+    return {
+      id: physical.row.id,
+      generation: build.generation,
+      contentVersion: build.contentVersion,
+      packageSha256: physical.row.packageSha256,
+      documents: nodes.map((node) => ({
+        path: physical.validated.manifest.leaves.find((leaf) => leaf.leafId === node.leafId)!.contentPath,
+        leafId: node.leafId,
+        title: node.title,
+        content: node.contentMarkdown!,
+        reviewStatus: node.status,
+        evidenceStatus: node.status === "needs_verification" ? "needs_verification" : "not_independently_verified",
+      })),
+    };
+  }, { isolationLevel: "repeatable read" });
+}
+
+export async function readDiagnosticKnowledgeArchive(userId: number, conversationId: string,
+  frozenSelection: { id: string; generation: number; contentVersion: number; packageSha256: string }) {
+  const db = await getDb();
+  if (!db) fail("DATABASE_UNAVAILABLE", "数据库暂不可用");
+  const [build] = await db.select().from(knowledgeBaseBuilds).where(and(
+    enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
+    eq(knowledgeBaseBuilds.conversationId, conversationId),
+  )).limit(1);
+  if (!build) fail("BUILD_NOT_FOUND", "知识库构建不存在或无权访问");
+  const physical = await readValidatedActiveKnowledgeBaseWorkingSet({ db, build, frozenSelection });
+  return physical.bytes;
+}
+
 /** Reset → build → authoritative start turn. The first receipt is immutable. */
 export async function acceptKnowledgeBaseInitialDraft(
   userId: number,

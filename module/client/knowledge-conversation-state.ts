@@ -50,7 +50,7 @@ export interface LocalMessage {
   content: string;
   attachments?: Attachment[];
   timestamp: number;
-  outputFiles?: { fileUrl: string; fileName: string; mimeType: string }[];
+  outputFiles?: { fileUrl: string; fileName: string; mimeType: string; sha256?: string }[];
   /** Inline base64 images embedded in assistant text (for display in MarkdownRenderer) */
   inlineImages?: { src: string; alt?: string }[];
   /** Per-response elapsed time in seconds (set when the response completes) */
@@ -71,6 +71,7 @@ export interface LocalMessage {
     kind: "pending_user" | "presentation" | "completion";
     buildId?: string;
     operationKey?: string;
+    operationType?: string;
     clientRequestId?: string;
     turnId?: string;
     presentationKey?: string;
@@ -563,6 +564,7 @@ export function applyKnowledgeBaseObservation(
           buildId: (observation.progress ?? observation.interaction.progress)
             ?.build.id,
           operationKey: observation.activeTurn?.operationKey,
+          operationType: observation.activeTurn?.operationType,
           turnId: activeTurnId,
           generation: observation.generation,
           revision: observation.activeTurn?.expectedRevision ?? undefined,
@@ -599,6 +601,8 @@ export function applyKnowledgeBaseObservation(
           buildId: (observation.progress ?? observation.interaction.progress)
             ?.build.id,
           turnId: completedTurn.turnId,
+          operationKey: completedTurn.operationKey ?? message.knowledgeBase.operationKey,
+          operationType: completedTurn.operationType ?? message.knowledgeBase.operationType,
           generation: observation.generation,
           serverOwned: true,
         },

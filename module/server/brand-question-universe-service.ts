@@ -2226,7 +2226,7 @@ async function observeBrandQuestionUniverse(actor: AuthenticatedUser) {
 async function startBrandQuestionUniverse(input: {
   actor: AuthenticatedUser;
   value: z.infer<typeof brandQuestionUniverseStartInputSchema>;
-}) {
+}): Promise<never> {
   assertCustomer(input.actor);
   throw new BrandQuestionUniverseServiceError(
     "GENERATION_RETIRED",

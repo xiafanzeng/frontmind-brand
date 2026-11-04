@@ -518,7 +518,7 @@ export const siteContentPlanWireV2Schema = z
         context.addIssue({
           code: "custom",
           path: ["routes", index, "ctaLabel"],
-          message: "CTA label and target path must both be present or absent",
+          message: `CTA label and target path must both be present or absent; route ${route.routeId} (${route.path}) has ctaLabel=${JSON.stringify(route.ctaLabel)} with ctaTargetPath=${JSON.stringify(route.ctaTargetPath)}`,
         });
       }
     });
@@ -527,7 +527,7 @@ export const siteContentPlanWireV2Schema = z
         context.addIssue({
           code: "custom",
           path: ["sections", index, "routeId"],
-          message: "Section references an absent route",
+          message: `Section references an absent route; section ${section.sectionId} ("${section.heading}") targets unknown routeId ${section.routeId}`,
         });
       }
     });
@@ -538,7 +538,7 @@ export const siteContentPlanWireV2Schema = z
         context.addIssue({
           code: "custom",
           path: ["routes", index, "routeId"],
-          message: "Every route must own at least one section",
+          message: `Every route must own at least one section; route ${route.routeId} (${route.path}, "${route.title}") is referenced by zero entries in the flat sections array — bind one section to it or remove the route`,
         });
       }
     });
@@ -551,7 +551,7 @@ export const siteContentPlanWireV2Schema = z
         context.addIssue({
           code: "custom",
           path: ["coverage", index],
-          message: "Coverage status, routes and omission reason disagree",
+          message: `Coverage status, routes and omission reason disagree for sourceDocumentId ${item.sourceDocumentId} (status=${item.status}, routeIds.length=${item.routeIds.length}, omissionReason=${item.omissionReason === null ? "null" : "non-null"})`,
         });
       }
     });
