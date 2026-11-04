@@ -558,7 +558,7 @@ describe("simplified AI website preview", () => {
     expect(within(evaluation).getByRole("heading", { name: "待核验" })).toBeTruthy();
     expect(within(evaluation).queryByText("人工评审 · 本地计算")).toBeNull();
     expect(within(evaluation).getByLabelText("六维诊断评分").textContent).toContain("—");
-    expect(within(evaluation).getByText("可能分数 0–100")).toBeTruthy();
+    expect(within(evaluation).queryByText(/可能分数/)).toBeNull();
     expect(screen.queryByText("实时预览")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "开始网站建设" }));
