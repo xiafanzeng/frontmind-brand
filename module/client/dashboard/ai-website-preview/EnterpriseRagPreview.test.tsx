@@ -1342,7 +1342,8 @@ describe("rag-eval-1.4 checklist and radar presentation", () => {
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
     await waitFor(() => expect(evaluation().getByText("待改进")).toBeTruthy());
     expect(screen.queryByTestId("rag-legacy-rule-notice")).toBeNull();
-    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("98.5");
+    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("98");
+    expect(screen.getByTestId("rag-evaluation-score").textContent).not.toContain("98.5");
     openQualityDetails();
     fireEvent.click(screen.getByRole("button", { name: /清晰可行动 90%/ }));
     expect(screen.getByText(/同一句说明重复一次/)).toBeTruthy();
