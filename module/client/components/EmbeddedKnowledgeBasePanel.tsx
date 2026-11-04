@@ -1632,6 +1632,7 @@ function RealBuildFlow({
       nodeConversationDirty={nodeComposerDirty}
       onDetailsOpenChange={setNodeDetailsOpen}
       onNodeOpen={workbench ? undefined : focusNode}
+      onReturnToCurrent={focusNode}
       autoOpenDetails={false}
       firstReviewCompleted={Boolean(
         displayedProgress &&
@@ -2150,6 +2151,7 @@ export function PreviewBuildFlow({
           detailPresentation="dialog"
           className={workbench ? "knowledge-node-workspace--workbench" : ""}
           onNodeOpen={workbench ? undefined : focusNode}
+          onReturnToCurrent={focusNode}
           autoOpenDetails={false}
           progress={progress}
           conversationId={progress.build.conversationId}
