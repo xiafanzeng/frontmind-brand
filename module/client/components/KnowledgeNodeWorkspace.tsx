@@ -73,6 +73,8 @@ export interface KnowledgeNodeWorkspaceProps {
   /** A server completion receipt for this exact build and generation. */
   firstReviewCompleted?: boolean;
   onNodeOpen?: () => void;
+  /** Return from read-only browsing to the conversation that owns confirmation. */
+  onReturnToCurrent?: () => void;
   onEditTargetChange?: (target: KnowledgeNodeEditTarget | null) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onMutationPendingChange?: (pending: boolean) => void;
@@ -148,6 +150,7 @@ function KnowledgeNodeWorkspaceSession({
   autoOpenDetails = false,
   firstReviewCompleted = false,
   onNodeOpen,
+  onReturnToCurrent,
   onEditTargetChange,
   onDirtyChange,
   onMutationPendingChange,
@@ -814,7 +817,11 @@ function KnowledgeNodeWorkspaceSession({
         next.delete(branch.id);
         return next;
       });
-    if (sequentialReview) { setSelectedLeafId(currentId); setDrawerOpen(false); }
+    if (sequentialReview) {
+      setSelectedLeafId(currentId);
+      setDrawerOpen(false);
+      onReturnToCurrent?.();
+    }
     else selectLeaf(currentId);
     requestAnimationFrame(() => {
       if (!lifetime.current.signal.aborted)
