@@ -29,8 +29,8 @@ describe("native source system prompt (full-branch doc view)", () => {
     expect(prompt).toContain("不得以页面跳转代替文档打开");
     expect(prompt).toContain("严禁为了承载文档入口而新增");
     expect(prompt).toContain("聚合模块或聚合区块");
-    expect(prompt).toContain("信息架构与模板基线保持不变");
-    expect(prompt).toContain("与知识分支一一对应且不得重复");
+    expect(prompt).toContain("route manifest、路由路径与页面结构必须与冻结内容计划完全一致");
+    expect(prompt).toContain("不得为对齐知识分支而增删或改名路由");
   });
 });
 
