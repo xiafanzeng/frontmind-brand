@@ -273,8 +273,6 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
   const [automaticStarting, setAutomaticStarting] = useState(false);
   const [automaticError, setAutomaticError] = useState("");
   const backgroundRef = useRef<HTMLDivElement>(null);
-  const evaluationOverviewRef = useRef<HTMLDivElement>(null);
-  const evaluationSummaryRef = useRef<HTMLElement>(null);
   const syncedLiveAnswer = useRef("");
   const fallbackAutomaticRequestIds = useRef(new Map<string, string>());
   const close = () => {
@@ -290,31 +288,6 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = original; };
   }, [drawer]);
-  useEffect(() => {
-    const overview = evaluationOverviewRef.current;
-    const summary = evaluationSummaryRef.current;
-    if (!overview || !summary) return;
-
-    const syncGaugeSize = () => {
-      const summaryBounds = summary.getBoundingClientRect();
-      const compact = summaryBounds.width > 0 && summaryBounds.width < 320;
-      const height = Math.max(120, Math.ceil(summaryBounds.height));
-      const width = compact ? 120 : height;
-      overview.style.setProperty("--rag-evaluation-card-width", `${width}px`);
-      overview.style.setProperty("--rag-evaluation-card-height", `${height}px`);
-    };
-
-    syncGaugeSize();
-    const observer = typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver(syncGaugeSize);
-    observer?.observe(summary);
-    window.addEventListener("resize", syncGaugeSize);
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener("resize", syncGaugeSize);
-    };
-  }, []);
   useEffect(() => {
     setHistory(loadHistory(historyStorageKey));
   }, [historyStorageKey]);
@@ -753,9 +726,9 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
             </span>
             <h2>本轮回答质量</h2>
           </div>
-          <div ref={evaluationOverviewRef} className="rag-evaluation-overview" data-testid="rag-evaluation-overview">
+          <div className="rag-evaluation-overview" data-testid="rag-evaluation-overview">
             <RagEvaluationGauge score={result.score} unavailable={tone === "danger"} />
-            <section ref={evaluationSummaryRef} className={`rag-verdict is-${tone}`} aria-label="当前评估摘要">
+            <section className={`rag-verdict is-${tone}`} aria-label="当前评估摘要">
               <div className="rag-evaluation-summary-flow" data-testid="rag-evaluation-summary-flow">
                 <h3 className="rag-evaluation-status-title">
                   <i className="rag-evaluation-status-orb" aria-hidden="true" data-testid="rag-evaluation-status-orb" />

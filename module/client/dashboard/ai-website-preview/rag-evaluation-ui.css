@@ -408,13 +408,12 @@
 }
 
 .rag-eval-root .rag-evaluation-overview {
-  --rag-evaluation-card-width: 120px;
-  --rag-evaluation-card-height: 120px;
-  align-items: start;
+  --rag-evaluation-card-width: 136px;
+  align-items: stretch;
   display: grid;
   gap: 16px;
   grid-template-columns: var(--rag-evaluation-card-width) minmax(0, 1fr);
-  min-height: 120px;
+  min-height: 136px;
   min-width: 0;
 }
 
@@ -509,8 +508,8 @@
 
 .rag-eval-root .rag-evaluation-gauge-card {
   width: var(--rag-evaluation-card-width);
-  height: var(--rag-evaluation-card-height);
-  align-self: start;
+  height: auto;
+  align-self: stretch;
   box-sizing: border-box;
   display: grid;
   min-width: 0;
@@ -569,6 +568,6 @@
 }
 
 @container sfp (max-width:400px) {
-  .rag-eval-root .rag-evaluation-overview { gap: 8px; }
+  .rag-eval-root .rag-evaluation-overview { --rag-evaluation-card-width: 120px; gap: 8px; }
   .rag-eval-root .rag-evaluation-overview .rag-verdict { padding: 16px 8px 8px; }
 }

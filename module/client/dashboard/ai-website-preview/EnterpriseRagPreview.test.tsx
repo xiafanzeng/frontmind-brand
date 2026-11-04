@@ -366,10 +366,10 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByTestId("rag-task-status").textContent).toContain("通过");
   });
 
-  it("keeps the gauge card dimensions synchronized without compact-width feedback", () => {
-    let resize: ResizeObserverCallback | undefined;
+  it("uses stable CSS sizing without a ResizeObserver feedback loop", () => {
+    const resizeObserverConstructed = vi.fn();
     class TestResizeObserver {
-      constructor(callback: ResizeObserverCallback) { resize = callback; }
+      constructor() { resizeObserverConstructed(); }
       observe() {}
       unobserve() {}
       disconnect() {}
@@ -378,37 +378,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     showPage();
 
     const overview = screen.getByTestId("rag-evaluation-overview");
-    const summary = screen.getByRole("region", { name: "当前评估摘要" });
-    vi.spyOn(summary, "getBoundingClientRect").mockReturnValue({
-      bottom: 148,
-      height: 148,
-      left: 0,
-      right: 400,
-      top: 0,
-      width: 400,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
-
-    act(() => resize?.([], {} as ResizeObserver));
-    expect(overview.style.getPropertyValue("--rag-evaluation-card-width")).toBe("148px");
-    expect(overview.style.getPropertyValue("--rag-evaluation-card-height")).toBe("148px");
-
-    vi.mocked(summary.getBoundingClientRect).mockReturnValue({
-      bottom: 260,
-      height: 260,
-      left: 0,
-      right: 200,
-      top: 0,
-      width: 200,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
-    act(() => resize?.([], {} as ResizeObserver));
-    expect(overview.style.getPropertyValue("--rag-evaluation-card-width")).toBe("120px");
-    expect(overview.style.getPropertyValue("--rag-evaluation-card-height")).toBe("260px");
+    expect(resizeObserverConstructed).not.toHaveBeenCalled();
+    expect(overview.style.getPropertyValue("--rag-evaluation-card-width")).toBe("");
+    expect(overview.style.getPropertyValue("--rag-evaluation-card-height")).toBe("");
   });
 
   it("submits a live question without falling back to a synthetic answer", async () => {

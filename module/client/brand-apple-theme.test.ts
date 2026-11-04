@@ -115,17 +115,17 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain("transform: translateY(-1px);");
   });
 
-  it("sizes the left gauge card from the right summary on every viewport", () => {
+  it("uses stable CSS sizing for the gauge and summary without layout feedback", () => {
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview {");
-    expect(ragEvaluationCss).toContain("--rag-evaluation-card-width: 120px;");
-    expect(ragEvaluationCss).toContain("--rag-evaluation-card-height: 120px;");
+    expect(ragEvaluationCss).toContain("--rag-evaluation-card-width: 136px;");
     expect(ragEvaluationCss).toContain("grid-template-columns: var(--rag-evaluation-card-width) minmax(0, 1fr);");
-    expect(ragEvaluationCss).toContain("align-items: start;");
-    expect(ragEvaluationCss).toContain("min-height: 120px;");
+    expect(ragEvaluationCss).toContain("align-items: stretch;");
+    expect(ragEvaluationCss).toContain("min-height: 136px;");
     expect(ragEvaluationCss).toContain("gap: 16px;");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-gauge-card {");
     expect(ragEvaluationCss).toContain("width: var(--rag-evaluation-card-width);");
-    expect(ragEvaluationCss).toContain("height: var(--rag-evaluation-card-height);");
+    expect(ragEvaluationCss).toContain("height: auto;");
+    expect(ragEvaluationCss).toContain("align-self: stretch;");
     expect(ragEvaluationCss).toContain("aspect-ratio: 3 / 2;");
     expect(ragEvaluationCss).toContain("border-radius: 20px;");
     expect(ragEvaluationCss).toContain("background: rgba(255, 255, 255, 0.72);");
@@ -150,11 +150,11 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).not.toContain("@container rag-evaluation-summary");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-status-orb {");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-status-orb::after {");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview { gap: 8px; }");
+    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview { --rag-evaluation-card-width: 120px; gap: 8px; }");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview .rag-verdict { padding: 16px 8px 8px; }");
-    expect(enterpriseRagPreview).toContain("new ResizeObserver");
-    expect(enterpriseRagPreview).toContain('setProperty("--rag-evaluation-card-width"');
-    expect(enterpriseRagPreview).toContain('setProperty("--rag-evaluation-card-height"');
+    expect(enterpriseRagPreview).not.toContain("new ResizeObserver");
+    expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-width"');
+    expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-height"');
   });
 
   it("separates answer quality and task completion into Apple material cards", () => {
