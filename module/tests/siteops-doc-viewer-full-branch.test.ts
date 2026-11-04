@@ -1,19 +1,33 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import {
+  assertUpstreamPromptBudget,
+  upstreamPromptCharacterCount,
+} from "@frontmind/module-contracts/upstream-prompt-budget";
 
 import {
+  configureManusProviderCore,
+  type ManusProviderCore,
+  NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS,
+  nativeSourcePrompt,
+  nativeSourceRepairSystemPromptForWorkflow,
   nativeSourceSystemPromptForWorkflow,
   safePublicDocuments,
 } from "../server/siteops/manus-provider.js";
+
+configureManusProviderCore({
+  tables: {},
+  assertUpstreamPromptBudget,
+} as unknown as ManusProviderCore);
 
 describe("native source system prompt (full-branch doc view)", () => {
   const prompt = nativeSourceSystemPromptForWorkflow("2.9.0");
 
   it("requires a complete-document view grouped by knowledge branch", () => {
-    expect(prompt).toContain("完整文档视图");
-    expect(prompt).toContain("branchId");
-    expect(prompt).toContain("branchTitle");
-    expect(prompt).toContain("order 升序");
+    expect(prompt).toContain("完整文档模态弹层");
+    expect(prompt).toContain("branchIds");
+    expect(prompt).toContain("branch.title");
+    expect(prompt).toContain("按合同顺序");
     expect(prompt).toContain("文档大标题");
   });
 
@@ -31,6 +45,41 @@ describe("native source system prompt (full-branch doc view)", () => {
     expect(prompt).toContain("聚合模块或聚合区块");
     expect(prompt).toContain("route manifest、路由路径与页面结构必须与冻结内容计划完全一致");
     expect(prompt).toContain("不得为对齐知识分支而增删或改名路由");
+  });
+
+  it("requires the deterministic DOM contract used by browser QA", () => {
+    expect(prompt).toContain("frontmind-site-document-view-plan-v1.json");
+    expect(prompt).toContain("data-frontmind-document-branches");
+    expect(prompt).toContain("data-frontmind-section");
+    expect(prompt).toContain('role="dialog"');
+    expect(prompt).toContain("data-frontmind-document-dialog");
+    expect(prompt).toContain("data-frontmind-document-branch");
+    expect(prompt).toContain("data-frontmind-document-node");
+    expect(prompt).toContain("data-frontmind-document-close");
+    expect(prompt).toContain("document-level 委托点击处理");
+    expect(prompt).toContain("branchIds=[] 时不得设置空");
+    expect(prompt).toContain("plan.branches[].nodes[].id");
+    expect(prompt).toContain("nodeContentSource/splitDossierRule");
+    expect(prompt).toContain("dossier 是弹层正文的唯一来源");
+  });
+
+  it("keeps real href semantics while intercepting an unmodified primary click", () => {
+    expect(prompt).toContain("普通无修饰键的鼠标主键点击");
+    expect(prompt).toContain("preventDefault");
+    expect(prompt).toContain("Ctrl/Meta/Shift/Alt 修饰键");
+    expect(prompt).toContain("中键或新窗口语义仍保留 href");
+  });
+
+  it("repeats the document-view contract during a repair attempt", () => {
+    const repairPrompt = nativeSourceRepairSystemPromptForWorkflow("2.9.0");
+
+    expect(repairPrompt).toContain("frontmind-site-document-view-plan-v1.json");
+    expect(repairPrompt).toContain("data-frontmind-document-branches");
+    expect(repairPrompt).toContain("data-frontmind-document-dialog");
+    expect(repairPrompt).toContain("data-frontmind-document-node");
+    expect(repairPrompt).toContain("无修饰键主键点击时 preventDefault");
+    expect(repairPrompt).toContain("branchIds=[] 时不得设置空");
+    expect(repairPrompt).toContain("nodeContentSource/splitDossierRule");
   });
 });
 
@@ -85,5 +134,47 @@ describe("safePublicDocuments branch metadata", () => {
     expect(documents[1]!.branchId).toBeUndefined();
     expect(documents[1]!.branchTitle).toBeUndefined();
     expect(documents[1]!.order).toBeUndefined();
+  });
+});
+
+describe("native source prompt budget", () => {
+  it.each(Object.entries(NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS))(
+    "keeps the reachable fresh-build %s prompt below a 100-character safety margin",
+    (_name, templateCoordinateInstruction) => {
+      const prompt = nativeSourcePrompt({
+        operationToken:
+          "siteops-native-source:00000000-0000-4000-8000-000000000000:1",
+        baseSourceSha256: "a".repeat(64),
+        contractVersion: 2,
+        runtimeCoordinates: {} as never,
+        workflowVersion: "2.9.0",
+        hasCustomerFeedback: true,
+        hasKnowledgeMedia: true,
+        templateCoordinateInstruction,
+        contentPlanSha256: "b".repeat(64),
+      });
+
+      expect(upstreamPromptCharacterCount(prompt)).toBeLessThanOrEqual(2_900);
+    },
+  );
+
+  it("keeps the reachable continuous-revision prompt below the same margin", () => {
+    const prompt = nativeSourcePrompt({
+      operationToken:
+        "siteops-native-source:00000000-0000-4000-8000-000000000000:1",
+      baseSourceSha256: "a".repeat(64),
+      contractVersion: 2,
+      runtimeCoordinates: {} as never,
+      workflowVersion: "2.9.0",
+      hasCustomerFeedback: true,
+      hasRevisionMedia: true,
+      hasRevisionBaseline: true,
+      hasKnowledgeMedia: true,
+      // Continuous revisions use the frozen parent source, so the provider
+      // deliberately omits the mutually exclusive fresh-template coordinate.
+      contentPlanSha256: "b".repeat(64),
+    });
+
+    expect(upstreamPromptCharacterCount(prompt)).toBeLessThanOrEqual(2_900);
   });
 });

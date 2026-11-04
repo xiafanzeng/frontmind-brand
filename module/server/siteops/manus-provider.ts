@@ -161,6 +161,10 @@ import {
   type SupplementalKnowledgeMedia,
 } from "./site-content-plan.js";
 import {
+  deriveSiteDocumentViewPlanV1,
+  siteDocumentViewPlanAttachment,
+} from "./site-document-view-plan.js";
+import {
   pageContentResultFromWire,
   pageContentResultV2FromWire,
   pageContentWireOutputSchema,
@@ -4683,6 +4687,12 @@ const staticNativeTemplateCoordinateV1Schema = z
 const FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME =
   "frontmind-selected-template-coordinate-v1.json";
 
+export const NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS = {
+  staticCatalog: `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是唯一模板坐标；只用其 catalogCandidateId、providerSlug、sourceSubdirectory、sourceAssetId、sourceArchiveSha256，并从源码确定入口；不得改选或重设计。`,
+  providerArchive: `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是唯一模板坐标；只用 providerSlug、sourceSubdirectory、entrypoint；忽略 ZIP 内其他模板及默认首页，不得改选。`,
+  normalized: `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是唯一模板坐标；ZIP 已按该精确模板标准化并通过 production build；只用 providerSlug、sourceDirectory、entrypoint，不得改选或重设计。`,
+} as const;
+
 /**
  * Bind a selected Marketplace template to its exact entrypoint without
  * mutating the untouched Provider archive. This matters for registry repos
@@ -4705,7 +4715,8 @@ export function nativeTemplateCoordinateDirective(source: NativeSelection) {
     const bytes = Buffer.from(`${canonicalJson(manifest)}\n`, "utf8");
     return {
       manifest,
-      promptInstruction: `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是唯一模板坐标；严格使用其 catalogCandidateId、providerSlug、sourceSubdirectory、sourceAssetId、sourceArchiveSha256，从源码确定入口，禁止改选或重设计。`,
+      promptInstruction:
+        NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS.staticCatalog,
       attachment: {
         filename: FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME,
         mime_type: "application/json",
@@ -4756,8 +4767,8 @@ export function nativeTemplateCoordinateDirective(source: NativeSelection) {
     manifest,
     promptInstruction:
       manifest.sourceFormat === "provider_archive_v1"
-        ? `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是所选完整 Template 的唯一执行坐标。必须只使用其中指定的 providerSlug、sourceSubdirectory 和 entrypoint；即使源码 ZIP 同时包含同一仓库的其他模板，也必须全部忽略，不得自行选择相邻模板或仓库默认首页。`
-        : `${FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME} 是所选完整 Template 的唯一执行坐标。源码 ZIP 已由 FrontMind 从该精确模板完成标准化和 production build 验证；必须使用其中指定的 providerSlug、sourceDirectory 和 entrypoint，不得改选其他模板或重新设计。`,
+        ? NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS.providerArchive
+        : NATIVE_TEMPLATE_COORDINATE_PROMPT_INSTRUCTIONS.normalized,
     attachment: {
       filename: FRONTMIND_SELECTED_TEMPLATE_COORDINATE_FILENAME,
       mime_type: "application/json",
@@ -4826,13 +4837,14 @@ export function nativeSourceSystemPromptForWorkflow(workflowVersion: string) {
     return `你是生产级企业官网的前端、内容与构建工程师。返回完整可构建源码 ZIP，不返回 diff、解释或思考过程。
 
 执行合同：
-1. Template ZIP 是唯一源码与视觉基线；保留组件、布局和响应式风格，只做内容与静态运行所需修改，不得重设计。
-2. ${SITEOPS_CONTENT_PLAN_V2_FILENAME} 给出完整 route manifest 与内容坐标；按其 routes.path 生成页面。企业事实只取 dossier、冻结计划、客户反馈和已验证媒体，删除模板品牌、演示文案、占位资源及外部链接，不得编造。
-3. 导航和有目标 CTA 使用计划内规范路径的真实 <a href>，可见链接文字必须包含计划 cta.label。计划图片使用可信 publicUrl 和非空 alt。
+1. Template ZIP 是唯一源码/视觉基线；保留组件、布局和响应式，仅改内容与静态运行，不得重设计。
+2. ${SITEOPS_CONTENT_PLAN_V2_FILENAME} 冻结 route/内容坐标；按 routes.path 生成。事实只用 dossier、计划、客户反馈与验证媒体；删除模板品牌、演示/占位内容和外链，不编造。
+3. 导航和有目标 CTA 使用计划内规范路径的真实 <a href>，可见链接文字必须包含计划 cta.label。普通无修饰键的鼠标主键点击按第 7 条打开文档并 preventDefault；Ctrl/Meta/Shift/Alt 修饰键、中键或新窗口语义仍保留 href 的浏览器行为。计划图片使用可信 publicUrl 和非空 alt。
 4. 不得加入认证、支付、数据库、后台、统计、webhook、外部脚本、远程请求、远程资源、动态执行或动态 import。
-5. 输出 FrontMind Vite SPA；保留 execution shell，在 ${NATIVE_RUNTIME_ROUTE_MODULE} 用 eager static import 导出 ${NATIVE_RUNTIME_ROUTE_MANIFEST_EXPORT}。多页初始化与 popstate 调用 window.canonicalSitePathname()；仅函数不存在时回退 window.location.pathname。每个包含 JSX 的模块都必须显式绑定或 import React。
-6. 站内搜索必须覆盖全站：对计划全部 routes 的 section 标题与正文以及各路由 userQuestions 做客户端关键词匹配，不得只过滤当前页面；结果按栏目分组、显示所属栏目并链接到对应路由（可带 hash 锚点定位到区块）；无匹配时给出改用页面 AI 助手或联系 CTA 的明确提示。
-7. 页面上每一个可点击的内容元素——导航与子导航栏目标题、栏目卡片、区块小标题、列表条目、FAQ 项、CTA 按钮、页脚栏目链接和“查看文档原文”入口——点击后必须直接打开该元素所属知识分支的完整文档视图（模态弹层），不得以页面跳转代替文档打开。严禁为了承载文档入口而新增“内容与指引”、文档列表等任何聚合模块或聚合区块：文档入口必须融入页面既有元素本身。route manifest、路由路径与页面结构必须与冻结内容计划完全一致；导航栏目沿用计划路由，不得为对齐知识分支而增删或改名路由，导航栏目打开的文档即该栏目路由下全部区块引用的来源分支。dossier 文档带有 branchId、branchTitle、order 字段，同一 branchId 的全部文档按 order 升序组成一份完整知识文档；文档视图以 branchTitle 作为文档大标题，完整列出该分支的每一个节点（节点小节标题 + 逐字段落/列表），不得只展示被引用的节点，不得摘要化、改写或省略任何节点。文档原文中的网址一律去掉 http(s):// 前缀，只保留域名与路径文字（如 www.example.com/help）；严禁输出完整 URL 字面量或 // 开头的协议相对地址。文档视图用模态弹层实现，禁止新增 route manifest 路由。
+5. 输出 FrontMind Vite SPA；保留 execution shell，${NATIVE_RUNTIME_ROUTE_MODULE} 用 eager static import 导出 ${NATIVE_RUNTIME_ROUTE_MANIFEST_EXPORT}。初始化/popstate 优先 window.canonicalSitePathname()，否则 window.location.pathname；JSX 模块显式绑定/import React。
+6. 站内搜索必须覆盖全站：匹配全部 routes 的 section 标题/正文与 userQuestions，不得只过滤当前页面；按栏目分组并链接 route/hash，无结果提示 AI 助手或联系 CTA。
+7. 逐项读取 frontmind-site-document-view-plan-v1.json，不得猜测按钮映射。对 branchIds 非空的 route/section，每一个可点击的内容元素都设 data-frontmind-document-branches=英文逗号连接的 branchIds；区块根设 data-frontmind-section=sectionId，导航/页脚用目标 route 绑定，其他用所在 section 绑定。branchIds=[] 时不得设置空属性、编造文档或弹层。使用 document-level 委托点击处理；普通主键点击打开完整文档模态弹层，不得以页面跳转代替文档打开，<a href> 仅此时 preventDefault，修饰键/中键/新窗口保留。模态根用 role="dialog"+data-frontmind-document-dialog，分支/节点/关闭控件分别用 data-frontmind-document-branch/data-frontmind-document-node/data-frontmind-document-close；多分支同一 dialog 完整展示且可关闭再打开。严禁为了承载文档入口而新增聚合模块或聚合区块；route manifest、路由路径与页面结构必须与冻结内容计划完全一致，不得为对齐知识分支而增删或改名路由，禁止新增 route manifest 路由。文档大标题用 branch.title，按合同顺序完整展示 nodes，不得只展示被引用的节点，不得摘要化、改写或省略任何节点，也不得追加来源外文字。按 plan.branches[].nodes[].id 与 nodeContentSource/splitDossierRule 从 dossier/parts 拼接完整 content，节点只含 title+content，dossier 是弹层正文的唯一来源。文中网址去掉 http(s):// 前缀，禁止完整 URL 或 // 地址。
+“查看文档原文”入口也必须遵守第 7 条。
 8. 运行 production build 和 ${NATIVE_SOURCE_PREFLIGHT_V2_FILENAME}，逐路由确认无 pageerror、console.error 和空白 root。只交付 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME}。`;
   }
   if (workflowVersion === SITEOPS_STATIC_TEMPLATE_WORKFLOW_VERSION) {
@@ -4974,6 +4986,17 @@ function nativeRuntimeDiagnosticsAttachment(repair: NativeSourceRepairInput) {
   } as const;
 }
 
+export function nativeSourceRepairSystemPromptForWorkflow(
+  workflowVersion: string,
+) {
+  if (workflowVersion === SITEOPS_MATERIALIZER_V2_9.frontMindVersion) {
+    return `继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不重新设计；原任务的视觉、冻结计划、内容和事实边界继续有效。一次修完诊断附件全部问题。全局导航和有目标 CTA 必须是真实规范 <a href>，可见链接文字须包含计划标签且允许保留不改变含义的模板装饰。
+必须重新逐项读取 frontmind-site-document-view-plan-v1.json 并保持文档按钮合同：触发元素 data-frontmind-document-branches，区块根 data-frontmind-section，dialog 的 role=dialog 与 data-frontmind-document-dialog，分支 data-frontmind-document-branch，节点 data-frontmind-document-node，关闭 data-frontmind-document-close。使用 document-level 委托；<a href> 仅在普通无修饰键主键点击时 preventDefault 并打开对应完整文档，修饰键、中键和新窗口语义保留。文档绑定仅适用于合同 branchIds 非空的 route/section；branchIds=[] 时不得设置空 data-frontmind-document-branches，不得编造文档或弹层。按 nodes.id 与 nodeContentSource/splitDossierRule 从 dossier/parts 拼接完整 content；节点只含 title+content，不得追加来源外文字。不得新增聚合区块或路由。
+多页初始化与 popstate 必须优先调用宿主 canonicalSitePathname，函数不存在时才回退 window.location.pathname。`;
+  }
+  return "继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不是重新设计；原任务中的视觉、内容和事实边界继续有效。";
+}
+
 export function nativeSourcePrompt(input: {
   operationToken: string;
   baseSourceSha256: string;
@@ -4992,35 +5015,33 @@ export function nativeSourcePrompt(input: {
     throw new Error("NATIVE_SOURCE_RUNTIME_COORDINATES_MISSING");
   }
   const systemPrompt = input.repair
-    ? input.workflowVersion === SITEOPS_MATERIALIZER_V2_9.frontMindVersion
-      ? "继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不重新设计；原任务的视觉、冻结计划、内容和事实边界继续有效。一次修完诊断附件全部问题。全局导航和有目标 CTA 必须是真实规范 <a href>，可见链接文字须包含计划标签且允许保留不改变含义的模板装饰。多页初始化与 popstate 必须优先调用宿主 canonicalSitePathname，函数不存在时才回退 window.location.pathname。"
-      : "继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不是重新设计；原任务中的视觉、内容和事实边界继续有效。"
+    ? nativeSourceRepairSystemPromptForWorkflow(input.workflowVersion)
     : nativeSourceSystemPromptForWorkflow(input.workflowVersion);
   const repair = input.repair
     ? `\n\n上一份源码未通过${input.repair.kind === "compile" ? "本地编译" : "运行合同或硬安全检查"}。只按 ${NATIVE_RUNTIME_DIAGNOSTICS_FILENAME} 一次性修复全部坐标；不得重新设计或复用失败输出。以本消息重新附加的源码与执行基线为准，重跑 preflight 和 production build，并逐条打开 route manifest 的全部路由确认无 pageerror、console.error 或空白 root；execution shell 未声明 automatic JSX runtime 时，每个包含 JSX 的模块都必须显式绑定或 import React。返回完整源码 ZIP。`
     : "";
   const deliveryContract =
     input.contractVersion === 2
-      ? "Receipt 必须符合 Structured Output schema 且 preflightStatus=passed；archiveSha256 必须对应最终 ZIP；fileCount 必须填写最终 ZIP 的非目录文件条目数（不计目录项）。"
+      ? "Receipt 须符合 schema 且 preflightStatus=passed；archiveSha256 对应最终 ZIP，fileCount 为非目录文件数。"
       : `交付前必须运行 ${NATIVE_SOURCE_PREFLIGHT_FILENAME} 并通过 package、文件类型、依赖、源码语法和 production build 自检。Receipt 必须严格包含当前 operationToken、baseSourceSha256=${input.baseSourceSha256}、最终 ZIP 的 archiveSha256、实际 fileCount、preflightVersion=${NATIVE_SOURCE_PREFLIGHT_VERSION}、preflightStatus=passed、preflightSha256=${NATIVE_SOURCE_PREFLIGHT_SHA256}。`;
   return promptWithMarker(
     `${systemPrompt}
 
-frontmind-siteops-source-dossier-v1.json 是唯一企业事实来源；源码 ZIP 是唯一视觉与组件基线，baseSourceSha256=${input.baseSourceSha256}。不得采用附件之外的企业事实、媒体、依赖或外部资源。
+frontmind-siteops-source-dossier-v1.json 是唯一事实源；源码 ZIP 是唯一视觉/组件基线，baseSourceSha256=${input.baseSourceSha256}。禁用附件外事实、媒体、依赖及外部资源。
 
 ${input.templateCoordinateInstruction ?? ""}
 
-${input.hasCustomerFeedback ? "客户要求见 frontmind-customer-feedback-v1.json；仅在知识与原生样式边界内实现。" : ""}
+${input.hasCustomerFeedback ? "客户要求见 frontmind-customer-feedback-v1.json；严守事实/样式边界。" : ""}
 
-${input.hasRevisionMedia ? "本轮图片见 frontmind-user-media-manifest-v1.json，且已由 FrontMind 写入源码 public/frontmind-user-media。必须在客户要求指定的页面中使用清单 publicUrl；不得改写、转码或引用外部副本。" : ""}
+${input.hasRevisionMedia ? "用户图见 frontmind-user-media-manifest-v1.json；按 publicUrl 用于指定页，不转码/外引。" : ""}
 
-${input.hasRevisionBaseline ? "这是连续修订：frontmind-parent-content-plan-v1.json 是父版本完整内容计划基线。只修改客户明确要求的部分，未涉及的路由、事实、内容结构与媒体必须原样保留；交付仍须形成一份完整网站。" : ""}
+${input.hasRevisionBaseline ? "修订基线见 frontmind-parent-content-plan-v1.json；仅改明确要求，其余保持，交付完整站。" : ""}
 
-${input.hasKnowledgeMedia ? "内容计划选中的知识库图片见 frontmind-knowledge-media-manifest-v1.json，且可信原始字节已由 FrontMind 写入源码 public/frontmind-knowledge-media。必须按计划页面使用清单 publicUrl 与非空 alt；不得改写、转码或引用外部副本。" : ""}
+${input.hasKnowledgeMedia ? "知识图见 frontmind-knowledge-media-manifest-v1.json；按计划用 publicUrl+非空 alt，不转码/外引。" : ""}
 
-${input.contentPlanSha256 ? `${SITEOPS_CONTENT_PLAN_V2_FILENAME} 已由 Dashboard 冻结，sha256=${input.contentPlanSha256}；它是唯一信息架构与内容覆盖合同。必须先逐项读取，再适配源码，route manifest 必须与其 routes.path 完全一致。` : ""}
+${input.contentPlanSha256 ? `${SITEOPS_CONTENT_PLAN_V2_FILENAME} 已冻结，sha256=${input.contentPlanSha256}，是唯一信息架构/覆盖合同；逐项读取后适配，route manifest 必须等于 routes.path。` : ""}
 
-${deliveryContract}只返回 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME} 各一份后结束；不得解释、浏览或更新计划。${repair}`,
+${deliveryContract}只返回 ${FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME} 与 ${FRONTMIND_SITE_SOURCE_RECEIPT_FILENAME} 各一份；不解释、浏览或改计划。${repair}`,
     input.operationToken,
   );
 }
@@ -6723,6 +6744,17 @@ async function handleNativeReactSiteBuild(input: {
       providerStateV2(currentState),
     );
   }
+  const documentViewPlan = frozenContentPlan
+    ? deriveSiteDocumentViewPlanV1({
+        contentPlan: frozenContentPlan,
+        // Customer-revision instructions shape the generated site but are not
+        // public knowledge documents and must never be exposed in its viewer.
+        documents: input.documents,
+        ignoredSourceDocumentIds: revisionDocuments.map(
+          (document) => document.id,
+        ),
+      })
+    : undefined;
   const providerSourceAttachment = async (
     sourceClient: DashboardAgentClient,
   ): Promise<ManusV2Attachment> => {
@@ -6827,7 +6859,10 @@ async function handleNativeReactSiteBuild(input: {
       },
       brief: briefWithoutBrandAssets(dynamicPlanningBrief),
       visualEvidence: runtimeVisual,
-      documents: generationDocuments,
+      // Revision instructions shape the frozen plan and are supplied through
+      // their dedicated feedback/baseline inputs. They are not public facts
+      // and must never be copied into generated client source or doc dialogs.
+      documents: input.documents,
     }),
     await providerSourceAttachment(sourceClient),
     ...(revisionSource?.attachments ?? []),
@@ -6844,6 +6879,9 @@ async function handleNativeReactSiteBuild(input: {
     ...(templateCoordinate ? [templateCoordinate.attachment] : []),
     ...(frozenContentPlan
       ? [siteContentPlanAttachment(frozenContentPlan)]
+      : []),
+    ...(documentViewPlan
+      ? [siteDocumentViewPlanAttachment(documentViewPlan)]
       : []),
     ...nativeBrandAttachment(input.brandAsset),
     ...(input.input.feedback
@@ -8679,6 +8717,11 @@ async function handleNativeReactSiteBuild(input: {
         (currentState?.schemaVersion === 2
           ? currentState.contentPlanSha256
           : undefined),
+      documentViewPlan,
+      documentViewForbiddenSources: revisionDocuments.map((document) => ({
+        id: document.id,
+        content: document.content,
+      })),
       runtimeAudit:
         nativeSourceContractVersion === 2
           ? nativeSourceRuntime!.audit
@@ -8703,6 +8746,7 @@ async function handleNativeReactSiteBuild(input: {
         "NATIVE_BUILD_RENDER_FAILED",
         "NATIVE_BUILD_USER_MEDIA_INVALID",
         "NATIVE_BUILD_CONTENT_PLAN_INVALID",
+        "NATIVE_BUILD_DOCUMENT_VIEW_INVALID",
       ].includes(error.code)
     ) {
       const signature = nativeCompileSignature(error);
