@@ -1,3 +1,4 @@
+import { sha256WmaKnowledgeFile } from "../lib/wma-knowledge-upload";
 import { useKnowledgeBaseUploadBatch, useKnowledgeBaseUploadField, formatKnowledgeBaseUploadBytes } from "../lib/knowledge-base-upload-manager";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Loader2, Upload } from "lucide-react";
@@ -44,7 +45,7 @@ async function fileMatchesFrozenManifest(
 ) {
   if (!fileMatchesManifestMetadata(file, manifest)) return false;
   if (!manifest.sha256) return true;
-  return (await sha256UploadFile(file)) === manifest.sha256;
+  return (await (file.size > 100 * 1024 ** 2 ? sha256WmaKnowledgeFile(file) : sha256UploadFile(file))) === manifest.sha256;
 }
 
 export default function KnowledgeBaseManagedUploadRecovery({

@@ -96,8 +96,8 @@ type RetainedAssetFinderDependencies = {
   readStoredFile?: typeof readStoredPresalesFile;
 };
 
-function frozenRecoveryManifest(value: unknown): FrozenRecoveryManifestItem[] {
-  const manifest = normalizeKnowledgeBaseClientAttachmentManifest(value);
+function frozenRecoveryManifest(value: unknown, wmaInitial = false): FrozenRecoveryManifestItem[] {
+  const manifest = normalizeKnowledgeBaseClientAttachmentManifest(value, { wmaInitial });
   if (
     manifest.some(
       (item, index) =>
@@ -291,7 +291,7 @@ export async function resumeKnowledgeBaseDeferredTurnAttachments(
     conversationId: input.conversationId,
   });
   const attachmentManifest = frozenRecoveryManifest(
-    snapshot.clientAttachmentManifest,
+    snapshot.clientAttachmentManifest, snapshot.wmaInitial,
   );
   let finalTurn: KnowledgeBaseTurnRecord = snapshot.turn;
   const initialStagedCount = snapshot.turn.stagedUserAttachmentCount;
@@ -316,6 +316,22 @@ export async function resumeKnowledgeBaseDeferredTurnAttachments(
     index += 1
   ) {
     const item = attachmentManifest[index]!;
+    const remote = snapshot.wmaInitial ? snapshot.verifiedCosSources?.find(source =>
+      source.fileId && source.bytes === item.sizeBytes && source.mimeType === item.mimeType &&
+      (!item.sha256 || source.sha256 === item.sha256) &&
+      // Source-to-item association is checked again under the stage lock.
+      source.fileId === snapshot.verifiedCosItemIds?.[item.itemId]) : undefined;
+    if (remote) {
+      retainedCustomerAttachmentCount++;
+      if (contiguousPrefixRetained) finalTurn = await stageAttachment({ ...input, buildId: snapshot.buildId,
+        clientAttachmentManifest: attachmentManifest, index, attachment: { file_id: remote.fileId, filename: item.filename }, cosSource: remote,
+        managedUploadProof: { intentId: `wma-cos:${remote.fileId}`, itemId: item.itemId, mimeType: item.mimeType,
+          sizeBytes: item.sizeBytes, contentSha256: remote.sha256 } });
+      continue;
+    }
+    if (item.sizeBytes > MAX_RECOVERABLE_LOCAL_ASSET_BYTES) {
+      missingCustomerAttachments.push(missingDescriptor(item)); contiguousPrefixRetained = false; continue;
+    }
     const coordinate: KnowledgeBaseLocalUploadCoordinate = {
       conversationId: input.conversationId,
       turnId: input.turnId,

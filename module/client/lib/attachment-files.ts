@@ -1,3 +1,4 @@
+import { isWmaKnowledgeDocument, WMA_KNOWLEDGE_MAX_BATCH_BYTES, WMA_KNOWLEDGE_MAX_FILE_BYTES } from "../../contracts/wma-knowledge-upload";
 import JSZip from "jszip";
 import {
   inspectImageFile,
@@ -32,6 +33,17 @@ export function assertChatAttachmentSizes(
   for (const file of files) {
     const error = chatAttachmentSizeError(file);
     if (error) throw new Error(error);
+  }
+}
+
+/** Initial WMA documents alone receive the direct-COS allowance. */
+export function assertKnowledgeBaseInitialAttachmentSizes(files: readonly File[], wmaInitial: boolean) {
+  if (wmaInitial && files.reduce((total, file) => total + file.size, 0) > WMA_KNOWLEDGE_MAX_BATCH_BYTES)
+    throw new Error("本轮资料总量不能超过 3 GiB");
+  for (const file of files) {
+    if (wmaInitial && isWmaKnowledgeDocument(normalizedKnowledgeBaseUploadFilename(file.name), normalizedKnowledgeBaseUploadMimeType(file))) {
+      if (file.size > WMA_KNOWLEDGE_MAX_FILE_BYTES) throw new Error(`文件“${file.name}”不能超过 1 GiB`);
+    } else assertChatAttachmentSizes([file]);
   }
 }
 

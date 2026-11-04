@@ -22,6 +22,7 @@ export interface Attachment {
   expiresAt?: number;
   /** Authoritative expiry flag returned by the file service. */
   expired?: boolean;
+  availability?: "verifying" | "ready" | "expired" | "deleted" | "missing" | "unavailable";
 }
 
 export interface IntermediateStep {
