@@ -207,14 +207,25 @@ function TurnActivity({
   const earlierNative = nativeMessages.slice(0, -3);
   const earlierIds = new Set(earlierNative.map(item => item.id));
   const nativeCalls = calls.filter(item => item.id.includes(":wma:"));
-  const latestNativeAt = Math.max(0, ...nativeMessages.map(item => item.timestamp), ...nativeCalls.map(item => item.timestamp));
+  const nativeEntries = items.filter(item => item.id.includes(":wma:") ||
+    (item.kind === "status" && item.publicSummaryOrigin === "provider_native"));
+  const latestNativeAt = Math.max(0, ...nativeEntries.map(item =>
+    Math.max(item.timestamp, item.kind === "tool" ? item.finishedAt ?? 0 : 0)));
+  const hasNativeProgress = nativeEntries.length > 0;
+  // Animation is disabled on restored knowledge messages. It must not decide
+  // whether the authoritative business phase is still running.
+  const nativeRunning = hasNativeProgress && lastLifecycle?.isCurrent !== false &&
+    ["running", "rescheduling", "retrying"].includes(lastLifecycle?.status ?? "");
   const timeLabel = (timestamp: number) => new Date(timestamp).toLocaleTimeString("zh-CN", { hour12: false });
   return (
     <>
-      {nativeMessages.length > 0 && <div className="general-execution__native-heading">
+      {hasNativeProgress && <div className="general-execution__native-heading">
         <strong>WMA 执行进展</strong>
         {latestNativeAt > 0 && <span>最近记录 {timeLabel(latestNativeAt)}</span>}
       </div>}
+      {nativeRunning && nativeMessages.length === 0 && <ActivityLine>
+        任务仍在执行，正在等待新的公开进展。
+      </ActivityLine>}
       {items.map((item) => {
         if (earlierIds.has(item.id)) return item.id === earlierNative[0]?.id ? (
           <details key="earlier-native" className="general-execution__native-history">
