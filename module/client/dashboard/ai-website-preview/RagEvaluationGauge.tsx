@@ -42,7 +42,7 @@ function isDisplayableScore(score: number | null | undefined): score is number {
 }
 
 function formatScore(score: number) {
-  return Number(score.toFixed(2)).toString();
+  return Math.floor(score).toString();
 }
 
 export function RagEvaluationGauge({ score, unavailable = false }: RagEvaluationGaugeProps) {
