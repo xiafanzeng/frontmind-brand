@@ -1,9 +1,10 @@
+import { wmaKnowledgeUploadCapability } from "./wma-knowledge-upload";
 import {useCallback} from "react";
 import {toast} from "sonner";
 import {useConversation,captureWorkspaceRestOperation,notifyUsageChanged} from "../host";
 import type {Attachment} from "../conversation-types";
 import type {KnowledgeBaseUploadBatch} from "./knowledge-base-upload-manager";
-import {assertChatAttachmentSizes} from "./attachment-files";
+import {assertKnowledgeBaseInitialAttachmentSizes} from "./attachment-files";
 import {buildKnowledgeBaseStarterAttachmentManifest,projectKnowledgeBaseStarterRequest,shouldRecoverKnowledgeBaseStartFailure,uploadErrorMessage,uploadWasCancelled,type DeepReportStartInput,type KnowledgeBaseStarterLifecycle,type KnowledgeBaseStarterStartOutcome} from "../components/KnowledgeStarter";
 export function useKnowledgeBaseStarter(starterBatch:KnowledgeBaseUploadBatch){
  const {flushConversation,activeConversation,addMessage,commitKnowledgeBaseObservation,registerKnowledgeBaseConversation,settleKnowledgeBaseStartFailure,updateStatus,updateTitle,wakeKnowledgeBaseConversation}=useConversation();
@@ -37,7 +38,9 @@ export function useKnowledgeBaseStarter(starterBatch:KnowledgeBaseUploadBatch){
       let preparedMessageAttachments: Attachment[] = [];
 
       try {
-        assertChatAttachmentSizes(files);
+        const directCos = await wmaKnowledgeUploadCapability(lifecycle.reservation, operation.signal).catch(() => false);
+        operation.assertActive();
+        assertKnowledgeBaseInitialAttachmentSizes(files, directCos);
         const itemIds = files.map(
           (_file, index) =>
             lifecycle.fileItemIds?.[index] || `${clientRequestId}:${index + 1}`,
@@ -152,7 +155,7 @@ export function useKnowledgeBaseStarter(starterBatch:KnowledgeBaseUploadBatch){
             description: "已完成的文件会保留，继续时只上传未完成资料。",
           });
           throw error;
-        } else if (errorMessage.includes("不能超过 100 MB")) {
+        } else if (errorMessage.includes("不能超过")) {
           lifecycle.onBatchPhase("failed");
           toast.error("文件过大", { description: errorMessage });
           throw error;

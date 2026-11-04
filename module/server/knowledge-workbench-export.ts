@@ -1,9 +1,11 @@
+import { matchesWmaKnowledgeCosSource, wmaKnowledgeCosSourceSchema } from "../contracts/wma-knowledge-upload.js";
 import type { BrandSchema } from "../schema/index.js";
 import type { CoreSqlTable } from "../contracts/sql-table.js";
 import type { ConversationTurn, LocalAsset } from "../contracts/core-records.js";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { SQL } from "drizzle-orm";
 export interface KnowledgeWorkbenchExportCore {
+  streamRemoteOriginal?: (source: unknown) => AsyncIterable<Buffer>;
   getDb: () => Promise<MySql2Database<any> | null>;
   loadKnowledgeWorkbenchSnapshot: typeof import("./knowledge-workbench-service.js").loadKnowledgeWorkbenchSnapshot;
   assertKnowledgeWorkbenchCoordinates: typeof import("./knowledge-workbench-service.js").assertKnowledgeWorkbenchCoordinates;
@@ -14,6 +16,7 @@ export interface KnowledgeWorkbenchExportCore {
   readValidatedActiveKnowledgeBaseWorkingSet: ReturnType<typeof import("./knowledge-base-materialized-assets.js").createKnowledgeBaseMaterializedAssets>["readValidatedActiveKnowledgeBaseWorkingSet"];
   streamKnowledgeBaseLocalSource: ReturnType<typeof import("./knowledge-base-local-source-store.js").createKnowledgeBaseLocalSourceStore>["streamKnowledgeBaseLocalSource"];
 }
+let streamRemoteOriginal: KnowledgeWorkbenchExportCore["streamRemoteOriginal"];
 let getDb: KnowledgeWorkbenchExportCore["getDb"];
 let loadKnowledgeWorkbenchSnapshot: KnowledgeWorkbenchExportCore["loadKnowledgeWorkbenchSnapshot"];
 let assertKnowledgeWorkbenchCoordinates: KnowledgeWorkbenchExportCore["assertKnowledgeWorkbenchCoordinates"];
@@ -23,7 +26,7 @@ let knowledgeWorkbenchRecord: KnowledgeWorkbenchExportCore["knowledgeWorkbenchRe
 let knowledgeWorkbenchStage: KnowledgeWorkbenchExportCore["knowledgeWorkbenchStage"];
 let readValidatedActiveKnowledgeBaseWorkingSet: KnowledgeWorkbenchExportCore["readValidatedActiveKnowledgeBaseWorkingSet"];
 let streamKnowledgeBaseLocalSource: KnowledgeWorkbenchExportCore["streamKnowledgeBaseLocalSource"];
-export function configureKnowledgeWorkbenchExport(core:KnowledgeWorkbenchExportCore) { ({getDb,loadKnowledgeWorkbenchSnapshot,assertKnowledgeWorkbenchCoordinates,readKnowledgeWorkbenchNodes,validateKnowledgeWorkbenchNodes,knowledgeWorkbenchRecord,knowledgeWorkbenchStage,readValidatedActiveKnowledgeBaseWorkingSet,streamKnowledgeBaseLocalSource}=core); }
+export function configureKnowledgeWorkbenchExport(core:KnowledgeWorkbenchExportCore) { ({streamRemoteOriginal,getDb,loadKnowledgeWorkbenchSnapshot,assertKnowledgeWorkbenchCoordinates,readKnowledgeWorkbenchNodes,validateKnowledgeWorkbenchNodes,knowledgeWorkbenchRecord,knowledgeWorkbenchStage,readValidatedActiveKnowledgeBaseWorkingSet,streamKnowledgeBaseLocalSource}=core); }
 import { Readable } from "node:stream";
 
 import {KnowledgeBaseMaterializedError} from "./knowledge-base-materialized-service.js";
@@ -146,8 +149,7 @@ export function knowledgeOriginalAttachments(
       (item, index) =>
         item.index === index &&
         typeof item.filename === "string" &&
-        typeof item.storageKey === "string" &&
-        /^knowledge-base\/permanent-originals\//u.test(item.storageKey) &&
+        ((typeof item.storageKey === "string" && /^knowledge-base\/permanent-originals\//u.test(item.storageKey)) || wmaKnowledgeCosSourceSchema.safeParse(item.cosSource).success) &&
         /^[a-f0-9]{64}$/u.test(item.contentSha256) &&
         Number.isSafeInteger(item.sizeBytes) &&
         item.sizeBytes > 0,
@@ -206,29 +208,23 @@ export async function exportKnowledgeBaseWorkspace(
       "启动原件尚未完整保存，请稍后重试",
     );
   const originalPrefix = `knowledge-base/permanent-originals/${userId}/${snapshot.build.id.toLowerCase()}/g${snapshot.build.generation}/`;
+  const originalContent = (original: Record<string, any>) => {
+    if (original.cosSource) {
+      if (!streamRemoteOriginal || !matchesWmaKnowledgeCosSource(original.cosSource, {
+        accountUserId: userId, buildId: snapshot.build.id, generation: snapshot.build.generation,
+        turnId: snapshot.start?.id, contentSha256: original.contentSha256, sizeBytes: original.sizeBytes, mimeType: original.mimeType,
+      })) throw new KnowledgeBaseMaterializedError("INVALID_BUILD_STATE", "启动原件归属校验失败，请重新读取");
+      return streamRemoteOriginal(original.cosSource);
+    }
+    if (original.storageKey !== `${originalPrefix}${original.contentSha256}.bin`)
+      throw new KnowledgeBaseMaterializedError("INVALID_BUILD_STATE", "启动原件归属校验失败，请重新读取");
+    return streamKnowledgeBaseLocalSource({ storageKey: original.storageKey, contentSha256: original.contentSha256, sizeBytes: original.sizeBytes });
+  };
   for (const original of originals.entries) {
-    if (
-      original.storageKey !== `${originalPrefix}${original.contentSha256}.bin`
-    )
-      throw new KnowledgeBaseMaterializedError(
-        "INVALID_BUILD_STATE",
-        "启动原件归属校验失败，请重新读取",
-      );
     try {
-      // Fail before sending headers when a promised original is missing. The
-      // second streaming pass remains bounded and detects concurrent corruption.
-      for await (const _chunk of streamKnowledgeBaseLocalSource({
-        storageKey: original.storageKey,
-        contentSha256: original.contentSha256,
-        sizeBytes: original.sizeBytes,
-      })) {
-        /* integrity preflight */
-      }
+      for await (const _chunk of originalContent(original)) { /* Fail before headers; bounded integrity preflight. */ }
     } catch {
-      throw new KnowledgeBaseMaterializedError(
-        "INVALID_BUILD_STATE",
-        "启动原件暂不可读取，工作稿未导出，请重试",
-      );
+      throw new KnowledgeBaseMaterializedError("INVALID_BUILD_STATE", "启动原件暂不可读取，工作稿未导出，请重试");
     }
   }
   const entries: ZipEntry[] = [];
@@ -304,12 +300,7 @@ export async function exportKnowledgeBaseWorkspace(
     const item = originals.entries[index];
     entries.push({
       name: originalFiles[index].path,
-      content: () =>
-        streamKnowledgeBaseLocalSource({
-          storageKey: item.storageKey,
-          contentSha256: item.contentSha256,
-          sizeBytes: item.sizeBytes,
-        }),
+      content: () => originalContent(item),
     });
   }
   const resources = new Set([

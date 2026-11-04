@@ -1,3 +1,4 @@
+import { isWmaKnowledgeDocument, WMA_KNOWLEDGE_MAX_FILE_BYTES, WMA_KNOWLEDGE_MAX_BATCH_BYTES } from "../contracts/wma-knowledge-upload.js";
 import { KnowledgeBaseTurnReservationError } from "@frontmind/module-brand/server/knowledge-base-turn-service";
 import {
   normalizeKnowledgeBaseAttachmentFilename,
@@ -48,6 +49,7 @@ export function normalizeKnowledgeBaseUserAttachments(
 
 export function normalizeKnowledgeBaseClientAttachmentManifest(
   value: unknown,
+  options: { wmaInitial?: boolean } = {},
 ): KnowledgeBaseClientAttachmentManifestItem[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 99) {
     throw new KnowledgeBaseTurnReservationError(
@@ -55,6 +57,8 @@ export function normalizeKnowledgeBaseClientAttachmentManifest(
       "Customer attachment manifest must contain between 1 and 99 files",
     );
   }
+  if (options.wmaInitial && value.reduce((sum, entry) => sum + Number(entry?.sizeBytes ?? entry?.size ?? 0), 0) > WMA_KNOWLEDGE_MAX_BATCH_BYTES)
+    throw new KnowledgeBaseTurnReservationError("INVALID_REQUEST", "本轮资料总量不能超过 3 GiB");
   return value.map((entry, index) => {
     const source =
       entry && typeof entry === "object"
@@ -84,7 +88,7 @@ export function normalizeKnowledgeBaseClientAttachmentManifest(
       !filename ||
       !Number.isSafeInteger(sizeBytes) ||
       sizeBytes < 0 ||
-      sizeBytes > MAX_KNOWLEDGE_BASE_CLIENT_ATTACHMENT_BYTES ||
+      sizeBytes > (options.wmaInitial && isWmaKnowledgeDocument(filename, mimeType) ? WMA_KNOWLEDGE_MAX_FILE_BYTES : MAX_KNOWLEDGE_BASE_CLIENT_ATTACHMENT_BYTES) ||
       !Number.isSafeInteger(lastModified) ||
       lastModified < 0 ||
       !mimeType ||

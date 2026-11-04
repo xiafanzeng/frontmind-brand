@@ -1,3 +1,4 @@
+import { matchesWmaKnowledgeCosSource } from "../contracts/wma-knowledge-upload.js";
 import {KnowledgeBaseUploadEvidenceError} from "@frontmind/module-brand/server/knowledge-base-upload-evidence-store";
 import type { ConversationTurn } from "@frontmind/module-brand/contracts/core-records";
 import type { KnowledgeAsset } from "@frontmind/module-brand/contracts/dashboard-types";
@@ -77,6 +78,30 @@ function knowledgeBaseCustomerUploadBoundAttachments(turn: KnowledgeBaseCustomer
   const metadata = record(turn.metadata) || {};
   const recovery = record(metadata.recovery);
   const local = record(metadata.applicationNodeEdit);
+  const native = record(metadata.nativeKnowledgeProvider);
+  if (native?.provider === "tencent_wma") {
+    // Native WMA never sends Manus attachment ids. Its locally accepted task
+    // freezes the same original browser manifest and scope-bound source proofs.
+    const manifest = Array.isArray(recovery?.attachmentManifest) ? recovery.attachmentManifest : [];
+    const attachments = Array.isArray(recovery?.attachments) ? recovery.attachments : [];
+    const proofs = Array.isArray(recovery?.attachmentSourceProofs) ? recovery.attachmentSourceProofs : [];
+    const expected = Number(metadata.userAttachmentCount);
+    if (native.schemaVersion !== 1 || typeof native.taskId !== "string" || !native.taskId || native.taskId !== turn.upstreamTaskId ||
+      typeof native.operationId !== "string" || !native.operationId || !/^[a-f0-9]{64}$/.test(String(native.sourceRequestHash ?? "")) ||
+      turn.operationType !== "start" || !["queued", "running", "completed"].includes(turn.status) || metadata.attachmentsFrozen !== true ||
+      !Number.isSafeInteger(expected) || expected < 0 || attachments.length !== expected || manifest.length !== expected || proofs.length !== expected ||
+      !Array.isArray(turn.attachmentFileIds) || turn.attachmentFileIds.length !== expected) return null;
+    for (let index = 0; index < expected; index++) {
+      const proof = record(proofs[index]), attachment = record(attachments[index]), source = record(manifest[index]);
+      if (!proof || proof.index !== index || proof.fileId !== attachment?.file_id || proof.filename !== attachment?.filename ||
+        proof.filename !== source?.filename || proof.fileId !== turn.attachmentFileIds[index] || proof.contentSha256 !== source?.sha256 ||
+        proof.sizeBytes !== source?.sizeBytes || proof.mimeType !== source?.mimeType ||
+        !(customerUploadSourceKeys({ userId: turn.userId!, buildId: turn.buildId ?? "", generation: turn.buildGeneration! }, String(proof.contentSha256 ?? "")).includes(String(proof.localStorageKey ?? "")) ||
+          matchesWmaKnowledgeCosSource(proof.cosSource, { accountUserId: turn.userId!, buildId: turn.buildId ?? "", generation: turn.buildGeneration!, taskId: native.taskId,
+            fileId: proof.fileId as string, sizeBytes: proof.sizeBytes as number, contentSha256: proof.contentSha256 as string, mimeType: proof.mimeType as string }))) return null;
+    }
+    return attachments;
+  }
   if (local || recovery?.nodeEditMode === "low_v1") {
     const manifest = Array.isArray(recovery?.attachmentManifest) ? recovery.attachmentManifest : [];
     const attachments = Array.isArray(recovery?.attachments) ? recovery.attachments : [];

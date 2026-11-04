@@ -1,3 +1,5 @@
+import { wmaKnowledgeUploadCapability, uploadWmaKnowledgeDocument } from "./wma-knowledge-upload";
+import { isWmaKnowledgeDocument } from "../../contracts/wma-knowledge-upload";
 import { activateWorkspaceUploadScope, captureWorkspaceRestOperation, forkWorkspaceRestOperation, type WorkspaceRestOperation } from "./workspace-rest-scope";
 import { getKnowledgeBaseUploadStatus, controlKnowledgeBaseUpload, reserveKnowledgeBaseStart, reserveKnowledgeBaseTurnWithAttachments, uploadKnowledgeBaseLocalAsset, stageKnowledgeBaseTurnAttachment, createKnowledgeBaseTurnTask, resumeKnowledgeBaseTurnAttachments, uploadStatusToAttachmentResume, type KnowledgeBaseAttachmentManifestItem, type KnowledgeBaseAttachmentTurnReservation, type TaskResponse, type Message, type FileUploadStageEvent, type KnowledgeBaseUploadStatus, type KnowledgeBaseTurnAttachmentCoordinate } from "./frontmind-api";
 import type { KnowledgeBaseObservationDto } from "./knowledge-progress";
@@ -115,6 +117,8 @@ export class KnowledgeBaseUploadBatch {
       // Capture its current value only when each request is actually sent.
       const coordinate = () => ({ ...base, turnId: reserved.reservation.turnId, uploadAttemptId: this.coordinate?.uploadAttemptId });
       reserved.reservation = { ...reserved.reservation, uploadAttemptId: coordinate().uploadAttemptId };
+      const directCos = await wmaKnowledgeUploadCapability(coordinate(), operation.signal).catch(() => false);
+      operation.assertActive();
       const currentStatus = this.read<KnowledgeBaseUploadStatus | null>("uploadStatus", null);
       if (currentStatus) reserved.knowledgeObservation = currentStatus.knowledgeObservation;
       command.onReservation?.(reserved);
@@ -145,6 +149,13 @@ export class KnowledgeBaseUploadBatch {
         command.onPhase?.("uploading");
         let transferAttempt = 1;
         const manifest = manifestByItem.get(item.itemId)!;
+        if (directCos && isWmaKnowledgeDocument(manifest.filename, manifest.mimeType)) {
+          return uploadWmaKnowledgeDocument(item.file, { coordinate: coordinate(), itemId: item.itemId, ordinal: item.ordinal,
+            filename: manifest.filename, mimeType: manifest.mimeType, signal: operation.signal,
+            onProgress: percent => this.noteTransfer(item.itemId, item.file.size * percent / 100, transferAttempt),
+            onStage: event => emitFile(item.itemId, item.file, { ...event, receipt: undefined }),
+          });
+        }
         return uploadKnowledgeBaseLocalAsset(item.file, percent => {
           if (operation.signal.aborted || this.staged.has(item.itemId)) return;
           const loadedBytes = item.file.size * percent / 100;
@@ -213,7 +224,7 @@ export class KnowledgeBaseUploadBatch {
         }
         if (!this.staged.has(item.itemId) && !receipt.alreadyStaged) {
           command.onPhase?.("staging");
-          startNextUpload();
+          if (!directCos) startNextUpload();
           const savedReceipt = receipt;
           await waitForKnowledgeBaseReply({ signal: operation.signal,
             request: signal => stageKnowledgeBaseTurnAttachment({ ...coordinate(), attachmentManifest: command.manifest, index: item.ordinal - 1, attachment: { file_id: savedReceipt.fileId, filename: savedReceipt.filename }, signal }),
@@ -227,6 +238,7 @@ export class KnowledgeBaseUploadBatch {
         }
         operation.assertActive();
         this.staged.add(item.itemId);
+        if (directCos) startNextUpload();
         this.write("lastBusinessProgressAt", Date.now());
         emitFile(item.itemId, item.file, { stage: "uploaded", loadedBytes: item.file.size, totalBytes: item.file.size, receipt });
         if (receipt.knowledgeObservation) command.onObservation?.(receipt.knowledgeObservation);

@@ -388,6 +388,8 @@ export async function activateInitialKnowledgeBaseWorkingSet(input: {
   initialBundleExpectation: KnowledgeBaseInitialBundleExpectation;
   normalization?: AcceptedKnowledgeBaseNormalization;
   receivedAt?: Date;
+  /** Optional host lifecycle guard; runs inside the activation transaction, before build locks. */
+  assertProjectActive?: (tx: any) => Promise<void>;
 }) {
   const db = await requireDb();
   const receivedAt = input.receivedAt ?? new Date();
@@ -462,6 +464,7 @@ export async function activateInitialKnowledgeBaseWorkingSet(input: {
       : null;
 
   return db.transaction(async (tx: any) => {
+    await input.assertProjectActive?.(tx);
     const build = (
       await tx
         .select()
@@ -687,6 +690,13 @@ export async function activateInitialKnowledgeBaseWorkingSet(input: {
           dispatchState: "completed",
           contentVersion: 1,
           workingSetId,
+          knowledgeWorkbench: {
+            ...(record(turnMetadata.knowledgeWorkbench) || {}),
+            schemaVersion: 1,
+            reviewReadiness: { schemaVersion: 1, buildId: build.id, generation: build.generation,
+              contentVersion: 1, workingSetId, packageSha256: validated.packageSha256,
+              nodeCount: rows.length, readyAt: receivedAt.toISOString(), source: "validated_working_set" },
+          },
           ...(normalization
             ? {
                 normalization: {

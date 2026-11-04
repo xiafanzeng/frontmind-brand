@@ -45,8 +45,22 @@ type ManusV2ApiError=InstanceType<KnowledgeBaseApiCore["ManusV2ApiError"]>;
 type ManusV2KnowledgeBaseOperationContract=any;
 import type {ManusV2MessageEvent} from './siteops/provider-ports.js';
 type KnowledgeBaseUpstreamCreateFailureClass=any;
+/** Native initial-build boundary. The host retains provider/COS credentials and
+ * task persistence; Brand retains its full bundle validator and activation. */
+export type NativeInitialKnowledgeDispatchInput = {
+  claim: KnowledgeBaseRecoveryClaim;
+  build: NonNullable<KnowledgeBaseBuildRecord>;
+  credential: KnowledgeCredential;
+  initialBundleExpectation: KnowledgeBaseInitialBundleExpectation;
+  validateInitialCandidate: typeof validateKnowledgeBaseWorkingSetArchive;
+  activateInitial: typeof activateInitialKnowledgeBaseWorkingSet;
+};
+export type NativeInitialKnowledgeDispatch = (input: NativeInitialKnowledgeDispatchInput) => Promise<{
+  taskId: string; rebound: boolean; reconciled: boolean;
+}>;
 export interface KnowledgeBaseApiCore {
  tables:BrandSchema;
+dispatchNativeInitialKnowledgeBase?: NativeInitialKnowledgeDispatch;
 getKnowledgeImageLibrary:Port;
 saveKnowledgeImageLibrary:Port;
 acceptKnowledgeBaseInitialDraft:Port;
@@ -187,7 +201,9 @@ let canonicalUpstreamTask:KnowledgeBaseApiCore['canonicalUpstreamTask'];
 let upstreamTaskId:KnowledgeBaseApiCore['upstreamTaskId'];
 let credentialForRequest:(request:Request)=>KnowledgeCredential|undefined;
 let withCredentialScope:<T>(action:()=>T)=>T;
+let dispatchNativeInitialKnowledgeBase: NativeInitialKnowledgeDispatch | undefined;
 export function configureKnowledgeBaseApiCore(core:KnowledgeBaseApiCore) {
+dispatchNativeInitialKnowledgeBase = core.dispatchNativeInitialKnowledgeBase;
 ({knowledgeBaseBuildNodes}=core.tables);
 ({getKnowledgeImageLibrary,saveKnowledgeImageLibrary,acceptKnowledgeBaseInitialDraft,exportKnowledgeBaseWorkspace,runWithStoredEnterpriseProjectScope,sendAiBillingError,assertAiAccountFunds,assertKnowledgeBaseDispatchFunds,continueKnowledgeBaseAfterRecharge,pauseKnowledgeBaseForBilling,enterpriseWorkspaceUserId,knowledgeBaseWorkingSetAssetUrl,enterpriseProjectUrl,dispatchKnowledgeNodeEdit,dispatchManualKnowledgeNodeEdit,getKnowledgeNodeDetails,saveKnowledgeNodeContent,searchKnowledgeNodes,KNOWLEDGE_NODE_IMAGE_MIMES,createCredentialAgentClient,getUpstreamBaseUrl,AuthServiceError,getDecryptedCredentialForKnowledgeBaseReservation,getDecryptedCredentialForKnowledgeBaseUploadReservation,recordUpstreamResource,getDashboardWorkspace,getKnowledgeSnapshotById,getLatestKnowledgeSnapshot,downloadArchiveBytes,publishKnowledgeBaseBuild,KnowledgeArchiveDownloadError,assertServiceCapability,ServiceEntitlementError,getDb,UpstreamTaskAttachmentContentProofError,UpstreamTaskAttachmentPendingError,assertKnowledgeBaseWritable,parseExactJson,buildManusV2CreateTaskBody,latestManusV2TaskState,ManusV2ApiError,manusV2KnowledgeBaseStructuredResultForOperation,normalizeManusV2Output,orderManusV2EventsByProviderRank,ensureKnowledgeBaseManusV2Attachments,isKnowledgeBaseManusV2GeneratedFileCreateRejected,readStoredPresalesFile,persistKnowledgeBaseBuildSource,persistKnowledgeBaseGeneratedSource,readKnowledgeBaseLocalSource,ManagedUploadIntentError,logKnowledgeBaseRuntimeFailure,getKnowledgeBaseSkillDescriptor,knowledgeBasePinnedV4SkillSelection,readKnowledgeBaseSkillArchiveAttachment,buildKnowledgeBasePrefillEvidenceArchive,buildKnowledgeBasePrompt,KnowledgeBaseEnterpriseIdentityError,KNOWLEDGE_BASE_PREFILL_ATTACHMENT_FILENAME,resolveKnowledgeBaseEnterpriseIdentity,buildKnowledgeBaseInstructionDelivery,KNOWLEDGE_BASE_INSTRUCTIONS_FILENAME,buildKnowledgeBaseTurnPrompt,UpstreamPromptBudgetError,UpstreamFileReadinessError,canonicalUpstreamTask,upstreamTaskId, credentialForRequest,withCredentialScope}=core);
 }
@@ -921,6 +937,7 @@ export function knowledgeBaseUpstreamModelForCredential(credential: {
 }) {
   if (
     (credential.provider === "zhipu" && credential.upstreamModel === "glm-5.3") ||
+    (credential.provider === "tencent_wma" && credential.upstreamModel === "deepseek-v4-pro") ||
     (credential.provider === "xty_codex" &&
       (credential.upstreamModel === "gpt-6.1-sol" || credential.upstreamModel === "gpt-5.6-sol" || credential.upstreamModel === "gpt-6-astra"))
   ) {
@@ -4353,6 +4370,7 @@ async function dispatchKnowledgeBaseRecoveryClaim(
   claim: KnowledgeBaseRecoveryClaim,
   credential: RecoveryCredential,
   dependencies: {
+    dispatchNativeInitial?: NativeInitialKnowledgeDispatch;
     loadBuild?: typeof loadKnowledgeBaseBuildRecordById;
     ensureDispatch?: typeof ensureKnowledgeBaseRecoveryDispatch;
     ensureManusV2Attachments?: typeof ensureKnowledgeBaseManusV2Attachments;
@@ -4440,6 +4458,16 @@ async function dispatchKnowledgeBaseRecoveryClaim(
     );
   }
   if (claim.recoveryMetadata?.nodeEditMode === "manual_v1") return dispatchManualKnowledgeNodeEdit(claim);
+  if (credential.provider === "tencent_wma") {
+    const dispatchNative = dependencies.dispatchNativeInitial ?? dispatchNativeInitialKnowledgeBase;
+    if (claim.turn.operationType !== "start" || existingBuild.contentVersion !== 0 || !dispatchNative) {
+      throw new KnowledgeBaseLocalPreparationError("KNOWLEDGE_BASE_NATIVE_PROVIDER_UNAVAILABLE", "当前 WMA 配置仅支持完整知识库初次构建");
+    }
+    knowledgeBaseUpstreamModelForCredential(credential);
+    return dispatchNative({ claim, build: existingBuild, credential,
+      initialBundleExpectation: knowledgeBaseInitialBundleExpectation({ build: existingBuild, operationId: claim.turn.operationKey, expectedUploadsRead: claim.turn.expectedUserAttachmentCount }),
+      validateInitialCandidate, activateInitial });
+  }
   if (claim.recoveryMetadata?.nodeEditMode === "low_v1") return dispatchKnowledgeNodeEdit(claim, credential);
   return dispatchMaterializedKnowledgeBaseClaim({
     claim,
@@ -5586,6 +5614,7 @@ router.post("/start/reserve", async (req: KnowledgeRequest, res) => {
         ? []
         : normalizeKnowledgeBaseClientAttachmentManifest(
             body.attachmentManifest,
+            { wmaInitial: credentialForRequest(req)?.provider === "tencent_wma" },
           );
     const workspace = await getDashboardWorkspace(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const companyName = resolveKnowledgeBaseEnterpriseIdentity({
@@ -5625,7 +5654,7 @@ router.post("/start/reserve", async (req: KnowledgeRequest, res) => {
       return;
     }
     const newBuildPolicy = knowledgeBaseNewBuildPolicyBinding();
-    if (!existingBuild && credentialForRequest(req)?.provider !== "xty_codex") await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
+    if (!existingBuild && !["xty_codex", "tencent_wma"].includes(credentialForRequest(req)!.provider)) await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const [prefillKnowledgeSnapshot, latestSkillDescriptor] = await Promise.all(
       [
         getLatestKnowledgeSnapshot(enterpriseWorkspaceUserId(req.frontmindUser.id)),
@@ -6717,8 +6746,12 @@ router.post("/turn/attachments/stage", async (req: KnowledgeRequest, res) => {
   let replayAfterMutableFailure: (() => Promise<boolean>) | null = null;
   try {
     await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
+    const uploadCredential = await getDecryptedCredentialForKnowledgeBaseUploadReservation({
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id), conversationId, turnId,
+      projectAssignmentId: req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
+    });
     const manifest = normalizeKnowledgeBaseClientAttachmentManifest(
-      body.attachmentManifest,
+      body.attachmentManifest, { wmaInitial: uploadCredential?.provider === "tencent_wma" },
     );
     const index = Number(body.index);
     const attachment = normalizeKnowledgeBaseUserAttachments(
@@ -6953,12 +6986,17 @@ router.post("/turn/dispatch", async (req: KnowledgeRequest, res) => {
   let replayAfterMutableFailure: (() => Promise<boolean>) | null = null;
   try {
     await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
+    const uploadCredential = await getDecryptedCredentialForKnowledgeBaseUploadReservation({
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id), conversationId, turnId,
+      projectAssignmentId: req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
+    });
     const attachmentManifest =
       Array.isArray(body.attachmentManifest) &&
       body.attachmentManifest.length === 0
         ? []
         : normalizeKnowledgeBaseClientAttachmentManifest(
             body.attachmentManifest,
+            { wmaInitial: uploadCredential?.provider === "tencent_wma" },
           );
     replayAfterMutableFailure = () =>
       respondIfKnowledgeBaseTurnReplay({
@@ -7017,12 +7055,7 @@ router.post("/turn/dispatch", async (req: KnowledgeRequest, res) => {
     }
     const projectAssignmentId =
       req.frontmindDeliveryProjectContext?.projectAssignmentId;
-    const startCredential = await getDecryptedCredentialForKnowledgeBaseUploadReservation({
-          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
-          conversationId,
-          turnId,
-          projectAssignmentId: projectAssignmentId ?? null,
-        });
+    const startCredential = uploadCredential;
     const taskCredential = startCredential;
     if (!taskCredential) {
       if (await replayAfterMutableFailure()) return;
@@ -7040,7 +7073,7 @@ router.post("/turn/dispatch", async (req: KnowledgeRequest, res) => {
       });
       return;
     }
-    if (taskCredential.provider !== "xty_codex") await assertKnowledgeBaseDispatchFunds(enterpriseWorkspaceUserId(req.frontmindUser.id),turnId);
+    if (!["xty_codex", "tencent_wma"].includes(taskCredential.provider)) await assertKnowledgeBaseDispatchFunds(enterpriseWorkspaceUserId(req.frontmindUser.id),turnId);
     acquiredClaim = await claimKnowledgeBaseDeferredTurnDispatch({
       uploadAttemptId: typeof req.body.uploadAttemptId === "string" ? req.body.uploadAttemptId : undefined,
       userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
@@ -7068,6 +7101,7 @@ router.post("/turn/dispatch", async (req: KnowledgeRequest, res) => {
       authoritativeAttachmentManifest =
         normalizeKnowledgeBaseClientAttachmentManifest(
           acquiredClaim.recoveryMetadata.attachmentManifest,
+          { wmaInitial: taskCredential.provider === "tencent_wma" && isStartReservation },
         );
     } catch {
       authoritativeAttachmentManifest = [];

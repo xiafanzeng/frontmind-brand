@@ -1,3 +1,4 @@
+import { matchesWmaKnowledgeCosSource, type WmaKnowledgeCosSource } from "../contracts/wma-knowledge-upload.js";
 import {knowledgeBaseBuildSkillPinSupported} from "./knowledge-base-tree-policy-rollout.js";
 import { uploadMetadataVersion, projectKnowledgeBaseUploadStatus } from "./knowledge-base-upload-state.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
@@ -292,6 +293,7 @@ type KnowledgeBaseTurnMetadata = Record<string, unknown> & {
     sizeBytes?: number;
     contentSha256?: string;
     localStorageKey?: string;
+    cosSource?: WmaKnowledgeCosSource;
   }>;
   recovery?: Record<string, unknown>;
   dispatchingAt?: string;
@@ -4664,6 +4666,8 @@ type StageKnowledgeBaseDeferredTurnAttachmentInput = {
    * row and deferred turn coordinate are locked by the staging transaction.
    */
   managedUploadBytes?: Buffer;
+  /** Host-only proof, checked against the durable verified COS ledger under the turn lock. */
+  cosSource?: WmaKnowledgeCosSource;
   /**
    * Retained-source copy already materialized before the staging transaction
    * (content-addressed and idempotent). Its storage key is injected into the
@@ -4769,6 +4773,9 @@ export type KnowledgeBaseLocalUploadCoordinateAssertion = {
 };
 
 export type KnowledgeBaseDeferredAttachmentReservationSnapshot = {
+  wmaInitial?: boolean;
+  verifiedCosSources?: WmaKnowledgeCosSource[];
+  verifiedCosItemIds?: Record<string, string>;
   buildId: string;
   turn: KnowledgeBaseTurnRecord;
   /**
@@ -4868,6 +4875,14 @@ export async function inspectKnowledgeBaseDeferredAttachmentReservation(
     return {
       buildId: build.id,
       turn: turnRecord(turn),
+      wmaInitial: turn.operationType === "start" && (recovery.frozenAgentCredential as any)?.provider === "tencent_wma",
+      verifiedCosItemIds: Object.fromEntries(Object.values((metadata as any).wmaDirectUploads ?? {}).flatMap((value: any) =>
+        value?.state === "verified" && typeof value.itemId === "string" ? [[value.itemId, value.fileId]] : [])),
+      verifiedCosSources: Object.values((metadata as any).wmaDirectUploads ?? {}).flatMap((value: any) => value?.state === "verified" &&
+        value.source?.credentialId === turn.apiCredentialId && matchesWmaKnowledgeCosSource(value.source, {
+          accountUserId: turn.userId, buildId: build.id, generation: build.generation, turnId: turn.id,
+          fileId: value.fileId, sizeBytes: value.input?.bytes, contentSha256: value.input?.sha256, mimeType: value.input?.mimeType,
+        }) ? [value.source as WmaKnowledgeCosSource] : []),
       clientAttachmentManifest: clientAttachmentManifest.map((entry) =>
         entry && typeof entry === "object" && !Array.isArray(entry)
           ? { ...(entry as Record<string, unknown>) }
@@ -4911,6 +4926,13 @@ export async function getKnowledgeBaseUploadStatus(input: KnowledgeBaseUploadSta
     const status=projectKnowledgeBaseUploadStatus(turn,build);
     for (const file of status.files) {
       if(file.status !== "missing") continue;
+      const remote = Object.values((turn.metadata as any)?.wmaDirectUploads ?? {}).find((value: any) =>
+        value?.state === "verified" && value.itemId === file.itemId && value.ordinal === file.ordinal && value.filename === file.filename &&
+        value.source?.credentialId === turn.apiCredentialId && matchesWmaKnowledgeCosSource(value.source, {
+          accountUserId: input.userId, buildId: build.id, generation: build.generation, turnId: turn.id, fileId: value.fileId,
+          sizeBytes: file.sizeBytes, contentSha256: value.input?.sha256, mimeType: file.mimeType,
+        })) as { fileId: string } | undefined;
+      if (remote) { file.status = "retained"; file.resourceId = remote.fileId; delete file.missingReason; continue; }
       const id=knowledgeBaseLocalAssetIdentity({userId:input.userId,projectAssignmentId:input.projectAssignmentId ?? null,coordinate:{conversationId:input.conversationId,turnId:coordinate.turnId,clientRequestId:input.clientRequestId,expectedResetRevision:input.expectedResetRevision,itemId:file.itemId,ordinal:file.ordinal},sizeBytes:file.sizeBytes}).localAssetId;
       const asset=(await tx.select().from(localAssets).where(and(eq(localAssets.id,id),enterpriseAccountOwnerPredicate(localAssets,input.userId))).limit(1))[0];
       if (asset && asset.sizeBytes === file.sizeBytes && asset.contentSha256 && (!asset.retainUntil || asset.retainUntil.getTime() > Date.now())) {
@@ -5291,7 +5313,7 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
   const frozenContentSha256 = String(manifestItem?.sha256 || "")
     .trim()
     .toLowerCase();
-  const expectedLocalAssetId = input.managedUploadProof
+  const expectedLocalAssetId = input.cosSource ? input.cosSource.fileId : input.managedUploadProof
     ? knowledgeBaseLocalAssetIdentity({
         userId: turn.userId,
         projectAssignmentId: input.projectAssignmentId ?? null,
@@ -5327,14 +5349,14 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
       (frozenContentSha256 && frozenContentSha256 !== managedContentSha256) ||
       attachment.file_id !== expectedLocalAssetId ||
       input.managedUploadProof.intentId !==
-        `local-asset:${expectedLocalAssetId}`)
+        `${input.cosSource ? "wma-cos" : "local-asset"}:${expectedLocalAssetId}`)
   ) {
     throw new KnowledgeBaseTurnReservationError(
       "CONFLICT",
       "The uploaded local asset does not match its frozen manifest coordinate",
     );
   }
-  const localAsset = input.managedUploadProof
+  const localAsset = input.managedUploadProof && !input.cosSource
     ? (
         await tx
           .select()
@@ -5366,7 +5388,17 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
           .for("update")
       )[0] as UpstreamResource | undefined)
     : undefined;
-  if (input.managedUploadProof) {
+  if (input.cosSource) {
+    const ledger = (metadata as any).wmaDirectUploads?.[input.cosSource.fileId];
+    if (!input.managedUploadProof || turn.operationType !== "start" ||
+      !matchesWmaKnowledgeCosSource(input.cosSource, { accountUserId: turn.userId, buildId: build.id, generation: build.generation,
+        turnId: turn.id, fileId: attachment.file_id, sizeBytes: input.managedUploadProof.sizeBytes,
+        contentSha256: managedContentSha256, mimeType: input.managedUploadProof.mimeType }) ||
+      turn.apiCredentialId !== input.cosSource.credentialId || ledger?.state !== "verified" || ledger.itemId !== input.managedUploadProof.itemId ||
+      ledger.ordinal !== input.index + 1 || ledger.filename !== attachment.filename ||
+      hashKnowledgeBaseTurnRequest(ledger.source) !== hashKnowledgeBaseTurnRequest(input.cosSource))
+      throw new KnowledgeBaseTurnReservationError("CONFLICT", "远端原件校验记录与当前构建不符");
+  } else if (input.managedUploadProof) {
     if (
       !localAsset ||
       localAsset.id !== expectedLocalAssetId ||
@@ -5444,7 +5476,9 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
       "Customer files must be staged once in manifest order",
     );
   }
-  if (managedUploadProof && input.preparedRetainedSource) {
+  if (input.cosSource) {
+    // Verified remote originals remain in COS; no disk copy or whole-file buffer.
+  } else if (managedUploadProof && input.preparedRetainedSource) {
     // The permanent copy was materialized before this transaction took the
     // turn/build locks; under the lock only the ledger update remains.
     managedUploadProof = {
@@ -5478,7 +5512,7 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
       };
     }
   }
-  if (managedUploadProof && !managedUploadProof.localStorageKey) {
+  if (managedUploadProof && !managedUploadProof.localStorageKey && !input.cosSource) {
     throw new KnowledgeBaseTurnReservationError(
       "CONFLICT",
       "The retained upload source is missing",
@@ -5510,11 +5544,8 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
             "managed upload content hash",
             64,
           ),
-          localStorageKey: normalizeRequiredId(
-            managedUploadProof.localStorageKey!,
-            "managed upload local storage key",
-            1_024,
-          ),
+          ...(input.cosSource ? { cosSource: input.cosSource } : { localStorageKey: normalizeRequiredId(
+            managedUploadProof.localStorageKey!, "managed upload local storage key", 1_024) }),
         }
       : {}),
   });
@@ -5545,6 +5576,7 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
       ...(item.localStorageKey
         ? { localStorageKey: item.localStorageKey }
         : {}),
+      ...(item.cosSource ? { cosSource: item.cosSource } : {}),
     })),
   });
   if (turn.operationType === "start") {
@@ -5556,7 +5588,7 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
         status: staged.length === metadata.userAttachmentCount ? "complete" : "pending",
         entries: staged.map((item) => ({ index: item.index, filename: item.filename,
           mimeType: item.mimeType, sizeBytes: item.sizeBytes,
-          contentSha256: item.contentSha256, storageKey: item.localStorageKey })),
+          contentSha256: item.contentSha256, ...(item.cosSource ? { cosSource: item.cosSource } : { storageKey: item.localStorageKey }) })),
       },
     };
   }
@@ -5599,7 +5631,7 @@ async function prepareKnowledgeBaseDeferredStageRetainedSource(
   input: StageKnowledgeBaseDeferredTurnAttachmentInput,
   db: any,
 ): Promise<{ storageKey: string } | undefined> {
-  if (!input.managedUploadProof) return undefined;
+  if (!input.managedUploadProof || input.cosSource) return undefined;
   // Test/custom executors may only implement the transaction surface; those
   // fall back to the legacy in-transaction retention path.
   if (typeof db?.select !== "function") return undefined;

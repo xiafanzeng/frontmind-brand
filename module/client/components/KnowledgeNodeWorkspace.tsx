@@ -697,7 +697,7 @@ function KnowledgeNodeWorkspaceSession({
     onNodeOpen?.();
   };
   const selectLeaf = (leafId: string) => {
-    if (sequentialReview || mutationPending || imageDirty) return;
+    if (mutationPending || imageDirty) return;
     if (drawerOpen && leafId === selectedLeafId) {
       onNodeOpen?.();
       return;
@@ -814,7 +814,8 @@ function KnowledgeNodeWorkspaceSession({
         next.delete(branch.id);
         return next;
       });
-    if (!sequentialReview) selectLeaf(currentId);
+    if (sequentialReview) { setSelectedLeafId(currentId); setDrawerOpen(false); }
+    else selectLeaf(currentId);
     requestAnimationFrame(() => {
       if (!lifetime.current.signal.aborted)
         nodeElements.current
@@ -1045,6 +1046,14 @@ function KnowledgeNodeWorkspaceSession({
         </label>
       )}
       <div className="knowledge-node-workspace__detail">
+        {sequentialReview && (
+          <div className="knowledge-node-workspace__notice">
+            <p>只读预览不会改变核验进度。</p>
+            <Button type="button" variant="outline" size="sm" onClick={locateCurrent} disabled={mutationPending}>
+              返回当前待核验节点
+            </Button>
+          </div>
+        )}
         <div className="knowledge-node-workspace__detail-heading">
           {!editing && (
             <Button
@@ -1370,7 +1379,7 @@ function KnowledgeNodeWorkspaceSession({
           disabled={!progress?.build.currentLeafId || mutationPending}
         >
           <Crosshair aria-hidden="true" />
-          定位当前节点
+          返回当前待核验节点
         </Button>
       </header>
       {readonlyPreview && !(inlineDetails && drawerOpen) && (
@@ -1537,7 +1546,7 @@ function KnowledgeNodeWorkspaceSession({
                                       }
                                       onClick={() => selectLeaf(leaf.id)}
                                       disabled={
-                                        mutationPending || sequentialReview
+                                        mutationPending
                                       }
                                       data-review-locked={
                                         sequentialReview || undefined
