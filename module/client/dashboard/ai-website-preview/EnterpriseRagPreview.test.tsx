@@ -1011,7 +1011,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByText(/此问题不在示例库/).textContent).toContain("未连接真实问答服务");
     expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
     expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
-    expect(evaluation().getByText("可能分数 0–100")).toBeTruthy();
+    expect(evaluation().queryByText(/可能分数/)).toBeNull();
     openJudgmentDetails();
     expect(screen.getByRole("button", { name: "人工评审与计算" }).hasAttribute("disabled")).toBe(true);
 
@@ -1040,7 +1040,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
     expect(evaluation().getByText("评审覆盖 80%")).toBeTruthy();
-    expect(evaluation().getByText("可能分数 80–100")).toBeTruthy();
+    expect(evaluation().queryByText(/可能分数/)).toBeNull();
     const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
     expect(saved).toHaveLength(1);
     expect(saved[0].dimensions.find((item: { id: string }) => item.id === "intent").evidenceIds).toEqual([]);
