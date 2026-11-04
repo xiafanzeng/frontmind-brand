@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { chromium } from "playwright";
 
@@ -12,6 +13,8 @@ import {
   normalizedDocumentViewText,
 } from "../server/siteops/native-react-build-runtime.js";
 import type { SiteDocumentViewPlanV1 } from "../server/siteops/site-document-view-plan.js";
+
+const browserInstalled = existsSync(chromium.executablePath());
 
 const plan: SiteDocumentViewPlanV1 = {
   schemaVersion: 1,
@@ -236,7 +239,7 @@ describe("document-view source evidence", () => {
     ).toBe("交付步骤需求确认上线验收");
   });
 
-  it(
+  it.runIf(browserInstalled)(
     "matches a real DOM node with block elements and an ordered list",
     async () => {
       const browser = await chromium.launch({ headless: true });
