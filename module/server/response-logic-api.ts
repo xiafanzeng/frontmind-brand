@@ -1228,10 +1228,32 @@ router.get("/tasks/:taskId/status", async (request, res) => {
     }
     logSecret = credential.credentialRef;
 
-    const client = createCredentialAgentClient(credential, {
-      baseUrl: getUpstreamBaseUrl(req),
-      accountUserId: workspaceUserId,
-    });
+    let client: ReturnType<typeof createCredentialAgentClient>;
+    try {
+      client = createCredentialAgentClient(credential, {
+        baseUrl: getUpstreamBaseUrl(req),
+        accountUserId: workspaceUserId,
+      });
+    } catch (credentialError) {
+      const message =
+        credentialError instanceof Error ? credentialError.message : "";
+      if (message.includes("XTY") || message.includes("XTY_SERVICE_IDENTITY")) {
+        await releaseResponseLogicTaskBinding({
+          userId: workspaceUserId,
+          questionId: parsedQuery.data.questionId,
+          taskId,
+        }).catch(() => undefined);
+        res.status(422).json({
+          error: {
+            code: "RESPONSE_LOGIC_TASK_CREDENTIAL_EXPIRED",
+            message:
+              "该任务绑定的凭据已失效（部署模式变更），已自动解除绑定。请重新生成应答逻辑。",
+          },
+        });
+        return;
+      }
+      throw credentialError;
+    }
     const events = await client.listAllMessages({ taskId, order: "desc" });
     const roundEvents = currentResponseLogicRoundEvents(events);
     const execution = responseLogicPublicExecution(taskId, events);

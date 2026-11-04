@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, useEffect } from "react";
 import ResponseLogicWorkspace from "./ResponseLogicWorkspace.js";
 import { createBrandResponseLogicHost } from "./response-logic-brand-adapter.js";
+import { WorkspaceErrorBoundary } from "./response-logic/workspace-error-boundary.js";
 import type { IntentQuestion as BrandIntentQuestion } from "../contracts/intent-workbench.js";
 import { captureWorkspaceRestOperation } from "./host.js";
 
@@ -64,13 +65,15 @@ export default function BrandResponseLogicEntry({ question, onBack, visual, toas
   }, [question]);
 
   return (
-    <ResponseLogicWorkspace
-      preview={false}
-      questionGroups={groups as never}
-      initialQuestionId={question.id}
-      onPublished={() => {
-        toast.success("应答逻辑已更新");
-      }}
-    />
+    <WorkspaceErrorBoundary contextLabel={question.question}>
+      <ResponseLogicWorkspace
+        preview={false}
+        questionGroups={groups as never}
+        initialQuestionId={question.id}
+        onPublished={() => {
+          toast.success("应答逻辑已更新");
+        }}
+      />
+    </WorkspaceErrorBoundary>
   );
 }
