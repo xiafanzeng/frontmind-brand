@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type AgentProvider = "manus" | "zhipu" | "xty_codex";
+export type AgentProvider = "manus" | "zhipu" | "xty_codex" | "tencent_wma";
 export type AgentUpstreamEffort = "low" | "medium" | "high" | "max";
 
 export const managedAgentProfileSchema = z.enum([
@@ -27,13 +27,14 @@ export function managedAgentProfileModel(
 export function managedAgentProfileModel(
   profile: ManagedAgentProfile,
   provider: AgentProvider,
-): "manus-1.6" | "manus-1.6-max" | "glm-5.3" | "gpt-5.6-sol";
+): "manus-1.6" | "manus-1.6-max" | "glm-5.3" | "gpt-5.6-sol" | "deepseek-v4-pro";
 export function managedAgentProfileModel(
   profile: ManagedAgentProfile,
   provider: AgentProvider = "manus",
 ) {
   if (provider === "zhipu") return "glm-5.3";
   if (provider === "xty_codex") return "gpt-5.6-sol";
+  if (provider === "tencent_wma") return "deepseek-v4-pro";
   return profile === "frontmind-base" ? "manus-1.6" : "manus-1.6-max";
 }
 
@@ -75,6 +76,7 @@ export function generalAgentModelProfileModel(
 ) {
   if (provider === "zhipu") return "glm-5.3";
   if (provider === "xty_codex") return "gpt-5.6-sol";
+  if (provider === "tencent_wma") throw new Error("WMA_KNOWLEDGE_ONLY");
   if (profile === "frontmind-lite") return "manus-1.6-lite" as const;
   if (profile === "frontmind-base") return "manus-1.6" as const;
   return "manus-1.6-max" as const;

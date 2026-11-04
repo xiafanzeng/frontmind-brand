@@ -16,6 +16,7 @@ type ActivityItem = ExecutionDisplayEntry;
 
 function isLive(item: ActivityItem) {
   if (item.animate === false || item.isCurrent === false) return false;
+  if (item.kind === "status" && item.publicSummaryOrigin === "provider_native" && item.thinkingComplete) return false;
   if (item.kind === "tool")
     return item.status === "running" && item.finishedAt === undefined;
   return ["thinking", "running", "rescheduling", "retrying"].includes(
@@ -113,7 +114,7 @@ function ThinkingBlock({
       </span>
     </>
   );
-  if (display === "inline") {
+  if (display === "inline" || item.publicSummaryOrigin === "provider_native") {
     return (
       <div className="general-execution__thinking" aria-label="公开过程摘要" aria-live={live ? "polite" : undefined}>
         {item.publicSummaryTitle && <strong className="general-execution__thinking-title">{item.publicSummaryTitle}</strong>}
@@ -202,9 +203,25 @@ function TurnActivity({
     calls[0]?.id ??
     start?.id ??
     (active && !thinkingText(active) ? active.id : undefined);
+  const nativeMessages = items.filter(item => item.kind === "status" && item.publicSummaryOrigin === "provider_native" && thinkingText(item));
+  const earlierNative = nativeMessages.slice(0, -3);
+  const earlierIds = new Set(earlierNative.map(item => item.id));
+  const nativeCalls = calls.filter(item => item.id.includes(":wma:"));
+  const latestNativeAt = Math.max(0, ...nativeMessages.map(item => item.timestamp), ...nativeCalls.map(item => item.timestamp));
+  const timeLabel = (timestamp: number) => new Date(timestamp).toLocaleTimeString("zh-CN", { hour12: false });
   return (
     <>
+      {nativeMessages.length > 0 && <div className="general-execution__native-heading">
+        <strong>WMA 执行进展</strong>
+        {latestNativeAt > 0 && <span>最近记录 {timeLabel(latestNativeAt)}</span>}
+      </div>}
       {items.map((item) => {
+        if (earlierIds.has(item.id)) return item.id === earlierNative[0]?.id ? (
+          <details key="earlier-native" className="general-execution__native-history">
+            <summary>查看较早进展（{earlierNative.length} 条）</summary>
+            {earlierNative.map(entry => <ThinkingBlock key={entry.id} item={entry} display="inline" />)}
+          </details>
+        ) : null;
         const summary =
           !item.phase &&
           !(item.kind === "status" && item.publicSummary) &&
@@ -281,6 +298,12 @@ function TurnActivity({
           </div>
         ) : null;
       })}
+      {nativeCalls.length > 0 && <details className="general-execution__native-history">
+        <summary>公开操作记录（{nativeCalls.length} 项）</summary>
+        <ol className="general-execution__native-operations">
+          {nativeCalls.map(item => <li key={item.id}><time dateTime={new Date(item.timestamp).toISOString()}>{timeLabel(item.timestamp)}</time><span>{safeToolLabel(item)}</span></li>)}
+        </ol>
+      </details>}
     </>
   );
 }
