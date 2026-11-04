@@ -409,12 +409,19 @@
 
 .rag-eval-root .rag-evaluation-overview {
   --rag-evaluation-card-width: 136px;
-  align-items: stretch;
+  align-items: start;
   display: grid;
   gap: 16px;
   grid-template-columns: var(--rag-evaluation-card-width) minmax(0, 1fr);
-  min-height: 136px;
+  min-height: var(--rag-evaluation-card-width);
   min-width: 0;
+}
+
+.rag-eval-root .rag-evaluation-overview > .rag-verdict {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: var(--rag-evaluation-card-width);
+  padding: 16px;
 }
 
 .rag-eval-root .rag-evaluation-status-title {
@@ -437,7 +444,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 100%;
+  min-height: 0;
   min-width: 0;
   text-align: left;
 }
@@ -451,7 +458,7 @@
   display: grid;
   gap: 8px;
   grid-template-columns: 20px minmax(0, 1fr);
-  margin-top: auto;
+  margin-top: 0;
 }
 
 .rag-eval-root .rag-evaluation-summary-copy {
@@ -467,6 +474,18 @@
   padding-inline-start: calc(20px + 8px);
   color: var(--sfp-muted);
   font-size: var(--sfp-type-caption);
+}
+
+.rag-eval-root .rag-evaluation-supporting-meta {
+  align-self: end;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0 16px 16px;
+  min-width: 0;
+  z-index: 1;
 }
 
 .rag-eval-root .rag-evaluation-status-orb {
@@ -509,9 +528,12 @@
 .rag-eval-root .rag-evaluation-gauge-card {
   width: var(--rag-evaluation-card-width);
   height: auto;
-  align-self: stretch;
+  aspect-ratio: 1 / 1;
+  align-self: start;
   box-sizing: border-box;
   display: grid;
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
   padding: 0;
   place-items: center;
@@ -568,6 +590,39 @@
 }
 
 @container sfp (max-width:400px) {
-  .rag-eval-root .rag-evaluation-overview { --rag-evaluation-card-width: 120px; gap: 8px; }
-  .rag-eval-root .rag-evaluation-overview .rag-verdict { padding: 16px 8px 8px; }
+  .rag-eval-root .rag-evaluation-overview {
+    --rag-evaluation-card-width: 120px;
+    gap: 8px;
+  }
+  .rag-eval-root .rag-evaluation-overview > .rag-verdict {
+    height: var(--rag-evaluation-card-width);
+    min-height: var(--rag-evaluation-card-width);
+    padding: 8px;
+  }
+  .rag-eval-root .rag-evaluation-summary-flow {
+    height: 100%;
+    gap: 4px;
+    justify-content: center;
+  }
+  .rag-eval-root .rag-evaluation-summary-copy {
+    padding-inline-start: 0;
+    font-size: 12px;
+    line-height: 16px;
+  }
+  .rag-eval-root .rag-evaluation-supporting-meta {
+    align-self: start;
+    gap: 4px;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin: 0;
+  }
+  .rag-eval-root .rag-evaluation-secondary-meta {
+    justify-content: center;
+    padding-inline-start: 0;
+  }
+  .rag-eval-root .rag-evaluation-metrics {
+    display: flex;
+    justify-content: center;
+  }
+  .rag-eval-root .rag-evaluation-metric-copy { justify-content: center; }
 }
