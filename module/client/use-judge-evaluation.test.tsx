@@ -17,12 +17,13 @@ function setup(errorCode = "RESPONSE_LOGIC_JUDGE_TASK_FAILED") {
     .mockResolvedValueOnce(response(422, {error: {code: errorCode, message: "评估未完成"}}))
     .mockResolvedValueOnce(started("retry", 1));
   configureIntentWorkspaceHost({captureRestOperation: (signal?: AbortSignal | null) => ({
-    signal: signal ?? new AbortController().signal, assertActive() {}, fetch,
+    signal: signal ?? new AbortController().signal, assertActive() {},
+    fetch: (url: string, init?: RequestInit) => url.includes('/recovery?') ? Promise.resolve(response(200, {status: 'none'})) : fetch(url, init),
   })} as unknown as Parameters<typeof configureIntentWorkspaceHost>[0]);
   const hook = renderHook(() => useJudgeEvaluation({questionId: "q", recordRevision: 3, sourceFingerprint: "fingerprint"}));
   return {...hook, fetch};
 }
-afterEach(() => {cleanup(); vi.useRealTimers();});
+afterEach(() => {cleanup(); sessionStorage.clear(); vi.useRealTimers();});
 
 describe("Judge explicit retry dispatch", () => {
   it("sends one retry intent only after a terminal failure and an explicit click", async () => {
@@ -45,7 +46,8 @@ describe("Judge explicit retry dispatch", () => {
     await act(async () => {await result.current.start();});
     await act(async () => {await vi.advanceTimersByTimeAsync(TASK_POLL_INTERVAL_MS);});
     await act(async () => {await result.current.start();});
-    expect(JSON.parse(String(fetch.mock.calls[2][1].body))).toEqual({questionId: "q", expectedRevision: 3});
+    expect(fetch.mock.calls[2][1].method).toBe("GET");
+    expect(fetch.mock.calls.filter(call=>call[1].method==="POST")).toHaveLength(1);
   });
 
   it.each(["JUDGE_TRANSPORT_FAILED", "JUDGE_TIMEOUT", "JUDGE_RESPONSE_INVALID"])("does not request a paid retry after %s", async errorCode => {
@@ -53,6 +55,7 @@ describe("Judge explicit retry dispatch", () => {
     await act(async () => {await result.current.start();});
     await act(async () => {await vi.advanceTimersByTimeAsync(TASK_POLL_INTERVAL_MS);});
     await act(async () => {await result.current.start({retry: true});});
-    expect(JSON.parse(String(fetch.mock.calls[2][1].body))).toEqual({questionId: "q", expectedRevision: 3});
+    expect(fetch.mock.calls[2][1].method).toBe("GET");
+    expect(fetch.mock.calls.filter(call=>call[1].method==="POST")).toHaveLength(1);
   });
 });

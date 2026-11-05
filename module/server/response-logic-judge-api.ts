@@ -1,3 +1,4 @@
+import {responseLogicPublicExecution} from "./response-logic-public-execution.js";
 import { createHash } from "node:crypto";
 import { Router, type Response } from "express";
 import { z } from "zod";
@@ -88,6 +89,7 @@ const judgeStartInputSchema = z
 
 const judgeStatusQuerySchema = z
   .object({
+    progress: z.literal("1").optional(),
     questionId: z.string().trim().min(1).max(191),
     expectedRevision: z.coerce.number().int().positive(),
   })
@@ -620,6 +622,46 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
     judgeError(res, 500, "RESPONSE_LOGIC_JUDGE_FAILED", "Judge 请求失败");
   }
 
+  // Recovery never calls start, uploads inputs, or repairs ownership bindings.
+  router.get("/recovery", async (request, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const parsed = judgeStatusQuerySchema.omit({progress: true}).safeParse(request.query);
+      if (!parsed.success) { judgeError(res, 400, "INVALID_RESPONSE_LOGIC_JUDGE_INPUT", "Judge 恢复查询格式不完整"); return; }
+      const ctx = await resolveContext(request as unknown as CoreRequest, res, parsed.data.questionId, parsed.data.expectedRevision);
+      if (!ctx) return;
+      const credential = core.credentialForRequest(request);
+      if (!credential) { judgeError(res, 428, "CUSTOMER_KEY_REQUIRED", "当前客户账号尚未配置 API Key"); return; }
+      if (!core.getFrontMindCredentials(request).credentialRef) { judgeError(res, 401, "UNAUTHORIZED", "尚未配置 API Key"); return; }
+      const snapshot = await core.getLatestKnowledgeSnapshot(ctx.workspaceUserId);
+      const skill = await buildJudgeSkillArchive();
+      const contextKey = judgeIdempotencyKey({
+        userId: ctx.workspaceUserId, questionId: parsed.data.questionId,
+        recordRevision: ctx.record.revision, sourceFingerprint: ctx.fingerprint,
+        skillContentHash: skill.contentHash,
+        knowledgeFingerprint: snapshot ? createHash("sha256").update(snapshot.documents.map(doc => doc.content).join("\n"), "utf8").digest("hex") : "none",
+        questionHash: brandQuestionHash(ctx.record.question, ctx.record.intent ?? ""),
+      });
+      let found: {taskId: string; attempt: number} | null = null;
+      for (let attempt = 0; attempt <= 100; attempt++) {
+        const key = judgeAttemptKey(contextKey, attempt);
+        const client = core.createCredentialAgentClient(credential, {
+          baseUrl: core.getUpstreamBaseUrl(request), accountUserId: ctx.workspaceUserId,
+          intentId: key, rateLimitScope: `managed-user:${ctx.workspaceUserId}`,
+        });
+        if (!client.findCreatedTaskReadOnly) { res.json({status: "unavailable", reason: "unsupported"}); return; }
+        const task = (await client.findCreatedTaskReadOnly({title: `FrontMind judge ${key.slice(0, 24)}`, operationToken: key})).unique;
+        if (!task) break;
+        if (!await core.getCredentialForUpstreamResource(ctx.workspaceUserId, "task", task.id)) {
+          res.json({status: "unavailable", reason: "binding_pending"}); return;
+        }
+        found = {taskId: task.id, attempt};
+        if (task.status !== "error") break;
+      }
+      res.json(found ? {status: "found", ...found, recordRevision: ctx.record.revision, sourceFingerprint: ctx.fingerprint} : {status: "none"});
+    } catch (error) { judgeFailure(res, error); }
+  });
+
   /* -- POST / (start) -- */
 
   router.post("/", async (request, res) => {
@@ -883,12 +925,14 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
         accountUserId: workspaceUserId,
       });
       const events = await client.listAllMessages({ taskId, order: "desc" });
+      const progress = parsed.data.progress === "1" ? {execution: responseLogicPublicExecution(taskId, events, core.orderManusV2EventsByProviderRank)} : {};
       const status = core.latestManusV2TaskState(events);
 
       if (status === null || status === "running" || status === "waiting") {
         res.setHeader("Cache-Control", "no-store");
         res.status(202).json({
           status: "running",
+          ...progress,
           taskId,
           expectedRevision: parsed.data.expectedRevision,
           model: credential.agentProfile,
@@ -921,8 +965,8 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
       }
 
       res.setHeader("Cache-Control", "no-store");
-      res.json(
-        judgeEvaluationEnvelopeSchema.parse({
+      res.json({
+        ...judgeEvaluationEnvelopeSchema.parse({
           status: "completed",
           judgeVersion: "1",
           recordRevision: record.revision,
@@ -930,7 +974,8 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
           evaluatedAt: new Date().toISOString(),
           judge: parsedResult.judge,
         }),
-      );
+        ...progress,
+      });
     } catch (error) {
       judgeFailure(res, error);
     }

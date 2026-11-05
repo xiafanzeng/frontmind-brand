@@ -9,7 +9,8 @@
  * current view.
  */
 
-export type TaskPhase = "idle" | "starting" | "running" | "completed" | "failed";
+import type {GeneralExecutionDto} from "@frontmind/module-contracts/execution";
+export type TaskPhase = "idle" | "starting" | "running" | "uncertain" | "completed" | "failed";
 
 /**
  * Shared polling budget for async LLM tasks (judge + optimizer).
@@ -17,10 +18,9 @@ export type TaskPhase = "idle" | "starting" | "running" | "completed" | "failed"
  * Real frontmind-pro evaluations observed in production run 7-12 minutes,
  * so the previous 100-attempt (~5 min) cap reported spurious timeouts while
  * the upstream task was still executing. 300 attempts × 3s ≈ 15 minutes
- * covers the observed worst case with headroom. On timeout the task MAY
- * still be running in the background: the idempotency key makes a later
- * manual restart reuse the same upstream task, so the wording tells users
- * to check back later instead of implying the task failed.
+ * covers the observed worst case with headroom. On timeout the task may
+ * still run in the background: pause with an uncertain state and resume
+ * authenticated queries of the same task instead of creating another task.
  */
 export const TASK_POLL_INTERVAL_MS = 3000;
 export const MAX_TASK_POLL_ATTEMPTS = 300; // ~15 minutes
@@ -32,6 +32,7 @@ export type TaskLifecycleState<T> = {
   errorCode: string;
   taskId: string | null;
   activeContext: string;
+  execution?: GeneralExecutionDto;
 };
 
 export type TaskLifecycleEvent<T> =
@@ -42,6 +43,9 @@ export type TaskLifecycleEvent<T> =
   | { type: "poll-completed"; result: T; contextKey: string }
   | { type: "poll-failed"; message: string; code: string; contextKey: string }
   | { type: "timeout"; contextKey: string }
+  | { type: "restore"; taskId: string; contextKey: string }
+  | { type: "progress"; execution?: GeneralExecutionDto; contextKey: string }
+  | { type: "uncertain"; message: string; code: string; contextKey: string }
   | { type: "reset" };
 
 export function initialTaskLifecycleState<T>(): TaskLifecycleState<T> {
@@ -50,7 +54,7 @@ export function initialTaskLifecycleState<T>(): TaskLifecycleState<T> {
 
 /** True while a start request must not be issued again (task already in flight). */
 export function taskStartBlocked(phase: TaskPhase): boolean {
-  return phase === "starting" || phase === "running";
+  return phase === "starting" || phase === "running" || phase === "uncertain";
 }
 
 export function createTaskLifecycleReducer<T>(options?: { timeoutCode?: string; timeoutMessage?: string }) {
@@ -60,6 +64,15 @@ export function createTaskLifecycleReducer<T>(options?: { timeoutCode?: string; 
     event: TaskLifecycleEvent<T>,
   ): TaskLifecycleState<T> {
     switch (event.type) {
+      case "restore":
+        if (event.contextKey !== state.activeContext) return state;
+        return {...state, phase:"running", taskId:event.taskId, error:"", errorCode:""};
+      case "progress":
+        if (event.contextKey !== state.activeContext || state.phase === "completed" || state.phase === "failed") return state;
+        return {...state, phase:"running", execution:event.execution ?? state.execution, error:"", errorCode:""};
+      case "uncertain":
+        if (event.contextKey !== state.activeContext) return state;
+        return {...state, phase:"uncertain", error:event.message, errorCode:event.code};
       case "context-change":
         if (event.contextKey === state.activeContext) return state;
         return { ...initial, activeContext: event.contextKey };
@@ -80,7 +93,7 @@ export function createTaskLifecycleReducer<T>(options?: { timeoutCode?: string; 
         return { ...state, phase: "failed", error: event.message, errorCode: event.code };
       case "timeout":
         if (event.contextKey !== state.activeContext) return state;
-        return { ...state, phase: "failed", error: options?.timeoutMessage ?? "任务轮询超时（轮询次数达到上限）", errorCode: options?.timeoutCode ?? "TASK_TIMEOUT" };
+        return { ...state, phase: "uncertain", error: options?.timeoutMessage ?? "暂时无法确认任务状态，请恢复查询", errorCode: options?.timeoutCode ?? "TASK_TIMEOUT" };
       case "reset":
         return { ...initial, activeContext: state.activeContext };
     }

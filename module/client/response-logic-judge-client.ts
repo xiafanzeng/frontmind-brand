@@ -1,3 +1,5 @@
+import {readResponseLogicExecution,responseLogicRecoverySchema,type ResponseLogicRecovery} from "../contracts/response-logic-progress.js";
+import type {GeneralExecutionDto} from "@frontmind/module-contracts/execution";
 import { captureWorkspaceRestOperation } from "./response-logic-runtime-host.js";
 import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
 import {
@@ -42,6 +44,19 @@ async function readJson(response: Response): Promise<unknown> {
   try { return await response.json(); } catch { return null; }
 }
 
+export async function recoverJudgeEvaluation(input: {questionId: string; expectedRevision: number; sourceFingerprint: string; signal?: AbortSignal}): Promise<ResponseLogicRecovery> {
+  const query = new URLSearchParams({questionId: input.questionId, expectedRevision: String(input.expectedRevision)});
+  const response = await judgeFetch(`${RESPONSE_LOGIC_API_BASE}/evaluation/judge/recovery?${query}`, {method: "GET", headers: {Accept: "application/json"}}, input.signal);
+  const payload = await readJson(response);
+  // An old server has no recovery route; an explicit record error is not that case.
+  if (response.status === 404 && !(payload && typeof payload === 'object' && 'error' in payload)) return {status: 'unavailable', reason: 'unsupported'};
+  if (!response.ok) throw judgeHttpError(response.status, payload);
+  const parsed = responseLogicRecoverySchema.safeParse(payload);
+  if (!parsed.success) throw new JudgeRequestError('JUDGE_RESPONSE_INVALID', 'Judge 恢复响应格式无效', response.status);
+  if (parsed.data.status === 'found' && (parsed.data.recordRevision !== input.expectedRevision || parsed.data.sourceFingerprint !== input.sourceFingerprint)) return {status: 'none'};
+  return parsed.data;
+}
+
 /** POST {RESPONSE_LOGIC_API_BASE}/evaluation/judge — start an async Judge task. */
 export async function startJudgeEvaluation(input: {
   questionId: string;
@@ -68,7 +83,7 @@ export async function startJudgeEvaluation(input: {
   }, input.signal);
   const payload = await readJson(response);
   if (!response.ok) throw judgeHttpError(response.status, payload);
-  const body = payload as Record<string, unknown>;
+  const body = (payload ?? {}) as Record<string, unknown>;
   if (typeof body.taskId !== "string" || typeof body.recordRevision !== "number") {
     throw new JudgeRequestError("JUDGE_RESPONSE_INVALID", "Judge 启动响应格式无效", response.status);
   }
@@ -88,28 +103,35 @@ export async function pollJudgeTask(input: {
   taskId: string;
   signal?: AbortSignal;
 }): Promise<
-  | { status: "running" }
-  | { status: "completed"; result: JudgeEvaluationEnvelope }
+  | { status: "running"; execution?: GeneralExecutionDto }
+  | { status: "completed"; result: JudgeEvaluationEnvelope; execution?: GeneralExecutionDto }
 > {
   const query = new URLSearchParams({
     questionId: input.questionId,
+    progress: "1",
     expectedRevision: String(input.expectedRevision),
   });
-  const response = await judgeFetch(
+  let response = await judgeFetch(
     `${RESPONSE_LOGIC_API_BASE}/evaluation/judge/tasks/${encodeURIComponent(input.taskId)}/status?${query}`,
     { method: "GET", headers: { Accept: "application/json" } },
     input.signal,
   );
+  if (response.status === 400) {
+    query.delete("progress");
+    response = await judgeFetch(`${RESPONSE_LOGIC_API_BASE}/evaluation/judge/tasks/${encodeURIComponent(input.taskId)}/status?${query}`, {method:"GET",headers:{Accept:"application/json"}},input.signal);
+  }
   const payload = await readJson(response);
   if (!response.ok) throw judgeHttpError(response.status, payload);
-  const body = payload as Record<string, unknown>;
-  if (body.status === "running") return { status: "running" };
+  const body = (payload ?? {}) as Record<string, unknown>;
+  const execution = readResponseLogicExecution(body.execution, input.taskId);
+  const {execution: _execution, ...businessResult} = body;
+  if (body.status === "running") return { status: "running", ...(execution ? {execution} : {}) };
   if (body.status === "completed") {
-    const parsed = judgeEvaluationEnvelopeSchema.safeParse(body);
+    const parsed = judgeEvaluationEnvelopeSchema.safeParse(businessResult);
     if (!parsed.success) {
       throw new JudgeRequestError("JUDGE_RESPONSE_INVALID", "Judge 结果未通过传输协议校验", response.status);
     }
-    return { status: "completed", result: parsed.data };
+    return { status: "completed", result: parsed.data, ...(execution ? {execution} : {}) };
   }
   throw new JudgeRequestError("JUDGE_RESPONSE_INVALID", `Judge 任务返回未知状态: ${String(body.status)}`, response.status);
 }

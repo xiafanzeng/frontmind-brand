@@ -1,4 +1,6 @@
-import {useEffect,useMemo,useState} from "react";
+import {TaskStageCard} from "./task-stage-card.js";
+import "./optimization-result.css";
+import {useEffect,useMemo,useState,useRef} from "react";
 import type {LogicField,LogicSections} from "../../contracts/response-logic-evaluation.js";
 import {LOGIC_FIELDS} from "../../contracts/response-logic-evaluation.js";
 import type {OptimizationOutput,OptimizationChange} from "../../contracts/response-logic-optimization.js";
@@ -33,19 +35,22 @@ const EVIDENCE_SOURCE_TEXT:Record<string,string>={draft:"草稿原文",knowledge
  * record directly, and no heuristic/demo content is ever shown as an LLM
  * candidate.
  */
-export function ResponseLogicOptimizationWorkflow({question,intent,logic,judgeTaskId,optimization,onAdopt,onBack}:{question:string;intent:string;logic:LogicSections;judgeTaskId:string;optimization:{state:OptimizationState;start:()=>Promise<void>;reset:()=>void};onAdopt:(patch:Partial<LogicSections>)=>void;onBack:()=>void}){
+export function ResponseLogicOptimizationWorkflow({question,intent,logic,judgeTaskId,optimization,onAdopt,onBack}:{question:string;intent:string;logic:LogicSections;judgeTaskId:string;optimization:{state:OptimizationState;start:()=>Promise<void>;reset:()=>void;resume?:()=>void};onAdopt:(patch:Partial<LogicSections>)=>void;onBack:()=>void}){
   const result=optimization.state.result;
   const [edited,setEdited]=useState<LogicSections|null>(null);
   const [accepted,setAccepted]=useState<Record<LogicField,boolean>>(allSelected());
+  const [activeField,setActiveField]=useState<LogicField>("concern");
+  const [adopted,setAdopted]=useState(false);
+  const adoptingRef=useRef(false);
 
   // Bind the editable copy to the CURRENT candidate only; a new candidate
   // (fresh generation after reset) starts from the model's proposal again.
   useEffect(()=>{
-    if(result)setEdited(result.optimizedDraft);
+    if(result){setEdited(result.optimizedDraft);setAccepted(allSelected());setAdopted(false);adoptingRef.current=false;}
   },[result]);
   const effectiveEdited=edited??(result?result.optimizedDraft:logic);
   const hasCandidate=optimization.state.phase==="completed"&&result!==null;
-  const dirty=hasCandidate&&result&&LOGIC_FIELDS.some(({field})=>effectiveEdited[field]!==result.optimizedDraft[field]||!accepted[field]);
+  const dirty=!adopted&&hasCandidate&&result&&LOGIC_FIELDS.some(({field})=>effectiveEdited[field]!==result.optimizedDraft[field]||!accepted[field]);
   useEffect(()=>{if(!dirty)return;const guard=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue="";};window.addEventListener("beforeunload",guard);return()=>window.removeEventListener("beforeunload",guard);},[dirty]);
 
   const changesByField=useMemo(()=>{
@@ -60,15 +65,16 @@ export function ResponseLogicOptimizationWorkflow({question,intent,logic,judgeTa
   },[result]);
 
   const adopt=()=>{
-    if(!result)return;
-    onAdopt(buildAdoptionPatch(result,accepted,effectiveEdited));
+    if(!result||adoptingRef.current||!LOGIC_FIELDS.some(({field})=>accepted[field]))return;
+    adoptingRef.current=true;
+    try{onAdopt(buildAdoptionPatch(result,accepted,effectiveEdited));setAdopted(true);}catch(error){adoptingRef.current=false;throw error;}
   };
   const startGeneration=()=>{void optimization.start();};
 
   return <section className="rl-eval-root" aria-label="优化应答逻辑">
     <div className="rl-eval-back"><button type="button" className="rl-eval-back-button" onClick={onBack}>← 返回评估详情</button></div>
     <header className="rl-eval-heading"><div><h2>优化应答逻辑</h2><p>{question}{intent?` · Intent：${intent}`:""} · 优化基于已完成的 LLM 四维评估，生成候选版本供人工审阅与逐栏采用。</p></div></header>
-    <WorkbenchSteps step={2}/>
+    <WorkbenchSteps step={adopted?3:2}/>
 
     {optimization.state.phase==="idle"&&!judgeTaskId&&<div className="rl-opt-toolbar rl-eval-card" role="status">
       <h3>尚无可用的评估结果</h3>
@@ -80,51 +86,35 @@ export function ResponseLogicOptimizationWorkflow({question,intent,logic,judgeTa
       <div className="rl-eval-action-buttons"><button type="button" className="rl-eval-primary" onClick={startGeneration}>生成优化版本</button></div>
     </div>}
 
-    {(optimization.state.phase==="starting"||optimization.state.phase==="running")&&<div className="rl-opt-toolbar rl-eval-card" role="status">
-      <h3>正在生成优化版本…</h3>
-      <p className="rl-eval-score-description">模型正在基于评估结论优化当前草稿，通常需要 1–3 分钟。请勿离开本页。</p>
-      <div className="rl-eval-action-buttons"><button type="button" className="rl-eval-outline" disabled aria-disabled>生成中…</button></div>
-    </div>}
+    {["starting","running","uncertain","failed"].includes(optimization.state.phase)&&<TaskStageCard flow="optimizer" phase={optimization.state.phase} taskId={optimization.state.taskId} execution={optimization.state.execution} error={optimization.state.error} errorCode={optimization.state.errorCode} onResume={optimization.resume} onRetry={optimization.state.taskId?optimization.resume:startGeneration} retryLabel={optimization.state.taskId?"恢复查询":"重新生成"}/>}
 
-    {optimization.state.phase==="failed"&&<div className="rl-opt-toolbar rl-eval-card" role="alert">
-      <h3>优化未完成</h3>
-      <p className="rl-eval-score-description">{[optimization.state.error,optimization.state.errorCode].filter(Boolean).join(" · ")||"优化任务失败"}。可重试；若提示评估结果不可用或上下文不一致，请先重新进行四维评估。</p>
-      <div className="rl-eval-action-buttons">
-        <button type="button" className="rl-eval-primary" onClick={startGeneration}>重新生成</button>
-        <button type="button" className="rl-eval-outline" onClick={optimization.reset}>放弃本次优化</button>
-      </div>
-    </div>}
-
+    {optimization.state.phase==="failed"&&<button type="button" className="rl-eval-outline" onClick={optimization.reset}>放弃本次优化</button>}
     {hasCandidate&&result&&<><div className="rl-opt-toolbar">
       <span className="rl-eval-tag supported">LLM 优化候选 · 未写入正式内容</span>
       <button type="button" className="rl-eval-outline" onClick={()=>setEdited(result.optimizedDraft)}>恢复模型建议</button>
       <button type="button" className="rl-eval-outline" onClick={optimization.reset}>放弃候选</button>
     </div>
-    <div className="rl-opt-layout">
-      <div className="rl-opt-main">
-        <section className="rl-eval-card" aria-label="优化摘要"><h3>优化摘要</h3><p className="rl-eval-score-description">{result.summary}</p></section>
-        {LOGIC_FIELDS.map(({field,title:label})=>{
-          const fieldChanges=changesByField.get(field)??[];
-          const changed=result.optimizedDraft[field]!==logic[field];
-          return <section className={`rl-opt-task ${accepted[field]?"selected":""}`} key={field}>
-            <label><input type="checkbox" checked={accepted[field]} aria-label={`采用${label}`} onChange={event=>setAccepted({...accepted,[field]:event.target.checked})}/><b>{label}</b><span className={`rl-eval-tag ${changed?"partial":"neutral"}`}>{changed?"有修改":"保持原文"}</span></label>
-            <div className="rl-opt-compare-pair"><div className="rl-opt-before"><b>原文</b><p>{logic[field]||"（暂无内容）"}</p></div><div className="rl-opt-after"><b>优化候选（可编辑）</b><textarea value={effectiveEdited[field]} aria-label={`编辑${label}`} onChange={event=>setEdited({...effectiveEdited,[field]:event.target.value})} rows={Math.max(3,Math.min(12,Math.ceil((effectiveEdited[field].length||1)/28)))}/></div></div>
-            {fieldChanges.map((change,index)=><div className="rl-opt-issue" key={index}>
-              <p className="rl-opt-evidence"><b>修改原因</b>{change.summary}</p>
-              {change.evidence.map((evidence,eIndex)=><p className="rl-judge-evidence" key={eIndex}>「{evidence.excerpt}」<span className="rl-eval-tag neutral">{EVIDENCE_SOURCE_TEXT[evidence.source]??evidence.source}</span> — {evidence.supports}</p>)}
-            </div>)}
-          </section>;
-        })}
-      </div>
-      <aside className="rl-opt-menu rl-eval-card" aria-label="采用确认">
+    <div className="rl-opt-result-layout">
+      <section className="rl-opt-result-summary rl-eval-card" aria-label="优化摘要">
+        <h3>优化摘要</h3>
+        <div className="rl-opt-core-summary"><h4>核心优化结论</h4><p>{result.summary}</p></div>
+        {result.changes.length>0&&<><h4>主要优化建议与修改依据</h4><ol className="rl-opt-suggestions">{result.changes.map((change,index)=><li key={`${change.field}-${index}`}><b>{LOGIC_FIELDS.find(item=>item.field===change.field)?.title}</b><p>{change.summary}</p>{change.evidence.length>0&&<details><summary>查看修改依据</summary>{change.evidence.map((evidence,i)=><p key={i}>「{evidence.excerpt}」<span className="rl-eval-tag neutral">{EVIDENCE_SOURCE_TEXT[evidence.source]??evidence.source}</span> — {evidence.supports}</p>)}</details>}</li>)}</ol><h4>候选中的知识边界与风险提示</h4><p className="rl-opt-boundary-text">{result.optimizedDraft.boundaries}</p></>}
+      </section>
+      <aside className="rl-opt-result-adopt rl-eval-card" aria-label="采用确认">
         <h3>采用到草稿 <small>已选 {LOGIC_FIELDS.filter(({field})=>accepted[field]).length} / 4 项</small></h3>
-        <p className="rl-eval-score-description">仅把你勾选的栏目写入当前编辑器草稿（未勾选栏目保留原文）；写入后仍需经现有草稿保存与发布流程，不会自动发布。</p>
-        <div className="rl-eval-action-buttons">
-          <button type="button" className="rl-eval-primary" onClick={adopt}>采用选中项到草稿</button>
-          <button type="button" className="rl-eval-outline" onClick={optimization.reset}>放弃候选</button>
-        </div>
+        <p className="rl-eval-score-description">逐段选择；保持原文的内容不会被候选覆盖。</p>
+        <div className="rl-opt-choices">{LOGIC_FIELDS.map(({field,title},index)=><div key={field}><b>{index+1}. {title}</b><div><label className={accepted[field]?"selected":""}><input type="checkbox" disabled={adopted} checked={accepted[field]} aria-label={`采用${title}`} onChange={event=>setAccepted({...accepted,[field]:event.target.checked})}/>采用候选</label><button type="button" disabled={adopted} aria-pressed={!accepted[field]} onClick={()=>setAccepted({...accepted,[field]:false})}>保持原文</button></div></div>)}</div>
+        <p className="rl-eval-score-description">仅把选中栏目写入编辑器草稿；仍沿用现有保存与发布流程，不会自动发布。</p>
+        <div className="rl-eval-action-buttons"><button type="button" className="rl-eval-primary" disabled={adopted||!LOGIC_FIELDS.some(({field})=>accepted[field])} onClick={adopt}>{adopted?"已采用到编辑器草稿":"采用选中项到草稿"}</button><button type="button" className="rl-eval-outline" onClick={optimization.reset}>放弃候选</button></div>
       </aside>
     </div>
+    <section className="rl-opt-comparison rl-eval-card" aria-label="原文与优化候选对照">
+      <h3>逐段对照</h3><div className="rl-opt-field-tabs" role="group" aria-label="选择对照段落">{LOGIC_FIELDS.map(({field,title})=><button type="button" key={field} aria-pressed={activeField===field} onClick={()=>setActiveField(field)}>{title}</button>)}</div>
+      {LOGIC_FIELDS.filter(({field})=>field===activeField).map(({field,title:label})=><div key={field}>
+        <div className="rl-opt-compare-pair"><div className="rl-opt-before"><b>原文</b><p>{logic[field]||"（暂无内容）"}</p></div><div className="rl-opt-after"><b>优化候选（可编辑）</b><textarea disabled={adopted} value={effectiveEdited[field]} aria-label={`编辑${label}`} onChange={event=>setEdited({...effectiveEdited,[field]:event.target.value})} rows={Math.max(5,Math.min(14,Math.ceil((effectiveEdited[field].length||1)/35)))}/><span className="rl-eval-tag neutral">{accepted[field]?"已选择候选":"保持原文"}</span></div></div>
+        {(changesByField.get(field)??[]).map((change,index)=><div className="rl-opt-issue" key={index}><p className="rl-opt-evidence"><b>修改原因</b>{change.summary}</p>{change.evidence.map((evidence,i)=><p className="rl-judge-evidence" key={i}>「{evidence.excerpt}」<span className="rl-eval-tag neutral">{EVIDENCE_SOURCE_TEXT[evidence.source]??evidence.source}</span> — {evidence.supports}</p>)}</div>)}
+      </div>)}
+    </section>
     <div className="rl-eval-actions"><span>优化建议需人工审核后采用；采用仅写入编辑器草稿，不直接写入服务器正式内容。</span><button type="button" className="rl-eval-outline" onClick={onBack}>返回评估详情</button></div>
     </>}
   </section>;

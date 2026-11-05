@@ -9,6 +9,8 @@ export type CoreProviderError = Error & { status:number|null;code:string;retryab
 export type CoreRequest = Request & {frontmindUser?: {id:number};frontmindCredential?: never};
 type Port = (...args: any[]) => any;
 export interface IntentExecutionClient {
+ /** Optional capability: never reserve tasks, observe billing, or persist runtime state. */
+ findCreatedTaskReadOnly?(input:{title:string;operationToken:string}):Promise<{unique:{id:string;status?:string|null}|null}>;
  findCreatedTask?(input:{title:string;operationToken:string}):Promise<{unique:{id:string;status?:string|null}|null}>;
  createTask(input:{prompt:string;attachments:Array<{file_id:string;filename:string}>;title:string;agentProfile?:string;locale:string;interactiveMode:boolean;structuredOutputSchema:Record<string,unknown>}):Promise<{taskId:string;raw:Record<string,unknown>}>;
  sendMessage(input:{taskId:string;prompt:string;attachments:Array<{file_id:string;filename:string}>;structuredOutputSchema:Record<string,unknown>}):Promise<{taskId:string;raw:Record<string,unknown>}>;

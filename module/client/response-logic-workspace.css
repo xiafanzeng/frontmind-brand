@@ -1348,8 +1348,11 @@ fieldset.rl-editor-scroll:disabled select {
 .rl-answer-summary {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding: 26px 30px;
+  justify-content: flex-start;
+  padding: 18px 20px;
+  border-radius: 14px;
+  min-width: 0;
+  height: auto;
 }
 
 .rl-answer-summary > span {
@@ -1364,6 +1367,13 @@ fieldset.rl-editor-scroll:disabled select {
   color: #534c5e;
   font-size: 13px;
   line-height: 1.75;
+}
+
+.rl-answer-summary > .rl-confirmation-concern {
+  margin-top: 8px;
+  max-width: 75ch;
+  white-space: pre-wrap;
+  line-height: 1.8;
 }
 
 .rl-confirmation-markdown > :first-child {
@@ -1684,7 +1694,7 @@ fieldset.rl-editor-scroll:disabled select {
   }
 
   .rl-answer-summary {
-    padding: 22px;
+    padding: 16px;
   }
 
   .rl-confirmation-grid {

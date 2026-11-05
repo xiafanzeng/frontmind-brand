@@ -182,7 +182,8 @@ describe("optimization workflow rendering", () => {
   it("shows the running state and disables re-triggering", () => {
     const html = optimizationFlow({ ...initialOptimizationLifecycleState, phase: "running", taskId: "t" });
     expect(html).toContain("正在生成优化版本");
-    expect(html).toContain("disabled");
+    expect(html).not.toContain(">生成优化版本</button>");
+    expect(html).toContain("任务阶段");
   });
 
   it("shows the real failure with its code and retry/discard entries", () => {
@@ -202,9 +203,9 @@ describe("optimization workflow rendering", () => {
     // summary, four sections with before/after, change reasons and evidence
     expect(html).toContain("补充来源绑定与适用前提");
     expect(html).toContain("关心原文");
-    expect(html).toContain("结论原文（更直接）");
-    expect(html).toContain("来源标记：每条事实标注来源");
-    expect(html).toContain("修改原因");
+    expect(html).toContain("核心结论与执行口径");
+    expect(html).toContain("企业材料与官方依据");
+    expect(html).toContain("主要优化建议与修改依据");
     expect(html).toContain("直接回应问题主语");
     expect(html).toContain("「结论原文」");
     expect(html).toContain("草稿原文");
@@ -222,6 +223,6 @@ describe("optimization workflow rendering", () => {
     const html = optimizationFlow({ ...initialOptimizationLifecycleState, phase: "completed", result, taskId: "t" });
     // facts change has empty evidence → only its reason appears, no fake excerpt
     expect(html).toContain("补来源标记");
-    expect((html.match(/<p class="rl-judge-evidence">/g) || []).length).toBe(1);
+    expect((html.match(/「结论原文」/g) || []).length).toBe(1);
   });
 });

@@ -1,3 +1,5 @@
+import {readResponseLogicExecution,responseLogicRecoverySchema,type ResponseLogicRecovery} from "../contracts/response-logic-progress.js";
+import type {GeneralExecutionDto} from "@frontmind/module-contracts/execution";
 import { captureWorkspaceRestOperation } from "./response-logic-runtime-host.js";
 import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
 import {
@@ -42,6 +44,18 @@ async function readJson(response: Response): Promise<unknown> {
   try { return await response.json(); } catch { return null; }
 }
 
+export async function recoverOptimizationGeneration(input: {questionId: string; expectedRevision: number; sourceFingerprint: string; judgeTaskId: string; signal?: AbortSignal}): Promise<ResponseLogicRecovery> {
+  const query = new URLSearchParams({questionId: input.questionId, expectedRevision: String(input.expectedRevision), judgeTaskId: input.judgeTaskId});
+  const response = await optimizationFetch(`${RESPONSE_LOGIC_API_BASE}/optimization/recovery?${query}`, {method: 'GET', headers: {Accept: 'application/json'}}, input.signal);
+  const payload = await readJson(response);
+  if (response.status === 404 && !(payload && typeof payload === 'object' && 'error' in payload)) return {status: 'unavailable', reason: 'unsupported'};
+  if (!response.ok) throw optimizationHttpError(response.status, payload);
+  const parsed = responseLogicRecoverySchema.safeParse(payload);
+  if (!parsed.success) throw new OptimizationRequestError('OPTIMIZATION_RESPONSE_INVALID', '优化恢复响应格式无效', response.status);
+  if (parsed.data.status === 'found' && (parsed.data.recordRevision !== input.expectedRevision || parsed.data.sourceFingerprint !== input.sourceFingerprint)) return {status: 'none'};
+  return parsed.data;
+}
+
 /** POST {RESPONSE_LOGIC_API_BASE}/optimization — start an optimization task for a completed judge task. */
 export async function startOptimizationGeneration(input: {
   questionId: string;
@@ -68,7 +82,7 @@ export async function startOptimizationGeneration(input: {
   }, input.signal);
   const payload = await readJson(response);
   if (!response.ok) throw optimizationHttpError(response.status, payload);
-  const body = payload as Record<string, unknown>;
+  const body = (payload ?? {}) as Record<string, unknown>;
   if (typeof body.taskId !== "string" || typeof body.recordRevision !== "number") {
     throw new OptimizationRequestError("OPTIMIZATION_RESPONSE_INVALID", "优化启动响应格式无效", response.status);
   }
@@ -89,29 +103,36 @@ export async function pollOptimizationTask(input: {
   taskId: string;
   signal?: AbortSignal;
 }): Promise<
-  | { status: "running" }
-  | { status: "completed"; result: OptimizationEnvelope }
+  | { status: "running"; execution?: GeneralExecutionDto }
+  | { status: "completed"; result: OptimizationEnvelope; execution?: GeneralExecutionDto }
 > {
   const query = new URLSearchParams({
     questionId: input.questionId,
+    progress: "1",
     expectedRevision: String(input.expectedRevision),
     judgeTaskId: input.judgeTaskId,
   });
-  const response = await optimizationFetch(
+  let response = await optimizationFetch(
     `${RESPONSE_LOGIC_API_BASE}/optimization/tasks/${encodeURIComponent(input.taskId)}/status?${query}`,
     { method: "GET", headers: { Accept: "application/json" } },
     input.signal,
   );
+  if (response.status === 400) {
+    query.delete("progress");
+    response = await optimizationFetch(`${RESPONSE_LOGIC_API_BASE}/optimization/tasks/${encodeURIComponent(input.taskId)}/status?${query}`, {method:"GET",headers:{Accept:"application/json"}},input.signal);
+  }
   const payload = await readJson(response);
   if (!response.ok) throw optimizationHttpError(response.status, payload);
-  const body = payload as Record<string, unknown>;
-  if (body.status === "running") return { status: "running" };
+  const body = (payload ?? {}) as Record<string, unknown>;
+  const execution = readResponseLogicExecution(body.execution, input.taskId);
+  const {execution: _execution, ...businessResult} = body;
+  if (body.status === "running") return { status: "running", ...(execution ? {execution} : {}) };
   if (body.status === "completed") {
-    const parsed = optimizationEnvelopeSchema.safeParse(body);
+    const parsed = optimizationEnvelopeSchema.safeParse(businessResult);
     if (!parsed.success) {
       throw new OptimizationRequestError("OPTIMIZATION_RESPONSE_INVALID", "优化结果未通过传输协议校验", response.status);
     }
-    return { status: "completed", result: parsed.data };
+    return { status: "completed", result: parsed.data, ...(execution ? {execution} : {}) };
   }
   throw new OptimizationRequestError("OPTIMIZATION_RESPONSE_INVALID", `优化任务返回未知状态: ${String(body.status)}`, response.status);
 }
