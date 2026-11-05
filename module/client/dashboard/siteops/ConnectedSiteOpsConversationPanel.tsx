@@ -436,6 +436,9 @@ export default function ConnectedSiteOpsConversationPanel({
   const pollEpoch = useRef({ coordinate: "idle", startedAt: Date.now() });
   const revisionAttemptRef = useRef<SiteOpsRevisionAttempt | null>(null);
   const revisionSubmissionInFlightRef = useRef(false);
+  // Independent design/domain/history components share one synchronous write
+  // boundary, including the gap before React mutation state is rendered.
+  const interactionInFlightRef = useRef(false);
   const [observation, setObservation] = useState<SiteOpsObservationV1 | null>(
     null,
   );
@@ -443,6 +446,7 @@ export default function ConnectedSiteOpsConversationPanel({
     useState<SiteOpsSelectVisualState | null>(null);
   const [submissionNotice, setSubmissionNotice] = useState<string | null>(null);
   const [revisionSubmitting, setRevisionSubmitting] = useState(false);
+  const [interactionSubmitting, setInteractionSubmitting] = useState(false);
   const [designRecommendationRequest, setDesignRecommendationRequest] =
     useState<SiteDesignRecommendationInput | null>(null);
   const [pageActive, setPageActive] = useState(() =>
@@ -716,10 +720,30 @@ export default function ConnectedSiteOpsConversationPanel({
     void observeSelectedVisual(submitting.clientRequestId, rawAck);
   }
 
+  async function runExclusiveInteraction<T>(operation: () => Promise<T>): Promise<T> {
+    if (interactionInFlightRef.current
+      || revisionSubmissionInFlightRef.current
+      || selectVisualInFlight(selectVisualRef.current)) {
+      throw new Error("上一项建站操作仍在进行，请等待完成后重试。");
+    }
+    interactionInFlightRef.current = true;
+    setInteractionSubmitting(true);
+    try {
+      return await operation();
+    } finally {
+      interactionInFlightRef.current = false;
+      setInteractionSubmitting(false);
+    }
+  }
+
   async function runSiteOpsAction(input: SiteOpsActionInput) {
+    return runExclusiveInteraction(() => runSiteOpsActionExclusive(input));
+  }
+
+  async function runSiteOpsActionExclusive(input: SiteOpsActionInput) {
     const currentObservation = observationRef.current;
-    if (!currentObservation || selectVisualInFlight(selectVisualRef.current)) {
-      return;
+    if (!currentObservation) {
+      throw new Error(`${SITEOPS_CUSTOMER_DISPLAY_NAME}尚未就绪，请刷新后重试。`);
     }
 
     if (input.action === "select_visual") {
@@ -796,7 +820,7 @@ export default function ConnectedSiteOpsConversationPanel({
     ) {
       return;
     }
-    await submitSelectVisual(scope, current);
+    await runExclusiveInteraction(() => submitSelectVisual(scope, current));
   }
 
   const requestDesignRecommendation = useCallback(
@@ -813,14 +837,24 @@ export default function ConnectedSiteOpsConversationPanel({
   async function saveDesignPreferences(
     input: SiteDesignPreferencesSaveInput,
   ) {
-    saveDesignPreferencesMutation.reset();
-    const updatedObservation =
-      await saveDesignPreferencesMutation.mutateAsync(input);
-    acceptObservation(updatedObservation);
-    return updatedObservation;
+    return runExclusiveInteraction(async () => {
+      saveDesignPreferencesMutation.reset();
+      const updatedObservation =
+        await saveDesignPreferencesMutation.mutateAsync(input);
+      acceptObservation(updatedObservation);
+      return updatedObservation;
+    });
   }
 
   async function submitRevision(input: {
+    text: string;
+    files: File[];
+    onProgress: (fileIndex: number, percent: number) => void;
+  }) {
+    return runExclusiveInteraction(() => submitRevisionExclusive(input));
+  }
+
+  async function submitRevisionExclusive(input: {
     text: string;
     files: File[];
     onProgress: (fileIndex: number, percent: number) => void;
@@ -956,7 +990,11 @@ export default function ConnectedSiteOpsConversationPanel({
     interactionPending:
       Boolean(pendingActionAck.current) ||
       selectVisualInFlight(selectVisual) ||
+      interactionSubmitting ||
       revisionSubmitting ||
+      actMutation.isPending ||
+      aliyunBeginMutation.isPending ||
+      aliyunDisconnectMutation.isPending ||
       saveDesignPreferencesMutation.isPending ||
       sendMessageMutation.isPending,
     selectVisual,
@@ -987,12 +1025,12 @@ export default function ConnectedSiteOpsConversationPanel({
     onRetrySelectVisual: retrySelectVisual,
     onSubmitRevision: submitRevision,
     onBeginAliyun: async () => {
-      if (!observation) {
+      if (!observationRef.current) {
         throw new Error(`${SITEOPS_CUSTOMER_DISPLAY_NAME}尚未就绪。`);
       }
-      return await aliyunBeginMutation.mutateAsync({
-        conversationId: observation.project.conversationId,
-      });
+      return runExclusiveInteraction(async () => aliyunBeginMutation.mutateAsync({
+        conversationId: observationRef.current!.project.conversationId,
+      }));
     },
     aliyunDomains: aliyunDomainsQuery.data?.domains ?? [],
     aliyunDomainsLoading: aliyunDomainsQuery.isLoading,
@@ -1001,12 +1039,16 @@ export default function ConnectedSiteOpsConversationPanel({
       await aliyunDomainsQuery.refetch();
     },
     onDisconnectAliyun: async () => {
-      if (!observation) return;
-      await aliyunDisconnectMutation.mutateAsync({
-        conversationId: observation.project.conversationId,
+      if (!observationRef.current) {
+        throw new Error(`${SITEOPS_CUSTOMER_DISPLAY_NAME}尚未就绪。`);
+      }
+      await runExclusiveInteraction(async () => {
+        await aliyunDisconnectMutation.mutateAsync({
+          conversationId: observationRef.current!.project.conversationId,
+        });
+        const refreshed = await observeQuery.refetch();
+        if (refreshed.data) acceptObservation(refreshed.data);
       });
-      const refreshed = await observeQuery.refetch();
-      if (refreshed.data) acceptObservation(refreshed.data);
     },
   };
 

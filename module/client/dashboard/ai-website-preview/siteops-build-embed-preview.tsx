@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { Download, ExternalLink, RefreshCw } from "lucide-react";
 
 type EmbedRoute = { id: string; slug: string; title: string };
 
@@ -8,6 +8,7 @@ export type EmbeddableBuild = {
   ordinal: number;
   status: string;
   previewUrl: string | null;
+  sourceUrl?: string | null;
   knowledgeSnapshotVersion: number | null;
 };
 
@@ -74,6 +75,10 @@ export function SiteOpsBuildEmbedPreview({
   });
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const trialAcceptedRef = useRef(false);
+  const trialBindingKey = JSON.stringify(expectedTrialBinding);
+  useEffect(() => {
+    trialAcceptedRef.current = false;
+  }, [trialBindingKey]);
   const [routeSlug, setRouteSlug] = useState("/");
   const [reloadSequence, setReloadSequence] = useState(0);
   const [frameFailed, setFrameFailed] = useState(false);
@@ -153,8 +158,8 @@ export function SiteOpsBuildEmbedPreview({
   // Trusted preview bridge: only a message from THIS iframe carrying the
   // server-minted bridge token and the exact frozen build/assistant
   // coordinates counts as a completed real trial. Synthetic drafts, errors,
-  // timeouts and forgeries never satisfy it. The gate is one-shot per mount;
-  // reloading the same build keeps an already-accepted trial.
+  // timeouts and forgeries never satisfy it. A changed or invalidated design
+  // binding allows another genuine trial; reloading the same binding keeps it.
   useEffect(() => {
     if (!onTrialComplete) return;
     const handler = (event: MessageEvent) => {
@@ -212,7 +217,7 @@ export function SiteOpsBuildEmbedPreview({
               ? `知识快照 v${build.knowledgeSnapshotVersion}`
               : "知识快照版本待确认"}
             {" · "}
-            {build.status}
+            {({ approved: "检查通过", preview_ready: "构建完成", building: "构建中", qa_running: "检查中", failed: "需要处理", superseded: "历史版本" } as Record<string, string>)[build.status] ?? "历史构建"}
           </small>
         </span>
         <label className="sfp-embed-page">
@@ -244,6 +249,7 @@ export function SiteOpsBuildEmbedPreview({
         <button type="button" onClick={openInNewWindow} disabled={!build.previewUrl}>
           <ExternalLink size={14} /> 新窗口打开
         </button>
+        {build.sourceUrl && <a href={build.sourceUrl} download><Download size={14} /> 下载源码</a>}
       </div>
       <div className={`sfp-embed-stage sfp-embed-stage--${device}`}>
         {tokenState.state === "loading" && (

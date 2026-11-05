@@ -36,7 +36,7 @@ vi.mock("./SimplifiedWebsiteBuilderPreview", () => ({
       <button
         type="button"
         data-testid="designed-website-builder"
-        onClick={() => (props.onOpenSiteOpsRelease as (() => void) | undefined)?.()}
+        onClick={() => (props.onStepChange as ((step: string) => void) | undefined)?.("design")}
       >
         三步建站
       </button>
@@ -63,25 +63,24 @@ describe("connected redesigned website builder", () => {
     expect(mocks.received).toMatchObject({
       initialStep: "design",
       onOpenRag,
-      onOpenSiteOpsRelease: expect.any(Function),
       onStepChange,
       siteOps: mocks.liveSiteOps,
       storageScope: "live:42:workspace-1",
     });
   });
 
-  it("switches the same connected controller to SiteOps release settings and back", () => {
-    const view = render(<ConnectedSimplifiedWebsiteBuilderPreview />);
+  it("keeps the three-step builder mounted and removes the legacy management-page switch", () => {
+    const onStepChange = vi.fn();
+    const view = render(<ConnectedSimplifiedWebsiteBuilderPreview onStepChange={onStepChange} />);
     const page = within(view.container);
 
     fireEvent.click(page.getByTestId("designed-website-builder"));
 
-    expect(page.queryByTestId("designed-website-builder")).toBeNull();
-    expect(page.getByTestId("established-siteops-panel")).toBeTruthy();
-    fireEvent.click(page.getByRole("button", { name: "返回三步建站" }));
-
+    expect(onStepChange).toHaveBeenCalledWith("design");
     expect(page.queryByTestId("established-siteops-panel")).toBeNull();
     expect(page.getByTestId("designed-website-builder")).toBeTruthy();
+    expect(page.queryByRole("button", { name: "返回三步建站" })).toBeNull();
+    expect(mocks.received).not.toHaveProperty("onOpenSiteOpsRelease");
   });
 
   it("honors the host workspace scope instead of sharing drafts across projects", () => {
