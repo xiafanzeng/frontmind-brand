@@ -466,16 +466,6 @@
   text-align: left;
 }
 
-.rag-eval-root .rag-evaluation-secondary-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-start;
-  padding-inline-start: calc(20px + 8px);
-  color: var(--sfp-muted);
-  font-size: var(--sfp-type-caption);
-}
-
 .rag-eval-root .rag-evaluation-supporting-meta {
   align-self: end;
   display: flex;
@@ -615,10 +605,6 @@
     grid-column: 1 / -1;
     grid-row: 2;
     margin: 0;
-  }
-  .rag-eval-root .rag-evaluation-secondary-meta {
-    justify-content: center;
-    padding-inline-start: 0;
   }
   .rag-eval-root .rag-evaluation-metrics {
     display: flex;

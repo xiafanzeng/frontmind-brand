@@ -93,7 +93,7 @@ function completedAutomaticRun(): EnterpriseRagEvaluationRunDto {
         ruleVersion: "rag-eval-1.2",
         judgeVersion: "1.0.0",
         provider: "xty_codex",
-        model: "gpt-5.6-sol",
+        model: "gpt-6.1-sol",
         effort: "high",
         skillHash: "d".repeat(64),
         outputHash: "e".repeat(64),
@@ -162,6 +162,11 @@ function openJudgmentDetails() {
   const trigger = evaluation().getByRole("button", { name: "理解本次判断" });
   if (trigger.getAttribute("aria-expanded") === "false") fireEvent.click(trigger);
   return evaluation();
+}
+
+function automaticEvaluateButton() {
+  openJudgmentDetails();
+  return screen.getByTestId("rag-auto-evaluate");
 }
 
 function openReview() {
@@ -484,11 +489,9 @@ describe("enterprise RAG evidence-based review UI", () => {
       turnId: "turn-1",
     }));
     expect(start).not.toHaveBeenCalled();
-    expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain(
-      "页面加载只读取已有记录",
-    );
+    expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false);
 
-    fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+    fireEvent.click(automaticEvaluateButton());
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     expect(start).toHaveBeenCalledWith(expect.objectContaining({
       sourceQaTaskId: "task-1",
@@ -496,9 +499,7 @@ describe("enterprise RAG evidence-based review UI", () => {
       clientRequestId: expect.any(String),
     }));
     await waitFor(() =>
-      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain(
-        "自动评估已完成",
-      ),
+      expect(screen.queryByTestId("rag-auto-evaluation-status")).toBeNull(),
     );
     expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93");
     openJudgmentDetails();
@@ -509,6 +510,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByTestId("rag-auto-evaluation-report").textContent).toContain(
       "evaluation-report-1",
     );
+    expect(screen.queryByText(/gpt-6\.1-sol|XTY Codex/)).toBeNull();
   });
 
   it("disables the full improvement plan when the current report has no repair items", async () => {
@@ -530,7 +532,7 @@ describe("enterprise RAG evidence-based review UI", () => {
       />,
     );
 
-    await waitFor(() => expect(evaluation().getByText(/报告 evaluation-report-1/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93"));
     const quality = openQualityDetails();
     expect(quality.getByText("当前记录没有待修复项；继续用更多真实场景验证。")).toBeTruthy();
     const fullPlan = quality.getByRole("button", { name: "查看完整方案" });
@@ -566,12 +568,14 @@ describe("enterprise RAG evidence-based review UI", () => {
       expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93"),
     );
     expect(start).not.toHaveBeenCalled();
-    expect(screen.getByText("报告 evaluation-report-1")).toBeTruthy();
+    expect(screen.queryByText("报告 evaluation-report-1")).toBeNull();
+    expect(screen.queryByText(/服务器留痕|gpt-6\.1-sol|XTY Codex/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
     expect(records.getByText("服务端自动评估记录")).toBeTruthy();
     expect(records.getByLabelText("六维诊断评分 93，满分 100").textContent).toBe("93/100");
     expect(records.getByText(/报告：evaluation-report-1/)).toBeTruthy();
+    expect(records.queryByText(/gpt-6\.1-sol|XTY Codex/)).toBeNull();
     expect(records.getByText(/人工复核不改变服务端自动报告/)).toBeTruthy();
   });
 
@@ -670,7 +674,7 @@ describe("enterprise RAG evidence-based review UI", () => {
         await Promise.resolve();
       });
       expect(observe).toHaveBeenCalledTimes(2);
-      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain("自动评估已完成");
+      expect(screen.queryByTestId("rag-auto-evaluation-status")).toBeNull();
       expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93");
     } finally {
       vi.useRealTimers();
@@ -702,18 +706,18 @@ describe("enterprise RAG evidence-based review UI", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(false),
+      expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false),
     );
-    fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+    fireEvent.click(automaticEvaluateButton());
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText(/网络结果未知/)).toBeTruthy());
     const firstId = start.mock.calls[0][0].clientRequestId;
 
-    fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+    fireEvent.click(automaticEvaluateButton());
     await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
     expect(start.mock.calls[1][0].clientRequestId).toBe(firstId);
     await waitFor(() =>
-      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain("自动评估已完成"),
+      expect(screen.queryByTestId("rag-auto-evaluation-status")).toBeNull(),
     );
   });
 
@@ -748,9 +752,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(false),
+      expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false),
     );
-    fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+    fireEvent.click(automaticEvaluateButton());
     await waitFor(() =>
       expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain(
         "上游任务创建结果不确定",
@@ -799,7 +803,7 @@ describe("enterprise RAG evidence-based review UI", () => {
       );
 
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-      fireEvent.click(screen.getByTestId("rag-auto-evaluate"));
+      fireEvent.click(automaticEvaluateButton());
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
       expect(screen.getByText(/自动评估已提交/).classList.contains("rag-muted")).toBe(true);
       expect(screen.getByText(/自动评估已提交/).classList.contains("sfp-notice")).toBe(false);
