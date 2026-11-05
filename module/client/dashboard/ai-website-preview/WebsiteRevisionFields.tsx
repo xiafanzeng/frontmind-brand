@@ -49,7 +49,6 @@ export function WebsiteRevisionFields({
   return (
     <section className="sfp-design-section sfp-revision-fields" aria-labelledby={`${id}-title`}>
       <h3 id={`${id}-title`}>补充修改要求</h3>
-      <p className="sfp-revision-hint">描述希望调整的内容，也可添加参考图片；与网站设计一起提交生成。</p>
       <textarea
         id={`${id}-text`}
         aria-label="补充修改要求"
@@ -91,7 +90,7 @@ export function WebsiteRevisionFields({
         <button type="button" className="sfp-revision-add" disabled={disabled} onClick={() => fileInput.current?.click()}>
           <ImagePlus size={16} aria-hidden="true" /> 添加参考图片
         </button>
-        <p id={`${id}-limits`}>支持粘贴或拖入；最多 8 张，每张 8 MiB，总计 32 MiB。</p>
+        <p id={`${id}-limits`}>可粘贴或拖入；最多 8 张，单张 ≤ 8 MiB，总计 ≤ 32 MiB。</p>
       </div>
       {error && <p role="alert" className="sfp-revision-error">{error}</p>}
       {files.length > 0 && (
