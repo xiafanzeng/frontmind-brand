@@ -636,7 +636,6 @@ describe("redesigned live website builder setup", () => {
 
     await waitFor(() => {
       expect((screen.getByLabelText("在网站中显示关于我们") as HTMLInputElement).checked).toBe(true);
-      expect(screen.getByText(/本地草稿模板 · 1 个主栏目/)).toBeTruthy();
     });
 
     const withServerDesign: SiteOpsObservationV1 = {
@@ -674,7 +673,6 @@ describe("redesigned live website builder setup", () => {
       expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("服务端已保存网站");
       expect((screen.getByLabelText("在网站中显示首页") as HTMLInputElement).checked).toBe(true);
       expect((screen.getByLabelText("在网站中显示关于我们") as HTMLInputElement).checked).toBe(false);
-      expect(screen.getByText(/真实帮助中心模板 · 1 个主栏目/)).toBeTruthy();
     });
   });
 
@@ -1426,7 +1424,7 @@ describe("redesigned live website builder setup", () => {
     ).toBeTruthy();
   });
 
-  it("renders the real-data draft preview from the server projection", async () => {
+  it("keeps recommendations in the design fields without mounting an inline website preview", async () => {
     const current = recommendableObservation();
     const onRequestDesignRecommendation = vi.fn();
     const baseProps: SiteOpsConversationPanelProps = {
@@ -1444,10 +1442,9 @@ describe("redesigned live website builder setup", () => {
     await waitFor(() =>
       expect(onRequestDesignRecommendation).toHaveBeenCalledTimes(1),
     );
-    // Before the projection arrives the preview stays honest: a waiting
-    // state, never a fixture website.
-    expect(screen.getByTestId("website-draft-preview-state").textContent)
-      .toContain("尚未生成真实数据草稿");
+    expect(screen.queryByTestId("website-design-preview")).toBeNull();
+    expect((screen.getByRole("button", { name: "试用 AI 助手" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("link", { name: "查看网站" })).toBeNull();
     expect(screen.queryByText("您好，需要了解什么？")).toBeNull();
     expect(screen.queryByText("搜索文档，或直接询问 AI 助手")).toBeNull();
 
@@ -1469,35 +1466,17 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    const banner = screen.getByTestId("website-draft-preview-banner");
-    expect(banner.textContent).toContain("真实数据草稿");
-    expect(banner.textContent).toContain("知识库 v3");
-    expect(banner.textContent).toContain("构建完成后以真实构建预览为准");
-    const blocks = screen
-      .getAllByTestId("website-draft-block")
-      .map((block) => block.textContent);
-    // Every column is enabled by default, so the projection covers all four
-    // real routes.
-    expect(blocks).toHaveLength(4);
-    expect(blocks[0]).toContain("首页 Hero");
-    expect(blocks[0]).toContain("首页真实内容");
-    expect(blocks[0]).toContain("首页的知识投影");
-    expect(blocks[1]).toContain("产品与服务");
-    expect(blocks[2]).toContain("联系方式");
-    expect(blocks[3]).toContain("关于我们真实内容");
-    expect(screen.getAllByText(/个知识来源/).length).toBeGreaterThanOrEqual(3);
-    // The unified preview keeps the assistant identity on the same screen, but
-    // the live draft never simulates answers: only the real build preview
-    // completes the trial.
-    expect(screen.getByLabelText("网站 AI 助手预览")).toBeTruthy();
-    expect(screen.getByText(/本地草稿不会模拟回答/)).toBeTruthy();
+    expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
+      .toBe("远山企业官网");
+    expect(screen.queryByTestId("website-design-preview")).toBeNull();
+    expect(screen.getByRole("region", { name: "建站管理" })).toBeTruthy();
     expect(screen.queryByLabelText("在网站助手中提问")).toBeNull();
     // Fixture demo copy must not leak into the live preview.
     expect(screen.queryByText("您好，需要了解什么？")).toBeNull();
     expect(screen.queryByText("企业知识帮助中心")).toBeNull();
   });
 
-  it("shows an in-progress draft state instead of mock pages while projecting", async () => {
+  it("shows recommendation loading without mounting a mock website or assistant", async () => {
     const current = recommendableObservation();
     const onRequestDesignRecommendation = vi.fn();
     const baseProps: SiteOpsConversationPanelProps = {
@@ -1533,13 +1512,13 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    expect(screen.getByTestId("website-draft-preview-state").textContent)
-      .toContain("正在按当前发布知识生成真实数据草稿");
+    expect(screen.getByText(/正在按当前发布知识生成网站名称/)).toBeTruthy();
+    expect(screen.queryByTestId("website-design-preview")).toBeNull();
     expect(screen.queryByText("您好，需要了解什么？")).toBeNull();
     expect(screen.queryByTestId("website-draft-block")).toBeNull();
   });
 
-  it("embeds the real build through the owner-only preview endpoint", async () => {
+  it("opens the real assistant trial on demand through the owner-only preview endpoint", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -1576,6 +1555,10 @@ describe("redesigned live website builder setup", () => {
         />,
       );
 
+      expect(screen.queryByTitle("真实构建预览")).toBeNull();
+      expect(screen.getByRole("link", { name: "查看网站" }).getAttribute("href"))
+        .toBe("/api/frontmind/v2/siteops/builds/preview-1");
+      fireEvent.click(screen.getByRole("button", { name: "试用 AI 助手" }));
       await waitFor(() => {
         const frame = screen.getByTitle("真实构建预览") as HTMLIFrameElement;
         expect(frame.src).toContain(
@@ -1598,7 +1581,7 @@ describe("redesigned live website builder setup", () => {
         expect(frame.src).toContain("/embed-preview/products/?token=");
       });
 
-      fireEvent.click(screen.getByRole("button", {name: /新窗口打开/}));
+      fireEvent.click(screen.getByRole("button", {name: /新窗口查看/}));
       expect(openMock).toHaveBeenCalledWith(
         "/api/frontmind/v2/siteops/builds/preview-1/products/",
         "_blank",
@@ -1609,7 +1592,7 @@ describe("redesigned live website builder setup", () => {
     }
   });
 
-  it("keeps the embedded real build visible while design edits are pending", async () => {
+  it("keeps the last website available but rejects trial credit while edits are pending", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -1636,16 +1619,17 @@ describe("redesigned live website builder setup", () => {
         />,
       );
 
+      fireEvent.click(screen.getByRole("button", { name: "试用 AI 助手" }));
       await waitFor(() =>
         expect((screen.getByTitle("真实构建预览") as HTMLIFrameElement).src)
           .toContain("embed-preview/?token="),
       );
 
-      // Selecting or deselecting a column must not yank the real site away;
-      // the panel stays on the last real build and labels the pending edits.
+      // Pending edits retain access to the last real build, but cannot earn
+      // trial credit for a design that has not been submitted.
       fireEvent.click(screen.getByLabelText("在网站中显示关于我们"));
       await waitFor(() => {
-        expect(screen.getByText("真实构建预览 · 有未提交修改")).toBeTruthy();
+        expect(screen.getByText(/完成当前设计的构建后/)).toBeTruthy();
       });
       expect((screen.getByTitle("真实构建预览") as HTMLIFrameElement).src)
         .toContain("embed-preview/?token=");
@@ -1726,6 +1710,7 @@ describe("redesigned live website builder setup", () => {
           storageScope="live:7:bridge-trial"
         />,
       );
+      fireEvent.click(screen.getByRole("button", { name: "试用 AI 助手" }));
       await waitFor(() =>
         expect((screen.getByTitle("真实构建预览") as HTMLIFrameElement).src)
           .toContain("embed-preview/?token="),
@@ -1798,6 +1783,7 @@ describe("redesigned live website builder setup", () => {
       await waitFor(() =>
         expect(screen.getByText("助手试用已完成")).toBeTruthy(),
       );
+      fireEvent.click(screen.getByRole("button", { name: "关闭助手试用" }));
       fireEvent.click(screen.getByRole("button", { name: "进入建设评估" }));
       expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
       expect(onAction).not.toHaveBeenCalled();
@@ -1818,7 +1804,7 @@ describe("redesigned live website builder setup", () => {
     }
   });
 
-  it("feeds the draft preview without rewriting saved design preferences", async () => {
+  it("keeps saved design preferences when a recommendation arrives", async () => {
     const withPreferences = recommendableObservation();
     withPreferences.brief = {
       ...withPreferences.brief!,
@@ -1882,10 +1868,7 @@ describe("redesigned live website builder setup", () => {
     expect(
       (screen.getByLabelText("站点简介 / 建站目标") as HTMLTextAreaElement).value,
     ).toBe("已保存建站目标");
-    // The real-data draft preview still renders from the projection.
-    expect(screen.getByTestId("website-draft-preview-banner").textContent)
-      .toContain("真实数据草稿");
-    expect(screen.getAllByTestId("website-draft-block").length).toBe(3);
+    expect(screen.queryByTestId("website-design-preview")).toBeNull();
   });
 
   it("saves the real brief configuration before selecting the admitted template", async () => {
@@ -1933,9 +1916,9 @@ describe("redesigned live website builder setup", () => {
     fireEvent.change(screen.getByLabelText("欢迎语"), {
       target: { value: "您好，我会依据企业知识为您解答。" },
     });
-    expect(screen.getByTestId("website-design-preview")).toBeTruthy();
+    expect(screen.queryByTestId("website-design-preview")).toBeNull();
     expect(screen.queryByLabelText(/展示回答来源/)).toBeNull();
-    // 生成真实预览不再被试用门禁拦截：真实试聊发生在构建完成后的嵌入预览里。
+    // 首次构建不被试用门禁拦截：真实试聊在构建完成后显式打开。
     expect(screen.getByText("助手试用未完成")).toBeTruthy();
     fireEvent.click(screen.getByTestId("website-build-start"));
 
@@ -2153,7 +2136,7 @@ describe("redesigned live website builder setup", () => {
       )).toBeTruthy());
       expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
         .toBe(failureMode === "newer-edit" ? "保存期间的新设计 B" : "保存中的设计 A");
-      expect(screen.getByText("真实构建预览 · 有未提交修改")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "查看网站" }).getAttribute("href")).toBe(approved.builds[0]!.previewUrl);
       expect(screen.getByTestId("website-revision-submit").textContent).toBe("提交修改并重新生成");
       expect((screen.getByTestId("website-publish-request") as HTMLButtonElement).disabled).toBe(true);
       expect(onSubmitRevision).toHaveBeenCalledTimes(failureMode === "newer-edit" ? 0 : 1);
@@ -2165,7 +2148,7 @@ describe("redesigned live website builder setup", () => {
           <SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ ...siteOps, observation: saved }} storageScope={scope} />,
         );
         await waitFor(() => expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("保存中的设计 A"));
-        expect(screen.getByText("真实构建预览 · 有未提交修改")).toBeTruthy();
+        expect(screen.getByRole("link", { name: "查看网站" }).getAttribute("href")).toBe(approved.builds[0]!.previewUrl);
         expect((screen.getByTestId("website-publish-request") as HTMLButtonElement).disabled).toBe(true);
       }
     },

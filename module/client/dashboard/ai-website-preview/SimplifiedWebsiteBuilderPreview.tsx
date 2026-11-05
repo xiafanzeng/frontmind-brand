@@ -3,6 +3,7 @@ import {
   Bot,
   Check,
   CircleAlert,
+  ExternalLink,
   FileText,
   Globe2,
   LayoutTemplate,
@@ -21,7 +22,6 @@ import {
   siteDesignTemplateCoordinateSchema,
   type SiteDesignKnowledgeSnapshotCoordinate,
   type SiteDesignPreferencesDraft,
-  type SiteDesignPreviewBlock,
   type SiteDesignRecommendationInput,
   type SiteDesignTemplateCoordinate,
 } from "../../../contracts/site-design-preferences";
@@ -33,7 +33,6 @@ import {
   PreviewAssistantWidget,
   type AssistantExchangeBinding,
 } from "./preview-assistant-widget";
-import { SiteDesignDraftPreview } from "./site-design-draft-preview";
 import { SiteOpsBuildEmbedPreview } from "./siteops-build-embed-preview";
 import { WebsiteDomainPublishPanel, getWebsitePublishState, type WebsitePublishTarget } from "./WebsiteDomainPublishPanel";
 import { WebsiteRevisionFields } from "./WebsiteRevisionFields";
@@ -523,7 +522,6 @@ export function saveWebsiteDraft(draft: WebsiteDraftV2, storageScope?: string) {
 
 export const EMPTY_SITE_DESIGN_DRAFT_HASH = "0".repeat(64);
 
-const EMPTY_DRAFT_PREVIEW_BLOCKS = new Map<string, SiteDesignPreviewBlock>();
 
 /**
  * The revision message only starts a new revision. Website/assistant settings
@@ -919,6 +917,9 @@ export function SimplifiedWebsiteBuilderPreview({
     releaseReport !== null,
     closeReleaseConfirmation,
   );
+  const [assistantTrialOpen, setAssistantTrialOpen] = useState(false);
+  const closeAssistantTrial = useCallback(() => setAssistantTrialOpen(false), []);
+  const assistantTrialDialogRef = usePreviewDialog(assistantTrialOpen, closeAssistantTrial);
 
   const liveObservation = siteOps?.observation ?? null;
   const liveCandidates = useMemo(
@@ -1122,41 +1123,15 @@ export function SimplifiedWebsiteBuilderPreview({
     () => enabledPages.map((page) => ({ name: page.name, detail: page.detail })),
     [enabledPages],
   );
-  // Real-data draft preview source: blocks projected by the read-only
-  // recommendation API from the current published knowledge snapshot. The
-  // draft preview never falls back to fixture pages.
-  const draftPreviewData = useMemo(() => {
-    const request = designRecommendation?.request ?? null;
-    const response = designRecommendation?.data ?? null;
-    if (
-      !request ||
-      !response ||
-      response.requestContext.requestId !== request.requestContext.requestId
-    ) {
-      return null;
-    }
-    const routeIds = new Set(
-      liveObservation?.brief?.routes.map((route) => route.id) ?? [],
-    );
-    const blocksByRoute = new Map<string, SiteDesignPreviewBlock>();
-    for (const block of response.previewBlocks) {
-      if (routeIds.has(block.routeId)) blocksByRoute.set(block.routeId, block);
-    }
-    return { blocksByRoute, knowledgeVersion: response.knowledgeSnapshot.version };
-  }, [designRecommendation?.data, designRecommendation?.request, liveObservation?.brief?.routes]);
-  const draftPreviewPages = useMemo(
-    () => enabledPages.map((page) => ({ id: page.id, name: page.name })),
-    [enabledPages],
-  );
-  // Two-stage preview: once a real build with a dist exists it stays embedded
-  // even while the design draft has unsaved edits or a newer build is still
-  // generating — the owner always sees a real site, clearly labeled as not yet
-  // reflecting pending changes. The assistant trial, however, is only credited
-  // against the frozen coordinates of the newest build with the draft synced,
-  // so an edit-and-retry loop can never bank a trial from a stale site.
+  // The last completed site remains available through the page-header link
+  // while design edits or a new build are pending. The explicit assistant
+  // trial only counts against the newest build with the design draft synced.
   const displayedBuild = liveObservation?.builds.find(
     (build) => build.previewUrl,
   ) ?? null;
+  useEffect(() => {
+    if (activeStep !== "design" || !displayedBuild) closeAssistantTrial();
+  }, [activeStep, displayedBuild?.id, closeAssistantTrial]);
   const designDraftSynced = latestBuild?.previewUrl
     ? !hasRevisionRequirements
       && (!latestBuild.designPreferences || !currentProjectDesignPreferences
@@ -2053,18 +2028,18 @@ export function SimplifiedWebsiteBuilderPreview({
       // the embedded build preview once it exists.
       const accepted = await submitLiveConfigurationAndBuild();
       if (!accepted) return;
-      setNotice("真实预览已开始生成；构建完成后请在右侧真实构建预览中完成一次助手问答，再继续进入建设评估。");
+      setNotice("网站已开始生成；构建完成后请点击“试用 AI 助手”完成一次真实问答，再继续进入建设评估。");
       return;
     }
     if (activeStep === "design" && siteOps && liveRevisionEditable) {
       if (!designDraftSynced || hasRevisionRequirements) {
         const accepted = await submitLiveRevision();
         if (!accepted) return;
-        setNotice("改版要求已提交；新版本生成后请在右侧完成一次助手问答，再继续进入建设评估。");
+        setNotice("改版要求已提交；新版本生成后请点击“试用 AI 助手”完成一次真实问答，再继续进入建设评估。");
         return;
       }
       if (!assistantTested) {
-        setNotice("请先在右侧真实构建预览中向助手提问并得到真实回答，完成真实试聊后再继续。");
+        setNotice("请先点击“试用 AI 助手”并得到真实回答，完成真实试聊后再继续。");
         return;
       }
     }
@@ -2464,6 +2439,15 @@ export function SimplifiedWebsiteBuilderPreview({
           <h1>从知识库快速搭建帮助中心</h1>
           <p>先完成网站建设与整体评估，再考虑域名和正式上线。</p>
         </div>
+        <div className="sfp-heading-actions">
+          {siteOps && displayedBuild?.previewUrl && (
+            <a className="sfp-button sfp-button--primary sfp-view-website" href={displayedBuild.previewUrl} target="_blank" rel="noopener noreferrer" title={`查看构建 v${displayedBuild.ordinal}（新窗口）`}>
+              <ExternalLink size={16} /> 查看网站
+            </a>
+          )}
+          {siteOps && displayedBuild?.sourceUrl && (
+            <a className="sfp-button sfp-button--ghost sfp-view-website" href={displayedBuild.sourceUrl} download>下载源码</a>
+          )}
         <div className={`sfp-draft-state ${storageAvailable ? "" : "is-session-only"}`}>
           <i />
           <span>
@@ -2478,6 +2462,7 @@ export function SimplifiedWebsiteBuilderPreview({
                 : storageAvailable ? `本地草稿 · ${isConfirmed ? "草稿确认状态已保存" : "配置已自动保存"}` : "仅本次页面保存"}
             </small>
           </span>
+        </div>
         </div>
       </header>
 
@@ -2631,7 +2616,7 @@ export function SimplifiedWebsiteBuilderPreview({
         )}
 
         {activeStep === "design" && (
-          <div className="sfp-workspace-grid">
+          <div className={`sfp-workspace-grid${siteOps ? " sfp-workspace-grid--management" : ""}`}>
             <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--design">
               <div className="sfp-section-heading sfp-section-heading--compact">
                 <div><h2>网站设计</h2><p>网站结构、主题与助手共用同一份设计草稿；语言由服务端根据当前知识确定。</p></div>
@@ -2745,7 +2730,7 @@ export function SimplifiedWebsiteBuilderPreview({
               </div>
 
               <div className="sfp-design-section" data-design-section="theme">
-                <header><span>3</span><div><h3>主题颜色</h3><p>网站与助手颜色会一起出现在右侧统一预览。</p></div></header>
+                <header><span>3</span><div><h3>主题颜色</h3><p>{siteOps ? "网站与助手颜色在提交生成后应用到网站。" : "网站与助手颜色会一起出现在右侧统一预览。"}</p></div></header>
                 <div className="sfp-design-color-grid">
                   <fieldset>
                     <legend>网站主题色</legend>
@@ -2782,14 +2767,43 @@ export function SimplifiedWebsiteBuilderPreview({
                     <strong>{assistantTested ? "助手试用已完成" : "助手试用未完成"}</strong>
                     <small>{assistantTested
                       ? siteOps
-                        ? "已在右侧真实构建预览中完成一次真实问答；修改名称、欢迎语或知识版本后需重新试用。"
+                        ? "已完成一次真实问答；修改名称、欢迎语或知识版本后需重新试用。"
                         : "已在右侧预览中完成一次问答；修改名称或欢迎语后需重新试用。"
                       : siteOps
-                        ? "请在右侧真实构建预览中向助手提问并得到真实回答；本地草稿问答不计入试用。"
+                        ? "点击“试用 AI 助手”完成真实问答；本地草稿问答不计入试用。"
                         : "请在右侧预览中提问一次并得到回答，再进入建设评估。"}</small>
                   </span>
                 </div>
               </div>
+            </section>
+            {siteOps ? (
+              <section className="sfp-panel sfp-builder-tools-panel" aria-label="建站管理">
+                <div className="sfp-section-heading sfp-section-heading--compact">
+                  <div><h2>建站管理</h2><p>补充修改、管理域名与发布；查看网站请使用页面顶部入口。</p></div>
+                </div>
+              {siteOps && liveBuildProgress && (
+                <div
+                  className="sfp-build-progress"
+                  data-testid="siteops-build-progress"
+                  role="progressbar"
+                  aria-label="真实网站构建进度"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={liveBuildProgress.percent}
+                >
+                  <span className="sfp-build-progress__track"><i style={{ width: `${liveBuildProgress.percent}%` }} /></span>
+                  <span className="sfp-build-progress__meta">
+                    <strong>{liveBuildProgress.stageText}</strong>
+                    <small>已进行 {liveBuildProgress.elapsedText} · 预计约 20 分钟，路由越多耗时越长</small>
+                  </span>
+                </div>
+              )}
+                <div className="sfp-assistant-test-action">
+                  <button type="button" className="sfp-button sfp-button--ghost" disabled={!embeddableBuild} onClick={() => setAssistantTrialOpen(true)}>
+                    <Bot size={16} /> 试用 AI 助手
+                  </button>
+                  <small>{!embeddableBuild ? "网站构建完成后即可试用。" : !embedTrialBinding ? "可试用已生成的网站；完成当前设计的构建后，真实问答才计入本次验收。" : assistantTested ? "真实试用已完成，可继续建设评估。" : "得到一次真实回答后，将记录助手试用结果。"}</small>
+                </div>
               {siteOps && latestBuild && (
                 <WebsiteRevisionFields
                   text={revisionText}
@@ -2820,53 +2834,10 @@ export function SimplifiedWebsiteBuilderPreview({
                 setIsConfirmed(false);
                 goTo("template");
               }} />}
-            </section>
-            <section className={`sfp-preview-panel sfp-builder-preview-panel${embeddableBuild ? " sfp-builder-preview-panel--live" : ""}`} aria-label="网站与助手统一预览" data-testid="website-design-preview">
-              <div className="sfp-preview-heading"><span><strong>{isLiveBuilder ? (embeddableBuild ? (embedShowsLatestBuild ? (designDraftSynced ? "真实构建预览" : "真实构建预览 · 有未提交修改") : "真实构建预览 · 新版本生成中") : "真实数据草稿") : "知识驱动统一预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? (embeddableBuild ? (embedShowsLatestBuild ? (designDraftSynced ? " · 已嵌入真实构建产物" : " · 预览为最近一次真实构建，提交修改后自动更新") : " · 正在生成新版本，当前显示上一版真实构建") : " · 内容来自当前知识投影，构建完成后以真实构建预览为准") : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
-              {siteOps && liveBuildProgress && (
-                <div
-                  className="sfp-build-progress"
-                  data-testid="siteops-build-progress"
-                  role="progressbar"
-                  aria-label="真实网站构建进度"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={liveBuildProgress.percent}
-                >
-                  <span className="sfp-build-progress__track"><i style={{ width: `${liveBuildProgress.percent}%` }} /></span>
-                  <span className="sfp-build-progress__meta">
-                    <strong>{liveBuildProgress.stageText}</strong>
-                    <small>已进行 {liveBuildProgress.elapsedText} · 预计约 20 分钟，路由越多耗时越长</small>
-                  </span>
-                </div>
-              )}
-              {isLiveBuilder && embeddableBuild ? (
-                <SiteOpsBuildEmbedPreview
-                  build={embeddableBuild}
-                  device={device}
-                  expectedTrialBinding={embedTrialBinding}
-                  onTrialComplete={handleRealTrialComplete}
-                  routes={embedRoutes}
-                />
-              ) : isLiveBuilder ? (
-                <SiteDesignDraftPreview
-                  assistantAccent={effectiveAssistantAccent}
-                  assistantName={assistantName}
-                  blocksByRoute={draftPreviewData?.blocksByRoute ?? EMPTY_DRAFT_PREVIEW_BLOCKS}
-                  brandMark={brandMark}
-                  device={device}
-                  error={designRecommendation?.error ?? null}
-                  knowledgeVersion={draftPreviewData?.knowledgeVersion ?? null}
-                  loading={Boolean(designRecommendation?.loading)}
-                  pages={draftPreviewPages}
-                  siteAccent={siteAccent}
-                  siteDomain={previewDomain}
-                  siteName={siteName}
-                  stale={recommendationStale}
-                  templateName={selectedTemplate.name}
-                  welcome={welcome}
-                />
-              ) : (
+              </section>
+            ) : (
+              <section className="sfp-preview-panel sfp-builder-preview-panel" aria-label="网站与助手统一预览" data-testid="website-design-preview">
+                <div className="sfp-preview-heading"><span><strong>知识驱动统一预览</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目</small></span><DevicePicker device={device} onChange={setDevice} /></div>
                 <MiniSitePreview
                   assistantAccent={effectiveAssistantAccent}
                   assistantName={assistantName}
@@ -2884,8 +2855,8 @@ export function SimplifiedWebsiteBuilderPreview({
                   templateId={effectiveSelectedTemplateId}
                   welcome={welcome}
                 />
-              )}
-            </section>
+              </section>
+            )}
           </div>
         )}
 
@@ -3061,6 +3032,16 @@ export function SimplifiedWebsiteBuilderPreview({
           </button>
         )}
       </footer>
+      {siteOps && assistantTrialOpen && embeddableBuild && (
+        <div className="sfp-release-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeAssistantTrial(); }}>
+          <section ref={assistantTrialDialogRef} className="sfp-release-dialog sfp-assistant-trial-dialog" role="dialog" aria-modal="true" aria-label="试用 AI 助手" tabIndex={-1}>
+            <button type="button" className="sfp-release-dialog__close" aria-label="关闭助手试用" onClick={closeAssistantTrial}><X size={18} /></button>
+            <h2>试用 AI 助手</h2>
+            <p>在网站右下角打开助手，发送问题并查看真实回答及来源。</p>
+            <SiteOpsBuildEmbedPreview build={embeddableBuild} device="desktop" expectedTrialBinding={embedTrialBinding} onTrialComplete={handleRealTrialComplete} routes={embedRoutes} />
+          </section>
+        </div>
+      )}
       {releaseReport && (
         <div className="sfp-release-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeReleaseConfirmation(); }}>
           <section ref={releaseDialogRef} className="sfp-release-dialog" role="dialog" aria-modal="true" aria-label="发布确认" tabIndex={-1}>
