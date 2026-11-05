@@ -1518,6 +1518,103 @@ describe("redesigned live website builder setup", () => {
     expect(screen.queryByTestId("website-draft-block")).toBeNull();
   });
 
+  it("opens assessment for a completed site without claiming an unperformed assistant trial", async () => {
+    const current = approvedBuildWithDesignPreferences();
+    const scope = "live:assessment-without-trial";
+    const onAction = vi.fn(async () => undefined);
+    const onSubmitRevision = vi.fn(async () => undefined);
+    const onSaveDesignPreferences = vi.fn(async () => current);
+    const props = { observation: current, onAction, onSubmitRevision, onSaveDesignPreferences };
+    const view = render(<SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={props} storageScope={scope} />);
+    await waitFor(() => expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站"));
+    expect(screen.getByText("助手试用未完成")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "进入建设评估" }));
+    expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
+    const trialCheck = screen.getByText("助手真实试聊").closest("li")!;
+    expect(trialCheck.textContent).toContain("待试用");
+    expect(trialCheck.classList.contains("is-passed")).toBe(false);
+    expect(screen.getByText(/配置完整性用于确认草稿，真实试聊单独记录/)).toBeTruthy();
+    const confirm = screen.getByRole("button", { name: "确认当前建设草稿" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => {
+      const draft = JSON.parse(window.localStorage.getItem(`${WEBSITE_DRAFT_STORAGE_KEY}.${encodeURIComponent(scope)}`) ?? "{}");
+      expect(draft.design.assistant.tested).toBe(false);
+      expect(draft.completedStepIds).toEqual(["template", "design"]);
+      expect(draft.confirmed).toBe(true);
+    });
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onSubmitRevision).not.toHaveBeenCalled();
+    expect(onSaveDesignPreferences).not.toHaveBeenCalled();
+
+    view.unmount();
+    render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" siteOps={props} storageScope={scope} />);
+    await waitFor(() => expect(screen.getByText("助手真实试聊").closest("li")!.textContent).toContain("待试用"));
+    fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /网站设计/ }));
+    expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站");
+    expect(screen.getByText("助手试用未完成")).toBeTruthy();
+  });
+
+  it.each(["design", "revision"] as const)("keeps unsent %s changes when assessment is opened without rebuilding", async (change) => {
+    const current = approvedBuildWithDesignPreferences();
+    const onAction = vi.fn(async () => undefined);
+    const onSubmitRevision = vi.fn(async () => undefined);
+    const onSaveDesignPreferences = vi.fn(async () => current);
+    render(<SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ observation: current, onAction, onSubmitRevision, onSaveDesignPreferences }} storageScope={`live:assessment-pending-${change}`} />);
+    await waitFor(() => expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站"));
+    const input = change === "design" ? screen.getByLabelText("网站名称") : screen.getByRole("textbox", { name: "补充修改要求" });
+    fireEvent.change(input, { target: { value: "尚未提交的修改内容" } });
+    expect(screen.getByRole("button", { name: "提交修改并重新生成" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看建设评估" }));
+    expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
+    expect(screen.getByText("真实构建 #1")).toBeTruthy();
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onSubmitRevision).not.toHaveBeenCalled();
+    expect(onSaveDesignPreferences).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /网站设计/ }));
+    expect((change === "design" ? screen.getByLabelText("网站名称") : screen.getByRole("textbox", { name: "补充修改要求" })) as HTMLInputElement).toHaveProperty("value", "尚未提交的修改内容");
+  });
+
+  it.each([false, true])("keeps in-flight assessment tied to the current build (older preview: %s)", async (hasOlderPreview) => {
+    const previous = approvedBuildWithDesignPreferences();
+    const building = {
+      ...previous.builds[0]!,
+      id: "55555555-5555-4555-8555-555555555555",
+      ordinal: 2,
+      parentBuildId: previous.builds[0]!.id,
+      status: "building" as const,
+      previewUrl: null,
+      buildDelivery: null,
+    };
+    const current: SiteOpsObservationV1 = {
+      ...previous,
+      interactionState: "building",
+      builds: [building, ...(hasOlderPreview ? previous.builds : [])],
+    };
+    const onAction = vi.fn(async () => undefined);
+    render(<SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ observation: current, onAction }} storageScope={`live:assessment-building-${hasOlderPreview}`} />);
+    const submit = screen.getByRole("button", { name: "网站生成中…" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "查看建设评估" }));
+    expect(screen.getByText("真实构建 #2")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "确认当前建设草稿" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("页面结构").closest("li")!.classList.contains("is-passed")).toBe(false);
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("does not mark ungenerated configuration complete when its assessment is inspected", () => {
+    const current = liveBuildObservation("awaiting_visual_selection");
+    const onAction = vi.fn(async () => undefined);
+    render(<SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ observation: current, onAction }} storageScope="live:assessment-not-built" />);
+    expect(screen.queryByRole("button", { name: "查看建设评估" })).toBeNull();
+    fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /建设评估/ }));
+    expect((screen.getByRole("button", { name: "确认当前建设草稿" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("页面结构").closest("li")!.classList.contains("is-passed")).toBe(false);
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
   it("opens the real assistant trial on demand through the owner-only preview endpoint", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
@@ -1629,7 +1726,7 @@ describe("redesigned live website builder setup", () => {
       // trial credit for a design that has not been submitted.
       fireEvent.click(screen.getByLabelText("在网站中显示关于我们"));
       await waitFor(() => {
-        expect(screen.getByText(/完成当前设计的构建后/)).toBeTruthy();
+        expect(screen.getByText(/当前设计完成构建后/)).toBeTruthy();
       });
       expect((screen.getByTitle("真实构建预览") as HTMLIFrameElement).src)
         .toContain("embed-preview/?token=");
@@ -1786,6 +1883,22 @@ describe("redesigned live website builder setup", () => {
       fireEvent.click(screen.getByRole("button", { name: "关闭助手试用" }));
       fireEvent.click(screen.getByRole("button", { name: "进入建设评估" }));
       expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
+      expect(onAction).not.toHaveBeenCalled();
+      expect(onSubmitRevision).not.toHaveBeenCalled();
+      expect(onSaveDesignPreferences).not.toHaveBeenCalled();
+      fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /网站设计/ }));
+
+      // An unsent site title changes configuration completeness, while the
+      // genuine trial of the frozen site's unchanged assistant remains true.
+      fireEvent.change(screen.getByLabelText("网站名称"), {
+        target: { value: "尚未提交的网站标题" },
+      });
+      expect(screen.getByText("助手试用已完成")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "查看建设评估" }));
+      const trialCheck = screen.getByText("助手真实试聊").closest("li")!;
+      expect(trialCheck.classList.contains("is-passed")).toBe(true);
+      expect(trialCheck.textContent).toContain("助手配置有效且已完成一次真实问答");
+      expect(trialCheck.textContent).toContain("已确认");
       expect(onAction).not.toHaveBeenCalled();
       expect(onSubmitRevision).not.toHaveBeenCalled();
       expect(onSaveDesignPreferences).not.toHaveBeenCalled();
@@ -2183,7 +2296,7 @@ describe("redesigned live website builder setup", () => {
     expect(instructions.value).toBe("重置前的修改要求");
     resetRequest.resolve(undefined);
       await waitFor(() => expect(screen.getByRole("heading", { name: "选择一个模板版式" })).toBeTruthy());
-      fireEvent.click(screen.getByRole("button", { name: /2.*网站设计/u }));
+      fireEvent.click(screen.getByRole("button", { name: /网站设计/u }));
     await waitFor(() => expect((screen.getByRole("textbox", { name: "补充修改要求" }) as HTMLTextAreaElement).value).toBe(""));
     expect(screen.queryByRole("list", { name: "修改参考图片" })).toBeNull();
     expect(screen.getByText("助手试用未完成")).toBeTruthy();
