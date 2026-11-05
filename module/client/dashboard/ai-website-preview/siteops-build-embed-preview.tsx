@@ -247,7 +247,7 @@ export function SiteOpsBuildEmbedPreview({
           <RefreshCw size={14} /> 重新载入
         </button>
         <button type="button" onClick={openInNewWindow} disabled={!build.previewUrl}>
-          <ExternalLink size={14} /> 新窗口打开
+          <ExternalLink size={14} /> 新窗口查看
         </button>
         {build.sourceUrl && <a href={build.sourceUrl} download><Download size={14} /> 下载源码</a>}
       </div>
