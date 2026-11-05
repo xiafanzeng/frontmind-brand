@@ -2450,7 +2450,7 @@ export function SimplifiedWebsiteBuilderPreview({
       <header className="sfp-heading">
         <div>
           <h1>从知识库快速搭建帮助中心</h1>
-          <p>先完成网站建设与整体评估，再考虑域名和正式上线。</p>
+          {activeStep !== "design" && <p>先完成网站建设与整体评估，再考虑域名和正式上线。</p>}
         </div>
         <div className="sfp-heading-actions">
           {siteOps && displayedBuild?.previewUrl && (
@@ -2632,7 +2632,7 @@ export function SimplifiedWebsiteBuilderPreview({
           <div className={`sfp-workspace-grid${siteOps ? " sfp-workspace-grid--management" : ""}`}>
             <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--design">
               <div className="sfp-section-heading sfp-section-heading--compact">
-                <div><h2>网站设计</h2><p>设置网站信息、页面栏目、主题和 AI 助手。</p></div>
+                <div><h2>网站设计</h2></div>
               </div>
               <div className="sfp-design-section" data-design-section="site">
                 <header><span>1</span><div><h3>网站基础</h3><p>推荐内容来自当前发布知识，您可以继续编辑。</p></div></header>
@@ -2792,7 +2792,7 @@ export function SimplifiedWebsiteBuilderPreview({
             {siteOps ? (
               <section className="sfp-panel sfp-builder-tools-panel" aria-label="建站管理">
                 <div className="sfp-section-heading sfp-section-heading--compact">
-                  <div><h2>建站管理</h2><p>补充修改要求，管理域名与发布。</p></div>
+                  <div><h2>建站管理</h2></div>
                 </div>
               {siteOps && liveBuildProgress && (
                 <div
