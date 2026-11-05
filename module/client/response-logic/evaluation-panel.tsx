@@ -1,6 +1,8 @@
+import {TaskStageCard} from "./task-stage-card.js";
+import type {GeneralExecutionDto} from "@frontmind/module-contracts/execution";
 import {useMemo,type ReactNode} from "react";
 import {Score,WorkbenchCard,WorkbenchSteps} from "./workbench-parts.js";
-import {JudgeRelevance,JudgeCompleteness,JudgeActionability,JudgeBoundaryRisk,JudgeStatusBanner} from "./judge-panel.js";
+import {JudgeRelevance,JudgeCompleteness,JudgeActionability,JudgeBoundaryRisk} from "./judge-panel.js";
 import type {JudgeOutput,JudgeFinding} from "../../contracts/response-logic-judge.js";
 import type {JudgePhase} from "../use-judge-evaluation.js";
 import "./evaluation.css";
@@ -105,7 +107,7 @@ function DimensionCard({title,score,rules,children}:{title:string;score:number|n
  * scoring source: every score, finding, excerpt and suggestion shown here comes
  * from the judge output; the rule engine is internal-only and never rendered.
  */
-export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeResult,judgeError,dataSourceLabel,onBack,onOptimize,onRetry}:{question:string;intent:string;judgePhase:JudgePhase;judgeResult:JudgeOutput|null;judgeError?:string;dataSourceLabel?:string;onBack:()=>void;onOptimize:()=>void;onRetry?:()=>void}){
+export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeResult,judgeError,judgeErrorCode,judgeExecution,judgeTaskId,dataSourceLabel,onBack,onOptimize,onRetry,onResume}:{question:string;intent:string;judgePhase:JudgePhase;judgeResult:JudgeOutput|null;judgeError?:string;judgeErrorCode?:string;judgeExecution?:GeneralExecutionDto;judgeTaskId?:string|null;onResume?:()=>void;dataSourceLabel?:string;onBack:()=>void;onOptimize:()=>void;onRetry?:()=>void}){
   const hasResult = judgePhase==="completed" && judgeResult;
   const diagnoses=useMemo(()=>hasResult?collectJudgeDiagnoses(judgeResult):[],[hasResult,judgeResult]);
   const status=diagnoses.some(item=>item.severity==="risk")
@@ -114,21 +116,10 @@ export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeRe
     :{label:"暂无待处理问题",tone:"ok" as const};
   return <section className="rl-eval-root" aria-label="应答逻辑评估">
     <div className="rl-eval-back"><button type="button" className="rl-eval-back-button" onClick={onBack}>← 返回应答逻辑详情</button></div>
-    <header className="rl-eval-heading"><div><h2>应答逻辑评估 · {question}</h2><p>Intent：{intent||"未提供"} · 四项独立评分，不设综合分 · LLM 语义评估</p></div></header>
-    {judgePhase!=="idle" && judgePhase!=="completed" && <JudgeStatusBanner phase={judgePhase} error={judgePhase==="failed"?judgeError:undefined} />}
+    <header className="rl-eval-heading"><div><h2>应答逻辑评估 · {question}</h2></div></header>
     <WorkbenchSteps step={1}/>
-    {!hasResult && <div className="rl-eval-main"><div className="rl-eval-grid">
-      {judgePhase==="failed"
-        ?<WorkbenchCard title="LLM 语义评估未完成">
-          <p className="rl-eval-score-description">本次 LLM 语义评估未能完成，暂无法生成四维评分。{judgeError?`（${judgeError}）`:""}请检查错误信息后重试；应答逻辑未被修改。</p>
-          {onRetry&&<div className="rl-eval-actions rl-eval-actions--retry"><button type="button" className="rl-eval-primary" onClick={onRetry}>重新发起评估</button></div>}
-        </WorkbenchCard>
-        :judgePhase==="idle"
-          ?<WorkbenchCard title="尚未评估"><p className="rl-eval-score-description">当前应答逻辑尚未发起 LLM 语义评估。</p></WorkbenchCard>
-          :<WorkbenchCard title="LLM 语义评估进行中">
-            <p className="rl-eval-score-description">模型正在基于当前 Question、Intent、应答逻辑四栏内容与可用企业知识材料进行四维语义评估，完成后结果自动展示。通常需要 1–3 分钟。</p>
-          </WorkbenchCard>}
-    </div></div>}
+    {judgePhase!=="idle"&&judgePhase!=="completed"&&<TaskStageCard flow="judge" phase={judgePhase} taskId={judgeTaskId} execution={judgeExecution} error={judgeError} errorCode={judgeErrorCode} onRetry={onRetry} retryLabel="重新发起评估" onResume={onResume}/>}
+    {judgePhase==="idle"&&<div className="rl-eval-main"><div className="rl-eval-grid"><WorkbenchCard title="尚未评估"><p className="rl-eval-score-description">当前应答逻辑尚未发起 LLM 语义评估。</p></WorkbenchCard></div></div>}
     {hasResult && (()=>{const d=judgeResult.dimensions;return <>
     <div className="rl-eval-layout">
       <div className="rl-eval-main">

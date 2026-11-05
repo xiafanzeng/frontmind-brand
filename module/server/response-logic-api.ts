@@ -1,3 +1,4 @@
+import {responseLogicPublicExecution} from "./response-logic-public-execution.js";
 import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import { Router } from "express";
@@ -29,7 +30,7 @@ import { createResponseLogicOptimizationRouter } from "./response-logic-optimiza
 /** Business routes, evidence assembly, task binding, adoption and recovery live in the module.
  * The host only supplies identity, transactional repositories and generic execution/file services. */
 export function createResponseLogicApi(core: ResponseLogicApiPorts) {
- const { projectGeneralExecution, generalExecutionActivity, orderExecutionTimeline, projectBusinessExecution, enterpriseWorkspaceUserId, getEnterpriseProjectScope, enterpriseAccountOwnerPredicate, sendAiBillingError, localAssets, providerFileLeases, getCredentialForUpstreamResource, recordUpstreamResource, createCredentialAgentClient, fileResourceContentExpiry, isFileResourceContentExpired, getDashboardQuestion, getLatestKnowledgeSnapshot, getFrontMindCredentials, getUpstreamBaseUrl, toUpstreamAgentProfile, ResponseLogicConfirmedError, ResponseLogicProviderReadinessError, ResponseLogicPublicationRequestConflictError, ResponseLogicResultAdoptionError, ResponseLogicRevisionConflictError, ResponseLogicTaskActiveError, ResponseLogicTaskSupersededError, adoptResponseLogicModelResult, assertResponseLogicRecordEditable, getResponseLogicEntry, recordResponseLogicTaskStart, releaseResponseLogicTaskBinding, requireResponseLogicProviderReadiness, updateResponseLogicDraftMaterials, assertServiceCapability, ServiceEntitlementError, redactSensitivePayload, redactSensitiveText, safeErrorForLog, buildDeterministicTaskAttachmentArchive, assertUpstreamPromptBudget, getDb, readStoredPresalesFile, classifyManusV2StructuredResultEnvelope, latestManusV2TaskState, ManusV2ApiError, manusV2EventOperationToken, orderManusV2EventsByProviderRank } = core;
+ const { enterpriseWorkspaceUserId, getEnterpriseProjectScope, enterpriseAccountOwnerPredicate, sendAiBillingError, localAssets, providerFileLeases, getCredentialForUpstreamResource, recordUpstreamResource, createCredentialAgentClient, fileResourceContentExpiry, isFileResourceContentExpired, getDashboardQuestion, getLatestKnowledgeSnapshot, getFrontMindCredentials, getUpstreamBaseUrl, toUpstreamAgentProfile, ResponseLogicConfirmedError, ResponseLogicProviderReadinessError, ResponseLogicPublicationRequestConflictError, ResponseLogicResultAdoptionError, ResponseLogicRevisionConflictError, ResponseLogicTaskActiveError, ResponseLogicTaskSupersededError, adoptResponseLogicModelResult, assertResponseLogicRecordEditable, getResponseLogicEntry, recordResponseLogicTaskStart, releaseResponseLogicTaskBinding, requireResponseLogicProviderReadiness, updateResponseLogicDraftMaterials, assertServiceCapability, ServiceEntitlementError, redactSensitivePayload, redactSensitiveText, safeErrorForLog, buildDeterministicTaskAttachmentArchive, assertUpstreamPromptBudget, getDb, readStoredPresalesFile, classifyManusV2StructuredResultEnvelope, latestManusV2TaskState, ManusV2ApiError, manusV2EventOperationToken, orderManusV2EventsByProviderRank } = core;
 const router: import("express").Router = Router();
 
 // Server-side rule evaluation shares the /api/response-logic mount, so no host
@@ -54,20 +55,6 @@ router.use("/evaluation/judge", createResponseLogicJudgeRouter(core));
 // endpoint re-fetches and re-validates the referenced judge task server-side,
 // so client-supplied evaluation content is never trusted.
 router.use("/optimization", createResponseLogicOptimizationRouter(core));
-
-function responseLogicPublicExecution(taskId: string, events: readonly ManusV2MessageEvent[]) {
-  let turn = 0;
-  const rows = orderManusV2EventsByProviderRank(events, "oldest_first").map((event, rank) => {
-    if (event.type === "user_message") turn++;
-    const activity = generalExecutionActivity(event.executionActivity);
-    return { taskId, providerEventId: `${turn}:${event.id}`, providerTimestampMs: event.timestamp, normalizedPayload: { kind: "provider_event", providerOriginalRank: rank, executionTurn: { id: `${taskId}:${turn}`, userSequence: turn }, executionActivity: activity?.kind === "tool_result" && activity.callId ? { ...activity, callId: `${turn}:${activity.callId}` } : activity } };
-  });
-  const execution = projectGeneralExecution(taskId, rows);
-  const submitted = orderManusV2EventsByProviderRank(events, "oldest_first").flatMap((event, rank) => event.type === "user_message" ? [{ id: `${taskId}:submitted:${event.id}`, turnId: rows[rank]!.normalizedPayload.executionTurn.id, userSequence: rows[rank]!.normalizedPayload.executionTurn.userSequence, timestamp: event.timestamp < 1e12 ? event.timestamp * 1000 : event.timestamp, rank, phase: "preparing_requirements" as const, status: "ended" as const }] : []);
-  const stages = projectBusinessExecution(taskId, submitted);
-  return { ...execution, coverage: "partial" as const, timeline: orderExecutionTimeline([...execution.timeline, ...stages.timeline]) };
-}
-
 
 const RESPONSE_LOGIC_STRUCTURED_OUTPUT_SCHEMA = {
   type: "object",
@@ -1256,7 +1243,7 @@ router.get("/tasks/:taskId/status", async (request, res) => {
     }
     const events = await client.listAllMessages({ taskId, order: "desc" });
     const roundEvents = currentResponseLogicRoundEvents(events);
-    const execution = responseLogicPublicExecution(taskId, events);
+    const execution = responseLogicPublicExecution(taskId, events, orderManusV2EventsByProviderRank);
     const status = latestManusV2TaskState(roundEvents ?? []);
     if (status === null || status === "running" || status === "waiting") {
       res.status(202).json(

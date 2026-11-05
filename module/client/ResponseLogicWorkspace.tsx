@@ -1,4 +1,5 @@
-import { BusinessExecutionActivity, captureWorkspaceRestOperation, useSearch, activeEnterpriseProjectId, FilePreview, ImagePreview, Button, trpc, createResponseLogicTask, uploadChatLocalAsset, toast, loadPreviewAdapter } from "./response-logic-runtime-host.js";
+import {TaskStageCard} from "./response-logic/task-stage-card.js";
+import { captureWorkspaceRestOperation, useSearch, activeEnterpriseProjectId, FilePreview, ImagePreview, Button, trpc, createResponseLogicTask, uploadChatLocalAsset, toast, loadPreviewAdapter } from "./response-logic-runtime-host.js";
 import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
 import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
 import type { IntentMessage as Message } from "./response-logic-host.js";
@@ -1984,7 +1985,7 @@ function ResponseLogicQuestionEditor({
   const showDemo = Boolean(draft.concern.trim() || draft.conclusion.trim() || draft.facts.trim() || draft.boundaries.trim());
   // LLM-as-Judge is the sole formal scorer. The rule evaluation engine remains
   // a server-side internal diagnostic and is never invoked by this flow.
-  const judge = useJudgeEvaluation({ questionId, recordRevision: currentRevision, sourceFingerprint: currentFingerprint, questionBasis });
+  const judge = useJudgeEvaluation({ questionId, recordIdentity: persistedRecord?.id, recordRevision: currentRevision, sourceFingerprint: currentFingerprint, questionBasis });
   const beginDemoEvaluation = () => {
     void (async () => {
       if (!(await questionFreshness.checkNow())) return;
@@ -1998,7 +1999,7 @@ function ResponseLogicQuestionEditor({
       void judge.start({retry: true});
     })();
   };
-  const judgeErrorText = judge.state.phase === "failed"
+  const judgeErrorText = (judge.state.phase === "failed" || judge.state.phase === "uncertain")
     ? [judge.state.error, judge.state.errorCode].filter(Boolean).join(" · ") || undefined
     : undefined;
   // LLM optimization of the current draft, bound to the completed judge task.
@@ -2006,6 +2007,7 @@ function ResponseLogicQuestionEditor({
   // candidate can never be adopted into a changed draft.
   const optimization = useOptimizationGeneration({
     questionId,
+    recordIdentity: persistedRecord?.id,
     recordRevision: currentRevision,
     sourceFingerprint: currentFingerprint,
     judgeTaskId: judge.state.phase === "completed" && judge.state.taskId ? judge.state.taskId : "",
@@ -2081,38 +2083,8 @@ function ResponseLogicQuestionEditor({
       )}
 
       {showGenerationProcess && generation && (
-        <section className="rl-process-card" aria-label="应答生成过程">
-          <div className="rl-process-head">
-            {generation.phase === "running" && !generation.completedAt ? (
-              <>
-                <Loader2 size={15} className="animate-spin" />
-                <strong>
-                  {generation.adopting ? "正在保存生成结果…" : "正在生成应答逻辑…"}
-                </strong>
-                <span>
-                  {generation.degraded
-                    ? "暂时无法确认任务状态，正在自动重试查询；不会重复创建任务"
-                    : "生成期间材料与正文修改已冻结"}
-                </span>
-              </>
-            ) : generation.phase === "failed" ? (
-              <>
-                <CircleDot size={15} />
-                <strong>生成未完成</strong>
-                <span>{generation.failure?.message}</span>
-              </>
-            ) : (
-              <>
-                <Check size={15} />
-                <strong>已生成并进入编辑</strong>
-                <span>过程默认折叠，正文可直接修改</span>
-              </>
-            )}
-            {generation.phase === "failed" && (
-              <button
-                type="button"
-                className="rl-primary-button"
-                onClick={() => {
+        <TaskStageCard flow="generation" phase={generation.completedAt?"completed":generation.phase} taskId={generation.taskId} execution={generation.execution} adopting={generation.adopting} degraded={generation.degraded} onResume={()=>setLifecyclePoke(token=>token+1)} error={generation.failure?.message}
+          onRetry={() => {
                   if (generation.failure?.retryAdoptionOnly) {
                     setResponseLogicGeneration(scope, questionId, {
                       ...generation,
@@ -2123,19 +2095,11 @@ function ResponseLogicQuestionEditor({
                     setResponseLogicGeneration(scope, questionId, null);
                     void startGeneration();
                   }
-                }}
-              >
-                重试
-              </button>
-            )}
-          </div>
-          {generation.execution && (
-            <BusinessExecutionActivity execution={generation.execution} />
-          )}
-        </section>
+                }} />
       )}
 
-      {(generating || publishing) && !showGenerationProcess && (
+      {generating && !showGenerationProcess && <TaskStageCard flow="generation" phase="starting"/>}
+      {publishing && !showGenerationProcess && (
         <section className="rl-process-card" aria-label="处理中">
           <div className="rl-process-head">
             <Loader2 size={15} className="animate-spin" />
@@ -2170,7 +2134,7 @@ function ResponseLogicQuestionEditor({
         </div>
       )}
       {showDemo && demoView === "evaluation" && (
-        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={retryDemoEvaluation}/>
+        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} judgeErrorCode={judge.state.errorCode} judgeExecution={judge.state.execution} judgeTaskId={judge.state.taskId} onResume={judge.resume} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={retryDemoEvaluation}/>
       )}
       {showDemo && demoView === "optimize" && (
         <ResponseLogicOptimizationWorkflow key={`${questionId}:${currentVersion}:${currentRevision}:${currentFingerprint}`} question={question.question} intent={question.intent ?? ""} logic={currentLogic} judgeTaskId={judge.state.phase === "completed" && judge.state.taskId ? judge.state.taskId : ""} optimization={guardedOptimization} onAdopt={adoptOptimizationPatch} onBack={()=>setDemoView("evaluation")}/>

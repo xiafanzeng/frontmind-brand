@@ -1,0 +1,196 @@
+.rl-single-page .rl-opt-result-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 62fr) minmax(0, 38fr);
+  gap: 20px;
+  align-items: start;
+  margin-bottom: 20px;
+}
+.rl-single-page .rl-opt-result-summary,
+.rl-single-page .rl-opt-result-adopt {
+  min-width: 0;
+  padding: 20px;
+  border-radius: 14px;
+}
+.rl-single-page .rl-opt-result-summary h4 {
+  font-size: 13px;
+  margin: 20px 0 10px;
+  font-weight: 600;
+}
+.rl-single-page .rl-opt-core-summary {
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: #f7f3fb;
+  border: 1px solid #ece4f4;
+  margin-top: 14px;
+}
+.rl-single-page .rl-opt-core-summary h4 {
+  color: var(--iw-purple);
+  margin: 0 0 8px;
+}
+.rl-single-page .rl-opt-core-summary p,
+.rl-single-page .rl-opt-boundary-text {
+  font-size: 13px;
+  line-height: 1.85;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rl-single-page .rl-opt-suggestions {
+  padding: 0;
+  list-style: none;
+  margin: 0;
+}
+.rl-single-page .rl-opt-suggestions li {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--iw-line);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.rl-single-page .rl-opt-suggestions li:last-child {
+  border: 0;
+}
+.rl-single-page .rl-opt-suggestions p {
+  margin: 6px 0;
+}
+.rl-single-page .rl-opt-suggestions summary {
+  cursor: pointer;
+  color: var(--iw-purple);
+  font-size: 12px;
+}
+.rl-single-page .rl-opt-result-adopt h3 small {
+  font-size: 12px;
+  color: var(--iw-purple);
+  font-weight: 400;
+}
+.rl-single-page .rl-opt-choices {
+  display: grid;
+  gap: 16px;
+  margin: 20px 0;
+}
+.rl-single-page .rl-opt-choices b {
+  font-size: 12px;
+  font-weight: 500;
+  display: block;
+  margin-bottom: 7px;
+}
+.rl-single-page .rl-opt-choices > div > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.rl-single-page .rl-opt-choices label,
+.rl-single-page .rl-opt-choices button {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--iw-line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 4px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #74647f;
+}
+.rl-single-page .rl-opt-choices label.selected,
+.rl-single-page .rl-opt-choices button[aria-pressed="true"] {
+  background: #f7f1fb;
+  border-color: #d9c5e7;
+  color: var(--iw-purple);
+}
+.rl-single-page .rl-opt-choices input {
+  accent-color: var(--iw-purple);
+}
+.rl-single-page .rl-opt-result-adopt .rl-eval-action-buttons {
+  display: flex;
+  flex-direction: column;
+}
+.rl-single-page .rl-opt-comparison {
+  padding: 20px;
+  border-radius: 14px;
+}
+.rl-single-page .rl-opt-field-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.rl-single-page .rl-opt-field-tabs button {
+  border: 1px solid var(--iw-line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: white;
+  font-size: 12px;
+  color: #74647f;
+  cursor: pointer;
+}
+.rl-single-page .rl-opt-field-tabs button[aria-pressed="true"] {
+  background: #f7f1fb;
+  border-color: #d9c5e7;
+  color: var(--iw-purple);
+}
+.rl-single-page .rl-opt-comparison .rl-opt-compare-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 46fr) minmax(0, 54fr);
+  gap: 16px;
+}
+.rl-single-page .rl-opt-comparison .rl-opt-before,
+.rl-single-page .rl-opt-comparison .rl-opt-after {
+  min-width: 0;
+  border: 1px solid var(--iw-line);
+  border-radius: 10px;
+  padding: 16px;
+  background: #fff;
+}
+.rl-single-page .rl-opt-comparison .rl-opt-after {
+  border-color: #dfd0eb;
+}
+.rl-single-page .rl-opt-comparison textarea {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  font: inherit;
+  line-height: 1.85;
+  resize: vertical;
+}
+.rl-single-page .rl-opt-comparison p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.85;
+}
+.rl-single-page .rl-opt-result-adopt button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rl-single-page .rl-opt-field-tabs button:focus-visible,
+.rl-single-page .rl-opt-choices button:focus-visible {
+  outline: 2px solid var(--iw-purple);
+  outline-offset: 3px;
+}
+@media (max-width: 700px) {
+  .rl-single-page .rl-opt-result-layout,
+  .rl-single-page .rl-opt-comparison .rl-opt-compare-pair {
+    grid-template-columns: 1fr;
+  }
+  .rl-single-page .rl-opt-result-summary,
+  .rl-single-page .rl-opt-result-adopt,
+  .rl-single-page .rl-opt-comparison {
+    padding: 16px;
+  }
+  .rl-single-page .rl-opt-core-summary {
+    padding: 16px;
+  }
+  .rl-single-page .rl-opt-field-tabs button {
+    flex: 1 1 45%;
+    white-space: normal;
+  }
+}
+
+.rl-single-page .rl-opt-comparison .rl-opt-after {
+  margin-top: 0;
+}
+.rl-single-page .rl-opt-result-layout ~ .rl-eval-actions {
+  position: static;
+}

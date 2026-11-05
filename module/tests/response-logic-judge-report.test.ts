@@ -149,12 +149,12 @@ describe("judgeEvaluationReducer", () => {
     expect(after.errorCode).toBe("JUDGE_TRANSPORT_FAILED");
   });
 
-  it("marks poll failures and timeouts as failed", () => {
+  it("distinguishes terminal failures from uncertain timeouts", () => {
     const running = runningOn(K1);
     const failed = judgeEvaluationReducer(running, { type: "poll-failed", message: "x", code: "JUDGE_POLL_FAILED", contextKey: K1 });
     expect(failed.phase).toBe("failed");
     const timedOut = judgeEvaluationReducer(runningOn(K1), { type: "timeout", contextKey: K1 });
-    expect(timedOut.phase).toBe("failed");
+    expect(timedOut.phase).toBe("uncertain");
     expect(timedOut.errorCode).toBe("JUDGE_TIMEOUT");
     // Timeout wording must not imply the task certainly failed: the upstream
     // may still be running and a later check reuses the same idempotent task.
@@ -168,10 +168,9 @@ describe("judgeEvaluationReducer", () => {
     expect(TASK_POLL_INTERVAL_MS).toBe(3000);
     expect(MAX_TASK_POLL_ATTEMPTS).toBe(300);
     expect((MAX_TASK_POLL_ATTEMPTS * TASK_POLL_INTERVAL_MS) / 60000).toBeGreaterThanOrEqual(15);
-    // A timeout settles the phase into failed — it never dispatches a new
-    // start by itself; a manual restart is the only path to a new request.
+    // A timeout retains the task and blocks new starts; recovery only queries it.
     const timedOut = judgeEvaluationReducer(runningOn(K1), { type: "timeout", contextKey: K1 });
-    expect(judgeStartBlocked(timedOut.phase)).toBe(false);
+    expect(judgeStartBlocked(timedOut.phase)).toBe(true);
     expect(timedOut.taskId).toBeTruthy(); // the task reference is kept, not auto-restarted
   });
 
@@ -262,7 +261,7 @@ describe("formal four-dimension report rendering", () => {
   it("shows the running state instead of any partial report", () => {
     const html = renderPanel({ judgePhase: "running" });
     expect(html).toContain("LLM 语义评估进行中");
-    expect(countOccurrences(html, 'class="rl-eval-card rl-eval-score-card"')).toBe(1);
+    expect(countOccurrences(html, 'aria-label="任务阶段"')).toBe(1);
     expect(html).not.toContain('role="meter"');
   });
 
@@ -278,8 +277,8 @@ describe("formal four-dimension report rendering", () => {
   it("shows the JUDGE_STRUCTURED_OUTPUT_MISSING error honestly without stale rule wording", () => {
     const html = renderPanel({ judgePhase: "failed", judgeError: "Judge 任务未返回结构化输出 · JUDGE_STRUCTURED_OUTPUT_MISSING", onRetry: () => {} });
     expect(html).toContain("JUDGE_STRUCTURED_OUTPUT_MISSING");
-    expect(html).toContain("暂无法生成四维评分");
-    expect(html).toContain("应答逻辑未被修改");
+    expect(html).toContain("查看错误详情");
+    expect(html).not.toContain("评估结果已通过校验");
     // No successful scores and no stale rule-era consolation wording.
     expect(html).not.toContain('role="meter"');
     expect(html).not.toContain("规则检查结果不受影响");
@@ -292,7 +291,8 @@ describe("formal four-dimension report rendering", () => {
     // Compiling this call with only judge props is the contract; rendering must succeed.
     const html = renderPanel({ judgePhase: "completed", judgeResult: buildJudge() });
     expect(html).toContain(QUESTION);
-    expect(html).toContain(INTENT);
+    expect(html).not.toContain("Intent：");
+    expect(html).not.toContain("四项独立评分，不设综合分");
   });
 
   it("renders an idle notice before any evaluation starts", () => {

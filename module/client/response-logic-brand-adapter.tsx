@@ -1,6 +1,7 @@
 import { ComponentType, useEffect, useRef, useState } from "react";
 import { configureIntentWorkspaceHost } from "./response-logic-runtime-host.js";
 import { RESPONSE_LOGIC_API_BASE } from "./response-logic-api-base.js";
+import { readResponseLogicExecution } from "../contracts/response-logic-progress.js";
 import type { IntentWorkspaceHost, IntentToast, StartResponseLogicTask, UploadIntentAsset, IntentRestOperation, IntentVisualComponents, IntentTrpcHost } from "./response-logic-host.js";
 
 /**
@@ -141,7 +142,8 @@ export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInp
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error((body as { error?: { message?: string } })?.error?.message ?? `生成任务创建失败（${response.status}）`);
+      const error = (body as { error?: { code?: string; message?: string } })?.error;
+      throw Object.assign(new Error(error?.message ?? `生成任务创建失败（${response.status}）`), {code:error?.code, status:response.status});
     }
     // The server wraps the task in an envelope: {task:{id,…},startedAt,…}.
     // Returning the raw body here leaves task.id undefined, the workspace
@@ -149,13 +151,14 @@ export function createBrandResponseLogicHost(input: BrandResponseLogicAdapterInp
     // and the page spins on 生成中 forever while the upstream task finishes
     // unobserved (live: tasks 712b31c5/e932f604/1f724bc9/5275fc1c all had
     // zero status calls after a 200 start). Unwrap strictly.
-    const task = (body as { task?: { id?: unknown; operationRevision?: unknown } }).task;
+    const task = (body as { task?: { id?: unknown; operationRevision?: unknown; execution?: unknown } }).task;
     if (!task || typeof task.id !== "string" || !task.id) {
-      throw new Error("生成任务创建响应无效（缺少任务标识）");
+      throw Object.assign(new Error("生成任务创建响应无效（缺少任务标识）"), {code:"RESPONSE_LOGIC_START_RESPONSE_INVALID"});
     }
     return {
       id: task.id,
       operationRevision: typeof task.operationRevision === "number" ? task.operationRevision : undefined,
+      execution: readResponseLogicExecution(task.execution, task.id),
     };
   };
 

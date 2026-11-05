@@ -5,7 +5,9 @@ import {
   pollJudgeTask,
   judgeContextKey,
   JudgeRequestError,
+  recoverJudgeEvaluation,
 } from "../client/response-logic-judge-client";
+import {recoverOptimizationGeneration} from "../client/response-logic-optimization-client";
 import { judgeOutputSchema, type JudgeOutput } from "../contracts/response-logic-judge";
 
 function installFetch(handlers: Array<(url: string, init?: RequestInit) => Response>) {
@@ -30,6 +32,28 @@ function installFetch(handlers: Array<(url: string, init?: RequestInit) => Respo
 
 const jsonResponse = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+describe.each([['judge', recoverJudgeEvaluation], ['optimizer', recoverOptimizationGeneration]] as const)('%s read-only recovery client', (_name, recover) => {
+  const input = {questionId:'q1',expectedRevision:3,sourceFingerprint:'fp',judgeTaskId:'judge-1'};
+  it('accepts only a matching revision and draft, using GET only', async () => {
+    const found = {status:'found',taskId:'existing',attempt:1,recordRevision:3,sourceFingerprint:'fp'};
+    const {calls} = installFetch([()=>jsonResponse(200,found),()=>jsonResponse(200,{...found,sourceFingerprint:'other'}),()=>jsonResponse(200,{...found,recordRevision:4})]);
+    expect(await recover(input)).toEqual(found);
+    expect(await recover(input)).toEqual({status:'none'});expect(await recover(input)).toEqual({status:'none'});
+    expect(calls.every(call=>call.init?.method==='GET')).toBe(true);
+    expect(calls[0].url).not.toContain('sourceFingerprint');
+  });
+  it('handles an absent old endpoint without falling back to POST', async () => {
+    const {calls}=installFetch([()=>new Response('Not Found',{status:404})]);
+    expect(await recover(input)).toEqual({status:'unavailable',reason:'unsupported'});
+    expect(calls).toHaveLength(1);expect(calls[0].init?.method).toBe('GET');
+  });
+  it('preserves explicit errors and rejects extra result fields',async()=>{
+    installFetch([()=>jsonResponse(404,{error:{code:'RESPONSE_LOGIC_RECORD_MISSING',message:'missing'}}),()=>jsonResponse(200,{status:'none',unexpected:true})]);
+    await expect(recover(input)).rejects.toMatchObject({code:'RESPONSE_LOGIC_RECORD_MISSING',status:404});
+    await expect(recover(input)).rejects.toMatchObject({code:expect.stringContaining('RESPONSE_INVALID')});
+  });
+});
 
 const startResponse = jsonResponse(200, {
   taskId: "judge-task-001", status: "running", recordRevision: 3,
@@ -64,6 +88,23 @@ const validJudge: JudgeOutput = judgeOutputSchema.parse({
 });
 
 describe("judge client", () => {
+  it("falls back to the old read endpoint when a strict server rejects progress negotiation",async()=>{
+    const {calls}=installFetch([()=>jsonResponse(400,{error:{code:"BAD_REQUEST"}}),()=>jsonResponse(202,{status:"running"})]);
+    expect(await pollJudgeTask({questionId:"q1",expectedRevision:3,taskId:"t"})).toEqual({status:"running"});
+    expect(calls[0].url).toContain("progress=1");
+    expect(calls[1].url).not.toContain("progress=");
+    expect(calls.every(call=>call.init?.method==="GET")).toBe(true);
+  });
+  it("reads safe progress beside a strict result without accepting extra business fields",async()=>{
+    const execution={schemaVersion:1,taskId:"t",coverage:"partial",timeline:[{id:"e",turnId:"t:1",userSequence:1,timestamp:1,rank:1,kind:"status",status:"running",thinkingText:"PRIVATE"}]};
+    const body={status:"completed",judgeVersion:"1",recordRevision:3,sourceFingerprint:"fp",evaluatedAt:new Date().toISOString(),judge:validJudge,execution};
+    installFetch([()=>jsonResponse(200,body),()=>jsonResponse(200,{...body,unknownBusinessField:true})]);
+    const result=await pollJudgeTask({questionId:"q1",expectedRevision:3,taskId:"t"});
+    expect(result.status).toBe("completed");
+    expect(result.execution?.timeline).toHaveLength(1);
+    expect(JSON.stringify(result.execution)).not.toContain("PRIVATE");
+    await expect(pollJudgeTask({questionId:"q1",expectedRevision:3,taskId:"t"})).rejects.toMatchObject({code:"JUDGE_RESPONSE_INVALID"});
+  });
   it("sends the explicit failed attempt and reads the accepted retry number", async () => {
     const {calls} = installFetch([() => jsonResponse(200, {taskId: "retry-task", attempt: 2,
       recordRevision: 3, sourceFingerprint: "fp-abc"})]);

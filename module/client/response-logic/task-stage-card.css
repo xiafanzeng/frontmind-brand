@@ -1,0 +1,232 @@
+.rl-task-stages {
+  --rl-task-purple: var(--module-accent, #7545a0);
+  border: 1px solid #e7dfed;
+  border-radius: 14px;
+  background: #fff;
+  padding: 20px;
+  margin: 0 0 18px;
+  min-width: 0;
+  color: #302a38;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.rl-task-stages * {
+  box-sizing: border-box;
+}
+.rl-task-stages header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.rl-task-stages h3 {
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 5px 0 0;
+  font-weight: 600;
+}
+.rl-task-eyebrow {
+  color: var(--rl-task-purple);
+  font-size: 12px;
+}
+.rl-task-duration {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #786c82;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.rl-task-stages .rl-task-description {
+  color: #685e72;
+  line-height: 1.7;
+  margin: 10px 0 18px;
+  overflow-wrap: anywhere;
+}
+.rl-task-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 24px;
+}
+.rl-task-body > ol {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.rl-task-stage {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  min-height: 54px;
+  padding: 0 0 14px;
+  color: #8a8390;
+}
+.rl-task-stage:last-child {
+  min-height: 32px;
+  padding-bottom: 0;
+}
+.rl-task-stage:not(:last-child):before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 28px;
+  bottom: 4px;
+  width: 1px;
+  background: #e9e3ee;
+}
+.rl-task-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 25px;
+  height: 25px;
+  border-radius: 50%;
+  background: #f1eef4;
+  color: #8c8493;
+  font-size: 11px;
+}
+.rl-task-stage b {
+  font-size: 13px;
+  line-height: 1.6;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.rl-task-stage small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #81778b;
+}
+.rl-task-stage.is-completed .rl-task-marker {
+  background: #eee5f6;
+  color: var(--rl-task-purple);
+}
+.rl-task-stage.is-completed {
+  color: #62536d;
+}
+.rl-task-stage.is-running {
+  color: var(--rl-task-purple);
+}
+.rl-task-stage.is-running b {
+  font-weight: 600;
+}
+.rl-task-stage.is-running .rl-task-marker {
+  background: var(--rl-task-purple);
+  color: white;
+}
+.rl-task-stage.is-running svg {
+  animation: rl-task-spin 1.8s linear infinite;
+}
+.rl-task-stage.is-failed {
+  color: #b3454d;
+}
+.rl-task-stage.is-failed .rl-task-marker {
+  background: #fbe9eb;
+  color: #b3454d;
+}
+.rl-task-activity {
+  border-left: 1px solid #eee8f2;
+  padding-left: 24px;
+  min-width: 0;
+}
+.rl-task-activity h4 {
+  font-size: 12px;
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+.rl-task-activity ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.rl-task-activity li {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  line-height: 1.7;
+  font-size: 12px;
+}
+.rl-task-activity time {
+  white-space: nowrap;
+  color: #877b91;
+  font-size: 11px;
+}
+.rl-task-activity p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #877b91;
+}
+.rl-task-activity .rl-task-hint {
+  margin-top: 16px;
+  padding: 10px 12px;
+  background: #faf7fc;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.rl-task-stages footer {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+  border-top: 1px solid #eee8f2;
+  margin-top: 16px;
+  padding-top: 12px;
+}
+.rl-task-stages details {
+  min-width: 0;
+  font-size: 12px;
+}
+.rl-task-stages details p {
+  overflow-wrap: anywhere;
+}
+.rl-task-stages summary {
+  cursor: pointer;
+  color: #8a3f51;
+}
+.rl-task-stages button {
+  border: 1px solid #d6c7e3;
+  border-radius: 8px;
+  padding: 7px 14px;
+  background: #fff;
+  color: var(--rl-task-purple);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rl-task-stages button:focus-visible {
+  outline: 2px solid var(--rl-task-purple);
+  outline-offset: 3px;
+}
+@keyframes rl-task-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 700px) {
+  .rl-task-stages {
+    padding: 16px;
+  }
+  .rl-task-stages header {
+    align-items: start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .rl-task-body {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .rl-task-activity {
+    padding: 16px 0 0;
+    border-left: 0;
+    border-top: 1px solid #eee8f2;
+  }
+  .rl-task-stages footer {
+    flex-wrap: wrap;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rl-task-stage.is-running svg {
+    animation: none;
+  }
+}

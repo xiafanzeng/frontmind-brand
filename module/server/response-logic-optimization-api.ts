@@ -1,3 +1,4 @@
+import {responseLogicPublicExecution} from "./response-logic-public-execution.js";
 import { createHash } from "node:crypto";
 import { Router, type Response } from "express";
 import { z } from "zod";
@@ -105,6 +106,7 @@ const optimizationStartInputSchema = z
 
 const optimizationStatusQuerySchema = z
   .object({
+    progress: z.literal("1").optional(),
     questionId: z.string().trim().min(1).max(191),
     expectedRevision: z.coerce.number().int().positive(),
     judgeTaskId: z.string().trim().min(1).max(255),
@@ -283,6 +285,43 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
     console.error("[Response Logic Optimization] error:", safeErrorForOptimizationLog(error));
     judgeError(res, 500, "RESPONSE_LOGIC_OPTIMIZATION_FAILED", "优化请求失败");
   }
+
+  router.get("/recovery", async (request, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const parsed = optimizationStatusQuerySchema.omit({progress: true}).safeParse(request.query);
+      if (!parsed.success) { judgeError(res, 400, "INVALID_RESPONSE_LOGIC_OPTIMIZATION_INPUT", "优化恢复查询格式不完整"); return; }
+      const ctx = await resolveContext(request as unknown as CoreRequest, res, parsed.data.questionId, parsed.data.expectedRevision);
+      if (!ctx) return;
+      const credential = core.credentialForRequest(request);
+      if (!credential) { judgeError(res, 428, "CUSTOMER_KEY_REQUIRED", "当前客户账号尚未配置 API Key"); return; }
+      if (!core.getFrontMindCredentials(request).credentialRef) { judgeError(res, 401, "UNAUTHORIZED", "尚未配置 API Key"); return; }
+      if (!await core.getCredentialForUpstreamResource(ctx.workspaceUserId, "task", parsed.data.judgeTaskId)) {
+        judgeError(res, 403, "OPTIMIZATION_JUDGE_TASK_FORBIDDEN", "引用的 Judge 任务不属于此账号"); return;
+      }
+      const snapshot = await core.getLatestKnowledgeSnapshot(ctx.workspaceUserId);
+      const skill = await buildOptimizerSkillArchive();
+      const key = optimizationIdempotencyKey({
+        userId: ctx.workspaceUserId, questionId: parsed.data.questionId,
+        recordRevision: ctx.record.revision, sourceFingerprint: ctx.fingerprint,
+        judgeTaskId: parsed.data.judgeTaskId, skillContentHash: skill.contentHash,
+        knowledgeFingerprint: knowledgeFingerprintOf(snapshot),
+        questionHash: brandQuestionHash(ctx.record.question, ctx.record.intent ?? ""),
+      });
+      const client = core.createCredentialAgentClient(credential, {
+        baseUrl: core.getUpstreamBaseUrl(request), accountUserId: ctx.workspaceUserId,
+        intentId: key, rateLimitScope: `managed-user:${ctx.workspaceUserId}`,
+      });
+      if (!client.findCreatedTaskReadOnly) { res.json({status: "unavailable", reason: "unsupported"}); return; }
+      const task = (await client.findCreatedTaskReadOnly({title: `FrontMind optimizer ${key.slice(0, 24)}`, operationToken: key})).unique;
+      if (!task) { res.json({status: "none"}); return; }
+      if (!await core.getCredentialForUpstreamResource(ctx.workspaceUserId, "task", task.id)) {
+        res.json({status: "unavailable", reason: "binding_pending"}); return;
+      }
+      // Status and result still go through the existing authenticated validator.
+      res.json({status: "found", taskId: task.id, attempt: 0, recordRevision: ctx.record.revision, sourceFingerprint: ctx.fingerprint});
+    } catch (error) { optimizationFailure(res, error); }
+  });
 
   /* -- POST / (start) -- */
 
@@ -508,12 +547,14 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
         accountUserId: workspaceUserId,
       });
       const events = await client.listAllMessages({ taskId, order: "desc" });
+      const progress = parsed.data.progress === "1" ? {execution: responseLogicPublicExecution(taskId, events, core.orderManusV2EventsByProviderRank)} : {};
       const status = core.latestManusV2TaskState(events);
 
       if (status === null || status === "running" || status === "waiting") {
         res.setHeader("Cache-Control", "no-store");
         res.status(202).json({
           status: "running",
+          ...progress,
           taskId,
           expectedRevision: parsed.data.expectedRevision,
           model: credential.agentProfile,
@@ -552,8 +593,8 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
       }
 
       res.setHeader("Cache-Control", "no-store");
-      res.json(
-        optimizationEnvelopeSchema.parse({
+      res.json({
+        ...optimizationEnvelopeSchema.parse({
           status: "completed",
           optimizerVersion: "1",
           recordRevision: record.revision,
@@ -563,7 +604,8 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
           evaluatedAt: new Date().toISOString(),
           optimization: schemaResult.data,
         }),
-      );
+        ...progress,
+      });
     } catch (error) {
       optimizationFailure(res, error);
     }

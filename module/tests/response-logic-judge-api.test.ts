@@ -108,6 +108,8 @@ afterEach(async () => {
 });
 
 type MockOptions = {
+  readOnlyLookup?: boolean;
+  taskOwned?: boolean;
   authenticated?: boolean;
   configured?: boolean;
   record?: ResponseLogicRecordDto | null;
@@ -130,9 +132,11 @@ async function makeApp(options: MockOptions = {}) {
   let uploadedFiles: Array<{ fileId: string; filename: string }> = [];
   let createdTask: { taskId: string } | null = null;
   const archives: Array<{ name: string; entrypoint: string; files: Array<{ path: string; content: string }> }> = [];
+  const effects = { uploads: 0, creates: 0, bindings: 0, lookups: 0 };
 
   const client = {
     createTask: async (input: { prompt: string; attachments: unknown[]; title: string; agentProfile?: string; locale: string; interactiveMode: boolean; structuredOutputSchema: Record<string, unknown> }) => {
+      effects.creates++;
       if (options.upstreamError) throw options.upstreamError;
       createdTask = { taskId: "task-judge-001" };
       return { taskId: "task-judge-001", raw: { status: "running" } };
@@ -143,6 +147,7 @@ async function makeApp(options: MockOptions = {}) {
       return options.upstreamEvents ?? [];
     },
     uploadFile: async (input: { filename: string }) => {
+      effects.uploads++;
       const fileId = `file-${uploadedFiles.length}`;
       uploadedFiles.push({ fileId, filename: input.filename });
       return { fileId, requestId: null, detail: { expiresAt: Math.floor(Date.now() / 1000) + 3600 } };
@@ -162,8 +167,10 @@ async function makeApp(options: MockOptions = {}) {
     getFrontMindCredentials: () => (options.hasCredential === false ? {} : { credentialRef: "test-ref" }),
     createCredentialAgentClient: (_credential: unknown, clientOptions?: {intentId?: string}) => !options.attemptTasks ? client : {
       ...client,
-      findCreatedTask: async () => ({unique: options.attemptTasks!.get(clientOptions?.intentId ?? "") ?? null}),
+      findCreatedTask: async () => { effects.lookups++; return {unique: options.attemptTasks!.get(clientOptions?.intentId ?? "") ?? null}; },
+      findCreatedTaskReadOnly: options.readOnlyLookup === false ? undefined : async () => { effects.lookups++; return {unique: options.attemptTasks!.get(clientOptions?.intentId ?? "") ?? null}; },
       createTask: async (input: {prompt: string}) => {
+        effects.creates++;
         const key = clientOptions?.intentId ?? "";
         let task = options.attemptTasks!.get(key);
         if (!task) {
@@ -180,12 +187,14 @@ async function makeApp(options: MockOptions = {}) {
     getUpstreamBaseUrl: () => "https://upstream.example.com",
     toUpstreamAgentProfile: (p: string) => p,
     getCredentialForUpstreamResource: async (userId: number, kind: string, id: string) => {
+      if (options.taskOwned === false) return null;
       // kind is "task" (MySQL ENUM in upstream_resources only accepts
       // "task" | "file"); ownership is userId + taskId based
       if (kind === "task" && (id === "task-judge-001" || [...(options.attemptTasks?.values() ?? [])].some(task => task.id === id))) return mockCredential;
       return null;
     },
     recordUpstreamResource: async () => {
+      effects.bindings++;
       if (options.recordUpstreamResourceError) throw options.recordUpstreamResourceError;
     },
     getLatestKnowledgeSnapshot: async () => options.knowledgeSnapshot ?? null,
@@ -233,7 +242,7 @@ async function makeApp(options: MockOptions = {}) {
   await once(server, "listening");
   const addr = server.address();
   if (!addr || typeof addr === "string") throw new Error("no addr");
-  return { url: `http://127.0.0.1:${addr.port}`, archives };
+  return { url: `http://127.0.0.1:${addr.port}`, archives, effects };
 }
 
 async function postStart(url: string, body: unknown) {
@@ -244,6 +253,42 @@ async function postStart(url: string, body: unknown) {
 async function getStatus(url: string, taskId: string, query = "questionId=q1&expectedRevision=3") {
   return fetch(`${url}/api/response-logic/evaluation/judge/tasks/${taskId}/status?${query}`);
 }
+
+describe("judge read-only recovery", () => {
+  const recover = (url: string, revision = 3) => fetch(`${url}/api/response-logic/evaluation/judge/recovery?questionId=q1&expectedRevision=${revision}`);
+  it("finds the latest explicitly retried attempt using the start identity without writes", async () => {
+    const options: MockOptions = {attemptTasks: new Map()};
+    const {url, effects} = await makeApp(options);
+    expect(await (await recover(url)).json()).toEqual({status: "none"});
+    const first = await (await postStart(url, {questionId: "q1", expectedRevision: 3})).json();
+    [...options.attemptTasks!.values()][0].status = "error";
+    const second = await (await postStart(url, {questionId: "q1", expectedRevision: 3, retry: {taskId: first.taskId, attempt: 0}})).json();
+    const before = {...effects};
+    expect(await (await recover(url)).json()).toMatchObject({status: "found", taskId: second.taskId, attempt: 1, recordRevision: 3, sourceFingerprint: fingerprintLogic(logic)});
+    expect(effects).toMatchObject({uploads: before.uploads, creates: before.creates, bindings: before.bindings});
+    options.taskOwned = false;
+    expect(await (await recover(url)).json()).toEqual({status: "unavailable", reason: "binding_pending"});
+    options.taskOwned = true;
+    options.knowledgeSnapshot = {version: 2, sourceFileName: "new.md", documents: [{path: "a.md", title: "new", content: "new knowledge"}]};
+    expect(await (await recover(url)).json()).toEqual({status: "none"});
+  });
+  it.each([{authenticated: false}, {configured: false}, {capabilityError: true}])("rejects inaccessible contexts before querying tasks: %j", async (denial) => {
+    const {url, effects} = await makeApp({...denial, attemptTasks: new Map()});
+    expect((await recover(url)).status).toBeGreaterThanOrEqual(400);
+    expect(effects).toEqual({uploads: 0, creates: 0, bindings: 0, lookups: 0});
+  });
+  it("never falls back to the legacy lookup that can persist runtime state", async () => {
+    const {url, effects} = await makeApp({attemptTasks: new Map(), readOnlyLookup: false});
+    expect(await (await recover(url)).json()).toEqual({status: "unavailable", reason: "unsupported"});
+    expect(effects).toEqual({uploads: 0, creates: 0, bindings: 0, lookups: 0});
+  });
+  it("rejects stale revision and declares unsupported lookup without creating anything", async () => {
+    const {url, effects} = await makeApp();
+    expect((await recover(url, 2)).status).toBe(409);
+    expect(await (await recover(url)).json()).toEqual({status: "unavailable", reason: "unsupported"});
+    expect(effects).toEqual({uploads: 0, creates: 0, bindings: 0, lookups: 0});
+  });
+});
 
 describe("judge API: POST / (start)", () => {
   it("retries an explicitly failed task once under concurrency and restores the latest attempt on refresh", async () => {
@@ -384,6 +429,24 @@ describe("judge API: POST / (start)", () => {
 });
 
 describe("judge API: GET /tasks/:taskId/status", () => {
+  it("only adds public progress after explicit negotiation, preserving legacy responses", async () => {
+    const events=[{id:"u",type:"user_message",timestamp:1000},{id:"s",type:"status_update",timestamp:1001,status_update:{agent_status:"running"},executionActivity:{kind:"status",status:"running",thinkingText:"private",publicSummary:"private summary"}}];
+    const {url}=await makeApp({upstreamEvents:events});
+    expect((await (await getStatus(url,"task-judge-001")).json()).execution).toBeUndefined();
+    const res=await getStatus(url,"task-judge-001","questionId=q1&expectedRevision=3&progress=1");
+    expect(res.status).toBe(202);
+    const body=await res.json();
+    expect(body.execution.timeline).toHaveLength(1);
+    expect(JSON.stringify(body)).not.toContain("private");
+  });
+  it("returns negotiated progress alongside the unchanged validated result",async()=>{
+    const {url}=await makeApp({upstreamEvents:[judgeEvent(JSON.stringify(validJudge)),stoppedEvent()]});
+    const res=await getStatus(url,"task-judge-001","questionId=q1&expectedRevision=3&progress=1");
+    expect(res.status).toBe(200);
+    const body=await res.json();
+    expect(body.judge).toEqual(validJudge);
+    expect(body.execution.taskId).toBe("task-judge-001");
+  });
   it("returns 202 running while task is in progress", async () => {
     const { url } = await makeApp({ upstreamEvents: [{ id: "e1", type: "status_update", timestamp: Date.now(), status_update: { agent_status: "running" } }] });
     const res = await getStatus(url, "task-judge-001");
