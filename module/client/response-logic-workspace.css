@@ -2158,6 +2158,10 @@ fieldset.rl-editor-scroll:disabled select {
   border-radius: 12px;
   box-shadow: none;
 }
+.rl-editor-card--single > .rl-card-title {
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
 .rl-editor-card--single .rl-editor-scroll {
   flex: none;
   min-width: 0;
