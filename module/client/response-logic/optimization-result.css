@@ -53,10 +53,14 @@
 .rl-single-page .rl-opt-suggestions p {
   margin: 6px 0;
 }
-.rl-single-page .rl-opt-suggestions summary {
+.rl-single-page .rl-opt-suggestions summary,
+.rl-single-page .rl-opt-boundary-disclosure > summary {
   cursor: pointer;
   color: var(--iw-purple);
   font-size: 12px;
+}
+.rl-single-page .rl-opt-boundary-disclosure > .rl-opt-boundary-text {
+  margin-top: 8px;
 }
 .rl-single-page .rl-opt-result-adopt h3 small {
   font-size: 12px;
