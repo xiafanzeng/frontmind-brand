@@ -2818,6 +2818,7 @@ export function SimplifiedWebsiteBuilderPreview({
                 setAssistantTested(false);
                 setCompletedStepIds([]);
                 setIsConfirmed(false);
+                goTo("template");
               }} />}
             </section>
             <section className={`sfp-preview-panel sfp-builder-preview-panel${embeddableBuild ? " sfp-builder-preview-panel--live" : ""}`} aria-label="网站与助手统一预览" data-testid="website-design-preview">
