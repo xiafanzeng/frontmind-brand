@@ -50,6 +50,12 @@ function knowledgeWorkbenchStage(
     knowledgeWorkbenchRecord(start?.metadata).knowledgeWorkbench,
   );
   const receipt = knowledgeWorkbenchRecord(workbench.initialAcceptance);
+  const readiness = knowledgeWorkbenchRecord(workbench.reviewReadiness);
+  const ready = readiness.schemaVersion === 1 && readiness.buildId === build.id &&
+    readiness.generation === build.generation && readiness.contentVersion === 1 &&
+    typeof readiness.workingSetId === "string" &&
+    readiness.workingSetId === knowledgeWorkbenchRecord(start?.metadata).workingSetId &&
+    typeof readiness.packageSha256 === "string" && /^[a-f0-9]{64}$/.test(readiness.packageSha256);
   const accepted =
     receipt.buildId === build.id &&
     receipt.generation === build.generation &&
@@ -62,7 +68,7 @@ function knowledgeWorkbenchStage(
     generation: build.generation,
     stateEpoch: build.stateEpoch,
     phase:
-      accepted || legacyPublished ? ("editing" as const) : ("initial" as const),
+      accepted || ready || legacyPublished ? ("editing" as const) : ("initial" as const),
     acceptedAt:
       accepted && typeof receipt.acceptedAt === "string"
         ? receipt.acceptedAt

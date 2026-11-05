@@ -1,3 +1,5 @@
+import { wmaKnowledgeUploadCapability } from "../lib/wma-knowledge-upload";
+import { isWmaKnowledgeDocument, WMA_KNOWLEDGE_MAX_FILE_BYTES } from "../../contracts/wma-knowledge-upload";
 
 import { useKnowledgeBaseUploadBatch, useKnowledgeBaseUploadField } from "../lib/knowledge-base-upload-manager";
 import React, { useRef, useEffect, useCallback, useMemo } from "react";
@@ -1027,9 +1029,13 @@ export function EmptyConversationHint({
     setDialogOpen(true);
   }, [setDialogOpen]);
 
-  const addFiles = useCallback((fileList: FileList | File[]) => {
-    const incoming = Array.from(fileList).filter((file) => {
-      const sizeError = chatAttachmentSizeError(file);
+  const addFiles = useCallback(async (fileList: FileList | File[]) => {
+    const selected = Array.from(fileList);
+    const directCos = selected.some(file => file.size > 100 * 1024 ** 2)
+      ? await wmaKnowledgeUploadCapability(startReservation ?? undefined).catch(() => false) : false;
+    const incoming = selected.filter((file) => {
+      const directDocument = directCos && isWmaKnowledgeDocument(normalizedKnowledgeBaseUploadFilename(file.name), normalizedKnowledgeBaseUploadMimeType(file));
+      const sizeError = directDocument ? (file.size > WMA_KNOWLEDGE_MAX_FILE_BYTES ? "PDF／ZIP 单个文件不能超过 1 GiB" : null) : chatAttachmentSizeError(file);
       if (!sizeError) return true;
       toast.error("文件过大", { description: sizeError });
       return false;
@@ -1068,7 +1074,7 @@ export function EmptyConversationHint({
       }
       return next;
     });
-  }, []);
+  }, [startReservation]);
 
   const resetDialog = useCallback(() => {
     setCompanyWebsite("");

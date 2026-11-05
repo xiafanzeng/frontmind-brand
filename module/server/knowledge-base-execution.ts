@@ -40,7 +40,7 @@ export async function loadCompletedKnowledgeBaseSummaryTurn(input: {
   if (!db) throw new Error("DATABASE_UNAVAILABLE");
   const [turn] = await db
     .select({ id: conversationTurns.id, upstreamTaskId: conversationTurns.upstreamTaskId,
-      completedAt: conversationTurns.completedAt })
+      completedAt: conversationTurns.completedAt, metadata: conversationTurns.metadata })
     .from(conversationTurns)
     .where(and(
       enterpriseOwnerPredicate(conversationTurns, input.userId),
@@ -50,6 +50,9 @@ export async function loadCompletedKnowledgeBaseSummaryTurn(input: {
       eq(conversationTurns.status, "completed"),
     ))
     .limit(1);
+  // WMA owns native public text. Even when the current account credential is
+  // XTY, a completed native turn must never enter the paid summary backfill lane.
+  if ((turn?.metadata?.nativeKnowledgeProvider as { provider?: string } | undefined)?.provider === "tencent_wma") return null;
   return turn?.upstreamTaskId ? { ...turn, upstreamTaskId: turn.upstreamTaskId } : null;
 }
 
@@ -314,7 +317,9 @@ export async function loadKnowledgeBaseExecution(input: {
         rank: Number.MAX_SAFE_INTEGER,
         kind: "status",
         runId: build.id,
-        ...(turn.status === "completed" ? { phase: "published" as const, label: businessExecutionLabels.published } : {}),
+        ...(turn.status === "completed" ? (turn.metadata?.nativeKnowledgeProvider as { provider?: string } | undefined)?.provider === "tencent_wma"
+          ? { phase: "awaiting_knowledge_review" as const, label: businessExecutionLabels.awaiting_knowledge_review }
+          : { phase: "published" as const, label: businessExecutionLabels.published } : {}),
         status:
           turn.status === "completed"
             ? "ended"

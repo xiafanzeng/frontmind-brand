@@ -19,6 +19,7 @@ export function knowledgeExecutionItems(
     ?.filter((item) => !localTurns.has(item.turnId))
     .filter((item) => {
       if (item.kind !== "status" || item.status !== "thinking" || !item.publicSummary) return true;
+      if (item.publicSummaryOrigin === "provider_native") return true; // Native sequence identities already deduplicate; equal text can be two real messages.
       const key = `${item.turnId}:${item.publicSummaryTitle ?? ""}:${item.publicSummary.trim()}`;
       if (previousSummary === key) return false;
       previousSummary = key;
@@ -28,6 +29,7 @@ export function knowledgeExecutionItems(
       if (
         item.kind === "status" &&
         item.publicSummary &&
+        item.publicSummaryOrigin !== "provider_native" &&
         !/[\u4e00-\u9fff]/u.test(item.publicSummary)
       ) {
         // The execution-side Chinese projection arrives asynchronously. Keep

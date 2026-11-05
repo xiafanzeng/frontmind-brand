@@ -1165,8 +1165,9 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
       "请联系管理员完成智能服务配置，重置后重新上传资料并开始新构建",
     );
   }
+  const provider = input.credential.provider;
   const client = createDashboardAgentClient({
-    provider: input.credential.provider,
+    provider,
     credentialRef: input.credential.credentialRef,
     credentialId: input.credential.id,
     credentialVersion: input.credential.version,
@@ -1187,7 +1188,7 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
       ...entry,
       clientForGeneration: (generation) =>
         createDashboardAgentClient({
-          provider: input.credential.provider,
+          provider,
           credentialRef: input.credential.credentialRef,
           credentialId: input.credential.id,
           credentialVersion: input.credential.version,

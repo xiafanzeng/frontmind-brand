@@ -83,7 +83,7 @@ function publicRecoveryCopy(action: KnowledgeBaseRecoveryAction): {
       return {
         code: "FRONTMIND_KB_RESET_REQUIRED",
         message:
-          "任务已结束，但知识库文件未通过完整性校验。系统不会自动重试；请重置后重新上传资料。",
+          "本轮未能生成可用的知识库。系统不会自动重试；请重置后重新上传资料。",
       };
     case "regenerate_turn":
     case "create_new_canonical_from_snapshot":

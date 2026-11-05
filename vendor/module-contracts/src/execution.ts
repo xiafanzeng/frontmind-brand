@@ -3,6 +3,9 @@
 export type GeneralThinkingText = {
   /** Explicit provider-designated public summary; private thinkingText is not UI copy. */
   publicSummary?: string;
+  /** Native public response text, never private reasoning or a second model call. */
+  publicSummaryOrigin?: "provider_native";
+  publicSummaryProvider?: "tencent_wma";
   publicSummaryTitle?: string;
   publicSummarySourceHash?: string;
   publicSummaryModel?: "gpt-6.1-sol" | "gpt-5.6-sol";
@@ -117,7 +120,12 @@ export function generalThinkingText(
     value.publicSummaryTitle.length <= 40 && /[\u4e00-\u9fff]/.test(value.publicSummaryTitle) &&
     ["gpt-6.1-sol", "gpt-5.6-sol"].includes(value.publicSummaryModel ?? "") &&
     value.publicSummaryEffort === "low";
-  return { publicSummary, ...(generated ? {
+  const native = value.publicSummaryOrigin === "provider_native" && value.publicSummaryProvider === "tencent_wma";
+  return { publicSummary, ...(native ? {
+    publicSummaryOrigin: "provider_native" as const,
+    publicSummaryProvider: "tencent_wma" as const,
+    thinkingComplete: value.thinkingComplete === true,
+  } : {}), ...(generated && !native ? {
     publicSummaryTitle: value.publicSummaryTitle,
     publicSummarySourceHash: value.publicSummarySourceHash,
     publicSummaryModel: value.publicSummaryModel,
@@ -223,6 +231,12 @@ export const generalExecutionStatusText: Record<
 /** Public business phases are an allowlist, never provider payload labels. */
 export const businessExecutionLabels = {
   uploading: "上传资料",
+  transferring_knowledge_inputs: "同步构建资料",
+  preparing_knowledge_session: "准备构建环境",
+  executing_knowledge_build: "研究并构建知识",
+  reading_knowledge_output: "读取知识工作包",
+  validating_knowledge_output: "校验知识工作包",
+  awaiting_knowledge_review: "已生成，待确认",
   staging: "校验资料",
   dispatching: "准备调研",
   researching: "采集公开资料",

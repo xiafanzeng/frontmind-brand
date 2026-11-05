@@ -738,9 +738,8 @@ export function EnterpriseRagPreview({ onOpenWebsite, onOpenWebsiteAssistant, we
               </div>
             </section>
             <div className="rag-evaluation-supporting-meta" data-testid="rag-evaluation-supporting-meta">
-              {(automaticReport || (!result.complete && !checklistJudgments)) && <div className="rag-evaluation-secondary-meta">
-                {automaticReport && <span>服务器留痕 · {automaticReport.evaluator.model}</span>}
-                {!result.complete && !checklistJudgments && <span>可能分数 {Math.floor(result.lower)}–{Math.ceil(result.upper)}</span>}
+              {automaticReport && <div className="rag-evaluation-secondary-meta">
+                <span>服务器留痕 · {automaticReport.evaluator.model}</span>
               </div>}
               <div className="rag-status-row rag-evaluation-metrics" data-testid="rag-evaluation-metrics">
                 <ShieldCheck size={14} aria-hidden="true" data-testid="rag-evaluation-metric-shield" />
