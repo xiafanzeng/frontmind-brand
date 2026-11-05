@@ -81,8 +81,8 @@ export function ResponseLogicOptimizationWorkflow({question,intent,logic,judgeTa
       <p className="rl-eval-score-description">优化必须基于当前内容的 LLM 四维评估。请先返回评估页完成「查看四维评估」，再回来生成优化版本。</p>
     </div>}
 
-    {optimization.state.phase==="idle"&&judgeTaskId&&<div className="rl-opt-toolbar rl-eval-card">
-      <p className="rl-eval-score-description">将以当前四栏草稿为输入，结合已完成的 Judge 评估结论与企业知识材料，由 LLM 生成优化候选版本。生成后可逐栏审阅、编辑并选择采用哪些栏目。</p>
+    {optimization.state.phase==="idle"&&judgeTaskId&&<div className="rl-opt-toolbar rl-eval-card rl-opt-generation-intro">
+      <p className="rl-opt-generation-copy">将以当前四栏草稿为输入，结合已完成的 Judge 评估结论与企业知识材料，由 LLM 生成优化候选版本。生成后可逐栏审阅、编辑并选择采用哪些栏目。</p>
       <div className="rl-eval-action-buttons"><button type="button" className="rl-eval-primary" onClick={startGeneration}>生成优化版本</button></div>
     </div>}
 

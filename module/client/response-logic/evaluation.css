@@ -227,6 +227,28 @@
 @media(max-width:800px){.rl-single-page .rl-judge-grid{grid-template-columns:1fr}}
 @media(max-width:480px){.rl-single-page .rl-judge-grid{grid-template-columns:1fr}.rl-single-page .rl-judge-finding{padding:8px 10px}}
 
+/* Keep these nested content cards inset even under the Brand page theme. */
+.rl-single-page .rl-eval-root .rl-eval-diagnosis.rl-eval-card>h3{padding:16px;gap:8px;flex-wrap:wrap;justify-content:flex-start}
+.rl-single-page .rl-eval-diagnosis>h3 small{margin-left:auto}
+.rl-single-page .rl-eval-diagnosis .rl-dx-status{padding:4px 8px;border-radius:6px;white-space:nowrap}
+.rl-single-page .rl-eval-diagnosis .rl-judge-overall{margin:16px;padding:14px;border-radius:12px;overflow-wrap:anywhere}
+.rl-single-page .rl-eval-diagnosis .rl-dx-list{gap:12px;padding:0 16px}
+.rl-single-page .rl-eval-diagnosis .rl-dx-item{border:1px solid var(--iw-line);border-radius:12px;overflow:hidden}
+.rl-single-page .rl-eval-diagnosis .rl-dx-item>summary{display:grid;grid-template-columns:minmax(0,1fr) auto 12px;gap:8px;padding:12px;align-items:center}
+.rl-single-page .rl-eval-diagnosis .rl-dx-item>summary:focus-visible{outline:2px solid var(--iw-purple);outline-offset:-3px;border-radius:11px}
+.rl-single-page .rl-eval-diagnosis .rl-eval-tag{padding:3px 8px;border-radius:6px;white-space:nowrap}
+.rl-single-page .rl-eval-diagnosis .rl-dx-body{padding:0 12px 12px}
+.rl-single-page .rl-eval-diagnosis .rl-eval-diagnosis-method{margin:16px}
+.rl-single-page .rl-eval-root .rl-opt-generation-intro{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:24px;padding:20px}
+.rl-single-page .rl-opt-generation-intro .rl-opt-generation-copy{margin:0;padding:16px;border-radius:12px;background:rgba(117,66,176,.06);color:var(--iw-muted);font-size:13px;line-height:1.8;overflow-wrap:anywhere;min-width:0}
+.rl-single-page .rl-opt-generation-intro .rl-eval-action-buttons{margin:0;justify-content:flex-end}
+.rl-single-page .rl-opt-generation-intro .rl-eval-primary{white-space:nowrap}
+@media(max-width:700px){
+  .rl-single-page .rl-eval-root .rl-opt-generation-intro{grid-template-columns:minmax(0,1fr);gap:16px;padding:16px}
+  .rl-single-page .rl-opt-generation-intro .rl-opt-generation-copy{padding:14px}
+}
+@media(max-width:480px){.rl-single-page .rl-opt-generation-intro .rl-eval-primary{width:100%}}
+
 /* —— Soft Utility 探索层：统一过渡（160–240ms）/轻按压反馈/减少动效偏好；不改品牌色、字体与结构 —— */
 .rl-single-page .rl-eval-outline,.rl-single-page .rl-eval-primary,.rl-single-page .rl-eval-entry-button,.rl-single-page .rl-dx-locate,.rl-single-page .rl-eval-back-button{transition:background-color .2s ease,border-color .2s ease,color .2s ease,opacity .2s ease,transform .16s ease}
 .rl-single-page .rl-eval-outline:active:not(:disabled),.rl-single-page .rl-eval-primary:active:not(:disabled),.rl-single-page .rl-eval-entry-button:active:not(:disabled),.rl-single-page .rl-dx-locate:active:not(:disabled){transform:scale(.98)}

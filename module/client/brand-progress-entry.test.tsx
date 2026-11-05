@@ -25,6 +25,7 @@ vi.mock("./host.js", () => ({
 import { judgeOutputSchema } from "../contracts/response-logic-judge";
 import { fingerprintLogic } from "../contracts/response-logic-evaluation";
 import BrandResponseLogicEntry from "./BrandResponseLogicEntry";
+import { ResponseLogicConfirmationPanel } from "./ResponseLogicWorkspace";
 import { __resetBrandRecordsStoreForTests } from "./response-logic-brand-adapter";
 const question = "企业如何选择知识管理系统？";
 const response = (body: unknown, status = 200) =>
@@ -143,6 +144,21 @@ afterEach(() => {
   sessionStorage.clear();
 });
 describe("real Brand entry progress (only HTTP mocked)", () => {
+  it("presents all four confirmed logic fields in a single 01–04 sequence", () => {
+    const view = render(<ResponseLogicConfirmationPanel
+      group={{id: "brand-intent", title: "品牌意图优化", subtitle: "", tone: "plum", questions: []}}
+      question={{id: "q-summary", question, intent: "", summary: ""}}
+      logic={{...draft, version: 1, updatedAt: "2026-11-05T00:00:00.000Z"}}
+    />);
+    const headings = Array.from(view.container.querySelectorAll(".rl-logic-section-title"));
+    expect(headings.map(e => e.querySelector("span")?.textContent)).toEqual(["01", "02", "03", "04"]);
+    expect(headings.map(e => e.querySelector("h4")?.textContent)).toEqual([
+      "用户真实关心", "核心结论与执行口径", "企业材料/官方依据（引自知识库文档）", "回答边界/禁止表达",
+    ]);
+    for (const text of [draft.concern, draft.conclusion, draft.facts, draft.boundaries]) {
+      expect(screen.getByText(text)).toBeTruthy();
+    }
+  });
   it("restores a server task with no browser hint through the real entry without POST", async () => {
     h.router = async (url) => {
       if (url.includes("/recovery?"))
@@ -168,6 +184,9 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
       return response({ records: [record] });
     };
     render(<BrandResponseLogicEntry {...props} />);
+    await waitFor(() =>
+      expect(h.calls.some(c => c.includes("/judge/tasks/"))).toBe(true),
+    );
     fireEvent.click(
       await screen.findByRole("button", { name: "查看四维评估" }),
     );
@@ -366,7 +385,7 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
       ),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "生成优化版本" }),
+      await screen.findByRole("button", { name: "生成优化版本" }),
     );
     await screen.findByRole("region", { name: "任务阶段" });
     await waitFor(
