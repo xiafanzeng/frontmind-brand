@@ -258,9 +258,8 @@ export function WebsiteDomainPublishPanel({
     <details className="sfp-domain-publish" data-design-section="domain" data-testid="website-domain-publish" tabIndex={-1} open>
       <summary><span><Globe2 size={17} aria-hidden="true" />域名与发布</span><span className="sfp-domain-summary-status">{domain?.displayDomain || domain?.domain || "可提前配置"}<ChevronDown size={16} aria-hidden="true" /></span></summary>
       <div className="sfp-domain-body">
-        <p className="sfp-domain-note">可在生成网站前准备域名。暂不配置也能生成和查看预览。</p>
         {!observation ? <p role="status">{siteOps.loading ? "正在读取域名与发布状态…" : "域名与发布状态暂不可用，请刷新重试。"}</p> : <>
-          <div className="sfp-domain-row"><strong>阿里云连接</strong><span>{connected ? "已连接" : observation.aliyunConnection.status === "attention_required" ? "授权需要更新" : "尚未连接"}</span></div>
+          <div className="sfp-domain-row sfp-field-heading"><strong><span className="sfp-field-title">阿里云连接</span></strong><span>{connected ? "已连接" : observation.aliyunConnection.status === "attention_required" ? "授权需要更新" : "尚未连接"}</span></div>
           <div className="sfp-domain-actions">
             {!connected && <button type="button" className="sfp-button sfp-button-secondary" disabled={locked || !onBeginAliyun} onClick={() => void connectAliyun()}>{busy?.startsWith("oauth") ? <Loader2 size={14} className="sfp-domain-spin" /> : null}{observation.aliyunConnection.status === "not_connected" ? "连接阿里云" : "重新授权阿里云"}</button>}
             <button type="button" className="sfp-button sfp-button-secondary" disabled={locked || (!onRefresh && !onRefreshAliyunDomains)} onClick={() => void run("refresh", async () => { await onRefresh?.(); if (connected) await onRefreshAliyunDomains?.(); })}><RefreshCw size={14} aria-hidden="true" />刷新状态</button>
@@ -268,18 +267,18 @@ export function WebsiteDomainPublishPanel({
           </div>
           {connected && !observation.aliyunConnection.canDisconnect && <p className="sfp-domain-note">域名解析操作正在进行，请等待完成后再修改连接。</p>}
           {disconnectConfirm && <div className="sfp-domain-confirm" role="group" aria-label="解除阿里云连接确认"><p>解除连接后，后续解析管理需要重新授权。确认解除？</p><div className="sfp-domain-actions"><button type="button" className="sfp-button sfp-button-secondary" disabled={locked} onClick={() => setDisconnectConfirm(false)}>取消</button><button type="button" className="sfp-button sfp-button-secondary" disabled={locked || !observation.aliyunConnection.canDisconnect} onClick={() => void run("disconnect", async () => { await onDisconnectAliyun?.(); setDisconnectConfirm(false); })}>确认解除连接</button></div></div>}
-          <p className="sfp-domain-note">授权用于读取域名和管理解析，不会购买、续费或从阿里云账号扣款。</p>
+          <p className="sfp-domain-note">授权用于读取域名、管理解析，不会购买、续费或扣款。</p>
           {connected && !domain?.domain && <div className="sfp-domain-configuration">
-            <label htmlFor={`${id}-domain`}>选择网站域名</label>
+            <label className="sfp-field-heading" htmlFor={`${id}-domain`}><span className="sfp-field-title">选择网站域名</span></label>
             <select id={`${id}-domain`} value={selectedDomain} disabled={locked || Boolean(aliyunDomainsLoading)} onChange={(event) => setSelectedDomain(event.target.value)}><option value="">{aliyunDomainsLoading ? "正在读取域名…" : "请选择域名"}</option>{aliyunDomains.map((item) => <option key={item.domain} value={item.domain}>{item.displayDomain}</option>)}</select>
             {aliyunDomainsError && <p className="sfp-domain-error" role="alert">{readableError(new Error(aliyunDomainsError), "域名列表读取失败，请刷新状态重试。")}</p>}
             {!aliyunDomainsLoading && !aliyunDomainsError && aliyunDomains.length === 0 && <p className="sfp-domain-note">未找到可接入的域名。可在阿里云购买后刷新列表。</p>}
             <div className="sfp-domain-actions"><button type="button" className="sfp-button sfp-button-primary" disabled={locked || resetPending || !selectedDomain || !onAction || !observation.aliyunConnection.canDisconnect} onClick={() => configureDomain(selectedDomain)}>{busy === "domain_sync" ? "正在提交…" : "确认并配置解析"}</button>{aliyunDomains.length === 0 && <a href="https://wanwang.aliyun.com/domain/" target="_blank" rel="noopener noreferrer">前往阿里云<ExternalLink size={13} /></a>}</div>
-            <p className="sfp-domain-note">确认后会为所选域名配置网站解析，请先核对域名。</p>
+            <p className="sfp-domain-note">确认后将修改所选域名的解析，请先核对。</p>
           </div>}
           {domain?.domain && <div className="sfp-domain-state"><strong>{domain.displayDomain || domain.domain}</strong><dl><div><dt>所有权</dt><dd>{domainStatus(domain.ownershipStatus)}</dd></div><div><dt>解析</dt><dd>{domainStatus(domain.dnsStatus)}</dd></div><div><dt>ICP 备案</dt><dd>{domainStatus(domain.icpStatus)}{domain.icpStatus === "approved" && !icpReady ? "（域名版本待核验）" : ""}</dd></div></dl>{connected && ["attention_required", "failed", "conflict"].includes(domain.dnsStatus ?? "") && <button type="button" className="sfp-button sfp-button-secondary" disabled={locked || resetPending || !onAction || !observation.aliyunConnection.canDisconnect} onClick={() => configureDomain(domain.domain!)}>重试配置解析</button>}{!icpReady && <a href="https://beian.aliyun.com/" target="_blank" rel="noopener noreferrer">前往阿里云 ICP 备案<ExternalLink size={13} /></a>}</div>}
           <div className="sfp-domain-release">
-            <label htmlFor={`${id}-target`}>发布区域</label>
+            <label className="sfp-field-heading" htmlFor={`${id}-target`}><span className="sfp-field-title">发布区域</span></label>
             <select id={`${id}-target`} value={target} onChange={(event) => setTarget(event.target.value as WebsitePublishTarget)}>
               <option value="global_excluding_cn">海外</option>
               <option value="mainland_cn">中国大陆</option>

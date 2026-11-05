@@ -1305,16 +1305,14 @@ describe("redesigned live website builder setup", () => {
     });
     expect(screen.getByTestId("website-site-name-recommend-flag").textContent)
       .toContain("已修改");
-    expect(screen.getByTestId("website-site-goal-recommend-flag").textContent)
-      .toContain("根据企业资料推荐");
+    expect(screen.queryByTestId("website-site-goal-recommend-flag")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "恢复推荐的网站名称" }));
     await waitFor(() =>
       expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
         .toBe("远山企业官网"),
     );
-    expect(screen.getByTestId("website-site-name-recommend-flag").textContent)
-      .toContain("根据企业资料推荐");
+    expect(screen.queryByTestId("website-site-name-recommend-flag")).toBeNull();
 
     fireEvent.click(screen.getByLabelText("在网站中显示联系我们"));
     fireEvent.click(screen.getByLabelText("在网站中显示关于我们"));
@@ -1332,8 +1330,7 @@ describe("redesigned live website builder setup", () => {
           .checked,
       ).toBe(true);
     });
-    expect(screen.getByTestId("website-routes-recommend-flag").textContent)
-      .toContain("主栏目根据企业资料推荐");
+    expect(screen.queryByTestId("website-routes-recommend-flag")).toBeNull();
   });
 
   it("prefers saved user-edited draft fields over the live brief and recommendations", async () => {
@@ -1726,7 +1723,7 @@ describe("redesigned live website builder setup", () => {
       // trial credit for a design that has not been submitted.
       fireEvent.click(screen.getByLabelText("在网站中显示关于我们"));
       await waitFor(() => {
-        expect(screen.getByText(/当前设计完成构建后/)).toBeTruthy();
+        expect(screen.getByText(/当前设计生成后再记录结果/)).toBeTruthy();
       });
       expect((screen.getByTitle("真实构建预览") as HTMLIFrameElement).src)
         .toContain("embed-preview/?token=");

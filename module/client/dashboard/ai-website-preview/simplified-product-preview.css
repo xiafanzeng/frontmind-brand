@@ -4269,18 +4269,62 @@
   padding: 0;
 }
 
-.sfp-root[data-step="design"] :is(.sfp-brand-fields label > span, .sfp-form-grid > label > span) {
-  align-items: baseline;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
+.sfp-root[data-step="design"] :is(.sfp-brand-fields label, .sfp-form-grid > label:not(.sfp-setting-row)) {
+  gap: 8px;
 }
 
-.sfp-root[data-step="design"] :is(.sfp-brand-fields label > span small, .sfp-form-grid > label > span small) {
+.sfp-root[data-step="design"] .sfp-field-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0;
+  min-height: 22px;
+  min-width: 0;
+}
+
+.fm-brand-theme[data-brand-page="website"] .sfp-root[data-step="design"] .sfp-field-heading .sfp-field-title,
+.sfp-root[data-step="design"] .sfp-field-heading .sfp-field-title {
+  align-items: center;
+  color: var(--sfp-ink);
+  display: inline-flex;
+  font-size: var(--sfp-type-body);
+  font-weight: 600;
+  gap: 8px;
+  line-height: 1.5;
+  min-width: 0;
+}
+
+.sfp-root[data-step="design"] .sfp-field-title::before {
+  background: color-mix(in srgb, var(--sfp-accent) 70%, white);
+  border-radius: 2px;
+  content: "";
+  flex: 0 0 3px;
+  height: 14px;
+}
+
+.sfp-root[data-step="design"] .sfp-field-heading > strong {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.sfp-root[data-step="design"] .sfp-field-heading > small {
+  align-items: center;
   display: inline-flex;
   flex-wrap: wrap;
   gap: 6px;
+  line-height: 1.5;
   margin-top: 0;
+}
+
+.sfp-root[data-step="design"] :is(.sfp-field-heading > small, .sfp-field-heading > button, .sfp-domain-row.sfp-field-heading > span:not(.sfp-field-title)) {
+  font-size: var(--sfp-type-sm);
+  font-weight: var(--sfp-weight-regular);
+  margin-inline-start: auto;
+}
+
+.sfp-root[data-step="design"] :is(.sfp-domain-configuration, .sfp-domain-release) {
+  row-gap: 8px;
 }
 
 /* The host theme and operator shell also style controls; keep this design
@@ -4399,6 +4443,10 @@
 .sfp-root[data-step="design"] .sfp-assistant-test-action {
   gap: 10px;
   padding: 16px;
+}
+
+.sfp-root[data-step="design"] .sfp-assistant-test-action > .sfp-assistant-trial {
+  margin-top: 0;
 }
 
 .sfp-root[data-step="design"] .sfp-assistant-test-action small {

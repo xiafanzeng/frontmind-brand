@@ -2469,11 +2469,11 @@ export function SimplifiedWebsiteBuilderPreview({
                 ? LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus
                 : isConfirmed ? "草稿已确认" : "建设中"}
             </strong>
-            <small>
+            {(!siteOps || activeStep !== "design") && <small>
               {siteOps
                 ? `真实 SiteOps · 项目版本 ${liveObservation?.project.revision ?? "—"}`
                 : storageAvailable ? `本地草稿 · ${isConfirmed ? "草稿确认状态已保存" : "配置已自动保存"}` : "仅本次页面保存"}
-            </small>
+            </small>}
           </span>
         </div>
         </div>
@@ -2635,41 +2635,33 @@ export function SimplifiedWebsiteBuilderPreview({
                 <div><h2>网站设计</h2></div>
               </div>
               <div className="sfp-design-section" data-design-section="site">
-                <header><span>1</span><div><h3>网站基础</h3><p>推荐内容来自当前发布知识，您可以继续编辑。</p></div></header>
+                <header><span>1</span><div><h3>网站基础</h3></div></header>
               <div className="sfp-brand-fields">
                 <label className="sfp-brand-name">
-                  <span>
-                    网站名称
-                    {siteOps && (recommendationFieldEdited.siteName ? (
+                  <span className="sfp-field-heading">
+                    <span className="sfp-field-title">网站名称</span>
+                    {siteOps && recommendationFieldEdited.siteName && (
                       <small className="sfp-recommend-flag is-edited" data-testid="website-site-name-recommend-flag">
                         已修改
                         {canRestoreRecommendedField("siteName") && (
                           <button type="button" className="sfp-recommend-restore" aria-label="恢复推荐的网站名称" onClick={() => restoreRecommendedField("siteName")}>恢复推荐</button>
                         )}
                       </small>
-                    ) : appliedRecommendation ? (
-                      <small className="sfp-recommend-flag" data-testid="website-site-name-recommend-flag">根据企业资料推荐</small>
-                    ) : (
-                      <small>真实 brief 字段</small>
-                    ))}
+                    )}
                   </span>
                   <input aria-label="网站名称" data-testid="website-site-name" maxLength={80} value={siteName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteName"); invalidateSteps("design"); setSiteName(event.currentTarget.value); }} />
                 </label>
                 <label className="sfp-brand-name">
-                  <span>
-                    站点简介 / 建站目标
-                    {siteOps && (recommendationFieldEdited.siteGoal ? (
+                  <span className="sfp-field-heading">
+                    <span className="sfp-field-title">站点简介 / 建站目标</span>
+                    {siteOps && recommendationFieldEdited.siteGoal && (
                       <small className="sfp-recommend-flag is-edited" data-testid="website-site-goal-recommend-flag">
                         已修改
                         {canRestoreRecommendedField("siteGoal") && (
                           <button type="button" className="sfp-recommend-restore" aria-label="恢复推荐的建站目标" onClick={() => restoreRecommendedField("siteGoal")}>恢复推荐</button>
                         )}
                       </small>
-                    ) : appliedRecommendation ? (
-                      <small className="sfp-recommend-flag" data-testid="website-site-goal-recommend-flag">根据企业资料推荐</small>
-                    ) : (
-                      <small>真实 brief 字段</small>
-                    ))}
+                    )}
                   </span>
                   <textarea aria-label="站点简介 / 建站目标" data-testid="website-site-goal" maxLength={200} value={siteGoal} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { manuallyEditedRecommendationFieldsRef.current.add("siteGoal"); invalidateSteps("design"); setSiteGoal(event.currentTarget.value); }} />
                 </label>
@@ -2692,27 +2684,24 @@ export function SimplifiedWebsiteBuilderPreview({
               {siteOps && liveConfigurationEditable && !designRecommendation?.loading && !recommendationStale && appliedRecommendation && (
                 <div className="sfp-recommend-refresh" data-testid="website-recommendation-refresh">
                   <button type="button" onClick={() => requestFreshDesignRecommendation(true, !currentProjectDesignPreferences)}>刷新推荐</button>
-                  <small>重新获取建议；手动修改过的字段保持不变。</small>
                 </div>
               )}
               </div>
 
               <div className="sfp-design-section" data-design-section="pages">
-                <header><span>2</span><div><h3>页面与栏目</h3><p>全部栏目默认加入导航；可按需关闭个别栏目。</p></div></header>
+                <header><span>2</span><div><h3>页面与栏目</h3></div></header>
                 <div className="sfp-knowledge-summary" data-testid="website-design-knowledge-summary">
                   <FileText size={17} />
-                  <span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 示例知识范围"}</strong><small>{siteOps ? `项目版本 ${liveObservation?.project.revision ?? "—"} · ${pages.length} 个真实页面` : `${previewKnowledgeCollectionCount} 个知识集合 · ${previewKnowledgeFragmentCount} 个示例片段`}</small></span>
+                  <span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 示例知识范围"}</strong>{!siteOps && <small>{previewKnowledgeCollectionCount} 个知识集合 · {previewKnowledgeFragmentCount} 个示例片段</small>}</span>
                 </div>
-                {siteOps && (recommendationFieldEdited.featuredRoutes ? (
+                {siteOps && recommendationFieldEdited.featuredRoutes && (
                   <p className="sfp-recommend-row" data-testid="website-routes-recommend-flag">
                     <span>主栏目已手动调整</span>
                     {canRestoreRecommendedField("featuredRoutes") && (
                       <button type="button" className="sfp-recommend-restore" aria-label="恢复推荐的主栏目" onClick={() => restoreRecommendedField("featuredRoutes")}>恢复推荐</button>
                     )}
                   </p>
-                ) : appliedRecommendation ? (
-                  <p className="sfp-recommend-row" data-testid="website-routes-recommend-flag">主栏目根据企业资料推荐</p>
-                ) : null)}
+                )}
                 <details className="sfp-page-disclosure">
                   <summary>共 {pages.length} 个栏目，{enabledPages.length} 个启用</summary>
               <div className="sfp-page-list">
@@ -2743,7 +2732,7 @@ export function SimplifiedWebsiteBuilderPreview({
               </div>
 
               <div className="sfp-design-section" data-design-section="theme">
-                <header><span>3</span><div><h3>主题颜色</h3><p>{siteOps ? "网站与助手颜色在提交生成后应用到网站。" : "网站与助手颜色会一起出现在右侧统一预览。"}</p></div></header>
+                <header><span>3</span><div><h3>主题颜色</h3><p>{siteOps ? "提交生成后生效。" : "颜色实时预览。"}</p></div></header>
                 <div className="sfp-design-color-grid">
                   <fieldset>
                     <legend>网站主题色</legend>
@@ -2762,31 +2751,27 @@ export function SimplifiedWebsiteBuilderPreview({
                     </div>
                     <label className="sfp-color-follow">
                       <input type="checkbox" checked={assistantFollowsSite} onChange={(event) => { invalidateSteps("design"); setAssistantFollowsSite(event.currentTarget.checked); }} />
-                      <span><strong>跟随网站主题色</strong><small>切换回自定义时会恢复上一次选择的助手颜色。</small></span>
+                      <span><strong>跟随网站主题色</strong></span>
                     </label>
                   </fieldset>
                 </div>
               </div>
 
               <div className="sfp-design-section" data-design-section="assistant">
-                <header><span>4</span><div><h3>助手设置</h3><p>助手问答使用同一知识快照，来源按产品策略始终可核对。</p></div></header>
+                <header><span>4</span><div><h3>助手设置</h3></div></header>
                 <div className="sfp-form-grid">
-                  <label><span>助手名称{siteOps && <small>真实设计字段</small>}</span><input aria-label="助手名称" data-testid="website-assistant-name" maxLength={80} value={assistantName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("design"); setAssistantName(event.currentTarget.value); setAssistantTested(false); }} /></label>
-                  <label className="sfp-welcome-field"><span>欢迎语{siteOps && <small>真实设计字段</small>}</span><textarea aria-label="欢迎语" data-testid="website-assistant-welcome" maxLength={500} value={welcome} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("design"); setWelcome(event.currentTarget.value); setAssistantTested(false); }} /></label>
+                  <label><span className="sfp-field-heading"><span className="sfp-field-title">助手名称</span></span><input aria-label="助手名称" data-testid="website-assistant-name" maxLength={80} value={assistantName} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("design"); setAssistantName(event.currentTarget.value); setAssistantTested(false); }} /></label>
+                  <label className="sfp-welcome-field"><span className="sfp-field-heading"><span className="sfp-field-title">欢迎语</span></span><textarea aria-label="欢迎语" data-testid="website-assistant-welcome" maxLength={500} value={welcome} disabled={Boolean(siteOps && !liveConfigurationEditable)} onChange={(event) => { invalidateSteps("design"); setWelcome(event.currentTarget.value); setAssistantTested(false); }} /></label>
                 </div>
-                <div className={`sfp-assistant-trial ${assistantTested ? "is-done" : ""}`}>
+                {!siteOps && <div className={`sfp-assistant-trial ${assistantTested ? "is-done" : ""}`}>
                   {assistantTested ? <Check size={17} /> : <CircleAlert size={17} />}
                   <span>
                     <strong>{assistantTested ? "助手试用已完成" : "助手试用未完成"}</strong>
                     <small>{assistantTested
-                      ? siteOps
-                        ? "已完成一次真实问答；修改名称、欢迎语或知识版本后需重新试用。"
-                        : "已在右侧预览中完成一次问答；修改名称或欢迎语后需重新试用。"
-                      : siteOps
-                        ? "可随时试用 AI 助手，试用结果单独记录，不影响进入建设评估。"
-                        : "请在右侧预览中提问一次并得到回答，再进入建设评估。"}</small>
+                      ? "已在右侧预览中完成一次问答；修改名称或欢迎语后需重新试用。"
+                      : "请在右侧预览中提问一次并得到回答，再进入建设评估。"}</small>
                   </span>
-                </div>
+                </div>}
               </div>
             </section>
             {siteOps ? (
@@ -2807,15 +2792,25 @@ export function SimplifiedWebsiteBuilderPreview({
                   <span className="sfp-build-progress__track"><i style={{ width: `${liveBuildProgress.percent}%` }} /></span>
                   <span className="sfp-build-progress__meta">
                     <strong>{liveBuildProgress.stageText}</strong>
-                    <small>已进行 {liveBuildProgress.elapsedText} · 预计约 20 分钟，路由越多耗时越长</small>
+                    <small>已进行 {liveBuildProgress.elapsedText} · 预计约 20 分钟</small>
                   </span>
                 </div>
               )}
                 <div className="sfp-assistant-test-action">
+                  <div className={`sfp-assistant-trial ${assistantTested ? "is-done" : ""}`}>
+                    {assistantTested ? <Check size={17} /> : <CircleAlert size={17} />}
+                    <span>
+                      <strong>{assistantTested ? "助手试用已完成" : "助手试用未完成"}</strong>
+                      {!embeddableBuild
+                        ? <small>网站生成后可试用。</small>
+                        : !embedTrialBinding
+                          ? <small>可试用已有版本；当前设计生成后再记录结果。</small>
+                          : !assistantTested ? <small>可选，不影响评估。</small> : null}
+                    </span>
+                  </div>
                   <button type="button" className="sfp-button sfp-button--ghost" disabled={!embeddableBuild} onClick={() => setAssistantTrialOpen(true)}>
                     <Bot size={16} /> 试用 AI 助手
                   </button>
-                  <small>{!embeddableBuild ? "网站构建完成后即可试用。" : !embedTrialBinding ? "可试用已生成的网站；当前设计完成构建后，真实问答才记入本次试用结果。" : assistantTested ? "真实试用已完成。" : "可随时试用；真实回答后会记录结果，不影响查看建设评估。"}</small>
                 </div>
               {siteOps && latestBuild && (
                 <WebsiteRevisionFields
