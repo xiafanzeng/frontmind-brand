@@ -61,10 +61,10 @@ describe("candidate review uses the existing adoption callback", () => {
       target: { value: "人工审阅后的关注" },
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "核心结论与执行口径", exact: true }),
+      screen.getByRole("button", { name: "核心结论与执行口径" }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "用户真实关心", exact: true }),
+      screen.getByRole("button", { name: "用户真实关心" }),
     );
     expect(
       (screen.getByLabelText("编辑用户真实关心") as HTMLTextAreaElement).value,

@@ -128,7 +128,7 @@ const validJudge = judgeOutputSchema.parse({
 });
 
 const props = {
-  question: { id: "q-progress", question, category: "选型" } as never,
+  question: { id: "q-progress", question, category: "选型", subdivision: "", tableId: "table-test", rowIndex: 0, sourceRevision: null },
   onBack() {},
   visual: { Button: (p: any) => <button {...p} /> },
   toast: { success() {}, error() {} },
@@ -216,7 +216,7 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
     render(
       <BrandResponseLogicEntry
         {...props}
-        question={{ ...props.question, id: "q-generation" } as never}
+        question={{ ...props.question, id: "q-generation" }}
       />,
     );
     await screen.findByRole("region", { name: "任务阶段" });
@@ -351,7 +351,7 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
     const entry = () => (
       <BrandResponseLogicEntry
         {...props}
-        question={{ ...props.question, id: qid } as never}
+        question={{ ...props.question, id: qid }}
       />
     );
     let view = render(entry());
@@ -366,7 +366,7 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
       ),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "生成优化版本", exact: true }),
+      screen.getByRole("button", { name: "生成优化版本" }),
     );
     await screen.findByRole("region", { name: "任务阶段" });
     await waitFor(
