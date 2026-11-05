@@ -176,6 +176,10 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
     });
     const { screen } = await import("@testing-library/react");
     await waitFor(() => expect(screen.getByDisplayValue("已恢复段落一")).toBeTruthy());
+    expect(document.querySelector(".rl-task-stages") === null).toBe(true);
+    const optimize = screen.getByRole("button", {name: "生成优化应答逻辑"});
+    await act(async () => {optimize.click();});
+    expect(document.querySelector(".rl-task-stages") === null).toBe(true);
     // No generation task was (re)created.
     expect(h.restCalls.some((c) => c.startsWith("POST") && c.includes("/start"))).toBe(false);
   });

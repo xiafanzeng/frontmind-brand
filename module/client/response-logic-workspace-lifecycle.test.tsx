@@ -215,6 +215,8 @@ describe("completed terminal path", () => {
     });
     await waitFor(() => expect(adoptCalls).toBe(1));
     // While adopt is pending, a lifecycle poke re-queries and sees completed again.
+    expect(screen.getByText("正在保存生成结果…")).toBeTruthy();
+    expect(Array.from(document.querySelectorAll("textarea")).every(e => e.matches(":disabled"))).toBe(true);
     await act(async () => {
       fireEvent(window, new Event("focus"));
       await Promise.resolve();
@@ -224,6 +226,7 @@ describe("completed terminal path", () => {
     releaseAdopt.current?.();
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(adoptCalls).toBe(1);
+    expect(document.querySelector(".rl-task-stages") === null).toBe(true);
   });
 });
 

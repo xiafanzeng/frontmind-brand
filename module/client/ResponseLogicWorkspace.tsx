@@ -1341,8 +1341,7 @@ function ResponseLogicQuestionEditor({
     (generation?.phase === "binding" ||
       generation?.phase === "dispatching" ||
       generation?.phase === "running") &&
-    // A completed generation keeps its process card visible but must reopen
-    // the editor for manual edits immediately.
+    // Adoption must finish before unlocking the editor or hiding progress.
     !generation?.completedAt;
 
   const questionFields = useCallback(
@@ -2029,9 +2028,8 @@ function ResponseLogicQuestionEditor({
   };
 
   const showGenerationProcess =
-    generating ||
-    Boolean(generation?.completedAt) ||
-    generation?.phase === "failed";
+    !generation?.completedAt &&
+    (generating || generation?.phase === "failed");
 
   return (
     <section className="rl-single-page">
@@ -2083,7 +2081,7 @@ function ResponseLogicQuestionEditor({
       )}
 
       {showGenerationProcess && generation && (
-        <TaskStageCard flow="generation" phase={generation.completedAt?"completed":generation.phase} taskId={generation.taskId} execution={generation.execution} adopting={generation.adopting} degraded={generation.degraded} onResume={()=>setLifecyclePoke(token=>token+1)} error={generation.failure?.message}
+        <TaskStageCard flow="generation" phase={generation.phase} taskId={generation.taskId} execution={generation.execution} adopting={generation.adopting} degraded={generation.degraded} onResume={()=>setLifecyclePoke(token=>token+1)} error={generation.failure?.message}
           onRetry={() => {
                   if (generation.failure?.retryAdoptionOnly) {
                     setResponseLogicGeneration(scope, questionId, {
@@ -2837,25 +2835,28 @@ export function ResponseLogicConfirmationPanel({
           <p>问题 · 证据 · 口径 · 边界</p>
         </div>
         <div className="rl-answer-summary">
-          <span>用户真实关心</span>
+          <div className="rl-logic-section-title">
+            <span>01</span>
+            <h4>用户真实关心</h4>
+          </div>
           <p className="rl-confirmation-concern">{publicLogic.concern}</p>
         </div>
       </section>
 
       <div className="rl-confirmation-grid">
         <LogicSection
-          number="01"
+          number="02"
           title="核心结论与执行口径"
           content={publicLogic.conclusion}
           wide
         />
         <LogicSection
-          number="02"
+          number="03"
           title={RESPONSE_LOGIC_FACTS_DISPLAY_HEADING}
           content={publicLogic.facts}
         />
         <LogicSection
-          number="03"
+          number="04"
           title="回答边界/禁止表达"
           content={publicLogic.boundaries}
           variant="boundary"
@@ -2863,7 +2864,7 @@ export function ResponseLogicConfirmationPanel({
         {hasSupportingAssets && (
           <section className="rl-logic-section rl-reference-section wide">
             <div className="rl-logic-section-title">
-              <span>04</span>
+              <span><Paperclip size={16} aria-hidden="true" /></span>
               <div>
                 <h4>图文依据</h4>
                 <p>材料与图片都归属于当前问题，不拆分为独立图片库。</p>
