@@ -2199,6 +2199,8 @@ describe("redesigned live website builder setup", () => {
     await waitFor(() => expect(onAction).toHaveBeenCalledTimes(2));
     expect(instructions.value).toBe("重置前的修改要求");
     resetRequest.resolve(undefined);
+      await waitFor(() => expect(screen.getByRole("heading", { name: "选择一个模板版式" })).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: /2.*网站设计/u }));
     await waitFor(() => expect((screen.getByRole("textbox", { name: "补充修改要求" }) as HTMLTextAreaElement).value).toBe(""));
     expect(screen.queryByRole("list", { name: "修改参考图片" })).toBeNull();
     expect(screen.getByText("助手试用未完成")).toBeTruthy();
