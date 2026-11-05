@@ -396,7 +396,10 @@ function persistedRecommendationEditedFields(value: unknown) {
   return result;
 }
 
-export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV2 {
+export function loadWebsiteDraft(
+  storageScope?: string,
+  { requireAssistantTrial = true }: { requireAssistantTrial?: boolean } = {},
+): WebsiteDraftV2 {
   const fallback = defaultDraft();
   if (typeof window === "undefined") return fallback;
 
@@ -466,7 +469,7 @@ export function loadWebsiteDraft(storageScope?: string): WebsiteDraftV2 {
     ) completedStepIds.push("design");
     const hasEnabledPage = featuredPageIds.length > 0;
     if (!hasValidTemplateSelection) completedStepIds = completedStepIds.filter((step) => step !== "template");
-    if (!hasEnabledPage || !siteName.trim() || !siteGoal.trim() || !assistantName.trim() || !assistantWelcome.trim() || !assistantTested) {
+    if (!hasEnabledPage || !siteName.trim() || !siteGoal.trim() || !assistantName.trim() || !assistantWelcome.trim() || (requireAssistantTrial && !assistantTested)) {
       completedStepIds = completedStepIds.filter((step) => step !== "design");
     }
     const confirmed = parsed.confirmed === true
@@ -776,7 +779,9 @@ export function SimplifiedWebsiteBuilderPreview({
 }: SimplifiedWebsiteBuilderPreviewProps) {
   const normalizedInitialStep = normalizeWebsiteBuildStep(initialStep) ?? "template";
   const auditStorage = useMemo(() => scopedEvaluationStorage(storageScope), [storageScope]);
-  const [draftSeed] = useState<WebsiteDraftV2>(() => loadWebsiteDraft(storageScope));
+  const [draftSeed] = useState<WebsiteDraftV2>(() => loadWebsiteDraft(storageScope, {
+    requireAssistantTrial: !siteOps,
+  }));
   const [activeStep, setActiveStep] = useState<BuildStep>(normalizedInitialStep);
   const [focusedSection, setFocusedSection] = useState<WebsiteDesignSection | null>(
     () => normalizeWebsiteDesignSection(initialSection),
@@ -1011,6 +1016,14 @@ export function SimplifiedWebsiteBuilderPreview({
       executionUnavailableReason: "服务端尚未确认当前构建模板。",
     };
   const latestBuild = liveObservation?.builds[0] ?? null;
+  const liveBuildStatus = latestBuild?.status ?? liveObservation?.interactionState ?? "loading";
+  const liveBuildInFlight = siteOps
+    && (liveBuildStatus === "preparing"
+      || liveBuildStatus === "visual_searching"
+      || liveBuildStatus === "design_compiling"
+      || liveBuildStatus === "contract_ready"
+      || liveBuildStatus === "building"
+      || liveBuildStatus === "qa_running");
   // Only the editable project brief participates in OCC and recommendation
   // suppression. A build-level copy is a frozen historical snapshot and must
   // never advance the current project's design revision/hash.
@@ -1072,6 +1085,7 @@ export function SimplifiedWebsiteBuilderPreview({
       "attention_required",
     ].includes(liveObservation.interactionState),
   );
+  const liveBuildCompleted = Boolean(latestBuild?.previewUrl && liveRevisionEditable && !liveBuildInFlight);
   const liveConfigurationEditable = templateSelectionOpen || liveRevisionEditable;
   const authoritativeGlobalHeadId =
     liveObservation?.project.globalLiveDeploymentId
@@ -1215,14 +1229,18 @@ export function SimplifiedWebsiteBuilderPreview({
   const structureReady = enabledPages.length > 0;
   const brandReady = Boolean(siteName.trim() && siteGoal.trim());
   const assistantReady = Boolean(assistantName.trim() && welcome.trim());
-  // 两种模式都要求在助手预览中完成一次真实问答试用，步骤才算配置完成；
-  // SiteOps 真实提交仍按原有时序在试用通过后执行。
+  // A completed server build confirms the live configuration independently of
+  // the owner's assistant trial. Trial evidence stays separate and truthful;
+  // the illustrative offline flow retains its existing trial requirement.
   const assistantVerified = assistantReady && assistantTested;
-  const templateComplete = templateReady && completedStepSet.has("template");
-  const designComplete = structureReady && brandReady && assistantVerified && completedStepSet.has("design");
+  const templateComplete = templateReady && (completedStepSet.has("template") || Boolean(siteOps && liveBuildCompleted));
+  const designComplete = structureReady && brandReady && assistantReady && (siteOps
+    ? liveBuildCompleted && designDraftSynced
+    : assistantVerified && completedStepSet.has("design"));
   const canComplete = templateComplete && designComplete;
-  // Four NON-scoring configuration checks. They gate the draft confirmation
-  // only; they never feed the 40/40/20 weighted website score.
+  // These checks never feed the 40/40/20 weighted score. In live mode, complete
+  // configuration gates draft confirmation while the real trial is recorded
+  // separately; opening an assessment never claims that trial has passed.
   const configurationChecks: Array<{
     id: "C01" | "C02" | "C03" | "C04";
     title: string;
@@ -1261,12 +1279,12 @@ export function SimplifiedWebsiteBuilderPreview({
     },
     {
       id: "C04",
-      title: "助手配置与真实试聊",
-      passed: assistantVerified && designComplete,
+      title: siteOps ? "助手真实试聊" : "助手配置与真实试聊",
+      passed: assistantVerified && (Boolean(siteOps) || designComplete),
       detail: assistantVerified
         ? "助手配置有效且已完成一次真实问答。"
         : siteOps
-          ? "需在真实构建预览中完成一次助手问答。"
+          ? "尚未完成真实试聊，可随时试用助手；不影响查看建设评估。"
           : "需在预览中完成一次助手问答。",
       onAction: () => goTo("design", "assistant"),
       actionLabel: "查看助手设置",
@@ -1307,17 +1325,8 @@ export function SimplifiedWebsiteBuilderPreview({
         }),
       };
 
-  const liveBuildStatus = latestBuild?.status ?? liveObservation?.interactionState ?? "loading";
-
   // Real-build progress strip: elapsed time and the finest stage the server
   // exposes (buildPhase beats the coarse execution-step stage).
-  const liveBuildInFlight = siteOps
-    && (liveBuildStatus === "preparing"
-      || liveBuildStatus === "visual_searching"
-      || liveBuildStatus === "design_compiling"
-      || liveBuildStatus === "contract_ready"
-      || liveBuildStatus === "building"
-      || liveBuildStatus === "qa_running");
   const [buildClockNow, setBuildClockNow] = useState(() => Date.now());
   useEffect(() => {
     if (!liveBuildInFlight) return;
@@ -1685,7 +1694,12 @@ export function SimplifiedWebsiteBuilderPreview({
       version: 2,
       updatedAt: Date.now(),
       confirmed: isConfirmed,
-      completedStepIds,
+      completedStepIds: isLiveBuilder
+        ? [
+            ...(templateComplete ? ["template" as const] : []),
+            ...(designComplete ? ["design" as const] : []),
+          ]
+        : completedStepIds,
       selectedTemplateId,
       templateSourceUrl: templateUrl,
       design: {
@@ -1707,7 +1721,7 @@ export function SimplifiedWebsiteBuilderPreview({
       },
     }, storageScope);
     setStorageAvailable(saved);
-  }, [assistantAccent, assistantFollowsSite, assistantName, assistantTested, completedStepIds, isConfirmed, pages, selectedTemplateId, siteAccent, siteGoal, siteName, storageScope, templateUrl, welcome]);
+  }, [assistantAccent, assistantFollowsSite, assistantName, assistantTested, completedStepIds, designComplete, isConfirmed, isLiveBuilder, pages, selectedTemplateId, siteAccent, siteGoal, siteName, storageScope, templateComplete, templateUrl, welcome]);
 
   useEffect(() => {
     if (!didMountDraftRef.current) {
@@ -2024,24 +2038,23 @@ export function SimplifiedWebsiteBuilderPreview({
       return;
     }
     if (activeStep === "design" && siteOps && templateSelectionOpen) {
-      // First real build: submit and stay. The real trial can only happen in
-      // the embedded build preview once it exists.
+      // First real build: submit and stay until a real website is generated.
       const accepted = await submitLiveConfigurationAndBuild();
       if (!accepted) return;
-      setNotice("网站已开始生成；构建完成后请点击“试用 AI 助手”完成一次真实问答，再继续进入建设评估。");
+      setNotice("网站已开始生成；完成后即可进入建设评估，也可随时试用 AI 助手。");
       return;
     }
     if (activeStep === "design" && siteOps && liveRevisionEditable) {
       if (!designDraftSynced || hasRevisionRequirements) {
         const accepted = await submitLiveRevision();
         if (!accepted) return;
-        setNotice("改版要求已提交；新版本生成后请点击“试用 AI 助手”完成一次真实问答，再继续进入建设评估。");
+        setNotice("改版要求已提交；新版本完成后即可进入建设评估，生成期间也可查看当前检查状态。");
         return;
       }
-      if (!assistantTested) {
-        setNotice("请先点击“试用 AI 助手”并得到真实回答，完成真实试聊后再继续。");
-        return;
-      }
+    }
+    if (activeStep === "design" && siteOps && !templateSelectionOpen && !liveBuildCompleted) {
+      setNotice(liveBuildInFlight ? "网站正在生成，构建与检查状态可在建设评估中查看。" : "网站尚未生成完成，请先完成网站生成。");
+      return;
     }
     if (activeStep === "design" && !siteOps && !assistantTested) {
       // The offline demo keeps its illustrative trial gate.
@@ -2619,7 +2632,7 @@ export function SimplifiedWebsiteBuilderPreview({
           <div className={`sfp-workspace-grid${siteOps ? " sfp-workspace-grid--management" : ""}`}>
             <section className="sfp-panel sfp-builder-config-panel sfp-builder-config-panel--design">
               <div className="sfp-section-heading sfp-section-heading--compact">
-                <div><h2>网站设计</h2><p>网站结构、主题与助手共用同一份设计草稿；语言由服务端根据当前知识确定。</p></div>
+                <div><h2>网站设计</h2><p>设置网站信息、页面栏目、主题和 AI 助手。</p></div>
               </div>
               <div className="sfp-design-section" data-design-section="site">
                 <header><span>1</span><div><h3>网站基础</h3><p>推荐内容来自当前发布知识，您可以继续编辑。</p></div></header>
@@ -2770,7 +2783,7 @@ export function SimplifiedWebsiteBuilderPreview({
                         ? "已完成一次真实问答；修改名称、欢迎语或知识版本后需重新试用。"
                         : "已在右侧预览中完成一次问答；修改名称或欢迎语后需重新试用。"
                       : siteOps
-                        ? "点击“试用 AI 助手”完成真实问答；本地草稿问答不计入试用。"
+                        ? "可随时试用 AI 助手，试用结果单独记录，不影响进入建设评估。"
                         : "请在右侧预览中提问一次并得到回答，再进入建设评估。"}</small>
                   </span>
                 </div>
@@ -2779,7 +2792,7 @@ export function SimplifiedWebsiteBuilderPreview({
             {siteOps ? (
               <section className="sfp-panel sfp-builder-tools-panel" aria-label="建站管理">
                 <div className="sfp-section-heading sfp-section-heading--compact">
-                  <div><h2>建站管理</h2><p>补充修改、管理域名与发布；查看网站请使用页面顶部入口。</p></div>
+                  <div><h2>建站管理</h2><p>补充修改要求，管理域名与发布。</p></div>
                 </div>
               {siteOps && liveBuildProgress && (
                 <div
@@ -2802,7 +2815,7 @@ export function SimplifiedWebsiteBuilderPreview({
                   <button type="button" className="sfp-button sfp-button--ghost" disabled={!embeddableBuild} onClick={() => setAssistantTrialOpen(true)}>
                     <Bot size={16} /> 试用 AI 助手
                   </button>
-                  <small>{!embeddableBuild ? "网站构建完成后即可试用。" : !embedTrialBinding ? "可试用已生成的网站；完成当前设计的构建后，真实问答才计入本次验收。" : assistantTested ? "真实试用已完成，可继续建设评估。" : "得到一次真实回答后，将记录助手试用结果。"}</small>
+                  <small>{!embeddableBuild ? "网站构建完成后即可试用。" : !embedTrialBinding ? "可试用已生成的网站；当前设计完成构建后，真实问答才记入本次试用结果。" : assistantTested ? "真实试用已完成。" : "可随时试用；真实回答后会记录结果，不影响查看建设评估。"}</small>
                 </div>
               {siteOps && latestBuild && (
                 <WebsiteRevisionFields
@@ -2922,7 +2935,7 @@ export function SimplifiedWebsiteBuilderPreview({
                 <b>{recommendationBadge}</b>
               </div>
               <div className="sfp-eval-metrics" aria-label="评估摘要">
-                <span><small>配置确认</small><strong>{configurationConfirmedCount}/4</strong></span>
+                <span><small>{siteOps ? "配置与试用检查" : "配置确认"}</small><strong>{configurationConfirmedCount}/4</strong></span>
                 <span><small>判定覆盖率</small><strong>{judgmentCoverage}%</strong></span>
                 <span><small>完全通过率</small><strong>{judgedChecks.length > 0 ? `${Math.round((judgedChecks.filter((check) => check.status === "passed").length / judgedChecks.length) * 100)}%` : "无法计算"}</strong></span>
                 <span><small>关键风险提示</small><strong>{unresolvedCriticalChecks.length}</strong></span>
@@ -2930,7 +2943,9 @@ export function SimplifiedWebsiteBuilderPreview({
               <section className="sfp-config-checks" aria-label="配置检查项" data-testid="website-config-checks">
                 <header>
                   <strong>配置检查项</strong>
-                  <small>非计分检查，只作为草稿确认门槛；不参与 40/40/20 加权评分，RAG 评估也不进入网站得分。</small>
+                  <small>{siteOps
+                    ? "非计分检查：配置完整性用于确认草稿，真实试聊单独记录，不阻止查看评估；不参与 40/40/20 加权评分。"
+                    : "非计分检查，只作为草稿确认门槛；不参与 40/40/20 加权评分，RAG 评估也不进入网站得分。"}</small>
                 </header>
                 <ul>
                   {configurationChecks.map((check) => (
@@ -2940,7 +2955,7 @@ export function SimplifiedWebsiteBuilderPreview({
                         <strong>{check.title}</strong>
                         <small>{check.detail}</small>
                       </div>
-                      <b>{check.passed ? "已确认" : "待确认"}</b>
+                      <b>{check.passed ? "已确认" : siteOps && check.id === "C04" ? "待试用" : "待确认"}</b>
                       <button type="button" onClick={check.onAction}>{check.actionLabel}</button>
                     </li>
                   ))}
@@ -3004,6 +3019,12 @@ export function SimplifiedWebsiteBuilderPreview({
             </button>
           </div>
         ) : (
+          <div className="sfp-action-cluster">
+          {siteOps && activeStep === "design" && latestBuild && (!liveRevisionEditable || !designDraftSynced) && (
+            <button type="button" className="sfp-button sfp-button--ghost" onClick={() => goTo("evaluation")}>
+              查看建设评估
+            </button>
+          )}
           <button
             type="button"
             className="sfp-button sfp-button--primary"
@@ -3019,6 +3040,7 @@ export function SimplifiedWebsiteBuilderPreview({
               || (activeStep === "template" && !templateReady)
               || (activeStep === "design" && templateSelectionOpen && (!assistantReady || !brandReady || !structureReady))
               || (activeStep === "design" && liveRevisionEditable && (!assistantReady || !brandReady || !structureReady))
+              || (activeStep === "design" && !templateSelectionOpen && !liveRevisionEditable && !liveBuildCompleted)
             ))}
             onClick={goNext}
           >
@@ -3028,8 +3050,11 @@ export function SimplifiedWebsiteBuilderPreview({
                 ? liveAction === "configure_and_build" ? "正在保存配置并生成…" : "保存真实配置并生成网站"
                 : siteOps && activeStep === "design" && liveRevisionEditable
                   ? liveAction === "submit_revision" ? "正在提交修改…" : designDraftSynced ? "进入建设评估" : "提交修改并重新生成"
+                : siteOps && activeStep === "design" && liveBuildInFlight
+                  ? "网站生成中…"
                 : "继续"}
           </button>
+          </div>
         )}
       </footer>
       {siteOps && assistantTrialOpen && embeddableBuild && (
