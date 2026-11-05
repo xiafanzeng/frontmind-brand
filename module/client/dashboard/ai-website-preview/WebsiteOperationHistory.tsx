@@ -1,0 +1,108 @@
+import { useRef, useState } from "react";
+import { ChevronDown, MoreHorizontal } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@frontmind/module-ui/components/ui/alert-dialog";
+import type { SiteOpsConversationPanelProps } from "../siteops/SiteOpsConversationPanel";
+import { userFacingErrorMessage } from "../../lib/user-facing-error";
+import "./website-revision-tools.css";
+
+const STEP_STATUS: Record<string, string> = {
+  queued: "等待中", running: "进行中", succeeded: "已完成", failed: "失败",
+  attention_required: "需处理", cancelled: "已取消",
+};
+
+function recordTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", {
+    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+}
+
+/** A read-only timeline with an explicitly confirmed reset in the More menu. */
+export function WebsiteOperationHistory({ siteOps, onResetAccepted }: { siteOps: SiteOpsConversationPanelProps; onResetAccepted?: () => void }) {
+  const [limit, setLimit] = useState(20);
+  const [restartOpen, setRestartOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  const observation = siteOps.observation;
+  if (!observation) return null;
+
+  const entries = [
+    ...observation.messages.map((message) => ({
+      id: `message:${message.id}`, at: message.sentAt,
+      label: message.role === "user" ? "你的操作" : "建站服务",
+      content: message.content,
+    })),
+    ...(observation.executionSteps ?? []).map((step) => ({
+      id: `step:${step.id}`, at: step.completedAt ?? step.startedAt,
+      label: step.buildId
+        ? `版本 ${observation.builds.find((build) => build.id === step.buildId)?.ordinal ?? "记录"}`
+        : "执行记录",
+      content: `${step.label} · ${STEP_STATUS[step.status] ?? step.status}`,
+    })),
+  ].sort((a, b) => b.at.localeCompare(a.at));
+
+  async function restart() {
+    if (!siteOps.onAction || busyRef.current || siteOps.interactionPending
+      || !observation?.rebuildRequest.allowed || observation.rebuildRequest.resetPending) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await siteOps.onAction({ action: "request_rebuild", input: {} });
+      onResetAccepted?.();
+      setRestartOpen(false);
+    } catch (failure) {
+      setError(userFacingErrorMessage(failure, "重新开始未完成，请重试。"));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="sfp-website-history">
+      <div className="sfp-website-history-toolbar">
+        <span>建站记录</span>
+        {observation.rebuildRequest.allowed && siteOps.onAction && (
+          <details className="sfp-website-more">
+            <summary><MoreHorizontal size={16} aria-hidden="true" /> 更多</summary>
+            <div>
+              <button type="button" disabled={busy || siteOps.interactionPending || observation.rebuildRequest.resetPending} onClick={() => { setError(null); setRestartOpen(true); }}>重新开始制作</button>
+            </div>
+          </details>
+        )}
+      </div>
+      <details className="sfp-website-history-disclosure">
+        <summary><span>操作记录</span><span>{entries.length} 条</span><ChevronDown size={15} aria-hidden="true" /></summary>
+        {entries.length === 0 ? <p>暂无操作记录。</p> : (
+          <ol>
+            {entries.slice(0, limit).map((entry) => (
+              <li key={entry.id}>
+                <div><strong>{entry.label}</strong><time dateTime={entry.at}>{recordTime(entry.at)}</time></div>
+                <p>{entry.content}</p>
+              </li>
+            ))}
+          </ol>
+        )}
+        {entries.length > limit && <button type="button" className="sfp-revision-add" onClick={() => setLimit((current) => current + 20)}>查看更早记录</button>}
+      </details>
+      <AlertDialog open={restartOpen} onOpenChange={(open) => { if (!busyRef.current) setRestartOpen(open); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>重新开始制作</AlertDialogTitle>
+            <AlertDialogDescription>清理当前制作任务并从当前知识库重新开始。已经发布的网站继续运行；域名、备案和阿里云连接会保留。</AlertDialogDescription>
+          </AlertDialogHeader>
+          {error && <p role="alert" className="sfp-revision-error">{error}</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
+            <AlertDialogAction disabled={busy || siteOps.interactionPending || !observation.rebuildRequest.allowed || observation.rebuildRequest.resetPending} onClick={(event) => { event.preventDefault(); void restart(); }}>{busy ? "正在处理…" : "确认重新开始"}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

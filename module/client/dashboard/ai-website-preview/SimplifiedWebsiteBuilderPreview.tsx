@@ -35,6 +35,9 @@ import {
 } from "./preview-assistant-widget";
 import { SiteDesignDraftPreview } from "./site-design-draft-preview";
 import { SiteOpsBuildEmbedPreview } from "./siteops-build-embed-preview";
+import { WebsiteDomainPublishPanel, getWebsitePublishState, type WebsitePublishTarget } from "./WebsiteDomainPublishPanel";
+import { WebsiteRevisionFields } from "./WebsiteRevisionFields";
+import { WebsiteOperationHistory } from "./WebsiteOperationHistory";
 import { usePreviewDialog } from "./qa-widget/usePreviewDialog";
 import {
   findLatestEvaluationReport,
@@ -72,10 +75,10 @@ export function normalizeWebsiteBuildStep(value: unknown): BuildStep | null {
 /** Design-step focus area. Legacy step=structure maps to the site section and
  * step=assistant to the assistant section; evaluation repair entries target
  * the exact area they audit. */
-export type WebsiteDesignSection = "site" | "pages" | "theme" | "assistant";
+export type WebsiteDesignSection = "site" | "pages" | "theme" | "assistant" | "domain";
 
 export function normalizeWebsiteDesignSection(value: unknown): WebsiteDesignSection | null {
-  if (value === "site" || value === "pages" || value === "theme" || value === "assistant") {
+  if (value === "site" || value === "pages" || value === "theme" || value === "assistant" || value === "domain") {
     return value;
   }
   return null;
@@ -86,8 +89,6 @@ export type SimplifiedWebsiteBuilderPreviewProps = {
   /** Focuses (scrolls + highlights) one design config area on the design step. */
   initialSection?: WebsiteDesignSection | null;
   onOpenRag?: () => void;
-  /** Opens the established SiteOps UI for Aliyun, domain and release controls. */
-  onOpenSiteOpsRelease?: () => void;
   onStepChange?: (step: BuildStep) => void;
   /** Real SiteOps state/actions supplied by the connected production adapter. */
   siteOps?: SiteOpsConversationPanelProps;
@@ -96,6 +97,7 @@ export type SimplifiedWebsiteBuilderPreviewProps = {
 };
 
 type LiveReleaseCoordinates = {
+  target: WebsitePublishTarget;
   projectId: string;
   projectRevision: number;
   knowledgeSnapshotId: string | null;
@@ -770,7 +772,6 @@ export function SimplifiedWebsiteBuilderPreview({
   initialStep = "template",
   initialSection,
   onOpenRag,
-  onOpenSiteOpsRelease,
   onStepChange,
   siteOps,
   storageScope,
@@ -857,6 +858,11 @@ export function SimplifiedWebsiteBuilderPreview({
   const [notice, setNotice] = useState("");
   const [liveAction, setLiveAction] = useState<string | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [revisionText, setRevisionText] = useState("");
+  const [revisionFiles, setRevisionFiles] = useState<File[]>([]);
+  const [revisionProgress, setRevisionProgress] = useState<number[]>([]);
+  const revisionEditSequenceRef = useRef(0);
+  const hasRevisionRequirements = Boolean(revisionText.trim() || revisionFiles.length);
   const [storageAvailable, setStorageAvailable] = useState(true);
   const [linkedRagReportId, setLinkedRagReportId] = useState<string | null>(
     () => loadLinkedRagReportId(storageScope, auditStorage),
@@ -877,7 +883,6 @@ export function SimplifiedWebsiteBuilderPreview({
   } | null>(null);
   // Edit sequence at the last successful structured save; a build embed is
   // only shown while the design draft has no unsaved edits on top of it.
-  const savedDesignSequenceRef = useRef<number | null>(null);
   const currentAssistantTrialBindingRef = useRef<AssistantExchangeBinding>({
     designEditSequence: 0,
     assistantName,
@@ -1078,10 +1083,6 @@ export function SimplifiedWebsiteBuilderPreview({
           && deployment.status === "active",
       ) ?? null
     : null;
-  const pendingGlobalDeployment = liveObservation?.deployments.find(
-    (deployment) => deployment.target === "global_excluding_cn"
-      && ["reserved", "deploying", "verifying"].includes(deployment.status),
-  ) ?? null;
   const liveVisualRetryAction = liveObservation?.visualGeneration.status === "retryable_error"
     ? liveObservation.visualGeneration.retryAction
       ?? (liveObservation.visualGeneration.generatedPages === 0 ? "start" : "supplemental")
@@ -1157,9 +1158,11 @@ export function SimplifiedWebsiteBuilderPreview({
     (build) => build.previewUrl,
   ) ?? null;
   const designDraftSynced = latestBuild?.previewUrl
-    ? !liveBriefHydrationRef.current
-      || designEditSequenceRef.current === liveBriefHydrationRef.current.editSequence
-      || designEditSequenceRef.current === savedDesignSequenceRef.current
+    ? !hasRevisionRequirements
+      && (!latestBuild.designPreferences || !currentProjectDesignPreferences
+        || latestBuild.designPreferences.draftHash === currentProjectDesignPreferences.draftHash)
+      && (!liveBriefHydrationRef.current
+        || designEditSequenceRef.current === liveBriefHydrationRef.current.editSequence)
     : false;
   const embeddableBuild = displayedBuild
     ? {
@@ -1167,6 +1170,7 @@ export function SimplifiedWebsiteBuilderPreview({
         ordinal: displayedBuild.ordinal,
         status: displayedBuild.status,
         previewUrl: displayedBuild.previewUrl,
+        sourceUrl: displayedBuild.sourceUrl,
         knowledgeSnapshotVersion: displayedBuild.knowledgeSnapshot?.version ?? null,
       }
     : null;
@@ -1329,7 +1333,6 @@ export function SimplifiedWebsiteBuilderPreview({
       };
 
   const liveBuildStatus = latestBuild?.status ?? liveObservation?.interactionState ?? "loading";
-  const liveBuildApproved = latestBuild?.status === "approved";
 
   // Real-build progress strip: elapsed time and the finest stage the server
   // exposes (buildPhase beats the coarse execution-step stage).
@@ -1386,16 +1389,8 @@ export function SimplifiedWebsiteBuilderPreview({
     return { stageText, percent, elapsedText };
   }, [liveBuildInFlight, latestBuild, liveObservation?.executionSteps, liveBuildStatus, buildClockNow]);
 
-  const liveDnsReady = liveObservation?.domainState?.dnsStatus === "active";
-  const currentBuildAlreadyLive = Boolean(
-    latestBuild && latestGlobalDeployment?.buildId === latestBuild.id,
-  );
-  const livePublishEligible = Boolean(
-    liveBuildApproved
-    && liveDnsReady
-    && !pendingGlobalDeployment
-    && !currentBuildAlreadyLive,
-  );
+  const livePublishEligible = Boolean(liveObservation
+    && getWebsitePublishState(liveObservation, liveReleaseCoordinates?.target ?? "global_excluding_cn").eligible);
 
   useEffect(() => {
     if (!siteOps || !liveObservation?.brief) return;
@@ -1698,6 +1693,7 @@ export function SimplifiedWebsiteBuilderPreview({
       `[data-design-section="${focusedSection}"]`,
     );
     if (!node) return;
+    if (node instanceof HTMLDetailsElement) node.open = true;
     node.scrollIntoView?.({ behavior: "smooth", block: "center" });
     node.classList.add("is-section-focus");
     const timer = window.setTimeout(() => {
@@ -1922,7 +1918,6 @@ export function SimplifiedWebsiteBuilderPreview({
       expectedDesignRevision: currentDesignRevision,
       draft: createLiveDesignPreferencesDraft(),
     });
-    savedDesignSequenceRef.current = designEditSequenceRef.current;
     return observation;
   };
 
@@ -1995,8 +1990,12 @@ export function SimplifiedWebsiteBuilderPreview({
       return false;
     }
     const submittedEditSequence = designEditSequenceRef.current;
+    const submittedRevisionSequence = revisionEditSequenceRef.current;
+    const submittedText = revisionText.trim();
+    const submittedFiles = [...revisionFiles];
     const submissionStillCurrent = () =>
-      designEditSequenceRef.current === submittedEditSequence;
+      designEditSequenceRef.current === submittedEditSequence
+      && revisionEditSequenceRef.current === submittedRevisionSequence;
     setLiveAction("submit_revision");
     setLiveError(null);
     try {
@@ -2006,9 +2005,13 @@ export function SimplifiedWebsiteBuilderPreview({
         return false;
       }
       await siteOps.onSubmitRevision({
-        text: buildLiveSiteOpsRevisionMessage(),
-        files: [],
-        onProgress: () => undefined,
+        text: submittedText || buildLiveSiteOpsRevisionMessage(),
+        files: submittedFiles,
+        onProgress: (index, percent) => setRevisionProgress((current) => {
+          const next = [...current];
+          next[index] = percent;
+          return next;
+        }),
       });
       if (!submissionStillCurrent()) {
         setNotice("改版任务提交期间网站设计已更新；当前页面不会将旧草稿标记完成，请重新提交最新设计。");
@@ -2018,6 +2021,9 @@ export function SimplifiedWebsiteBuilderPreview({
         projectId: liveObservation.project.id,
         editSequence: submittedEditSequence,
       };
+      setRevisionText("");
+      setRevisionFiles([]);
+      setRevisionProgress([]);
       setNotice("真实改版要求已提交；旧预览会保留到新版本完成，页面会同步新的构建状态。");
       return true;
     } catch (error) {
@@ -2051,7 +2057,7 @@ export function SimplifiedWebsiteBuilderPreview({
       return;
     }
     if (activeStep === "design" && siteOps && liveRevisionEditable) {
-      if (!designDraftSynced) {
+      if (!designDraftSynced || hasRevisionRequirements) {
         const accepted = await submitLiveRevision();
         if (!accepted) return;
         setNotice("改版要求已提交；新版本生成后请在右侧完成一次助手问答，再继续进入建设评估。");
@@ -2271,17 +2277,12 @@ export function SimplifiedWebsiteBuilderPreview({
     setNotice("已取消关联企业 RAG 评估；网站建设评分和发布选择均不受影响。");
   };
 
-  const openReleaseConfirmation = () => {
-    if (siteOps && !livePublishEligible) {
-      setNotice(
-        !liveBuildApproved
-          ? "真实网站仍在生成或检查中；只有当前已批准构建才能发布。"
-          : !liveDnsReady
-            ? "域名 DNS 尚未处于 active 状态，不能提交真实发布。"
-            : pendingGlobalDeployment
-              ? "海外站点已有发布任务进行中，请等待服务端完成。"
-              : "当前构建已经在线，无需重复发布。",
-      );
+  const openReleaseConfirmation = (target: WebsitePublishTarget = "global_excluding_cn") => {
+    const publishState = liveObservation ? getWebsitePublishState(liveObservation, target) : null;
+    if (siteOps && (!publishState?.eligible || liveInteractionPending || hasRevisionRequirements || !designDraftSynced)) {
+      setNotice(liveInteractionPending ? "操作正在进行，请稍后重试。"
+        : hasRevisionRequirements || !designDraftSynced ? "请先提交当前设计修改，等待新版本构建完成后再发布。"
+          : publishState?.reason ?? "正在读取发布条件，请刷新后重试。");
       return;
     }
     let report: EvaluationReportSnapshot;
@@ -2308,12 +2309,13 @@ export function SimplifiedWebsiteBuilderPreview({
     setLiveReleaseCoordinates(
       siteOps && liveObservation && latestBuild
         ? {
+            target,
             projectId: liveObservation.project.id,
             projectRevision: liveObservation.project.revision,
             knowledgeSnapshotId:
               liveObservation.project.currentKnowledgeSnapshotId ?? null,
             buildId: latestBuild.id,
-            expectedHeadDeploymentId: authoritativeGlobalHeadId,
+            expectedHeadDeploymentId: publishState?.headDeploymentId ?? null,
           }
         : null,
     );
@@ -2338,17 +2340,20 @@ export function SimplifiedWebsiteBuilderPreview({
       evaluationReportIds: reports.map((report) => report.reportId),
       acknowledgedRiskIds: acceptedRisk ? riskIds : [],
       riskAcknowledged: acceptedRisk,
-      note: siteOps ? "SiteOps publish_global request acknowledged by the server." : null,
+      note: siteOps ? `SiteOps ${liveReleaseCoordinates?.target === "mainland_cn" ? "publish_mainland" : "publish_global"} request acknowledged by the server.` : null,
     };
     if (siteOps) {
+      const target = liveReleaseCoordinates?.target ?? "global_excluding_cn";
+      const publishState = liveObservation ? getWebsitePublishState(liveObservation, target) : null;
       const currentCoordinates = liveObservation && latestBuild
         ? {
+            target,
             projectId: liveObservation.project.id,
             projectRevision: liveObservation.project.revision,
             knowledgeSnapshotId:
               liveObservation.project.currentKnowledgeSnapshotId ?? null,
             buildId: latestBuild.id,
-            expectedHeadDeploymentId: authoritativeGlobalHeadId,
+            expectedHeadDeploymentId: publishState?.headDeploymentId ?? null,
           }
         : null;
       if (
@@ -2359,14 +2364,18 @@ export function SimplifiedWebsiteBuilderPreview({
             liveReleaseCoordinates[key as keyof LiveReleaseCoordinates]
             !== currentCoordinates[key as keyof LiveReleaseCoordinates],
         )
-        || !livePublishEligible
+        || !publishState?.eligible
+        || liveInteractionPending
+        || !designDraftSynced
+        || hasRevisionRequirements
       ) {
         closeReleaseConfirmation();
         setNotice("真实发布条件已经变化，未提交请求也未写入成功审计；请返回检查状态。");
         return;
       }
-      const published = await runLiveAction("publish_global", {
-        action: "publish_global",
+      const action = target === "mainland_cn" ? "publish_mainland" : "publish_global";
+      const published = await runLiveAction(action, {
+        action,
         input: {
           buildId: liveReleaseCoordinates.buildId,
           expectedHeadDeploymentId:
@@ -2492,17 +2501,6 @@ export function SimplifiedWebsiteBuilderPreview({
               <RefreshCw size={15} />重新载入
             </button>
           )}
-        </div>
-      )}
-      {siteOps && liveBuildApproved && onOpenSiteOpsRelease && (
-        <div className="sfp-siteops-release-entry">
-          <span>
-            <Globe2 size={18} aria-hidden="true" />
-            <strong>构建已批准，可继续配置域名并上线</strong>
-          </span>
-          <button type="button" onClick={onOpenSiteOpsRelease}>
-            打开域名与发布设置
-          </button>
         </div>
       )}
 
@@ -2792,8 +2790,37 @@ export function SimplifiedWebsiteBuilderPreview({
                   </span>
                 </div>
               </div>
+              {siteOps && latestBuild && (
+                <WebsiteRevisionFields
+                  text={revisionText}
+                  files={revisionFiles}
+                  progress={revisionProgress}
+                  disabled={!liveRevisionEditable || liveInteractionPending}
+                  onChange={(text, files) => {
+                    revisionEditSequenceRef.current += 1;
+                    setRevisionText(text);
+                    setRevisionFiles(files);
+                    setRevisionProgress([]);
+                    setAssistantTested(false);
+                    setIsConfirmed(false);
+                    setCompletedStepIds((current) => current.filter((step) => step !== "design"));
+                  }}
+                />
+              )}
+              {siteOps && <WebsiteDomainPublishPanel siteOps={siteOps} onRequestPublish={openReleaseConfirmation} disabled={liveInteractionPending} publishBlockedReason={hasRevisionRequirements || Boolean(latestBuild?.previewUrl && !designDraftSynced) ? "请先提交设计修改，等待新版本构建完成后再发布。" : undefined} />}
+              {siteOps && <WebsiteOperationHistory siteOps={{ ...siteOps, interactionPending: liveInteractionPending }} onResetAccepted={() => {
+                setRevisionText("");
+                setRevisionFiles([]);
+                setRevisionProgress([]);
+                revisionEditSequenceRef.current += 1;
+                liveBriefHydrationRef.current = null;
+                appliedLiveBriefKeyRef.current = null;
+                setAssistantTested(false);
+                setCompletedStepIds([]);
+                setIsConfirmed(false);
+              }} />}
             </section>
-            <section className="sfp-preview-panel sfp-builder-preview-panel" aria-label="网站与助手统一预览" data-testid="website-design-preview">
+            <section className={`sfp-preview-panel sfp-builder-preview-panel${embeddableBuild ? " sfp-builder-preview-panel--live" : ""}`} aria-label="网站与助手统一预览" data-testid="website-design-preview">
               <div className="sfp-preview-heading"><span><strong>{isLiveBuilder ? (embeddableBuild ? (embedShowsLatestBuild ? (designDraftSynced ? "真实构建预览" : "真实构建预览 · 有未提交修改") : "真实构建预览 · 新版本生成中") : "真实数据草稿") : "知识驱动统一预览"}</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目{siteOps ? (embeddableBuild ? (embedShowsLatestBuild ? (designDraftSynced ? " · 已嵌入真实构建产物" : " · 预览为最近一次真实构建，提交修改后自动更新") : " · 正在生成新版本，当前显示上一版真实构建") : " · 内容来自当前知识投影，构建完成后以真实构建预览为准") : ""}</small></span><DevicePicker device={device} onChange={setDevice} /></div>
               {siteOps && liveBuildProgress && (
                 <div
@@ -2999,20 +3026,9 @@ export function SimplifiedWebsiteBuilderPreview({
             <button
               type="button"
               className="sfp-button sfp-button--primary"
-              disabled={Boolean(siteOps && (!livePublishEligible || liveInteractionPending))}
-              onClick={openReleaseConfirmation}
+              onClick={() => siteOps ? goTo("design", "domain") : openReleaseConfirmation()}
             >
-              {siteOps
-                ? !liveBuildApproved
-                  ? "等待真实构建检查"
-                  : !liveDnsReady
-                    ? "等待域名 DNS 生效"
-                    : pendingGlobalDeployment
-                      ? "海外站点发布中"
-                      : currentBuildAlreadyLive
-                        ? "当前构建已在线"
-                        : "进入发布确认"
-                : "进入发布确认"}
+              {siteOps ? "域名与发布" : "进入发布确认"}
             </button>
           </div>
         ) : (
@@ -3039,7 +3055,7 @@ export function SimplifiedWebsiteBuilderPreview({
               : siteOps && activeStep === "design" && templateSelectionOpen
                 ? liveAction === "configure_and_build" ? "正在保存配置并生成…" : "保存真实配置并生成网站"
                 : siteOps && activeStep === "design" && liveRevisionEditable
-                  ? liveAction === "submit_revision" ? "正在提交修改…" : "提交修改并重新生成"
+                  ? liveAction === "submit_revision" ? "正在提交修改…" : designDraftSynced ? "进入建设评估" : "提交修改并重新生成"
                 : "继续"}
           </button>
         )}
@@ -3052,15 +3068,16 @@ export function SimplifiedWebsiteBuilderPreview({
             <h2>确认是否继续发布</h2>
             <p>网站评估当前为“{recommendation}”，{releaseRelatedReports.length > 0 ? "并已冻结关联的企业 RAG 评估快照" : "未关联企业 RAG 评估快照"}。这些结果只提供质量建议，不会替你决定。</p>
             <dl>
+              {siteOps && <div><dt>发布目标</dt><dd>{liveReleaseCoordinates?.target === "mainland_cn" ? "中国大陆站点" : "海外站点"} · 构建 #{latestBuild?.ordinal}</dd></div>}
               <div><dt>网站评估</dt><dd>{releaseReport.result.score ?? "—"}/100 · {releaseReport.result.version}</dd></div>
               <div><dt>关联 RAG</dt><dd>{releaseRelatedReports.length > 0 ? `${releaseRelatedReports[0].result.score ?? "—"}/100 · ${releaseRelatedReports[0].result.version} · ${releaseRelatedReports[0].reportId}` : "未关联"}</dd></div>
               <div><dt>风险提示</dt><dd>{releaseRisks.length} 项</dd></div>
             </dl>
             {releaseRisks.length > 0 && <ul>{releaseRisks.map((risk) => <li key={risk.id}><strong>{risk.title}</strong><span>{risk.summary}</span></li>)}</ul>}
-            <div className="sfp-release-note"><CircleAlert size={18} /><span>{siteOps ? "继续会向真实 SiteOps 提交海外站点发布；服务端仍会检查构建版本、部署目标和域名条件。" : "继续只会记录你的发布决定；当前原型不会执行真实部署。真实发布仍需通过构建、部署目标和域名配置等技术检查。"}</span></div>
+            <div className="sfp-release-note"><CircleAlert size={18} /><span>{siteOps ? `继续会提交${liveReleaseCoordinates?.target === "mainland_cn" ? "中国大陆" : "海外"}站点发布；服务端仍会检查构建版本、部署目标和域名条件。发布完成前保留当前线上版本。` : "继续只会记录你的发布决定；当前原型不会执行真实部署。真实发布仍需通过构建、部署目标和域名配置等技术检查。"}</span></div>
             <div className="sfp-release-dialog__actions">
-              <button type="button" className="sfp-button sfp-button--ghost" onClick={closeReleaseConfirmation}>返回评估</button>
-              <button type="button" className="sfp-button sfp-button--primary" disabled={liveAction === "publish_global" || Boolean(siteOps && !livePublishEligible)} onClick={confirmReleaseDecision}>{liveAction === "publish_global" ? "正在提交真实发布…" : releaseHasRisks ? "我已了解风险，继续发布" : "确认继续发布"}</button>
+              <button type="button" className="sfp-button sfp-button--ghost" onClick={closeReleaseConfirmation}>{siteOps ? "返回网站设计" : "返回评估"}</button>
+              <button type="button" className="sfp-button sfp-button--primary" disabled={Boolean(siteOps && (liveInteractionPending || !livePublishEligible || !designDraftSynced))} onClick={confirmReleaseDecision}>{liveAction === "publish_global" || liveAction === "publish_mainland" ? "正在提交真实发布…" : releaseHasRisks ? "我已了解风险，继续发布" : "确认继续发布"}</button>
             </div>
           </section>
         </div>

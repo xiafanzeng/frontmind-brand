@@ -1,5 +1,5 @@
-import { act, render, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SiteOpsObservationV1 } from "../../../contracts/siteops-contract";
 import type {
   SiteDesignPreferencesSaveInput,
@@ -13,6 +13,12 @@ const mocks = vi.hoisted(() => ({
   openObservation: null as SiteOpsObservationV1 | null,
   actFast: vi.fn(),
   sendMessage: vi.fn(),
+  observeRefetch: vi.fn(),
+  aliyunBegin: vi.fn(),
+  aliyunDisconnect: vi.fn(),
+  actPending: false,
+  aliyunBeginPending: false,
+  aliyunDisconnectPending: false,
 }));
 
 vi.mock("../../api-hooks", () => ({
@@ -38,7 +44,7 @@ vi.mock("../../api-hooks", () => ({
             data: undefined,
             error: null,
             isFetching: false,
-            refetch: vi.fn(async () => ({ data: undefined })),
+            refetch: mocks.observeRefetch,
           }),
         },
         recommendDesign: {
@@ -65,6 +71,7 @@ vi.mock("../../api-hooks", () => ({
           useMutation: () => ({
             mutateAsync: mocks.actFast,
             reset: vi.fn(),
+            isPending: mocks.actPending,
             error: null,
           }),
         },
@@ -78,7 +85,7 @@ vi.mock("../../api-hooks", () => ({
         },
         aliyunConnection: {
           beginOAuth: {
-            useMutation: () => ({ mutateAsync: vi.fn(), error: null }),
+            useMutation: () => ({ mutateAsync: mocks.aliyunBegin, isPending: mocks.aliyunBeginPending, error: null }),
           },
           listDomains: {
             useQuery: () => ({
@@ -89,7 +96,7 @@ vi.mock("../../api-hooks", () => ({
             }),
           },
           disconnect: {
-            useMutation: () => ({ mutateAsync: vi.fn(), error: null }),
+            useMutation: () => ({ mutateAsync: mocks.aliyunDisconnect, isPending: mocks.aliyunDisconnectPending, error: null }),
           },
         },
       },
@@ -235,10 +242,15 @@ function controllerObservation(revision = 5): SiteOpsObservationV1 {
 }
 
 describe("connected SiteOps design transport", () => {
+  afterEach(cleanup);
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.recommendationInput = null;
     mocks.openObservation = null;
+    mocks.observeRefetch.mockReset().mockResolvedValue({ data: undefined });
+    mocks.actPending = false;
+    mocks.aliyunBeginPending = false;
+    mocks.aliyunDisconnectPending = false;
   });
 
   it("binds recommendation queries and structured saves through the controller", async () => {
@@ -331,4 +343,56 @@ describe("connected SiteOps design transport", () => {
       expectedProjectRevision: 6,
     }));
   });
+
+  it("locks all sibling writes synchronously while a delayed domain action awaits acknowledgement", async () => {
+    mocks.openObservation = controllerObservation();
+    let resolveAction!: (value: unknown) => void;
+    mocks.actFast.mockImplementationOnce(() => new Promise((resolve) => { resolveAction = resolve; }));
+    mocks.observeRefetch.mockResolvedValueOnce({ data: controllerObservation(6) });
+    const propsRef: { current: SiteOpsConversationPanelProps | null } = { current: null };
+    render(<ConnectedSiteOpsConversationPanel render={(value) => { propsRef.current = value; return null; }} />);
+    await waitFor(() => expect(propsRef.current?.observation?.project.revision).toBe(5));
+    const handlers = propsRef.current!;
+    let pendingAction!: Promise<void>;
+    let blockedWrites!: Promise<unknown>[];
+    act(() => {
+      pendingAction = handlers.onAction!({ action: "domain_sync", input: { domain: "example.com" } }) as Promise<void>;
+      // Invoke before React can publish isPending: the controller ref is the
+      // actual boundary between the independent design/domain/history panels.
+      blockedWrites = [
+        handlers.onAction!({ action: "request_rebuild", input: {} }),
+        handlers.onSaveDesignPreferences!(saveInput),
+        handlers.onSubmitRevision!({ text: "修订", files: [], onProgress: vi.fn() }),
+        handlers.onBeginAliyun!(),
+        handlers.onDisconnectAliyun!(),
+      ].map((result) => Promise.resolve(result));
+    });
+    for (const blocked of blockedWrites) await expect(blocked).rejects.toThrow("上一项建站操作仍在进行");
+    expect(propsRef.current?.interactionPending).toBe(true);
+    expect(mocks.actFast).toHaveBeenCalledTimes(1);
+    expect(mocks.saveDesignPreferences).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.aliyunBegin).not.toHaveBeenCalled();
+    expect(mocks.aliyunDisconnect).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveAction({ clientRequestId: "domain-action", projectRevision: 6, latestSequence: 6 });
+      await pendingAction;
+    });
+    await waitFor(() => expect(propsRef.current?.interactionPending).toBe(false));
+    mocks.saveDesignPreferences.mockResolvedValueOnce(controllerObservation(7));
+    await act(async () => { await propsRef.current?.onSaveDesignPreferences?.(saveInput); });
+    expect(propsRef.current?.observation?.project.revision).toBe(7);
+  });
+
+  it.each(["actPending", "aliyunBeginPending", "aliyunDisconnectPending"] as const)(
+    "exposes %s through the shared pending state",
+    async (pendingFlag) => {
+      mocks.openObservation = controllerObservation();
+      mocks[pendingFlag] = true;
+      const propsRef: { current: SiteOpsConversationPanelProps | null } = { current: null };
+      render(<ConnectedSiteOpsConversationPanel render={(value) => { propsRef.current = value; return null; }} />);
+      await waitFor(() => expect(propsRef.current?.observation).toBeTruthy());
+      expect(propsRef.current?.interactionPending).toBe(true);
+    },
+  );
 });

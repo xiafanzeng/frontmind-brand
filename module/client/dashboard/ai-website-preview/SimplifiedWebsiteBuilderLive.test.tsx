@@ -307,6 +307,32 @@ function fullCatalogObservation(): SiteOpsObservationV1 {
   };
 }
 
+function approvedBuildWithDesignPreferences(): SiteOpsObservationV1 {
+  const approved = liveBuildObservation("approved");
+  const preferences = {
+    schemaVersion: 1 as const,
+    siteName: "已构建的网站",
+    siteGoal: "帮助客户找到答案",
+    featuredRouteIds: ["help"],
+    siteAccent: "#6f35a5",
+    assistant: {
+      name: "企业助手",
+      welcome: "您好，我会依据企业知识回答问题。",
+      accentMode: "follow_site" as const,
+      customAccent: "#6f35a5",
+    },
+    knowledgeSnapshot: KNOWLEDGE_COORDINATE,
+    template: TEMPLATE_COORDINATE,
+    designRevision: 1,
+    draftHash: "a".repeat(64),
+  };
+  return {
+    ...approved,
+    brief: { ...approved.brief!, designPreferences: preferences },
+    builds: approved.builds.map((build) => ({ ...build, designPreferences: preferences })),
+  };
+}
+
 function recommendableObservation(): SiteOpsObservationV1 {
   const base = liveBuildObservation("awaiting_visual_selection");
   const routes = [
@@ -389,6 +415,15 @@ function designRecommendation(
 
 beforeEach(() => window.localStorage.clear());
 afterEach(cleanup);
+
+function openDomainPublishConfirmation() {
+  const evaluationEntry = screen.queryByRole("button", { name: "域名与发布" });
+  if (evaluationEntry) fireEvent.click(evaluationEntry);
+  const panel = screen.getByTestId("website-domain-publish");
+  const summary = panel.querySelector("summary");
+  if (summary && !summary.closest("details")?.open) fireEvent.click(summary);
+  fireEvent.click(within(panel).getByTestId("website-publish-request"));
+}
 
 describe("redesigned live website builder setup", () => {
   it("starts a fresh idempotency attempt when the same revision text targets a newer project revision", async () => {
@@ -1523,6 +1558,7 @@ describe("redesigned live website builder setup", () => {
       project: approved.project,
       builds: approved.builds.map((build) => ({
         ...build,
+        sourceUrl: "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/source.zip",
         knowledgeSnapshot: {
           id: KNOWLEDGE_COORDINATE.id,
           version: KNOWLEDGE_COORDINATE.version,
@@ -1549,6 +1585,8 @@ describe("redesigned live website builder setup", () => {
       const toolbar = screen.getByTestId("website-embed-preview-toolbar");
       expect(toolbar.textContent).toContain("真实构建 v1");
       expect(toolbar.textContent).toContain("知识快照 v3");
+      expect(within(toolbar).getByRole("link", { name: "下载源码" }).getAttribute("href"))
+        .toBe("/api/site-ops/builds/44444444-4444-4444-8444-444444444444/source.zip");
       // The real build replaces the draft; no fixture draft banner remains.
       expect(screen.queryByTestId("website-draft-preview-banner")).toBeNull();
 
@@ -1632,7 +1670,7 @@ describe("redesigned live website builder setup", () => {
     }
   });
 
-  it("completes the real trial only through a validated bridge report", async () => {
+  it("validates bridge trials and allows another trial after revision instructions are cleared", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -1677,11 +1715,14 @@ describe("redesigned live website builder setup", () => {
       })),
       interactionState: "approved",
     };
+    const onAction = vi.fn(async () => undefined);
+    const onSubmitRevision = vi.fn(async () => undefined);
+    const onSaveDesignPreferences = vi.fn(async () => observationWithBuild);
     try {
       const view = render(
         <SimplifiedWebsiteBuilderPreview
           initialStep="design"
-          siteOps={{ observation: observationWithBuild, onAction: vi.fn() }}
+          siteOps={{ observation: observationWithBuild, onAction, onSubmitRevision, onSaveDesignPreferences }}
           storageScope="live:7:bridge-trial"
         />,
       );
@@ -1742,6 +1783,27 @@ describe("redesigned live website builder setup", () => {
       await waitFor(() =>
         expect(screen.getByText("助手试用已完成")).toBeTruthy(),
       );
+
+      // Editing revision requirements suspends credit for this build. Clearing
+      // them restores the same iframe binding, which must accept a new trial.
+      const revisionInstructions = screen.getByRole("textbox", { name: "补充修改要求" });
+      fireEvent.change(revisionInstructions, { target: { value: "请修改首页标题" } });
+      expect(screen.getByText("助手试用未完成")).toBeTruthy();
+      dispatch(report({}));
+      expect(screen.getByText("助手试用未完成")).toBeTruthy();
+      fireEvent.change(revisionInstructions, { target: { value: "" } });
+      expect(screen.getByText("助手试用未完成")).toBeTruthy();
+      expect(screen.getByTitle("真实构建预览")).toBe(frame);
+      dispatch(report({}));
+      await waitFor(() =>
+        expect(screen.getByText("助手试用已完成")).toBeTruthy(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "进入建设评估" }));
+      expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
+      expect(onAction).not.toHaveBeenCalled();
+      expect(onSubmitRevision).not.toHaveBeenCalled();
+      expect(onSaveDesignPreferences).not.toHaveBeenCalled();
+      fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /网站设计/ }));
 
       // Renaming the assistant invalidates the completed trial again.
       fireEvent.change(screen.getByLabelText("助手名称"), {
@@ -2045,6 +2107,141 @@ describe("redesigned live website builder setup", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
+  it.each(["newer-edit", "revision-failure"] as const)(
+    "keeps an approved preview dirty after saving preferences without an accepted revision (%s)",
+    async (failureMode) => {
+      const approved = approvedBuildWithDesignPreferences();
+      const saveRequest = deferred<SiteOpsObservationV1>();
+      const onSaveDesignPreferences = vi.fn((
+        _input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSaveDesignPreferences"]>>[0],
+      ) => saveRequest.promise);
+      const onSubmitRevision = vi.fn(async () => {
+        if (failureMode === "revision-failure") throw new Error("改版服务暂时不可用");
+      });
+      const onAction = vi.fn(async () => undefined);
+      const onStepChange = vi.fn();
+      const scope = `live:7:saved-without-revision-${failureMode}`;
+      const siteOps = { observation: approved, onAction, onSaveDesignPreferences, onSubmitRevision };
+      const view = render(
+        <SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={siteOps} onStepChange={onStepChange} storageScope={scope} />,
+      );
+      await waitFor(() => expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站"));
+      expect((screen.getByTestId("website-publish-request") as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.change(screen.getByLabelText("网站名称"), { target: { value: "保存中的设计 A" } });
+      fireEvent.click(screen.getByTestId("website-revision-submit"));
+      await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
+      if (failureMode === "newer-edit") {
+        fireEvent.change(screen.getByLabelText("网站名称"), { target: { value: "保存期间的新设计 B" } });
+      }
+      const submitted = onSaveDesignPreferences.mock.calls[0]![0];
+      const saved: SiteOpsObservationV1 = {
+        ...approved,
+        project: { ...approved.project, revision: approved.project.revision + 1 },
+        brief: {
+          ...approved.brief!,
+          designPreferences: { ...submitted.draft, designRevision: 2, draftHash: "b".repeat(64) },
+        },
+      };
+      // Saving updates project preferences while the preview still belongs to
+      // the older approved build. That echo must not mark the preview synced.
+      view.rerender(
+        <SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ ...siteOps, observation: saved }} onStepChange={onStepChange} storageScope={scope} />,
+      );
+      saveRequest.resolve(saved);
+      await waitFor(() => expect(screen.getByText(
+        failureMode === "newer-edit" ? /保存期间网站设计已更新/ : "改版服务暂时不可用",
+      )).toBeTruthy());
+      expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
+        .toBe(failureMode === "newer-edit" ? "保存期间的新设计 B" : "保存中的设计 A");
+      expect(screen.getByText("真实构建预览 · 有未提交修改")).toBeTruthy();
+      expect(screen.getByTestId("website-revision-submit").textContent).toBe("提交修改并重新生成");
+      expect((screen.getByTestId("website-publish-request") as HTMLButtonElement).disabled).toBe(true);
+      expect(onSubmitRevision).toHaveBeenCalledTimes(failureMode === "newer-edit" ? 0 : 1);
+      expect(onAction).not.toHaveBeenCalled();
+      expect(onStepChange).not.toHaveBeenCalledWith("evaluation");
+      if (failureMode === "revision-failure") {
+        view.unmount();
+        render(
+          <SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ ...siteOps, observation: saved }} storageScope={scope} />,
+        );
+        await waitFor(() => expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("保存中的设计 A"));
+        expect(screen.getByText("真实构建预览 · 有未提交修改")).toBeTruthy();
+        expect((screen.getByTestId("website-publish-request") as HTMLButtonElement).disabled).toBe(true);
+      }
+    },
+  );
+
+  it("clears local revision requirements only after the reset is accepted", async () => {
+    const approved = approvedBuildWithDesignPreferences();
+    const resetRequest = deferred<void>();
+    const onAction = vi.fn()
+      .mockRejectedValueOnce(new Error("重置服务暂时不可用"))
+      .mockImplementationOnce(() => resetRequest.promise);
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ observation: { ...approved, rebuildRequest: { ...approved.rebuildRequest, allowed: true } }, onAction }}
+        storageScope="live:7:reset-revision-fields"
+      />,
+    );
+    const instructions = screen.getByRole("textbox", { name: "补充修改要求" }) as HTMLTextAreaElement;
+    fireEvent.change(instructions, { target: { value: "重置前的修改要求" } });
+    const image = new File(["reference"], "reset-reference.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("添加修改参考图片"), { target: { files: [image] } });
+    const references = screen.getByRole("list", { name: "修改参考图片" });
+    fireEvent.click(screen.getByText("更多"));
+    fireEvent.click(screen.getByRole("button", { name: "重新开始制作" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认重新开始" }));
+    await waitFor(() => expect(screen.getByText("重置服务暂时不可用")).toBeTruthy());
+    expect(instructions.value).toBe("重置前的修改要求");
+    expect(references.textContent).toContain("reset-reference.png");
+    fireEvent.click(screen.getByRole("button", { name: "确认重新开始" }));
+    await waitFor(() => expect(onAction).toHaveBeenCalledTimes(2));
+    expect(instructions.value).toBe("重置前的修改要求");
+    resetRequest.resolve(undefined);
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "补充修改要求" }) as HTMLTextAreaElement).value).toBe(""));
+    expect(screen.queryByRole("list", { name: "修改参考图片" })).toBeNull();
+    expect(screen.getByText("助手试用未完成")).toBeTruthy();
+    expect(onAction).toHaveBeenLastCalledWith({ action: "request_rebuild", input: {} });
+  });
+
+  it("submits freeform instructions and images from the unified design action", async () => {
+    const approved = liveBuildObservation("approved");
+    const onAction = vi.fn(async () => undefined);
+    const onSaveDesignPreferences = vi.fn(async () => approved);
+    const onSubmitRevision = vi.fn(async (
+      input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSubmitRevision"]>>[0],
+    ) => { input.onProgress(0, 100); });
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ observation: approved, onAction, onSaveDesignPreferences, onSubmitRevision }}
+        storageScope="live:7:freeform-revision"
+      />,
+    );
+
+    const image = new File(["reference-image"], "header-reference.png", { type: "image/png" });
+    const instructions = "请把首页头图替换为附件，并缩小导航高度。".padEnd(20_000, "参");
+    fireEvent.change(screen.getByRole("textbox", { name: "补充修改要求" }), {
+      target: { value: instructions },
+    });
+    fireEvent.change(screen.getByLabelText("添加修改参考图片"), {
+      target: { files: [image] },
+    });
+    fireEvent.click(screen.getByTestId("website-revision-submit"));
+
+    await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
+    expect(onSubmitRevision.mock.calls[0]![0]).toMatchObject({
+      text: instructions,
+      files: [image],
+    });
+    expect(onAction).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: "补充修改要求" }) as HTMLTextAreaElement).value).toBe(""),
+    );
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+  });
+
   it("does not advance or complete an older revision when the design changes while submission is pending", async () => {
     const scope = "live:7:pending-revision-race";
     const approved = liveBuildObservation("approved");
@@ -2279,7 +2476,7 @@ describe("redesigned live website builder setup", () => {
     expect(screen.getByText(/真实 SiteOps · 项目版本/)).toBeTruthy();
     expect(screen.queryByTestId("siteops-build-status")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "进入发布确认" }));
+    openDomainPublishConfirmation();
     fireEvent.click(screen.getByRole("button", { name: /继续发布|确认继续发布/ }));
 
     await waitFor(() =>
@@ -2366,13 +2563,11 @@ describe("redesigned live website builder setup", () => {
     }
   });
 
-  it("offers the established domain and release settings only after build approval", () => {
-    const onOpenSiteOpsRelease = vi.fn();
+  it("offers domain preparation before the first build and keeps evaluation linked to the same design section", () => {
     const onAction = vi.fn(async () => undefined);
     const page = render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="evaluation"
-        onOpenSiteOpsRelease={onOpenSiteOpsRelease}
+        initialStep="design"
         siteOps={{
           observation: liveBuildObservation("awaiting_visual_selection"),
           onAction,
@@ -2382,11 +2577,14 @@ describe("redesigned live website builder setup", () => {
     );
 
     expect(screen.queryByRole("button", { name: "打开域名与发布设置" })).toBeNull();
+    expect(screen.getByTestId("website-domain-publish")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "返回三步建站" })).toBeNull();
+    expect(onAction).not.toHaveBeenCalled();
 
-    page.rerender(
+    page.unmount();
+    render(
       <SimplifiedWebsiteBuilderPreview
         initialStep="evaluation"
-        onOpenSiteOpsRelease={onOpenSiteOpsRelease}
         siteOps={{
           observation: liveBuildObservation("approved"),
           onAction,
@@ -2394,9 +2592,12 @@ describe("redesigned live website builder setup", () => {
         storageScope="live:7:workspace-a"
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "打开域名与发布设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "域名与发布" }));
 
-    expect(onOpenSiteOpsRelease).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+    expect(screen.getByTestId("website-domain-publish")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "发布确认" })).toBeNull();
+    expect(onAction).not.toHaveBeenCalled();
   });
 
   it("uses the authoritative live head after a task reset hides the old deployment row", async () => {
@@ -2421,7 +2622,7 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "进入发布确认" }));
+    openDomainPublishConfirmation();
     fireEvent.click(screen.getByRole("button", { name: /继续发布|确认继续发布/ }));
 
     await waitFor(() =>
@@ -2446,7 +2647,7 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "进入发布确认" }));
+    openDomainPublishConfirmation();
     const next = {
       ...first,
       project: { ...first.project, revision: first.project.revision + 1 },
@@ -2472,11 +2673,110 @@ describe("redesigned live website builder setup", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("freezes the mainland target and its authoritative deployment head for confirmation", async () => {
+    const approved = liveBuildObservation("approved");
+    const mainlandHead = "88888888-8888-4888-8888-888888888888";
+    const globalHead = "99999999-9999-4999-8999-999999999999";
+    const onAction = vi.fn(async () => undefined);
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{
+          observation: {
+            ...approved,
+            project: { ...approved.project, globalLiveDeploymentId: globalHead, mainlandLiveDeploymentId: mainlandHead },
+            domainState: { ...approved.domainState!, icpStatus: "approved", icpDomainRevision: 1 },
+          },
+          onAction,
+        }}
+        storageScope="live:7:mainland-confirmation"
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("发布区域"), { target: { value: "mainland_cn" } });
+    openDomainPublishConfirmation();
+    expect(screen.getByRole("dialog", { name: "发布确认" }).textContent).toContain("中国大陆站点");
+    // The confirmation owns its target even if another render changes the form selection.
+    fireEvent.change(screen.getByLabelText("发布区域"), { target: { value: "global_excluding_cn" } });
+    fireEvent.click(screen.getByRole("button", { name: /继续发布|确认继续发布/ }));
+
+    await waitFor(() => expect(onAction).toHaveBeenCalledWith({
+      action: "publish_mainland",
+      input: { buildId: approved.builds[0]!.id, expectedHeadDeploymentId: mainlandHead },
+    }));
+  });
+
+  it("rejects a mainland confirmation when its live head changes and does not record success", async () => {
+    const approved = liveBuildObservation("approved");
+    const scope = "live:7:mainland-stale-head";
+    const current: SiteOpsObservationV1 = {
+      ...approved,
+      project: { ...approved.project, mainlandLiveDeploymentId: "88888888-8888-4888-8888-888888888888" },
+      domainState: { ...approved.domainState!, icpStatus: "approved", icpDomainRevision: 1 },
+    };
+    const onAction = vi.fn(async () => undefined);
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ observation: current, onAction }} storageScope={scope} />,
+    );
+    fireEvent.change(screen.getByLabelText("发布区域"), { target: { value: "mainland_cn" } });
+    openDomainPublishConfirmation();
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{
+          observation: { ...current, project: { ...current.project, mainlandLiveDeploymentId: "99999999-9999-4999-8999-999999999999" } },
+          onAction,
+        }}
+        storageScope={scope}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /继续发布|确认继续发布/ }));
+
+    await waitFor(() => expect(screen.getByText(/真实发布条件已经变化/)).toBeTruthy());
+    expect(onAction).not.toHaveBeenCalled();
+    expect(listPublishDecisions(scopedEvaluationStorage(scope))).toEqual([]);
+  });
+
+  it("keeps release selection separate from the saved design and requires ICP for the current domain version", async () => {
+    const approved = liveBuildObservation("approved");
+    const scope = "live:7:release-is-not-design";
+    const draftKey = `${WEBSITE_DRAFT_STORAGE_KEY}.${encodeURIComponent(scope)}`;
+    const onAction = vi.fn(async () => undefined);
+    const onSaveDesignPreferences = vi.fn(async () => approved);
+    const onSubmitRevision = vi.fn(async () => undefined);
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{
+          observation: { ...approved, domainState: { ...approved.domainState!, revision: 2, icpStatus: "approved", icpDomainRevision: 1 } },
+          onAction,
+          onSaveDesignPreferences,
+          onSubmitRevision,
+        }}
+        storageScope={scope}
+      />,
+    );
+    await waitFor(() => expect(window.localStorage.getItem(draftKey)).toBeTruthy());
+    const savedDraft = window.localStorage.getItem(draftKey);
+    const release = screen.getByTestId("website-publish-request") as HTMLButtonElement;
+    expect(release.disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText("发布区域"), { target: { value: "mainland_cn" } });
+    expect(release.disabled).toBe(true);
+    expect(screen.getByTestId("website-domain-publish").textContent).toContain("当前域名版本");
+    fireEvent.change(screen.getByLabelText("发布区域"), { target: { value: "global_excluding_cn" } });
+    expect(release.disabled).toBe(false);
+    expect(window.localStorage.getItem(draftKey)).toBe(savedDraft);
+    expect(screen.queryByText("真实构建预览 · 有未提交修改")).toBeNull();
+    expect(onSaveDesignPreferences).not.toHaveBeenCalled();
+    expect(onSubmitRevision).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
   it("requires active DNS, no pending deployment, and a not-yet-live current build", () => {
     const approved = liveBuildObservation("approved");
     const view = render(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="evaluation"
+        initialStep="design"
         siteOps={{
           observation: {
             ...approved,
@@ -2489,12 +2789,12 @@ describe("redesigned live website builder setup", () => {
         storageScope="live:7:workspace-a"
       />,
     );
-    let release = screen.getByRole("button", { name: "等待域名 DNS 生效" }) as HTMLButtonElement;
+    let release = screen.getByTestId("website-publish-request") as HTMLButtonElement;
     expect(release.disabled).toBe(true);
 
     view.rerender(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="evaluation"
+        initialStep="design"
         siteOps={{
           observation: {
             ...approved,
@@ -2512,12 +2812,12 @@ describe("redesigned live website builder setup", () => {
         storageScope="live:7:workspace-a"
       />,
     );
-    release = screen.getByRole("button", { name: "海外站点发布中" }) as HTMLButtonElement;
+    release = screen.getByTestId("website-publish-request") as HTMLButtonElement;
     expect(release.disabled).toBe(true);
 
     view.rerender(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="evaluation"
+        initialStep="design"
         siteOps={{
           observation: {
             ...approved,
@@ -2539,13 +2839,13 @@ describe("redesigned live website builder setup", () => {
         storageScope="live:7:workspace-a"
       />,
     );
-    release = screen.getByRole("button", { name: "进入发布确认" }) as HTMLButtonElement;
+    release = screen.getByTestId("website-publish-request") as HTMLButtonElement;
     expect(release.disabled).toBe(false);
-    expect(screen.queryByText("已公开 · https://help.example.com")).toBeNull();
+    expect(screen.getByTestId("website-domain-publish").querySelector('a[href="https://help.example.com"]')).toBeNull();
 
     view.rerender(
       <SimplifiedWebsiteBuilderPreview
-        initialStep="evaluation"
+        initialStep="design"
         siteOps={{
           observation: {
             ...approved,
@@ -2567,8 +2867,8 @@ describe("redesigned live website builder setup", () => {
         storageScope="live:7:workspace-a"
       />,
     );
-    release = screen.getByRole("button", { name: "当前构建已在线" }) as HTMLButtonElement;
+    release = screen.getByTestId("website-publish-request") as HTMLButtonElement;
     expect(release.disabled).toBe(true);
-    expect(screen.getByText("已公开 · https://help.example.com")).toBeTruthy();
+    expect(screen.getByTestId("website-domain-publish").querySelector('a[href="https://help.example.com"]')).toBeTruthy();
   });
 });
