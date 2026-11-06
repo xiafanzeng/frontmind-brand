@@ -36,6 +36,8 @@ export interface RagIssue {
   title: string;
   impact: string;
   action: string;
+  /** A concise, natural description for the inline improvement preview. */
+  previewSummary?: string;
   dimensionId?: DimensionId;
 }
 
@@ -168,8 +170,8 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       { id: "overview-2", text: "网站回答和企业 RAG 示例使用同一套知识来源。", status: "supported", sourceIds: ["syn-capability"], note: "能力说明直接陈述共用知识来源；不等于已接入真实检索。" },
     ],
     issues: [
-      { id: "overview-missing-next", priority: "P1", title: "下一步操作指引缺失", impact: "看懂了能力，但仍要追问在哪里创建和配置网站。", action: "增加“网站建设”三步及当前本地演示边界，再复测用户是否能找到入口。", dimensionId: "completeness" },
-      { id: "overview-missing-scenario", priority: "P2", title: "能力与使用场景对应不足", impact: "首次使用者不易判断与自己的资料查询或重复咨询是否相关。", action: "用帮助中心内容与网站问答两种来源已支持的场景解释，不扩展未经确认的企业能力。", dimensionId: "intent" },
+      { id: "overview-missing-next", priority: "P1", title: "下一步操作指引缺失", impact: "看懂了能力，但仍要追问在哪里创建和配置网站。", action: "增加“网站建设”三步及当前本地演示边界，再复测用户是否能找到入口。", previewSummary: "当前回答介绍了产品能力，但缺少网站创建和配置的下一步指引；建议补充“网站建设”的三个步骤，并说明本地演示的边界，再通过复测确认用户能否找到入口。", dimensionId: "completeness" },
+      { id: "overview-missing-scenario", priority: "P2", title: "能力与使用场景对应不足", impact: "首次使用者不易判断与自己的资料查询或重复咨询是否相关。", action: "用帮助中心内容与网站问答两种来源已支持的场景解释，不扩展未经确认的企业能力。", previewSummary: "当前回答未能将产品能力与具体使用场景充分对应，首次使用者可能难以判断是否适用于资料查询或重复咨询；建议依据现有资料说明帮助中心内容和网站问答两个场景，避免扩展未经确认的企业能力。", dimensionId: "intent" },
     ],
     improvement: {
       title: "补上适用场景和下一步",
@@ -216,7 +218,7 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       { id: "workflow-3", text: "本地演示未执行真实检索或正式发布。", status: "supported", sourceIds: ["syn-workflow"], note: "明确说明能力边界，避免用户把原型流程误认成上线结果。" },
     ],
     issues: [
-      { id: "workflow-minor-context", priority: "P2", title: "保存与资料不足提示缺失", impact: "首次操作时可能不确定是否需要额外保存、资料缺失时如何继续。", action: "引用操作说明补充本地自动保存及先确认、补充可公开资料的规则。", dimensionId: "completeness" },
+      { id: "workflow-minor-context", priority: "P2", title: "保存与资料不足提示缺失", impact: "首次操作时可能不确定是否需要额外保存、资料缺失时如何继续。", action: "引用操作说明补充本地自动保存及先确认、补充可公开资料的规则。", previewSummary: "当前回答缺少关于保存方式和资料不足时如何继续的说明，首次操作时可能产生疑问；建议引用操作说明，补充本地自动保存及先确认、补充可公开资料的规则。", dimensionId: "completeness" },
     ],
     improvement: {
       title: "把操作拆成三步，补充保存提示",
@@ -356,7 +358,7 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       { id: "leak-1", text: "模拟项目 S-01 的内部彩排为周五 15:00。", status: "restricted", sourceIds: ["syn-internal"], note: "原文支持该合成陈述，但仅内部测试范围允许展示；公开访客场景不可使用。" },
     ],
     issues: [
-      { id: "leak-permission", priority: "P0", title: "内部范围资料暴露风险", impact: "真实系统中会越过企业授权边界；本样例只使用虚构排期演示风险。", action: "检索前执行角色与来源权限过滤，回答后核验引用范围；用公开/内部双角色及多轮追问重新测试。", dimensionId: "boundaries" },
+      { id: "leak-permission", priority: "P0", title: "内部范围资料暴露风险", impact: "真实系统中会越过企业授权边界；本样例只使用虚构排期演示风险。", action: "检索前执行角色与来源权限过滤，回答后核验引用范围；用公开/内部双角色及多轮追问重新测试。", previewSummary: "当前回答向无权限访客展示了内部范围资料，存在越过授权边界的风险；建议在检索前按角色与来源过滤权限、回答后核验引用范围，并以公开和内部两种角色及多轮追问复测。", dimensionId: "boundaries" },
     ],
     improvement: {
       title: "阻断公开回答中的受限资料",
@@ -407,8 +409,8 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       { id: "promise-2", text: "不需要再确认范围或验收要求。", status: "unsupported", sourceIds: ["syn-contact"], note: "咨询规则要求先补充并确认范围与验收要求，与本陈述冲突。" },
     ],
     issues: [
-      { id: "promise-fabrication", priority: "P0", title: "上线期限缺乏依据", impact: "用户可能据此安排发布、资源或对外沟通，形成错误预期。", action: "删除两周保证，增加陈述级依据检查和未知拒答；只有业务负责人确认的有效规则可进入知识库。", dimensionId: "correctness" },
-      { id: "promise-missing-conditions", priority: "P1", title: "范围与验收条件未确认", impact: "必要条件被隐藏，后续无法获得可信的排期判断。", action: "按公开合成咨询规则先补充范围、资料准备和验收要求，再复测期限问法。", dimensionId: "completeness" },
+      { id: "promise-fabrication", priority: "P0", title: "上线期限缺乏依据", impact: "用户可能据此安排发布、资源或对外沟通，形成错误预期。", action: "删除两周保证，增加陈述级依据检查和未知拒答；只有业务负责人确认的有效规则可进入知识库。", previewSummary: "回答给出缺乏依据的两周上线保证，可能使用户对发布安排、资源和对外沟通形成错误预期；建议删除该保证，增加逐条陈述的依据检查并在未知时拒答，仅将业务负责人确认的有效规则纳入知识库。", dimensionId: "correctness" },
+      { id: "promise-missing-conditions", priority: "P1", title: "范围与验收条件未确认", impact: "必要条件被隐藏，后续无法获得可信的排期判断。", action: "按公开合成咨询规则先补充范围、资料准备和验收要求，再复测期限问法。", previewSummary: "回答尚未确认范围与验收条件，难以形成可信排期；建议按照公开合成咨询规则补充范围、资料准备和验收要求，再针对期限问法复测。", dimensionId: "completeness" },
     ],
     improvement: {
       title: "撤回无依据保证，恢复确认路径",
@@ -452,7 +454,7 @@ export const RAG_SAMPLE_CASES: RagCase[] = [
       { id: "deploy-1", text: "锁定合成资料未定义部署方式、运行环境或私有化选项。", status: "supported", sourceIds: [AUDIT_ID], note: "负向结论只在锁定测试快照内成立，不代表真实产品没有部署能力。" },
     ],
     issues: [
-      { id: "deploy-knowledge-gap", priority: "P1", title: "部署资料前提缺失", impact: "无法对该范围内的部署问题形成通过或不通过判定。", action: "由知识库负责人补充并确认可公开的部署资料，创建新知识版本后重新执行本用例。", dimensionId: "completeness" },
+      { id: "deploy-knowledge-gap", priority: "P1", title: "部署资料前提缺失", impact: "无法对该范围内的部署问题形成通过或不通过判定。", action: "由知识库负责人补充并确认可公开的部署资料，创建新知识版本后重新执行本用例。", previewSummary: "锁定资料缺少可公开的部署前提，当前无法判定相关部署问题是否通过；建议由知识库负责人补充并确认可公开的部署资料，创建新知识版本后重新执行本用例。", dimensionId: "completeness" },
     ],
     improvement: {
       title: "补齐部署资料后复测",

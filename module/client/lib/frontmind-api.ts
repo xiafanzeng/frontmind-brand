@@ -1,4 +1,5 @@
 import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
+import type { EnterpriseQaSteering } from "../enterprise-qa-steering";
 import type { EnterpriseQaAnswerMeta } from "../../contracts/enterprise-qa-answer";
 import { captureWorkspaceRestOperation } from "./workspace-rest-scope";
 import { waitForKnowledgeBaseReply } from "./knowledge-base-reply";
@@ -49,6 +50,7 @@ export interface Message {
 }
 
 export interface TaskResponse {
+  steering?: EnterpriseQaSteering;
   execution?: GeneralExecutionDto;
   id: string;
   purpose?: "enterprise_qa" | "content_production" | "general";

@@ -90,6 +90,34 @@ describe("five-layer transparent-center accessible radar", () => {
     expect(screen.getByText("不适用")).toBeTruthy();
   });
 
+  it("uses six gray empty-state dots with no invented score until a question exists", () => {
+    const items = dimensions();
+    items[1] = { ...items[1], score: null, status: "pending" };
+    items[2] = { ...items[2], score: null, status: "not_applicable" };
+    const view = render(<RagEvaluationRadar dimensions={items} />);
+    fireEvent.click(screen.getByRole("button", { name: /正确与有据 待核验/ }));
+    expect(screen.getByText("明确缺陷及对应影响")).toBeTruthy();
+    view.rerender(<RagEvaluationRadar dimensions={items} emptyQuestion />);
+    const buttons = screen.getAllByTestId("rag-evaluation-dimension");
+    expect(buttons).toHaveLength(6);
+    expect(buttons.every(button => button.getAttribute("aria-label")?.includes("暂无评分"))).toBe(true);
+    expect(buttons.every(button => (button as HTMLButtonElement).disabled)).toBe(true);
+    expect(buttons.every(button => button.querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-empty"))).toBe(true);
+    expect(screen.getAllByText("暂无评分")).toHaveLength(6);
+    expect(screen.queryByTestId("rag-radar-area")).toBeNull();
+    expect(screen.queryByText("0%")).toBeNull();
+    expect(screen.queryByText("明确缺陷及对应影响")).toBeNull();
+    (buttons[1] as HTMLButtonElement).click();
+    expect(screen.queryByText("明确缺陷及对应影响")).toBeNull();
+    view.rerender(<RagEvaluationRadar dimensions={items} />);
+    const pending = screen.getByRole("button", { name: /正确与有据 待核验/ });
+    expect((pending as HTMLButtonElement).disabled).toBe(false);
+    expect(pending.querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-pending")).toBe(true);
+    fireEvent.click(pending);
+    expect(screen.getByText("明确缺陷及对应影响")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /信息完整 不适用/ }).querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-not-applicable")).toBe(true);
+  });
+
   it("places six real zero scores on distinct inner-ring vertices", () => {
     const items = dimensions().map(item => ({ ...item, score: 0, status: "failed" as const }));
     render(<RagEvaluationRadar dimensions={items} />);

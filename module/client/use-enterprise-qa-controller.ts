@@ -3,6 +3,7 @@ import type { GeneralChatDispatchMetadata } from "@frontmind/module-contracts/ch
 import { brandHost, useConversation } from "./host";
 import type { Conversation, LocalMessage } from "./conversation-types";
 import type { TaskResponse } from "./lib/frontmind-api";
+import { readEnterpriseQaSteering, type EnterpriseQaSteering } from "./enterprise-qa-steering";
 import {
   isQaTaskTerminal,
   startEnterpriseQaPolling,
@@ -14,9 +15,19 @@ type QaTask = {
   status: string;
   error?: { message?: string };
   knowledgeBase?: TaskResponse["knowledgeBase"];
+  steering?: EnterpriseQaSteering;
 };
 
 type QaKnowledgeBase = NonNullable<TaskResponse["knowledgeBase"]>;
+type SteeringSnapshot = {
+  conversationId: string; taskId: string; userId: string; value: EnterpriseQaSteering;
+};
+
+function latestSteering(previous: SteeringSnapshot | null, next: SteeringSnapshot) {
+  return previous && previous.conversationId === next.conversationId && previous.taskId === next.taskId &&
+    previous.userId === next.userId && previous.value.turnId === next.value.turnId && previous.value.revision > next.value.revision
+    ? previous : next;
+}
 
 function validKnowledgeBase(value: unknown): value is QaKnowledgeBase {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -61,7 +72,11 @@ export function useEnterpriseQaController({ preview = false } = {}) {
     knowledgeBase: QaKnowledgeBase;
   } | null>(null);
   const lock = useRef(false);
+  const steerLock = useRef<string | null>(null);
+  const steerRequests = useRef(new Map<string, string>());
+  const [steeringState, setSteering] = useState<SteeringSnapshot | null>(null);
   const active = context.activeConversation;
+  const activeUserId = active?.messages.findLast(message => message.role === "user")?.id;
 
   useEffect(() => {
     setNotice("");
@@ -100,11 +115,21 @@ export function useEnterpriseQaController({ preview = false } = {}) {
     }
     const taskId = active.taskId;
     const conversationId = active.id;
+    const userId = activeUserId;
     return startEnterpriseQaPolling({
-      read: () =>
-        request<QaTask>(
+      read: async () => {
+        const result = await request<QaTask>(
           `/api/frontmind/v2/tasks/${encodeURIComponent(taskId)}`,
-        ),
+        );
+        const current = contextRef.current.activeConversation;
+        const value = readEnterpriseQaSteering(result.steering);
+        if (value && userId && current?.id === conversationId &&
+          (current.previousResponseId ?? current.taskId) === taskId &&
+          current.messages.findLast(message => message.role === "user")?.id === userId) {
+          setSteering(previous => latestSteering(previous, { conversationId, taskId, userId, value }));
+        }
+        return result;
+      },
       refresh: async () => {
         if (contextRef.current.activeConversation?.id === conversationId) {
           await contextRef.current.refreshConversations();
@@ -113,7 +138,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
       onError: (error) =>
         setNotice(error instanceof Error ? error.message : String(error)),
     });
-  }, [preview, active?.id, active?.taskId, active?.status, request]);
+  }, [preview, active?.id, active?.taskId, active?.status, activeUserId, request]);
 
   const send = useCallback(
     async (text: string, attachments: File[] = []) => {
@@ -248,6 +273,8 @@ export function useEnterpriseQaController({ preview = false } = {}) {
           conversation.id,
           pending.id,
         );
+        const steering = readEnterpriseQaSteering(result.steering);
+        if (steering) setSteering(previous => latestSteering(previous, { conversationId: conversation.id, taskId: result.id, userId: pending.id, value: steering }));
         if (!(await contextRef.current.flushConversation(conversation.id))) {
           throw new Error("回答已开始，任务绑定尚未保存；请刷新恢复原任务。");
         }
@@ -295,6 +322,53 @@ export function useEnterpriseQaController({ preview = false } = {}) {
     return pending ? send(pending.content, []) : false;
   }, [send]);
   const activeTaskId = active?.previousResponseId ?? active?.taskId;
+  const steering = steeringState && steeringState.conversationId === active?.id &&
+    steeringState.taskId === activeTaskId && steeringState.userId === activeUserId ? steeringState.value : null;
+  const steer = useCallback(async (text: string) => {
+    const conversation = contextRef.current.activeConversation;
+    const value = text.trim();
+    const taskId = conversation?.previousResponseId ?? conversation?.taskId;
+    const userId = conversation?.messages.findLast(message => message.role === "user")?.id;
+    if (!conversation || !taskId || !userId || !value || preview) return false;
+    if (!steering?.supported || steeringState?.conversationId !== conversation.id ||
+      steeringState.userId !== userId || !["running", "pending"].includes(conversation.status)) {
+      throw new Error("当前回答暂不支持本轮补充，输入内容已保留。");
+    }
+    const turnId = steering.turnId;
+    const owner = JSON.stringify([conversation.id, taskId, turnId, userId]);
+    if (steerLock.current === owner) return false;
+    const identity = JSON.stringify([conversation.id, taskId, turnId, value]);
+    const clientRequestId = steerRequests.current.get(identity) ?? crypto.randomUUID();
+    steerRequests.current.set(identity, clientRequestId);
+    steerLock.current = owner;
+    const stillCurrent = () => {
+      const current = contextRef.current.activeConversation;
+      return current?.id === conversation.id && (current.previousResponseId ?? current.taskId) === taskId &&
+        current.messages.findLast(message => message.role === "user")?.id === userId;
+    };
+    try {
+      const result = readEnterpriseQaSteering(await request<unknown>(
+        `/api/frontmind/v2/tasks/${encodeURIComponent(taskId)}/steer`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversationId: conversation.id, expectedTurnId: turnId, clientRequestId, text: value }),
+        },
+      ));
+      if (!stillCurrent()) return false;
+      if (!result || result.turnId !== turnId || !result.supplements.some(part => part.clientRequestId === clientRequestId && part.text === value)) {
+        throw new Error("补充尚未确认，内容已保留，请重试。");
+      }
+      setSteering(previous => latestSteering(previous, { conversationId: conversation.id, taskId, userId, value: result }));
+      steerRequests.current.delete(identity);
+      // A refresh failure cannot turn an acknowledged supplement into a duplicate submission.
+      void contextRef.current.refreshConversations().catch(() => undefined);
+      return true;
+    } catch (error) {
+      if (!stillCurrent()) return false;
+      throw error;
+    } finally {
+      if (steerLock.current === owner) steerLock.current = null;
+    }
+  }, [preview, request, steering, steeringState]);
   const responseKnowledgeBase =
     responseKnowledge &&
     responseKnowledge.conversationId === active?.id &&
@@ -306,6 +380,8 @@ export function useEnterpriseQaController({ preview = false } = {}) {
     active,
     sending,
     running,
+    steering,
+    steer,
     busy: sending || running,
     notice,
     pendingDispatch: pendingMessage?.generalChatDispatch

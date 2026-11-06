@@ -16,4 +16,24 @@ describe('fixed brand business history',()=>{
  it('retains a failed save and restores clean server task state after a successful retry',async()=>{
   const records=[conversation('qa-a')];const transport=client(records);vi.mocked(transport.sync).mockRejectedValueOnce(new Error('temporary save outage'));const runtime=createBrandConversationRuntime(transport,'enterprise_qa','test-workspace');const {result}=renderHook(()=>runtime.useConversation());await waitFor(()=>expect(result.current.hydrated).toBe(true));act(()=>result.current.updateTitle('qa-a','尚未保存的标题'));await act(async()=>{await expect(result.current.flushConversation('qa-a')).rejects.toThrow('temporary save outage');});expect(result.current.syncError).toContain('temporary');await act(()=>result.current.refreshConversations());expect(result.current.activeConversation?.title).toBe('尚未保存的标题');await act(()=>result.current.flushConversation('qa-a'));records[0]={...records[0],title:'服务器新状态',status:'completed'};await act(()=>result.current.refreshConversations());expect(result.current.activeConversation).toMatchObject({title:'服务器新状态',status:'completed'});runtime.dispose();
  });
+ it('serializes deletion after a pending save and prevents a stale refresh resurrecting the conversation',async()=>{
+  const record=conversation('qa-a');const transport=client([record]);let releaseSave!:()=>void;
+  vi.mocked(transport.sync).mockImplementation(async (_purpose,records)=>{if(records.length)await new Promise<void>(resolve=>{releaseSave=resolve;});});
+  const runtime=createBrandConversationRuntime(transport,'enterprise_qa','test-workspace');const {result}=renderHook(()=>runtime.useConversation());await waitFor(()=>expect(result.current.hydrated).toBe(true));
+  let save!:Promise<boolean>;let deletion!:Promise<boolean>;
+  act(()=>{result.current.updateTitle('qa-a','新标题');save=result.current.flushConversation('qa-a');});
+  await waitFor(()=>expect(transport.sync).toHaveBeenCalledTimes(1));
+  act(()=>{deletion=result.current.deleteConversation('qa-a') as Promise<boolean>;result.current.updateTitle('qa-a','不应保存');});
+  expect(result.current.activeConversation?.id).toBe('qa-a');expect(transport.sync).toHaveBeenCalledTimes(1);
+  await act(async()=>{releaseSave();await save;expect(await deletion).toBe(true);});
+  expect(vi.mocked(transport.sync).mock.calls[1][2]).toEqual(['qa-a']);expect(result.current.state.conversations).toHaveLength(0);
+  await act(()=>result.current.refreshConversations());expect(result.current.state.conversations).toHaveLength(0);
+  runtime.dispose();
+ });
+ it('preserves the conversation and reports a failed deletion',async()=>{
+  const transport=client([conversation('qa-a')]);vi.mocked(transport.sync).mockRejectedValueOnce(new Error('删除失败'));
+  const runtime=createBrandConversationRuntime(transport,'enterprise_qa','test-workspace');const {result}=renderHook(()=>runtime.useConversation());await waitFor(()=>expect(result.current.hydrated).toBe(true));
+  await act(async()=>{expect(await result.current.deleteConversation('qa-a')).toBe(false);});
+  expect(result.current.activeConversation?.id).toBe('qa-a');expect(result.current.syncError).toBe('删除失败');runtime.dispose();
+ });
 });

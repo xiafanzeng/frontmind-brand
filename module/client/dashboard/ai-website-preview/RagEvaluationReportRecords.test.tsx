@@ -1,0 +1,117 @@
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EnterpriseRagEvaluationHistoryDto, EnterpriseRagEvaluationRunDto } from "../../../contracts/enterprise-rag-evaluation-run";
+import { liveEnterpriseRagEvaluationApi } from "../enterprise-rag-evaluation-api";
+import { RagEvaluationReportRecords } from "./RagEvaluationReportRecords";
+import { RAG_DIMENSIONS, RAG_GATES } from "./rag-evaluation";
+import { enterpriseRagHistoryStorageKey, type RagReviewRecord } from "./rag-review-history";
+
+const coordinate = { sourceQaTaskId: "task-1", turnId: "turn-1" };
+function manual(id: string, version = "rag-eval-1.3", time = "2026-11-06T01:00:00.000Z"): RagReviewRecord {
+  return { id, question: `问题${id}`, answer: `完整原文${id}`, need: `任务${id}`, reviewer: "评审人", time, ruleVersion: version, knowledgeVersion: "KB-v1", dimensions: RAG_DIMENSIONS.map(({ id }) => ({ id, level: 3, rationale: "记录的判断理由", applicable: true, evidenceIds: ["原文段落1"] })), gates: RAG_GATES.map(({ id }) => ({ id, status: "passed", reason: "已核验" })) };
+}
+function run(id = "operation-1", task = "task-1"): EnterpriseRagEvaluationRunDto {
+  return { operationId: id, sourceQaTaskId: task, turnId: "turn-1", status: "completed", createdAt: "2026-11-06T01:00:00.000Z", updatedAt: "2026-11-06T01:01:00.000Z", error: null, report: {
+    reportId: `report-${id}`, sourceQaTaskId: task, sourceTurnId: "turn-1", conversationId: "conversation-1", questionMessageId: "question-1", answerMessageId: "answer-1", questionHash: "q-hash", answerHash: "a-hash", knowledgeBase: { snapshotId: "snapshot-1", version: 1, sourceFileName: "知识资料.zip", documentCount: 1, contentHash: "kb-hash" }, evaluator: { skillId: "enterprise-rag-evaluation", skillVersion: "2.0.0", ruleVersion: "rag-eval-1.3", judgeVersion: "2.0.0", provider: "test", model: "mock", effort: null, skillHash: "skill-hash", outputHash: "output-hash" }, createdAt: "2026-11-06T01:00:00.000Z", completedAt: "2026-11-06T01:01:00.000Z",
+    judgments: { operationToken: "token", inputHash: "input", dimensions: RAG_DIMENSIONS.map(({ id }) => ({ id, level: 4, rationale: "冻结理由", evidenceIds: ["source-1"] })), gates: RAG_GATES.map(({ id }) => ({ id, status: "passed", reason: "已核验", evidenceIds: ["source-1"] })), claims: [{ id: "claim-1", statement: "报告记录的陈述", status: "supported", sourceIds: ["source-1"], rationale: "来源支持" }], summary: "冻结评估摘要" },
+    result: { skillId: "enterprise-rag-evaluation", version: "2.0.0", status: "completed", score: 100, coverage: 100, answerVerdict: "usable", recommendation: "recommended", summary: "冻结评估摘要", dimensions: RAG_DIMENSIONS.map(({ id, label, weight }) => ({ id, label, score: weight, maxScore: weight, status: "passed", summary: "记录的理由", evidenceIds: ["source-1"] })), risks: [], relatedReportIds: [] },
+  } };
+}
+
+beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockRejectedValue(new Error("must never start")); vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] }); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+describe("report records", () => {
+  it("keeps preview and missing-answer reads offline", async () => {
+    const view = render(<RagEvaluationReportRecords preview storageScopeKey="preview" coordinate={coordinate} />);
+    expect(screen.getByText("本地预览使用合成示例，没有服务端自动评估记录。")).toBeTruthy();
+    view.rerender(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" />);
+    expect(screen.getByText(/未选择回答/)).toBeTruthy();
+    expect(liveEnterpriseRagEvaluationApi.latest).not.toHaveBeenCalled();
+    expect(liveEnterpriseRagEvaluationApi.start).not.toHaveBeenCalled();
+  });
+
+  it("shows original local snapshots by time and keeps old scoring semantics", () => {
+    localStorage.setItem(enterpriseRagHistoryStorageKey("preview"), JSON.stringify([manual("old", "rag-eval-1.2"), manual("new", "rag-eval-1.3", "2026-11-06T02:00:00.000Z"), manual("unknown", "rag-eval-9.9", "2026-11-06T03:00:00.000Z")]));
+    render(<RagEvaluationReportRecords preview storageScopeKey="preview" />);
+    const records = screen.getAllByTestId("rag-report-manual-record");
+    expect(records.map(item => item.querySelector("summary")!.textContent)).toEqual([expect.stringContaining("问题unknown"), expect.stringContaining("问题new"), expect.stringContaining("问题old")]);
+    expect(records[1].textContent).toContain("待改进");
+    expect(records[2].textContent).toContain("需要改进");
+    expect(records[0].textContent).toContain("历史规则暂不支持重新计算");
+    expect(records[2].textContent).toContain("完整原文old");
+    expect(records[2].textContent).toContain("原文段落1");
+  });
+
+  it("updates local records only for the bound workspace and clears old content on a scope switch", () => {
+    const key = enterpriseRagHistoryStorageKey("a");
+    const view = render(<RagEvaluationReportRecords preview storageScopeKey="a" />);
+    localStorage.setItem(key, JSON.stringify([manual("a")]));
+    fireEvent(window, new StorageEvent("storage", { key: enterpriseRagHistoryStorageKey("b") }));
+    expect(screen.queryByText("问题a")).toBeNull();
+    fireEvent(window, new StorageEvent("storage", { key }));
+    expect(screen.getByTestId("rag-report-manual-record").textContent).toContain("问题a");
+    view.rerender(<RagEvaluationReportRecords preview storageScopeKey="b" />);
+    expect(screen.queryByText("问题a")).toBeNull();
+    localStorage.setItem(enterpriseRagHistoryStorageKey("b"), JSON.stringify([manual("b")]));
+    fireEvent.focus(window);
+    expect(screen.getByTestId("rag-report-manual-record").textContent).toContain("问题b");
+  });
+
+  it("loads server records read-only, deduplicates them and exposes recorded evidence", async () => {
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: run(), history: [run()] });
+    render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    await waitFor(() => expect(screen.getAllByTestId("rag-report-automatic-record")).toHaveLength(1));
+    expect(screen.getByText("报告记录的陈述")).toBeTruthy();
+    expect(screen.getByText("q-hash")).toBeTruthy();
+    expect(liveEnterpriseRagEvaluationApi.latest).toHaveBeenCalledWith(coordinate);
+    expect(liveEnterpriseRagEvaluationApi.start).not.toHaveBeenCalled();
+  });
+
+  it("rejects records from another answer", async () => {
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: run("foreign", "task-other"), history: [] });
+    render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("与当前回答不匹配"));
+    expect(screen.queryByTestId("rag-report-automatic-record")).toBeNull();
+  });
+
+  it("preserves the frozen server score and conclusion instead of rescoring dimensions", async () => {
+    const frozen = run();
+    frozen.report!.result.score = 12;
+    frozen.report!.result.answerVerdict = "usable";
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: frozen, history: [] });
+    render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    await waitFor(() => expect(screen.getByTestId("rag-report-automatic-record")).toBeTruthy());
+    const summary = screen.getByTestId("rag-report-automatic-record").querySelector("summary")!;
+    expect(summary.textContent).toContain("12 / 100");
+    expect(summary.textContent).toContain("良好");
+    expect(summary.textContent).not.toContain("需修复");
+  });
+
+  it("ignores a late request after the bound answer changes", async () => {
+    let resolveOld!: (value: EnterpriseRagEvaluationHistoryDto) => void;
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockImplementation(({ sourceQaTaskId }) => sourceQaTaskId === "task-1" ? new Promise(resolve => { resolveOld = resolve; }) : Promise.resolve({ latest: run("new", "task-2"), history: [] }));
+    const view = render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    view.rerender(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={{ sourceQaTaskId: "task-2", turnId: "turn-1" }} />);
+    await waitFor(() => expect(screen.getByText("report-new")).toBeTruthy());
+    await act(async () => { resolveOld({ latest: run("old"), history: [] }); });
+    expect(screen.queryByText("report-old")).toBeNull();
+    expect(screen.getByText("report-new")).toBeTruthy();
+  });
+
+  it("reports failed reads, allows retry and does not manufacture an empty success", async () => {
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockRejectedValueOnce(new Error("读取失败"));
+    render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("读取失败"));
+    expect(screen.queryByText("当前回答暂无自动评估记录。")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    await waitFor(() => expect(screen.getByText("当前回答暂无自动评估记录。")).toBeTruthy());
+    expect(liveEnterpriseRagEvaluationApi.start).not.toHaveBeenCalled();
+  });
+
+  it("reports unavailable browser storage", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+    render(<RagEvaluationReportRecords preview storageScopeKey="preview" />);
+    expect(screen.getByRole("alert").textContent).toContain("浏览器存储不可用");
+  });
+});

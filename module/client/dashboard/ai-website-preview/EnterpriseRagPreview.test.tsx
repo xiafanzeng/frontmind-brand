@@ -10,16 +10,59 @@ import {
   listEvaluationReports,
 } from "./evaluation-report-store";
 import { previewRagAnswer } from "./preview-copy";
+import { RAG_SAMPLE_CASES } from "./rag-evaluation-cases";
 import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
 import { liveEnterpriseRagEvaluationApi } from "../enterprise-rag-evaluation-api";
 import type { EnterpriseRagEvaluationRunDto } from "../../../contracts/enterprise-rag-evaluation-run";
 import { createRagChecklist, scoreRagChecklist } from "../../../contracts/enterprise-rag-checklist";
 
 const historyKey = "frontmind-rag-reviews-v1";
+const nativeElementMatches = Element.prototype.matches;
 const dimensionLabels = ["需求满足", "正确与有据", "信息完整", "引用与时效", "清晰可行动", "边界与安全"];
+const riskLabels = ["核心事实", "关键引用", "权限与隐私", "高风险误导", "未知与澄清", "提示注入", "关键可用性"];
 
 function showPage() {
   return render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} />);
+}
+
+function expectEmptyGauge() {
+  const gauge = screen.getByTestId("rag-evaluation-score");
+  expect(gauge.classList.contains("is-empty")).toBe(true);
+  expect(within(gauge).getByTestId("rag-gauge-pending").textContent).toBe("N/A");
+  expect(within(gauge).queryByTestId("rag-gauge-value")).toBeNull();
+  const marker = within(gauge).getByTestId("rag-gauge-marker");
+  expect(marker.classList.contains("is-pending")).toBe(true);
+  expect(marker.getAttribute("fill")).toBe("#aeaeb2");
+  expect(within(gauge).queryByRole("button")).toBeNull();
+  expect(within(gauge).getByRole("img").getAttribute("aria-label")).toContain("待评估");
+}
+
+function expectUnavailableGauge() {
+  const gauge = screen.getByTestId("rag-evaluation-score");
+  expect(gauge.classList.contains("is-danger")).toBe(true);
+  expect(within(gauge).getByTestId("rag-gauge-pending").textContent).toBe("N/A");
+  expect(within(gauge).queryByTestId("rag-gauge-value")).toBeNull();
+  const marker = within(gauge).getByTestId("rag-gauge-marker");
+  expect(marker.classList.contains("is-unavailable")).toBe(true);
+  expect(marker.getAttribute("fill")).toBe("#aeaeb2");
+  const control = within(gauge).getByRole("button", { name: "评分不适用" });
+  fireEvent.focus(control);
+  expect(within(gauge).getByRole("tooltip").textContent).toBe("评分不适用");
+  fireEvent.blur(control);
+}
+
+async function chooseSample(id: string) {
+  const sample = RAG_SAMPLE_CASES.find(item => item.id === id);
+  if (!sample) throw new Error(`Unknown sample ${id}`);
+  // Settle any pending focus return from a previously opened detail window.
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  fireEvent.click(screen.getByRole("button", { name: "历史问答" }));
+  const dialog = await screen.findByRole("dialog", { name: "历史问答" });
+  fireEvent.click(within(dialog).getByRole("button", { name: name => name.startsWith(sample.question) }));
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull();
+    expect(screen.getByLabelText("企业助手问答").querySelectorAll(".erag-user-message").item(0)?.textContent).toBe(sample.question);
+  });
 }
 
 function liveRuntime(overrides: Partial<NonNullable<Parameters<typeof EnterpriseRagPreview>[0]["live"]>> = {}) {
@@ -152,27 +195,69 @@ function evaluation() {
   return within(screen.getByRole("region", { name: "本轮回答质量" }));
 }
 
-function openQualityDetails() {
-  const trigger = evaluation().getByRole("button", { name: "查看优化方案" });
-  if (trigger.getAttribute("aria-expanded") === "false") fireEvent.click(trigger);
-  return evaluation();
+function expectTaskStatus(label: string, status: "pass" | "fail" | "unverified", risk = false) {
+  const indicator = screen.getByTestId("rag-task-status");
+  expect(indicator.textContent).toBe(label);
+  for (const value of ["pass", "fail", "unverified"]) {
+    expect(indicator.classList.contains(`is-${value}`)).toBe(value === status);
+  }
+  expect(indicator.classList.contains("is-risk")).toBe(risk);
+  const orb = indicator.querySelector(".rag-evaluation-status-orb");
+  expect(orb?.getAttribute("aria-hidden")).toBe("true");
+  expect(orb?.textContent).toBe("");
 }
 
-function openJudgmentDetails() {
-  const trigger = evaluation().getByRole("button", { name: "理解本次判断" });
-  if (trigger.getAttribute("aria-expanded") === "false") fireEvent.click(trigger);
-  return evaluation();
+function openQualityDetails() {
+  fireEvent.click(evaluation().getByRole("button", { name: "优化方案" }));
+  return within(screen.getByRole("dialog", { name: "优化方案" }));
 }
 
 function automaticEvaluateButton() {
-  openJudgmentDetails();
+  if (!screen.queryByRole("dialog", { name: "回答依据与陈述核验" })) {
+    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
+  }
   return screen.getByTestId("rag-auto-evaluate");
 }
 
-function openReview() {
-  openJudgmentDetails();
-  fireEvent.click(screen.getByRole("button", { name: "人工评审与计算" }));
-  return within(screen.getByRole("dialog", { name: "人工评审与计算" }));
+function escapeFocusedDialog() {
+  const focused = document.activeElement?.closest<HTMLElement>('[role="dialog"]');
+  const dialog = focused ?? screen.queryAllByRole("dialog").at(-1);
+  if (dialog) fireEvent.keyDown(dialog, { key: "Escape" });
+}
+
+function expandReviewDimensions(review: ReturnType<typeof within>) {
+  for (const label of dimensionLabels) {
+    const trigger = review.getByRole("button", { name: label });
+    if (trigger.getAttribute("aria-expanded") === "false") fireEvent.click(trigger);
+  }
+}
+
+function openReview(expand = true) {
+  fireEvent.click(evaluation().getByRole("button", { name: "人工评审" }));
+  const review = within(screen.getByRole("dialog", { name: "人工评审与计算" }));
+  if (expand) expandReviewDimensions(review);
+  return review;
+}
+
+function openIntentReview() {
+  const review = openReview(false);
+  fireEvent.click(review.getByRole("button", { name: "需求满足" }));
+  return review;
+}
+
+async function chooseReviewOption(review: ReturnType<typeof within>, label: string, option: string) {
+  const trigger = review.getByRole("combobox", { name: label });
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  const menu = review.getByRole("listbox");
+  await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+  fireEvent.click(review.getByRole("option", { name: option }));
+  await waitFor(() => expect(document.activeElement === trigger).toBe(true));
+}
+
+function reviewEvidenceValues(review: ReturnType<typeof within>, label = "需求满足证据") {
+  const list = review.queryByRole("list", { name: `${label}：已选证据` });
+  return [...list?.querySelectorAll("[data-evidence-value]") ?? []]
+    .map(item => item.getAttribute("data-evidence-value"));
 }
 
 function confirmReview() {
@@ -183,6 +268,15 @@ function confirmReview() {
 }
 
 beforeEach(() => {
+  // jsdom 26's selector engine recursively evaluates unsupported top-layer
+  // pseudo-classes used by Floating UI. This suite has no native modal/fullscreen.
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function(this: Element, selector) {
+    if (selector === ":modal" || selector === ":fullscreen") return false;
+    return nativeElementMatches.call(this, selector);
+  });
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn(() => false);
+  Element.prototype.releasePointerCapture = vi.fn();
   window.localStorage.clear();
   window.sessionStorage.clear();
 });
@@ -196,11 +290,59 @@ afterEach(() => {
 });
 
 describe("enterprise RAG evidence-based review UI", () => {
+  it("opens report chapters as new-tab links without changing the answer or opening a drawer", () => {
+    const buildReportUrl = vi.fn((section: string) => `/?view=enterprise-qa&report=1#${section}`);
+    render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} buildReportUrl={buildReportUrl} />);
+    const question = screen.getByRole("textbox", { name: "输入企业 RAG 示例问题" });
+    fireEvent.change(question, { target: { value: "保留这份草稿" } });
+    for (const [name, anchor] of [["评分规则（在新标签页打开）", "rules"], ["评估记录（在新标签页打开）", "records"]]) {
+      const link = screen.getByRole("link", { name });
+      expect(link.getAttribute("href")).toBe(`/?view=enterprise-qa&report=1#${anchor}`);
+      expect(link.getAttribute("target")).toBe("_blank");
+      expect(link.getAttribute("rel")).toContain("noopener");
+    }
+    expect((question as HTMLTextAreaElement).value).toBe("保留这份草稿");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("starts the title, summary and risk text together while revealing each in reading order", () => {
+    let frameId = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => {
+      frames.set(++frameId, callback);
+      return frameId;
+    }));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn((id: number) => frames.delete(id)));
+    vi.stubGlobal("IntersectionObserver", undefined);
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
+    showPage();
+    const tick = (time: number) => act(() => {
+      const callbacks = [...frames.values()];
+      frames.clear();
+      callbacks.forEach(callback => callback(time));
+    });
+    tick(1000);
+    tick(1080);
+    const summary = screen.getByRole("region", { name: "当前评估摘要" });
+    const title = summary.querySelector(".rag-evaluation-status-title-text")!;
+    const copy = screen.getByTestId("rag-evaluation-summary-copy");
+    const risk = summary.querySelector(".rag-evaluation-metric-copy > span:first-child")!;
+    for (const region of [title, copy, risk]) {
+      const glyphs = region.querySelector('[aria-hidden="true"]')!.children;
+      const opacity = Array.from(glyphs, glyph => Number((glyph as HTMLElement).style.opacity));
+      expect(opacity[0]).toBeGreaterThan(0);
+      expect(opacity[opacity.length - 1]).toBeLessThan(opacity[0]);
+      expect(opacity.every((value, index) => index === 0 || value <= opacity[index - 1])).toBe(true);
+    }
+    expect(within(summary).getByRole("heading", { name: "待改进" })).toBeTruthy();
+    expect(within(summary).getByText("关键风险已核验")).toBeTruthy();
+    expect(within(summary).getByText("评审覆盖 100%")).toBeTruthy();
+  });
+
   it("renders the approved side-by-side evaluation overview without obsolete copy", () => {
     showPage();
 
     const qualityPanel = screen.getByRole("region", { name: "本轮回答质量" });
-    const taskPanel = screen.getByRole("region", { name: "客户任务完成情况" });
+    const taskPanel = screen.getByRole("region", { name: "客户任务结果" });
     const panel = within(qualityPanel);
     expect(qualityPanel.parentElement).toBe(taskPanel.parentElement);
     expect(qualityPanel.contains(taskPanel)).toBe(false);
@@ -219,7 +361,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     const summaryCopy = panel.getByTestId("rag-evaluation-summary-copy");
     const supportingMeta = panel.getByTestId("rag-evaluation-supporting-meta");
     const metrics = panel.getByTestId("rag-evaluation-metrics");
-    expect(overview.lastElementChild).toBe(supportingMeta);
+    expect(overview.lastElementChild).toBe(summary);
+    expect(overview.children).toHaveLength(2);
+    expect(summary.lastElementChild).toBe(supportingMeta);
     expect(summaryFlow.firstElementChild).toBe(statusTitle);
     expect(statusTitle.nextElementSibling).toBe(summaryCopy);
     expect(summaryFlow.lastElementChild).toBe(summaryCopy);
@@ -238,11 +382,8 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(summary).toBeTruthy();
     expect(gauge).toBeTruthy();
     expect(panel.getByRole("region", { name: "六维加权评分" })).toBeTruthy();
-    const judgmentDisclosure = panel.getByRole("button", { name: "理解本次判断" });
-    const qualityDisclosure = panel.getByRole("button", { name: "查看优化方案" });
-    expect(judgmentDisclosure.getAttribute("aria-expanded")).toBe("false");
-    expect(qualityDisclosure.getAttribute("aria-expanded")).toBe("false");
-    expect(judgmentDisclosure.compareDocumentPosition(qualityDisclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(panel.getByRole("group", { name: "回答评估详情" })).toBeTruthy();
+    expect(panel.queryByRole("button", { name: "理解本次判断" })).toBeNull();
     expect(panel.queryByText("用户真正想确认")).toBeNull();
     expect(panel.queryByText("优先优化")).toBeNull();
     expect(panel.queryByText("进入网站建设的 AI 助手")).toBeNull();
@@ -263,133 +404,461 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(panel.queryByText(/检查完成程度/)).toBeNull();
   });
 
-  it("keeps judgment and optimization in ordered disclosures that can remain open together", () => {
+  it("opens three direct detail panels in evidence, optimization, review order", async () => {
     showPage();
-
-    const qualityPanel = screen.getByRole("region", { name: "本轮回答质量" });
-    const quality = within(qualityPanel);
-    const judgmentDisclosure = quality.getByRole("button", { name: "理解本次判断" });
-    const qualityDisclosure = quality.getByRole("button", { name: "查看优化方案" });
-
-    fireEvent.click(judgmentDisclosure);
-    expect(judgmentDisclosure.getAttribute("aria-expanded")).toBe("true");
-    expect(qualityDisclosure.getAttribute("aria-expanded")).toBe("false");
-    const judgmentRegion = quality.getByRole("region", { name: "理解本次判断内容" });
-    const judgment = within(judgmentRegion);
-    expect(judgment.queryByRole("heading", { name: "用户要解决的问题" })).toBeNull();
-    expect(judgment.queryByText(/用户要解决的问题/)).toBeNull();
-    const taskCopy = judgmentRegion.querySelector(".rag-judgment-copy");
-    expect(taskCopy?.textContent).toContain("快速理解产品能解决哪些问题，以及自己下一步可以从哪里开始。");
-    expect(taskCopy?.textContent).toContain("“人工评审与计算”用于查看评分如何形成");
-    expect(taskCopy?.textContent).toContain("“查看回答依据”用于核对支撑本次结论的事实与记录");
-    expect(taskCopy).toBeTruthy();
-    if (!taskCopy) throw new Error("Expected judgment copy");
-    expect(taskCopy.tagName).toBe("P");
-    expect(taskCopy.classList.contains("rag-judgment-copy")).toBe(true);
-    expect(qualityPanel.querySelector(".rag-judgment-context")).toBeNull();
-    const reviewAction = judgment.getByRole("button", { name: "人工评审与计算" });
-    const evidenceAction = judgment.getByRole("button", { name: "查看回答依据" });
-    expect(reviewAction.classList.contains("rag-detail-action")).toBe(true);
-    expect(evidenceAction.classList.contains("rag-detail-action")).toBe(true);
-
-    fireEvent.click(qualityDisclosure);
-    expect(judgmentDisclosure.getAttribute("aria-expanded")).toBe("true");
-    expect(qualityDisclosure.getAttribute("aria-expanded")).toBe("true");
-    const optimization = within(quality.getByRole("region", { name: "查看优化方案内容" }));
-    expect(optimization.queryByText("优先优化")).toBeNull();
-    expect(optimization.queryByText("用户真正想确认")).toBeNull();
-    const priorityLabel = optimization.getByText("优先处理");
-    const issueTitle = optimization.getByText("下一步操作指引缺失");
-    const issueStatement = issueTitle.closest(".rag-priority-copy__statement");
-    expect(priorityLabel.classList.contains("is-attention")).toBe(true);
-    expect(issueTitle.compareDocumentPosition(priorityLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(issueTitle.closest(".rag-priority-copy__heading")).toBe(priorityLabel.closest(".rag-priority-copy__heading"));
-    expect(issueStatement?.firstElementChild?.textContent).toBe("问题：");
-    expect(issueStatement?.firstElementChild?.tagName).toBe("STRONG");
-    expect(issueTitle.closest("strong")).toBeNull();
-    expect(optimization.queryByText("用户不知道下一步怎么开始")).toBeNull();
-    expect(optimization.queryByText("建议做法")).toBeNull();
-    const issueAction = optimization.getByText("增加“网站建设”三步及当前本地演示边界，再复测用户是否能找到入口。");
-    expect(issueAction.closest(".rag-priority-copy__statement")?.firstElementChild?.textContent).toBe("方案：");
-    expect(issueAction.closest("strong")).toBeNull();
-    expect(issueTitle.closest(".rag-priority-copy")).toBeTruthy();
-    expect(qualityPanel.querySelector(".rag-priority-card")).toBeNull();
-    const completeAction = optimization.getByRole("button", { name: "查看完整方案" });
-    expect(completeAction.classList.contains("rag-detail-action")).toBe(true);
+    const quality = evaluation();
+    const group = quality.getByRole("group", { name: "回答评估详情" });
+    const actions = within(group).getAllByRole("button");
+    expect(actions.map(action => action.textContent)).toEqual(["回答依据", "优化方案", "人工评审"]);
+    expect(quality.queryByRole("button", { name: "理解本次判断" })).toBeNull();
+    expect(quality.queryByRole("button", { name: "查看优化方案" })).toBeNull();
+    expect(quality.queryByText(/网站建设.*三步/)).toBeNull();
     const radar = quality.getByRole("region", { name: "六维加权评分" });
-    expect(radar.compareDocumentPosition(judgmentDisclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(judgmentDisclosure.compareDocumentPosition(qualityDisclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(quality.queryByText("进入网站建设的 AI 助手")).toBeNull();
+    expect(radar.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    const task = within(screen.getByRole("region", { name: "客户任务完成情况" }));
+    for (const [index, title] of ["回答依据与陈述核验", "优化方案", "人工评审与计算"].entries()) {
+      actions[index].focus();
+      fireEvent.click(actions[index]);
+      const panel = screen.getByRole("dialog", { name: title });
+      expect(panel.contains(document.activeElement)).toBe(true);
+      escapeFocusedDialog();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await waitFor(() => expect(document.activeElement === actions[index]).toBe(true));
+    }
+    const task = within(screen.getByRole("region", { name: "客户任务结果" }));
     expect(task.getByText(/^必要完成点未全部满足/)).toBeTruthy();
     expect(task.getByText("正常问答")).toBeTruthy();
-    expect(task.getByText("稳定基准集")).toBeTruthy();
-    expect(task.getByText("规定运行 1 次")).toBeTruthy();
-    expect(task.getByText("归因：生成未遵循依据")).toBeTruthy();
-
-    fireEvent.change(screen.getByRole("combobox", { name: "选择评估示例" }), {
-      target: { value: "syn-assistant-workflow" },
-    });
-
-    expect(judgmentDisclosure.getAttribute("aria-expanded")).toBe("true");
-    expect(qualityDisclosure.getAttribute("aria-expanded")).toBe("true");
-    expect(quality.getByRole("region", { name: "六维加权评分" })).toBeTruthy();
-    expect(task.getByText("通过")).toBeTruthy();
   });
 
-  it("translates P0, P1, and P2 into user-facing priority labels", () => {
+  it("starts six review dimensions collapsed and preserves edits when independently folding them", async () => {
     showPage();
-    openQualityDetails();
-    expect(evaluation().getByText("优先处理").classList.contains("is-attention")).toBe(true);
-    expect(evaluation().queryByText(/^P[012]$/)).toBeNull();
-
-    fireEvent.change(screen.getByRole("combobox", { name: "选择评估示例" }), {
-      target: { value: "syn-assistant-workflow" },
+    const review = openReview(false);
+    const dimensions = review.getByRole("region", { name: "六维人工判断" });
+    expect(dimensions.querySelector(".rag-review-card")).toBeNull();
+    for (const label of dimensionLabels) {
+      const trigger = review.getByRole("button", { name: label });
+      expect(trigger.textContent).toBe(label);
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(review.queryByRole("combobox", { name: `${label}等级` })).toBeNull();
+      expect(review.queryByRole("textbox", { name: `${label}理由` })).toBeNull();
+    }
+    const intent = review.getByRole("button", { name: "需求满足" });
+    const correctness = review.getByRole("button", { name: "正确与有据" });
+    fireEvent.click(intent);
+    const reason = review.getByRole("textbox", { name: "需求满足理由" });
+    const initialEvidence = reviewEvidenceValues(review);
+    await chooseReviewOption(review, "需求满足等级", "2 · 部分满足");
+    fireEvent.change(reason, { target: { value: "折叠后仍应保留的人工判断。" } });
+    fireEvent.click(correctness);
+    expect(intent.getAttribute("aria-expanded")).toBe("true");
+    expect(correctness.getAttribute("aria-expanded")).toBe("true");
+    reason.focus();
+    fireEvent.click(intent);
+    expect(document.activeElement === intent).toBe(true);
+    expect(review.queryByRole("textbox", { name: "需求满足理由" })).toBeNull();
+    expect(review.getByRole("textbox", { name: "正确与有据理由" })).toBeTruthy();
+    fireEvent.click(intent);
+    expect(review.getByRole("combobox", { name: "需求满足等级" }).textContent).toContain("2 · 部分满足");
+    expect((review.getByRole("textbox", { name: "需求满足理由" }) as HTMLTextAreaElement).value).toBe("折叠后仍应保留的人工判断。");
+    expect(reviewEvidenceValues(review)).toEqual(initialEvidence);
+    fireEvent.click(review.getByRole("button", { name: "关闭评估面板" }));
+    const reopened = openReview(false);
+    expect(reopened.getByRole("button", { name: "需求满足" }).getAttribute("aria-expanded")).toBe("false");
+    expect(reopened.queryByRole("textbox", { name: "需求满足理由" })).toBeNull();
+    fireEvent.click(reopened.getByRole("button", { name: "需求满足" }));
+    expect((reopened.getByRole("textbox", { name: "需求满足理由" }) as HTMLTextAreaElement).value).toBe("折叠后仍应保留的人工判断。");
+    fireEvent.click(reopened.getByRole("button", { name: "需求满足" }));
+    confirmReview();
+    const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
+    expect(saved[0].dimensions.find((dimension: { id: string }) => dimension.id === "intent")).toMatchObject({
+      level: 2, rationale: "折叠后仍应保留的人工判断。",
     });
-    expect(evaluation().getByText("建议完善").classList.contains("is-suggestion")).toBe(true);
-    expect(evaluation().getByText("保存与资料不足提示缺失")).toBeTruthy();
-
-    fireEvent.change(screen.getByRole("combobox", { name: "选择评估示例" }), {
-      target: { value: "syn-permission-leak" },
-    });
-    expect(evaluation().getByText("立即修复").classList.contains("is-danger")).toBe(true);
-    expect(evaluation().getByText("内部范围资料暴露风险")).toBeTruthy();
-    fireEvent.click(evaluation().getByRole("button", { name: "查看完整方案" }));
-    const improvement = within(screen.getByRole("dialog", { name: "优化方案" }));
-    expect(improvement.getByText("立即修复")).toBeTruthy();
-    expect(improvement.queryByText(/^P[012]$/)).toBeNull();
   });
 
-  it("keeps answer quality and task completion as separate conclusions", () => {
+  it("opens evidence directly on its ordered topics without the removed context overview", () => {
+    showPage();
+    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
+    const dialog = screen.getByRole("dialog", { name: "回答依据与陈述核验" });
+    const evidence = within(dialog);
+    expect([...dialog.querySelectorAll(".rag-evidence-topic > h3")].map(heading => heading.textContent)).toEqual([
+      "陈述与证据", "来源原文", "本次判断记录", "关键风险核验",
+    ]);
+    expect(evidence.queryByText("核对本次回答的来源、陈述与风险记录，了解评估结论的依据。")).toBeNull();
+    expect(evidence.queryByText("FrontMind 可以帮企业做什么？")).toBeNull();
+    expect(evidence.queryByText("知识版本：KB-SYN-v1")).toBeNull();
+    expect(dialog.querySelector(".rag-evidence-evaluation")).toBeNull();
+    expect(evidence.getAllByTestId("rag-evaluation-gate")).toHaveLength(7);
+  });
+
+  it("starts every risk theme collapsed and preserves its draft when folding, reopening and saving", async () => {
+    showPage();
+    const review = openReview(false);
+    for (const label of riskLabels) {
+      const trigger = review.getByRole("button", { name: label });
+      expect(trigger.textContent).toBe(label);
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(review.queryByRole("combobox", { name: `${label}风险核验` })).toBeNull();
+      expect(review.queryByRole("textbox", { name: `${label}风险核验依据` })).toBeNull();
+    }
+    const privacy = review.getByRole("button", { name: "权限与隐私" });
+    const facts = review.getByRole("button", { name: "核心事实" });
+    fireEvent.click(privacy);
+    fireEvent.click(facts);
+    expect(privacy.getAttribute("aria-expanded")).toBe("true");
+    expect(facts.getAttribute("aria-expanded")).toBe("true");
+    const reason = review.getByRole("textbox", { name: "权限与隐私风险核验依据" });
+    fireEvent.keyDown(review.getByRole("combobox", { name: "权限与隐私风险核验" }), { key: "ArrowDown" });
+    const riskMenu = review.getByRole("listbox");
+    await waitFor(() => expect(riskMenu.contains(document.activeElement)).toBe(true));
+    expect(within(riskMenu).getAllByRole("option").map(option => option.textContent)).toEqual(["通过", "待核验", "发现风险"]);
+    fireEvent.keyDown(riskMenu, { key: "Escape" });
+    await waitFor(() => expect(document.activeElement === review.getByRole("combobox", { name: "权限与隐私风险核验" })).toBe(true));
+    await chooseReviewOption(review, "权限与隐私风险核验", "发现风险");
+    fireEvent.change(reason, { target: { value: "折叠后保留的风险核验依据。" } });
+    reason.focus();
+    fireEvent.click(privacy);
+    expect(document.activeElement === privacy).toBe(true);
+    expect(review.queryByRole("textbox", { name: "权限与隐私风险核验依据" })).toBeNull();
+    expect(review.getByRole("combobox", { name: "核心事实风险核验" })).toBeTruthy();
+    fireEvent.click(privacy);
+    expect(review.getByRole("combobox", { name: "权限与隐私风险核验" }).textContent).toContain("发现风险");
+    expect((review.getByRole("textbox", { name: "权限与隐私风险核验依据" }) as HTMLTextAreaElement).value).toBe("折叠后保留的风险核验依据。");
+    fireEvent.click(review.getByRole("button", { name: "关闭评估面板" }));
+    const reopened = openReview(false);
+    expect(reopened.getByRole("button", { name: "权限与隐私" }).getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(reopened.getByRole("button", { name: "权限与隐私" }));
+    expect((reopened.getByRole("textbox", { name: "权限与隐私风险核验依据" }) as HTMLTextAreaElement).value).toBe("折叠后保留的风险核验依据。");
+    fireEvent.click(reopened.getByRole("button", { name: "权限与隐私" }));
+    confirmReview();
+    const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
+    expect(saved[0].gates.find((gate: { id: string }) => gate.id === "permissions")).toMatchObject({
+      status: "failed", reason: "折叠后保留的风险核验依据。",
+    });
+  });
+
+  it("toggles evidence choices and preserves the exact selected values across folding, reopening and saving", () => {
+    showPage();
+    let review = openIntentReview();
+    const original = reviewEvidenceValues(review);
+    const intent = review.getByRole("button", { name: "需求满足" });
+    fireEvent.click(review.getByRole("button", { name: "需求满足证据" }));
+    const paragraph = review.getByRole("option", { name: /回答原文 · 第 1 段/ });
+    fireEvent.click(paragraph);
+    expect(reviewEvidenceValues(review)).toEqual([...original, previewRagAnswer]);
+    fireEvent.click(paragraph);
+    expect(reviewEvidenceValues(review)).toEqual(original);
+    fireEvent.click(paragraph);
+    fireEvent.keyDown(paragraph, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "人工评审与计算" })).toBeTruthy();
+    const list = review.getByRole("list", { name: "需求满足证据：已选证据" });
+    const firstRemove = within(list).getAllByRole("button", { name: /^移除/ })[0];
+    fireEvent.click(firstRemove);
+    const expected = [...original.slice(1), previewRagAnswer];
+    expect(reviewEvidenceValues(review)).toEqual(expected);
+    fireEvent.click(intent);
+    fireEvent.click(intent);
+    expect(reviewEvidenceValues(review)).toEqual(expected);
+    fireEvent.click(review.getByRole("button", { name: "关闭评估面板" }));
+    review = openIntentReview();
+    expect(reviewEvidenceValues(review)).toEqual(expected);
+    confirmReview();
+    const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
+    expect(saved[0].dimensions.find((item: { id: string }) => item.id === "intent").evidenceIds).toEqual(expected);
+  });
+
+  it("allows selecting actual answer paragraphs without a source or automatic report", () => {
+    showPage();
+    fireEvent.click(screen.getByRole("button", { name: "编辑回答" }));
+    const editor = within(screen.getByRole("dialog", { name: "录入待评估回答" }));
+    const paragraph = "当前公开资料未说明离线安装能力。";
+    fireEvent.change(editor.getByRole("textbox", { name: "实际回答" }), { target: { value: `${paragraph}\n\n请向产品负责人确认部署条件。` } });
+    fireEvent.change(editor.getByRole("textbox", { name: "用户任务" }), { target: { value: "确认离线部署要求" } });
+    fireEvent.click(editor.getByRole("button", { name: "保存回答，重新评审" }));
+    const review = openIntentReview();
+    expect(reviewEvidenceValues(review)).toEqual([]);
+    fireEvent.click(review.getByRole("button", { name: "需求满足证据" }));
+    expect(review.queryByText("参考资料", { exact: true })).toBeNull();
+    fireEvent.click(review.getByRole("option", { name: /回答原文 · 第 1 段/ }));
+    expect(reviewEvidenceValues(review)).toEqual([paragraph]);
+    expect(review.queryByText(/已核验来源/)).toBeNull();
+  });
+
+  it("keeps legacy locators and freezes claim descriptions while the same answer is evaluated again", async () => {
+    const original = completedAutomaticRun();
+    const originalClaim = "支持私有化部署";
+    const legacyLocator = "旧手填定位，保留标点及完整原文";
+    original.report!.judgments.dimensions[0].evidenceIds = ["claim-1", legacyLocator];
+    const refreshed = structuredClone(original);
+    refreshed.operationId = "evaluation-operation-2";
+    refreshed.report!.reportId = "evaluation-report-2";
+    refreshed.report!.judgments.claims[0].statement = "新报告里同编号的另一条陈述";
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: original, history: [original] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue(refreshed);
+    render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
+      taskId: "task-1", turnId: "turn-1", question: "你们支持哪些部署方式？", questionId: "question-1",
+      answer: "支持私有化部署，具体环境要求请联系项目团队确认。", answerId: "answer-1",
+      sources: [{ id: "source-1", title: "部署说明", kind: "published_knowledge" }],
+    })} />);
+    await waitFor(() => expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93"));
+    let review = openIntentReview();
+    expect(reviewEvidenceValues(review)).toEqual(["claim-1", legacyLocator]);
+    expect(within(review.getByRole("list", { name: "需求满足证据：已选证据" })).getByText(originalClaim, { exact: true })).toBeTruthy();
+    const reevaluate = automaticEvaluateButton();
+    await act(async () => {
+      fireEvent.click(reevaluate);
+      await Promise.resolve();
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("rag-auto-evaluation-status")).toBeNull();
+    fireEvent.click(review.getByRole("button", { name: "需求满足证据" }));
+    expect(within(review.getByRole("group", { name: "陈述" })).getByRole("option", { name: new RegExp(originalClaim) })).toBeTruthy();
+    expect(review.queryByText("新报告里同编号的另一条陈述", { exact: true })).toBeNull();
+    fireEvent.keyDown(within(review.getByRole("group", { name: "陈述" })).getByRole("option", { name: new RegExp(originalClaim) }), { key: "Escape" });
+    fireEvent.click(review.getByRole("button", { name: "关闭评估面板" }));
+    review = openIntentReview();
+    expect(reviewEvidenceValues(review)).toEqual(["claim-1", legacyLocator]);
+    const selected = within(review.getByRole("list", { name: "需求满足证据：已选证据" }));
+    expect(selected.getByText(originalClaim, { exact: true })).toBeTruthy();
+    expect(selected.getByText(legacyLocator, { exact: true })).toBeTruthy();
+    confirmReview();
+    const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
+    expect(saved[0].dimensions.find((item: { id: string }) => item.id === "intent").evidenceIds).toEqual(["claim-1", legacyLocator]);
+  });
+
+  it("keeps three desktop windows open and activates an existing review without replacing its draft", () => {
+    showPage();
+    for (const name of ["回答依据", "优化方案", "人工评审"]) {
+      fireEvent.click(evaluation().getByRole("button", { name }));
+    }
+    expect(screen.getAllByRole("dialog")).toHaveLength(3);
+    const titles = screen.getAllByRole("dialog").map(dialog => dialog.getAttribute("aria-labelledby"));
+    expect(new Set(titles).size).toBe(3);
+    expect(screen.getAllByRole("dialog").every(dialog => !dialog.hasAttribute("aria-modal"))).toBe(true);
+    const review = within(screen.getByRole("dialog", { name: "人工评审与计算" }));
+    fireEvent.click(review.getByRole("button", { name: "需求满足" }));
+    fireEvent.change(review.getByRole("textbox", { name: "需求满足理由" }), { target: { value: "保留正在填写的对照判断。" } });
+    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
+    expect(screen.getByRole("dialog", { name: "回答依据与陈述核验" }).classList.contains("is-active")).toBe(true);
+    fireEvent.click(evaluation().getByRole("button", { name: "人工评审" }));
+    expect(screen.getAllByRole("dialog")).toHaveLength(3);
+    expect((review.getByRole("textbox", { name: "需求满足理由" }) as HTMLTextAreaElement).value).toBe("保留正在填写的对照判断。");
+    expect(document.body.style.overflow).toBe("");
+  });
+
+  it("keeps the detail headers clean and reserves the bottom action bar for manual review", () => {
+    showPage();
+    for (const [action, title] of [["回答依据", "回答依据与陈述核验"], ["优化方案", "优化方案"], ["人工评审", "人工评审与计算"]]) {
+      fireEvent.click(evaluation().getByRole("button", { name: action }));
+      const dialog = screen.getByRole("dialog", { name: title });
+      const header = dialog.querySelector(":scope > header");
+      expect(header?.textContent).not.toMatch(/rag-eval-[\d.]+/);
+      const footer = dialog.querySelector(":scope > footer");
+      if (action === "人工评审") {
+        expect(footer).not.toBeNull();
+        expect(within(footer as HTMLElement).getByRole("button", { name: "保存评审并计算" })).toBeTruthy();
+      } else {
+        expect(footer).toBeNull();
+        expect(within(dialog).queryByRole("button", { name: "完成" })).toBeNull();
+      }
+    }
+  });
+
+  it("restores the same answer's review draft after closing and after visiting another sample", async () => {
+    showPage();
+    const original = "syn-capability-overview";
+    let review = openReview();
+    fireEvent.change(review.getByRole("textbox", { name: "需求满足理由" }), { target: { value: "这份草稿属于原来的回答。" } });
+    fireEvent.change(review.getByRole("textbox", { name: "评审人" }), { target: { value: "draft-reviewer" } });
+    fireEvent.click(review.getByRole("checkbox", { name: /已对照当前回答与证据进行核验/ }));
+    fireEvent.click(review.getByRole("button", { name: "关闭评估面板" }));
+    review = openReview();
+    expect((review.getByRole("textbox", { name: "需求满足理由" }) as HTMLTextAreaElement).value).toBe("这份草稿属于原来的回答。");
+    expect((review.getByRole("textbox", { name: "评审人" }) as HTMLInputElement).value).toBe("draft-reviewer");
+    expect((review.getByRole("checkbox", { name: /已对照当前回答与证据进行核验/ }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
+    await chooseSample("syn-assistant-workflow");
+    await waitFor(() => expect(screen.queryAllByRole("dialog")).toHaveLength(0));
+    const other = openReview();
+    expect((other.getByRole("textbox", { name: "评审人" }) as HTMLInputElement).value).toBe("");
+    expect((other.getByRole("textbox", { name: "需求满足理由" }) as HTMLTextAreaElement).value).not.toBe("这份草稿属于原来的回答。");
+    await chooseSample(original);
+    review = openReview();
+    expect((review.getByRole("textbox", { name: "需求满足理由" }) as HTMLTextAreaElement).value).toBe("这份草稿属于原来的回答。");
+    expect((review.getByRole("textbox", { name: "评审人" }) as HTMLInputElement).value).toBe("draft-reviewer");
+    expect(window.localStorage.getItem(historyKey)).toBeNull();
+  });
+
+  it("saves only the review window while keeping evidence and optimization available", () => {
+    showPage();
+    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
+    fireEvent.click(evaluation().getByRole("button", { name: "优化方案" }));
+    openReview();
+    confirmReview();
+    expect(screen.queryByRole("dialog", { name: "人工评审与计算" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "回答依据与陈述核验" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "优化方案" })).toBeTruthy();
+    expect(JSON.parse(window.localStorage.getItem(historyKey) || "[]")).toHaveLength(1);
+  });
+
+  it("clears in-memory drafts when the workspace changes", () => {
+    const runtime = liveRuntime({ conversationId: "conversation-a", question: "原问题", questionId: "q-a", answer: "原回答", answerId: "a-a" });
+    const props = { onOpenWebsite: vi.fn(), onOpenWebsiteAssistant: vi.fn(), live: runtime };
+    const page = render(<EnterpriseRagPreview {...props} storageScopeKey="workspace-a" />);
+    const review = openReview();
+    fireEvent.change(review.getByRole("textbox", { name: "评审人" }), { target: { value: "private-draft" } });
+    page.rerender(<EnterpriseRagPreview {...props} storageScopeKey="workspace-b" />);
+    expect(screen.queryAllByRole("dialog")).toHaveLength(0);
+    page.rerender(<EnterpriseRagPreview {...props} storageScopeKey="workspace-a" />);
+    const reopened = openReview();
+    expect((reopened.getByRole("textbox", { name: "评审人" }) as HTMLInputElement).value).toBe("");
+  });
+
+  it("keeps the review draft while switching between desktop windows and a single mobile sheet", () => {
+    const width = window.innerWidth;
+    const setWidth = (value: number) => {
+      Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value });
+      fireEvent(window, new Event("resize"));
+    };
+    try {
+      showPage();
+      const desktop = openReview();
+      fireEvent.change(desktop.getByRole("textbox", { name: "需求满足理由" }), { target: { value: "跨显示方式保留的草稿。" } });
+      setWidth(390);
+      const sheet = screen.getByRole("dialog", { name: "人工评审与计算" });
+      expect(sheet.getAttribute("aria-modal")).toBe("true");
+      expect(document.body.style.overflow).toBe("hidden");
+      const tabs = within(sheet).getByRole("navigation", { name: "回答评估详情切换" });
+      fireEvent.click(within(tabs).getByRole("button", { name: "回答依据" }));
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      const evidence = screen.getByRole("dialog", { name: "回答依据与陈述核验" });
+      fireEvent.click(within(within(evidence).getByRole("navigation", { name: "回答评估详情切换" })).getByRole("button", { name: "人工评审" }));
+      const restored = within(screen.getByRole("dialog", { name: "人工评审与计算" }));
+      expect(restored.getByRole("button", { name: "需求满足" }).getAttribute("aria-expanded")).toBe("true");
+      expect((restored.getByRole("textbox", { name: "需求满足理由" }) as HTMLTextAreaElement).value).toBe("跨显示方式保留的草稿。");
+      setWidth(width);
+      expect(screen.getAllByRole("dialog")).toHaveLength(2);
+      expect(document.body.style.overflow).toBe("");
+    } finally {
+      setWidth(width);
+    }
+  });
+
+  it("disables optimization at full marks and restores it when the answer changes", async () => {
+    showPage();
+    await chooseSample("syn-unknown-deadline");
+    const optimize = evaluation().getByRole("button", { name: "优化方案" });
+    expect(screen.getByTestId("rag-gauge-value").textContent).toBe("100");
+    expect(optimize.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(optimize);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(evaluation().getByRole("button", { name: "回答依据" }).hasAttribute("disabled")).toBe(false);
+    expect(evaluation().getByRole("button", { name: "人工评审" }).hasAttribute("disabled")).toBe(false);
+    await chooseSample("syn-capability-overview");
+    expect(evaluation().getByRole("button", { name: "优化方案" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("leads with a goal and presents the strategy in a consistent reading order", async () => {
+    showPage();
+    const cases = [["syn-capability", "优先处理"], ["syn-assistant-workflow", "建议完善"], ["syn-permission-leak", "立即修复"]];
+    for (const [id, label] of cases) {
+      if (id !== "syn-capability") await chooseSample(id);
+      const plan = openQualityDetails();
+      const summary = plan.getByTestId("rag-improvement-summary");
+      expect(summary.textContent?.length).toBeGreaterThan(20);
+      expect(summary.querySelector('.rag-priority-label')).toBeNull();
+      expect(plan.getAllByText(label).length).toBeGreaterThan(0);
+      expect(plan.getAllByRole("heading", { level: 3 }).map(heading => heading.textContent)).toEqual([
+        "优化目标", "调整步骤", "改写示例", "检查要点",
+      ]);
+      expect(plan.queryByRole("heading", { name: "下一步操作指引缺失" })).toBeNull();
+      expect(plan.queryByRole("heading", { name: /高优先级风险|一般记录项/ })).toBeNull();
+      expect(plan.queryByText(/^P[012]$/)).toBeNull();
+      expect(plan.queryByText("问题：")).toBeNull();
+      expect(plan.queryByText("方案：")).toBeNull();
+      expect(plan.queryByText(/^当前没有已确认的高优先级风险/)).toBeNull();
+      expect(plan.queryByText(/^当前没有一般记录项/)).toBeNull();
+      fireEvent.click(plan.getByRole("button", { name: "关闭评估面板" }));
+    }
+  });
+
+  it("keeps answer quality and task completion as separate conclusions", async () => {
     showPage();
 
     expect(evaluation().getByRole("heading", { name: "待改进" })).toBeTruthy();
     expect(screen.getByTestId("rag-task-status").textContent).toContain("缺下一步");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "选择评估示例" }), {
-      target: { value: "syn-assistant-workflow" },
-    });
+    await chooseSample("syn-assistant-workflow");
 
     expect(evaluation().getByRole("heading", { name: "待改进" })).toBeTruthy();
     expect(screen.getByTestId("rag-task-status").textContent).toContain("通过");
   });
 
-  it("uses stable CSS sizing without a ResizeObserver feedback loop", () => {
-    const resizeObserverConstructed = vi.fn();
-    class TestResizeObserver {
-      constructor() { resizeObserverConstructed(); }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
-    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  it("distinguishes missing task steps from confirmed risks and resets manual tasks without automatic evaluation", async () => {
+    const latest = vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue(completedAutomaticRun());
+    const observe = vi.spyOn(liveEnterpriseRagEvaluationApi, "observe").mockResolvedValue(completedAutomaticRun());
     showPage();
 
+    expectTaskStatus("缺下一步", "fail");
+    await chooseSample("syn-permission-leak");
+    expectTaskStatus("发现风险", "fail", true);
+    await chooseSample("syn-assistant-workflow");
+    expectTaskStatus("通过", "pass");
+    await chooseSample("syn-deployment-prereq");
+    expectTaskStatus("待确认", "unverified");
+
+    await chooseSample("syn-permission-leak");
+    expectTaskStatus("发现风险", "fail", true);
+    fireEvent.click(screen.getByRole("button", { name: "编辑回答" }));
+    const editor = within(screen.getByRole("dialog", { name: "录入待评估回答" }));
+    fireEvent.change(editor.getByRole("textbox", { name: "用户任务" }), { target: { value: "确认可公开提供的部署说明" } });
+    fireEvent.change(editor.getByRole("textbox", { name: "实际回答" }), { target: { value: "请联系项目团队核对可公开提供的部署资料。" } });
+    fireEvent.click(editor.getByRole("button", { name: "保存回答，重新评审" }));
+    expectTaskStatus("待确认", "unverified");
+
+    expect(latest).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it("keeps a live task unverified when an existing high-scoring answer report is loaded without starting evaluation", async () => {
+    const run = completedAutomaticRun();
+    const latest = vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: run, history: [run] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue(run);
+    const observe = vi.spyOn(liveEnterpriseRagEvaluationApi, "observe").mockResolvedValue(run);
+    render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
+      taskId: "task-1", turnId: "turn-1", questionId: "question-1", answerId: "answer-1",
+      question: "你们支持哪些部署方式？", answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
+    })} />);
+
+    expectTaskStatus("待确认", "unverified");
+    await waitFor(() => expect(screen.getByTestId("rag-gauge-value").textContent).toBe("93"));
+    expectTaskStatus("待确认", "unverified");
+    expect(latest).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it("observes the overview and visible summary without dynamically rewriting gauge dimensions", () => {
+    const observers: TestResizeObserver[] = [];
+    class TestResizeObserver {
+      constructor() { observers.push(this); }
+      observe = vi.fn();
+      unobserve() {}
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    const page = showPage();
+
     const overview = screen.getByTestId("rag-evaluation-overview");
-    expect(resizeObserverConstructed).not.toHaveBeenCalled();
+    const overviewObserver = observers.find(observer => observer.observe.mock.calls.some(([target]) => target === overview));
+    expect(overviewObserver).toBeDefined();
+    expect(overviewObserver!.observe).toHaveBeenCalledWith(screen.getByTestId("rag-evaluation-summary-copy"));
+    expect(overviewObserver!.observe).toHaveBeenCalledTimes(2);
     expect(overview.style.getPropertyValue("--rag-evaluation-card-width")).toBe("");
     expect(overview.style.getPropertyValue("--rag-evaluation-card-height")).toBe("");
+    page.unmount();
+    expect(overviewObserver!.disconnect).toHaveBeenCalledTimes(1);
   });
 
   it("submits a live question without falling back to a synthetic answer", async () => {
@@ -405,7 +874,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByTestId("enterprise-rag-live-root")).toBeTruthy();
     expect(screen.getByTestId("rag-task-status").textContent).toContain("待确认");
     expect(screen.getByText("企业知识库.zip")).toBeTruthy();
-    expect(screen.getByText(/知识版本 v7/)).toBeTruthy();
+    expect(screen.queryByText(/知识版本 v7/)).toBeNull();
     fireEvent.change(screen.getByTestId("rag-question-input"), {
       target: { value: "你们支持哪些部署方式？" },
     });
@@ -418,6 +887,31 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByTestId("rag-answer").textContent).toContain(
       "尚无待评估回答",
     );
+  });
+
+  it("waits 900ms for a synthetic submission, keeps drafts, and cancels an old preview", async () => {
+    vi.useFakeTimers();
+    try {
+      showPage();
+      const question = screen.getByRole("textbox", { name: "输入企业 RAG 示例问题" });
+      const originalQuestion = document.querySelector(".erag-user-message")!.textContent!;
+      fireEvent.change(question, { target: { value: originalQuestion } });
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "试用问题" })));
+      expect(screen.getByTestId("rag-chat-wait").textContent).toBe("正在读取文件…");
+      fireEvent.change(question, { target: { value: "下一条草稿" } });
+      await act(async () => vi.advanceTimersByTime(899));
+      expect(screen.queryByTestId("rag-preview-answer")).toBeNull();
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(screen.getByTestId("rag-preview-answer").textContent).toContain(previewRagAnswer);
+      expect((question as HTMLTextAreaElement).value).toBe("下一条草稿");
+      await act(async () => vi.advanceTimersByTime(360));
+      fireEvent.change(question, { target: { value: originalQuestion } });
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "试用问题" })));
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "停止回答" })));
+      await act(async () => vi.advanceTimersByTime(1000));
+      expect(screen.queryByTestId("rag-preview-answer")).toBeNull();
+      expect(screen.getByText("已停止回答。")).toBeTruthy();
+    } finally { vi.useRealTimers(); }
   });
 
   it("renders the persisted live answer and only server-resolved source metadata", async () => {
@@ -455,9 +949,46 @@ describe("enterprise RAG evidence-based review UI", () => {
       screen.getByRole("dialog", { name: "回答依据与陈述核验" }),
     );
     expect(evidence.getByText(/只公开服务端解析后的资料标识与标题/)).toBeTruthy();
-    expect(evidence.getByText(/知识版本：v7/)).toBeTruthy();
+    expect(evidence.queryByText(/知识版本：v7/)).toBeNull();
+    expect(evidence.getAllByTestId("rag-source")[0].textContent).toContain("v7");
     expect(screen.queryByRole("button", { name: "编辑回答" })).toBeNull();
-    expect(screen.getByText("服务端原始回答")).toBeTruthy();
+    expect(screen.queryByText("服务端原始回答")).toBeNull();
+  });
+
+  it("distinguishes an evaluated report with no claims from an unevaluated answer", async () => {
+    const run = completedAutomaticRun();
+    run.report!.judgments.claims = [];
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: run, history: [run] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue(run);
+    render(
+      <EnterpriseRagPreview
+        onOpenWebsite={vi.fn()}
+        onOpenWebsiteAssistant={vi.fn()}
+        live={liveRuntime({
+          taskId: "task-1",
+          turnId: "turn-1",
+          question: "你们支持哪些部署方式？",
+          questionId: "question-1",
+          answer: "具体环境要求请联系项目团队确认。",
+          answerId: "answer-1",
+          sources: [{ id: "source-1", title: "部署说明", kind: "published_knowledge" }],
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93"));
+    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
+    const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
+    expect(evidence.getByText("本次报告没有陈述级核验记录。")).toBeTruthy();
+    expect(evidence.queryByText(/^尚无服务端陈述级自动评估/)).toBeNull();
+    expect(evidence.getByText("部署说明")).toBeTruthy();
+    expect(evidence.getAllByTestId("rag-evaluation-gate")).toHaveLength(7);
+    const dialog = screen.getByRole("dialog", { name: "回答依据与陈述核验" });
+    expect([...dialog.querySelectorAll(".rag-evidence-topic > h3")].map(heading => heading.textContent)).toEqual([
+      "陈述与证据", "参考资料", "自动评估六维判断", "关键风险核验", "不可变报告溯源",
+    ]);
+    expect(evidence.getByTestId("rag-auto-evaluation-report").textContent).toContain("v7");
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("only starts a paid automatic evaluation after the explicit button click", async () => {
@@ -489,7 +1020,14 @@ describe("enterprise RAG evidence-based review UI", () => {
       turnId: "turn-1",
     }));
     expect(start).not.toHaveBeenCalled();
+    for (const action of ["回答依据", "优化方案", "人工评审"]) {
+      fireEvent.click(evaluation().getByRole("button", { name: action }));
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(start).not.toHaveBeenCalled();
+      escapeFocusedDialog();
+    }
     expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false);
+    expect(start).not.toHaveBeenCalled();
 
     fireEvent.click(automaticEvaluateButton());
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
@@ -502,10 +1040,10 @@ describe("enterprise RAG evidence-based review UI", () => {
       expect(screen.queryByTestId("rag-auto-evaluation-status")).toBeNull(),
     );
     expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93");
-    openJudgmentDetails();
+    escapeFocusedDialog();
     expect(screen.getAllByTestId("rag-evaluation-dimension")).toHaveLength(6);
 
-    fireEvent.click(screen.getByRole("button", { name: "查看回答依据" }));
+    fireEvent.click(screen.getByRole("button", { name: "回答依据" }));
     expect(screen.getAllByTestId("rag-evaluation-gate")).toHaveLength(7);
     expect(screen.getByTestId("rag-auto-evaluation-report").textContent).toContain(
       "evaluation-report-1",
@@ -513,7 +1051,52 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.queryByText(/gpt-6\.1-sol|XTY Codex/)).toBeNull();
   });
 
-  it("disables the full improvement plan when the current report has no repair items", async () => {
+  it.each(["success", "failure"] as const)("ignores an old answer's late POST %s while a new answer is submitting", async (outcome) => {
+    let resolveFirst!: (run: EnterpriseRagEvaluationRunDto) => void;
+    let rejectFirst!: (error: Error) => void;
+    let resolveSecond!: (run: EnterpriseRagEvaluationRunDto) => void;
+    const firstRequest = new Promise<EnterpriseRagEvaluationRunDto>((resolve, reject) => { resolveFirst = resolve; rejectFirst = reject; });
+    const secondRequest = new Promise<EnterpriseRagEvaluationRunDto>(resolve => { resolveSecond = resolve; });
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockImplementation(input => input.sourceQaTaskId === "task-1" ? firstRequest : secondRequest);
+    const first = liveRuntime({ conversationId: "conversation-1", taskId: "task-1", turnId: "turn-1", question: "第一个问题", questionId: "question-1", answer: "第一个回答", answerId: "answer-1" });
+    const second = liveRuntime({ conversationId: "conversation-2", taskId: "task-2", turnId: "turn-2", question: "第二个问题", questionId: "question-2", answer: "第二个回答", answerId: "answer-2" });
+    const props = { onOpenWebsite: vi.fn(), onOpenWebsiteAssistant: vi.fn(), storageScopeKey: "late-post-workspace" };
+    const page = render(<EnterpriseRagPreview {...props} live={first} />);
+    await waitFor(() => expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(automaticEvaluateButton());
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    page.rerender(<EnterpriseRagPreview {...props} live={second} />);
+    expect(screen.queryAllByRole("dialog")).toHaveLength(0);
+    await waitFor(() => expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(automaticEvaluateButton());
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
+    await act(async () => {
+      if (outcome === "success") resolveFirst(completedAutomaticRun());
+      else rejectFirst(new Error("旧回答提交迟到的错误"));
+      await Promise.resolve();
+    });
+    expect(evidence.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(true);
+    expect(evidence.getByTestId("rag-evidence-evaluation-status").textContent).toContain("正在提交评估");
+    expect(screen.queryByText("旧回答提交迟到的错误")).toBeNull();
+    expect(screen.queryByTestId("rag-auto-evaluation-report")).toBeNull();
+    expect(listEvaluationReports(scopedEvaluationStorage(props.storageScopeKey))).toHaveLength(0);
+
+    const secondRun = completedAutomaticRun();
+    secondRun.operationId = "evaluation-operation-2";
+    secondRun.sourceQaTaskId = "task-2";
+    secondRun.turnId = "turn-2";
+    Object.assign(secondRun.report!, { reportId: "evaluation-report-2", sourceQaTaskId: "task-2", sourceTurnId: "turn-2", conversationId: "conversation-2", questionMessageId: "question-2", answerMessageId: "answer-2" });
+    secondRun.report!.result.score = 81;
+    await act(async () => { resolveSecond(secondRun); await Promise.resolve(); });
+    await waitFor(() => expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("81"));
+    expect(evidence.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(false);
+    expect(evidence.getByTestId("rag-auto-evaluation-report").textContent).toContain("evaluation-report-2");
+    expect(evidence.getByTestId("rag-auto-evaluation-report").textContent).not.toContain("evaluation-report-1");
+  });
+
+  it("opens an empty improvement plan when the current report has no repair items", async () => {
     const run = completedAutomaticRun();
     vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: run, history: [run] });
     render(
@@ -535,10 +1118,10 @@ describe("enterprise RAG evidence-based review UI", () => {
     await waitFor(() => expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93"));
     const quality = openQualityDetails();
     expect(quality.getByText("当前记录没有待修复项；继续用更多真实场景验证。")).toBeTruthy();
-    const fullPlan = quality.getByRole("button", { name: "查看完整方案" });
-    expect(fullPlan.hasAttribute("disabled")).toBe(true);
-    fireEvent.click(fullPlan);
-    expect(screen.queryByRole("dialog", { name: "优化方案" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "优化方案" })).toBeTruthy();
+    expect(quality.queryByRole("heading", { name: "调整步骤" })).toBeNull();
+    expect(quality.queryByRole("heading", { name: "改写示例" })).toBeNull();
+    expect(quality.queryByRole("button", { name: "查看完整方案" })).toBeNull();
   });
 
   it("recovers the immutable latest automatic report on refresh without posting again", async () => {
@@ -570,6 +1153,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(start).not.toHaveBeenCalled();
     expect(screen.queryByText("报告 evaluation-report-1")).toBeNull();
     expect(screen.queryByText(/服务器留痕|gpt-6\.1-sol|XTY Codex/)).toBeNull();
+    if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
     expect(records.getByText("服务端自动评估记录")).toBeTruthy();
@@ -710,7 +1294,8 @@ describe("enterprise RAG evidence-based review UI", () => {
     );
     fireEvent.click(automaticEvaluateButton());
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText(/网络结果未知/)).toBeTruthy());
+    const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
+    await waitFor(() => expect(evidence.getByRole("alert").textContent).toContain("网络结果未知"));
     const firstId = start.mock.calls[0][0].clientRequestId;
 
     fireEvent.click(automaticEvaluateButton());
@@ -760,7 +1345,9 @@ describe("enterprise RAG evidence-based review UI", () => {
         "上游任务创建结果不确定",
       ),
     );
-    expect(screen.getByRole("alert").textContent).toContain("需要管理员确认");
+    const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
+    expect(evidence.getByRole("alert").textContent).toContain("需要管理员确认");
+    expect(evidence.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(false);
     expect(screen.queryByText(/自动评估已提交/)).toBeNull();
   });
 
@@ -807,13 +1394,17 @@ describe("enterprise RAG evidence-based review UI", () => {
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
       expect(screen.getByText(/自动评估已提交/).classList.contains("rag-muted")).toBe(true);
       expect(screen.getByText(/自动评估已提交/).classList.contains("sfp-notice")).toBe(false);
+      const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
+      expect(evidence.getByTestId("rag-evidence-evaluation-status").textContent).toContain("自动评估中");
+      expect(evidence.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(true);
 
       await act(async () => {
         vi.advanceTimersByTime(2_500);
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(screen.getByRole("alert").textContent).toContain("需要管理员确认");
+      expect(evidence.getByRole("alert").textContent).toContain("需要管理员确认");
+      expect(evidence.getByTestId("rag-evidence-evaluation-status").textContent).toContain("自动评估失败");
       expect(screen.queryByText(/自动评估已提交/)).toBeNull();
     } finally {
       vi.useRealTimers();
@@ -834,7 +1425,7 @@ describe("enterprise RAG evidence-based review UI", () => {
       />,
     );
     await waitFor(() =>
-      expect(screen.getByText(/已载入真实企业问答结果/)).toBeTruthy(),
+      expect(screen.getByTestId("rag-answer").textContent).toContain("旧回答"),
     );
 
     page.rerender(
@@ -876,8 +1467,8 @@ describe("enterprise RAG evidence-based review UI", () => {
       />,
     );
 
-    expect(screen.getByText("本任务冻结知识快照")).toBeTruthy();
-    expect(screen.getByText(/知识版本 v3/)).toBeTruthy();
+    expect(screen.queryByText("本任务冻结知识快照")).toBeNull();
+    expect(screen.queryByText(/知识版本 v3/)).toBeNull();
     expect(screen.getByText(/项目已发布 v9；本会话仍使用冻结的 v3/)).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "使用 v9 新建问答" }),
@@ -931,6 +1522,24 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "重试上次问题" }));
     await waitFor(() => expect(runtime.onRetryPending).toHaveBeenCalledTimes(1));
+  });
+
+  it("starts a new live conversation only for an idle existing task", () => {
+    const runtime = liveRuntime({ taskId: "task-existing" });
+    const props = { onOpenWebsite: vi.fn(), onOpenWebsiteAssistant: vi.fn() };
+    const page = render(<EnterpriseRagPreview {...props} live={runtime} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "新建问答" }));
+    expect(runtime.onStartNewConversation).toHaveBeenCalledTimes(1);
+
+    page.rerender(<EnterpriseRagPreview {...props} live={{ ...runtime, busy: true }} />);
+    const busyButton = screen.getByRole("button", { name: "新建问答" });
+    expect(busyButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(busyButton);
+    expect(runtime.onStartNewConversation).toHaveBeenCalledTimes(1);
+
+    page.rerender(<EnterpriseRagPreview {...props} live={{ ...runtime, taskId: undefined }} />);
+    expect(screen.getByRole("button", { name: "新建问答" })).toBeTruthy();
   });
 
   it("isolates live reviews by owner/workspace while sharing the scoped audit with website flow", () => {
@@ -1001,7 +1610,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(runtime.onAsk).not.toHaveBeenCalled();
   });
 
-  it("does not reuse the default answer or an old score for a custom question", () => {
+  it("does not reuse the default answer or an old score for a custom question", async () => {
     showPage();
     expect(screen.getByText(previewRagAnswer)).toBeTruthy();
 
@@ -1010,14 +1619,14 @@ describe("enterprise RAG evidence-based review UI", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "试用问题" }));
 
-    expect(screen.queryByText(previewRagAnswer)).toBeNull();
-    expect(screen.getByText(/尚无待评估回答/)).toBeTruthy();
+    expect(within(screen.getByRole("article", { name: "历史回答" })).getByText(previewRagAnswer)).toBeTruthy();
+    expect(within(screen.getByRole("article", { name: "企业助手回复" })).queryByText(previewRagAnswer)).toBeNull();
+    await waitFor(() => expect(screen.getByText(/尚无待评估回答/)).toBeTruthy());
     expect(screen.getByText(/此问题不在示例库/).textContent).toContain("未连接真实问答服务");
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
+    expectEmptyGauge();
     expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
     expect(evaluation().queryByText(/可能分数/)).toBeNull();
-    openJudgmentDetails();
-    expect(screen.getByRole("button", { name: "人工评审与计算" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "人工评审" }).hasAttribute("disabled")).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "录入回答" }));
     const editor = within(screen.getByRole("dialog", { name: "录入待评估回答" }));
@@ -1027,22 +1636,59 @@ describe("enterprise RAG evidence-based review UI", () => {
     fireEvent.click(editor.getByRole("button", { name: "保存回答，重新评审" }));
 
     expect(screen.getByText("现有公开资料未说明离线安装能力，请向产品负责人确认。")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "人工评审与计算" }).hasAttribute("disabled")).toBe(false);
-    expect(within(evaluation().getByLabelText("六维诊断评分")).getByTestId("rag-gauge-value").textContent).toBe("—");
+    expect(screen.getByRole("button", { name: "人工评审" }).hasAttribute("disabled")).toBe(false);
+    expectEmptyGauge();
   });
 
-  it("preserves unknown weight and a pending score when a saved rating lacks evidence", () => {
+  it("validates an edited question and invalidates the old answer score", () => {
+    showPage();
+    fireEvent.click(screen.getByRole("button", { name: "编辑回答" }));
+    const editor = within(screen.getByRole("dialog", { name: "录入待评估回答" }));
+    const question = editor.getByRole("textbox", { name: "问题" }) as HTMLTextAreaElement;
+    const save = editor.getByRole("button", { name: "保存回答，重新评审" });
+    expect(question.value).toBe(RAG_SAMPLE_CASES[0].question);
+    fireEvent.change(question, { target: { value: "  " } });
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(question, { target: { value: "产品是否适合对外服务？" } });
+    expect(save.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(save);
+    expect(screen.getByText("产品是否适合对外服务？")).toBeTruthy();
+    expectEmptyGauge();
+    expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
+  });
+
+  it("requires a question when entering an answer in a new conversation", () => {
+    showPage();
+    fireEvent.click(screen.getByRole("button", { name: "新建问答" }));
+    fireEvent.click(screen.getByRole("button", { name: "录入回答" }));
+    const editor = within(screen.getByRole("dialog", { name: "录入待评估回答" }));
+    const save = editor.getByRole("button", { name: "保存回答，重新评审" });
+    const question = editor.getByRole("textbox", { name: "问题" }) as HTMLTextAreaElement;
+    expect(question.value).toBe("");
+    fireEvent.change(editor.getByRole("textbox", { name: "用户任务" }), { target: { value: "了解支持的场景" } });
+    fireEvent.change(editor.getByRole("textbox", { name: "实际回答" }), { target: { value: "请先与团队确认场景。" } });
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(question, { target: { value: "支持哪些场景？" } });
+    expect(save.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(save);
+    expect(screen.getByText("支持哪些场景？")).toBeTruthy();
+    expectEmptyGauge();
+  });
+
+  it("preserves unknown weight and a pending score when a saved rating lacks evidence", async () => {
     showPage();
     const review = openReview();
     for (const label of dimensionLabels) {
-      fireEvent.change(review.getByRole("combobox", { name: `${label}等级` }), { target: { value: "4" } });
+      await chooseReviewOption(review, `${label}等级`, "4 · 充分满足");
     }
-    fireEvent.change(review.getByRole("textbox", { name: "需求满足证据" }), { target: { value: "   " } });
+    for (const remove of within(review.getByRole("list", { name: "需求满足证据：已选证据" })).getAllByRole("button", { name: /^移除/ })) {
+      fireEvent.click(remove);
+    }
     expect(review.getByRole("button", { name: "保存评审并计算" }).hasAttribute("disabled")).toBe(true);
     confirmReview();
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
+    expectEmptyGauge();
     expect(evaluation().getByText("评审覆盖 80%")).toBeTruthy();
     expect(evaluation().queryByText(/可能分数/)).toBeNull();
     const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
@@ -1050,24 +1696,34 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(saved[0].dimensions.find((item: { id: string }) => item.id === "intent").evidenceIds).toEqual([]);
   });
 
-  it("lets a failed gate override a manually saved perfect numeric score", () => {
+  it("lets a failed gate override a manually saved perfect numeric score", async () => {
     showPage();
     const review = openReview();
     for (const label of dimensionLabels) {
-      fireEvent.change(review.getByRole("combobox", { name: `${label}等级` }), { target: { value: "4" } });
+      await chooseReviewOption(review, `${label}等级`, "4 · 充分满足");
     }
-    fireEvent.change(review.getByRole("combobox", { name: "权限与隐私风险核验" }), { target: { value: "failed" } });
+    fireEvent.click(review.getByRole("button", { name: "权限与隐私" }));
+    await chooseReviewOption(review, "权限与隐私风险核验", "发现风险");
     fireEvent.change(review.getByRole("textbox", { name: "权限与隐私风险核验依据" }), {
       target: { value: "当前角色无权访问回答所引用的内部原文。" },
     });
     confirmReview();
 
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("100");
+    expectUnavailableGauge();
     expect(evaluation().getByText("需修复")).toBeTruthy();
     expect(evaluation().getByText("关键风险已发现")).toBeTruthy();
     expect(evaluation().queryByText(/可能分数/)).toBeNull();
     expect(evaluation().getByText(/高分不能把该回答判为可用，但不会取消网站发布选择/)).toBeTruthy();
+    openQualityDetails();
+    const manualPlan = within(screen.getByRole("dialog", { name: "优化方案" }));
+    const manualSummary = manualPlan.getByTestId("rag-improvement-summary");
+    expect(manualSummary.textContent).toMatch(/风险|修正/);
+    expect(manualPlan.getAllByText(/当前角色无权访问回答所引用的内部原文/)).toHaveLength(1);
+    expect(manualPlan.getByRole("heading", { name: "调整步骤" })).toBeTruthy();
+    expect(manualPlan.queryByRole("heading", { name: "改写示例" })).toBeNull();
+    expect(within(manualSummary).queryByText("立即修复")).toBeNull();
 
+    if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
     expect(records.getByLabelText("重大问题，数值分不适用").textContent).toBe("!");
@@ -1086,8 +1742,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     fireEvent.change(editor.getByRole("textbox", { name: "实际回答" }), { target: { value: "这是已经修订、尚待重新核验的回答。" } });
     fireEvent.click(editor.getByRole("button", { name: "保存回答，重新评审" }));
 
-    expect(evaluation().getByLabelText("六维诊断评分").textContent).toContain("—");
+    expectEmptyGauge();
     expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
+    if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
     expect(records.getByText(/历史快照，不适用于当前回答/)).toBeTruthy();
@@ -1095,20 +1752,80 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(JSON.parse(window.localStorage.getItem(historyKey) || "[]")[0]).toEqual(original);
   });
 
+  it("clears a new preview conversation while retaining saved reviews and manual entry without automatic evaluation", () => {
+    const latest = vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue(completedAutomaticRun());
+    const observe = vi.spyOn(liveEnterpriseRagEvaluationApi, "observe").mockResolvedValue(completedAutomaticRun());
+    showPage();
+    expect(screen.getAllByRole("button", { name: /^\[\d+\] / }).length).toBeGreaterThan(0);
+    openReview();
+    confirmReview();
+    const savedHistory = window.localStorage.getItem(historyKey);
+    const savedReports = window.localStorage.getItem(EVALUATION_REPORT_STORAGE_KEY);
+    const original = JSON.parse(savedHistory || "[]")[0];
+    expect(original.answer).toBe(previewRagAnswer);
+    expect(evaluation().getByText("评审覆盖 100%")).toBeTruthy();
+    const input = screen.getByRole("textbox", { name: "输入企业 RAG 示例问题" }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "尚未发送的新问题" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "新建问答" }));
+
+    expect(input.value).toBe("");
+    expect(document.activeElement === input).toBe(true);
+    const chat = within(input.closest(".erag-test-card") as HTMLElement);
+    expect(chat.queryByText(original.question)).toBeNull();
+    expect(chat.queryByText(previewRagAnswer)).toBeNull();
+    expect(screen.getByText(/尚无待评估回答/)).toBeTruthy();
+    expect(screen.queryAllByRole("button", { name: /^\[\d+\] / })).toHaveLength(0);
+    expectEmptyGauge();
+    expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
+    expect(evaluation().getByText("关键风险待核验")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "录入回答" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "人工评审" }).hasAttribute("disabled")).toBe(true);
+    expect(evaluation().getByRole("button", { name: "优化方案" }).hasAttribute("disabled")).toBe(true);
+    expect(evaluation().getByRole("button", { name: "回答依据" }).hasAttribute("disabled")).toBe(false);
+    expect(window.localStorage.getItem(historyKey)).toBe(savedHistory);
+    expect(window.localStorage.getItem(EVALUATION_REPORT_STORAGE_KEY)).toBe(savedReports);
+
+    if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
+    fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
+    const records = within(screen.getByRole("dialog", { name: "评估记录" }));
+    expect(records.getByText(original.question)).toBeTruthy();
+    expect(records.getByText(previewRagAnswer)).toBeTruthy();
+    expect(records.getByText(/历史快照，不适用于当前回答/)).toBeTruthy();
+    expect(latest).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(observe).not.toHaveBeenCalled();
+  });
+
   it("treats an adopted suggested rewrite as a new unreviewed answer", () => {
     showPage();
     openQualityDetails();
-    fireEvent.click(screen.getByRole("button", { name: "查看完整方案" }));
     const improvement = within(screen.getByRole("dialog", { name: "优化方案" }));
     const suggestedAnswer = improvement.getByText(/FrontMind 的演示能力包括：/).textContent;
     fireEvent.click(improvement.getByRole("button", { name: "采用改写并重新评审" }));
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByText(suggestedAnswer!)).toBeTruthy();
-    expect(within(evaluation().getByLabelText("六维诊断评分")).getByTestId("rag-gauge-value").textContent).toBe("—");
+    expectEmptyGauge();
     expect(evaluation().getByText("关键风险待核验")).toBeTruthy();
     expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
     expect(window.localStorage.getItem(historyKey)).toBeNull();
+  });
+
+  it("preserves multiline risk evidence when saving a manual review", () => {
+    showPage();
+    const review = openReview();
+    const reason = "已核对当前访客的资料访问权限。\n依据：部署说明第 2 节，不涉及内部受限内容。";
+    fireEvent.click(review.getByRole("button", { name: "权限与隐私" }));
+    fireEvent.change(review.getByRole("textbox", { name: "权限与隐私风险核验依据" }), {
+      target: { value: reason },
+    });
+    confirmReview();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
+    expect(saved[0].gates.find((gate: { id: string }) => gate.id === "permissions").reason).toBe(reason);
   });
 
   it("persists rule 1.3 review evidence and an independent evaluation report across remounts", () => {
@@ -1139,6 +1856,7 @@ describe("enterprise RAG evidence-based review UI", () => {
 
     page.unmount();
     showPage();
+    if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
     expect(records.getByText(/reviewer-A/)).toBeTruthy();
@@ -1156,16 +1874,16 @@ describe("enterprise RAG evidence-based review UI", () => {
 
     page.unmount();
     showPage();
+    if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
     expect(records.getByText(/rag-eval-1\.1/)).toBeTruthy();
     expect(records.getByText(previewRagAnswer)).toBeTruthy();
   });
 
-  it("exposes claim-level evidence and restores focus after Escape", () => {
+  it("exposes claim-level evidence without locking the desktop and restores focus after Escape", async () => {
     showPage();
-    openJudgmentDetails();
-    const opener = screen.getByRole("button", { name: "查看回答依据" });
+    const opener = screen.getByRole("button", { name: "回答依据" });
     opener.focus();
     fireEvent.click(opener);
     const panel = screen.getByRole("dialog", { name: "回答依据与陈述核验" });
@@ -1187,22 +1905,21 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(within(gateGrid).getByRole("img", { name: "核心事实：通过" })).toBeTruthy();
     expect(details.getAllByTestId("rag-evidence-claim-status").every((tag) => tag.classList.contains("is-positive"))).toBe(true);
     expect(details.getAllByTestId("rag-evidence-source-scope").every((tag) => tag.classList.contains("is-info"))).toBe(true);
-    expect(document.body.style.overflow).toBe("hidden");
-    expect(document.activeElement).toBe(details.getByRole("button", { name: "关闭评估面板" }));
+    expect(document.body.style.overflow).toBe("");
+    expect(panel.getAttribute("aria-modal")).toBeNull();
+    expect(document.querySelector<HTMLElement>(".rag-eval-root > div")?.inert).toBe(false);
+    expect(document.activeElement === details.getByRole("button", { name: "关闭评估面板" })).toBe(true);
 
-    fireEvent.keyDown(document, { key: "Escape" });
+    escapeFocusedDialog();
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
     expect(document.body.style.overflow).toBe("");
   });
 
-  it("uses danger semantics for failed risk gates and restricted claims", () => {
+  it("uses danger semantics for failed risk gates and restricted claims", async () => {
     showPage();
-    fireEvent.change(screen.getByRole("combobox", { name: "选择评估示例" }), {
-      target: { value: "syn-permission-leak" },
-    });
-    openJudgmentDetails();
-    fireEvent.click(screen.getByRole("button", { name: "查看回答依据" }));
+    await chooseSample("syn-permission-leak");
+    fireEvent.click(screen.getByRole("button", { name: "回答依据" }));
 
     const details = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
     expect(details.getAllByTestId("rag-gate-status-orb").some((orb) => orb.getAttribute("aria-label")?.includes("发现风险"))).toBe(true);
@@ -1210,9 +1927,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(details.getAllByTestId("rag-evidence-claim-status").some((tag) => tag.classList.contains("is-danger"))).toBe(true);
   });
 
-  it("removes the test-set demo while preserving single-answer sample review", () => {
+  it("removes the test-set demo while preserving single-answer sample review", async () => {
     showPage();
-    expect(screen.getByText("单次问答")).toBeTruthy();
+    expect(screen.queryByText("单次问答")).toBeNull();
     expect(screen.queryByRole("tab", { name: "测试集演示" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "测试集与验收口径演示" })).toBeNull();
     expect(screen.queryByLabelText("核心统计指标")).toBeNull();
@@ -1220,10 +1937,8 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByRole("button", { name: "评分规则" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "评估记录" })).toBeTruthy();
 
-    fireEvent.change(screen.getByRole("combobox", { name: "选择评估示例" }), {
-      target: { value: "syn-permission-leak" },
-    });
-    expect(within(evaluation().getByLabelText("六维诊断评分")).getByTestId("rag-gauge-value").textContent).toBe("!");
+    await chooseSample("syn-permission-leak");
+    expectUnavailableGauge();
     expect(evaluation().getByText("需修复")).toBeTruthy();
     expect(evaluation().getByText("关键风险已发现")).toBeTruthy();
   });
@@ -1250,7 +1965,7 @@ function gradedAutomaticRun(pending = false): EnterpriseRagEvaluationRunDto {
   return run;
 }
 
-function checklistAutomaticRun(excludeCitations = false): EnterpriseRagEvaluationRunDto {
+function checklistAutomaticRun(excludeCitations = false, optionalOnly = false): EnterpriseRagEvaluationRunDto {
   const run = completedAutomaticRun(), report = run.report!;
   const checklist = createRagChecklist("支持私有化部署吗？", "query");
   if (excludeCitations) checklist.checks.filter((check) => check.dimensionId === "citations").forEach((check) => {
@@ -1258,8 +1973,8 @@ function checklistAutomaticRun(excludeCitations = false): EnterpriseRagEvaluatio
     check.exclusionReason = "合成用例在评估前批准此维度不适用。";
   });
   const checks = checklist.checks.map((check) => ({ id: check.id,
-    status: !check.applicable ? "not_applicable" as const : check.id === "clarity_concise" ? "partial" as const : "met" as const,
-    rationale: !check.applicable ? check.exclusionReason : check.id === "clarity_concise" ? "同一句说明重复一次，但不影响用户完成任务。" : "合成固定判断：本项满足。",
+    status: !check.applicable ? "not_applicable" as const : !optionalOnly && check.id === "clarity_concise" ? "partial" as const : "met" as const,
+    rationale: !check.applicable ? check.exclusionReason : !optionalOnly && check.id === "clarity_concise" ? "同一句说明重复一次，但不影响用户完成任务。" : "合成固定判断：本项满足。",
     evidenceIds: check.applicable ? ["claim-1", "source-1"] : [],
   }));
   const scored = scoreRagChecklist(checklist, checks);
@@ -1273,14 +1988,14 @@ function checklistAutomaticRun(excludeCitations = false): EnterpriseRagEvaluatio
     gates: report.judgments.gates,
     claims: report.judgments.claims.map((claim) => ({ ...claim, kind: "fact" as const, relevance: "core" as const })),
     task: { status: "completed", rationale: "本轮任务完成。", evidenceIds: ["claim-1"] },
-    findings: [{ id: "finding-1", rootCauseId: "root-cause-1", checkId: "clarity_concise", kind: "expression", severity: "improvement", summary: "有一处明确重复", impact: "不影响完成任务，但增加少量阅读负担。", claimIds: [], evidenceIds: ["source-1"], dimensionIds: ["clarity"] }],
+    findings: optionalOnly ? [] : [{ id: "finding-1", rootCauseId: "root-cause-1", checkId: "clarity_concise", kind: "expression", severity: "improvement", summary: "有一处明确重复", impact: "不影响完成任务，但增加少量阅读负担。", claimIds: [], evidenceIds: ["source-1"], dimensionIds: ["clarity"] }],
     optionalSuggestions: [{ id: "suggestion-1", dimensionId: "clarity", summary: "可附示意图", benefit: "方便扫读，不影响当前答案质量。", evidenceIds: ["source-1"] }],
     summary: "合成 v3 报告。",
   };
-  report.result = { ...report.result, version: "3.0.0", status: "completed", answerVerdict: "usable_with_improvements",
-    score: scored.score, coverage: scored.coverage, recommendation: "publish_with_risk", summary: "核心任务完成，存在一处轻微重复。",
+  report.result = { ...report.result, version: "3.0.0", status: "completed", answerVerdict: optionalOnly ? "usable" : "usable_with_improvements",
+    score: scored.score, coverage: scored.coverage, recommendation: optionalOnly ? "recommended" : "publish_with_risk", summary: optionalOnly ? "核心任务完成，没有待修复项。" : "核心任务完成，存在一处轻微重复。",
     dimensions: scored.dimensions.map(({ checks: _checks, ...dimension }) => dimension),
-    risks: [{ id: "finding-1", severity: "low", title: "有一处明确重复", summary: "增加少量阅读负担。", evidenceIds: ["source-1"] }],
+    risks: optionalOnly ? [] : [{ id: "finding-1", severity: "low", title: "有一处明确重复", summary: "增加少量阅读负担。", evidenceIds: ["source-1"] }],
   };
   return run;
 }
@@ -1294,12 +2009,22 @@ describe("rag-eval-1.3 server conclusions", () => {
     await waitFor(() => expect(evaluation().getByText("待改进")).toBeTruthy());
     expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("83");
     openQualityDetails();
-    fireEvent.click(screen.getByRole("button",{name:"查看完整方案"}));
+    const reportSummary = screen.getByTestId("rag-improvement-summary");
+    expect(reportSummary.textContent?.length).toBeGreaterThan(20);
+    expect(reportSummary.textContent).not.toContain("引用定位可更清晰");
+    expect(within(reportSummary).queryByText("建议完善")).toBeNull();
     const dialog = within(screen.getByRole("dialog",{name:"优化方案"}));
-    for (const heading of ["必须修复","建议改进","待补证"]) expect(dialog.getByRole("heading",{name:heading})).toBeTruthy();
+    expect(dialog.getAllByRole("heading", { level: 3 }).map(heading => heading.textContent)).toEqual([
+      "优化目标", "调整步骤", "检查要点",
+    ]);
+    expect(dialog.queryByRole("heading", { name: "建议改进" })).toBeNull();
+    expect(dialog.queryByRole("heading", { name: "必须修复" })).toBeNull();
+    expect(dialog.queryByRole("heading", { name: "待补证" })).toBeNull();
+    expect(dialog.queryByRole("heading", { name: "改写示例" })).toBeNull();
+    expect(dialog.queryByRole("button", { name: "采用改写并重新评审" })).toBeNull();
     expect(dialog.getByText("支持私有化部署")).toBeTruthy();
-    expect(dialog.getByText(/事实有依据，不改变核心任务/)).toBeTruthy();
-    fireEvent.click(dialog.getByRole("button",{name:"完成"}));
+    expect(dialog.getAllByText(/事实有依据，不改变核心任务/)).toHaveLength(1);
+    fireEvent.click(dialog.getByRole("button",{name:"关闭评估面板"}));
     fireEvent.click(screen.getByRole("button",{name:"评分规则"}));
     expect(within(screen.getByRole("dialog",{name:"评分规则"})).getByText("rag-eval-1.3")).toBeTruthy();
   });
@@ -1309,7 +2034,7 @@ describe("rag-eval-1.3 server conclusions", () => {
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
     await waitFor(() => expect(evaluation().getAllByText("待核验").length).toBeGreaterThan(0));
     expect(evaluation().queryByText(/可用\s*·?\s*待改进/)).toBeNull();
-    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("—");
+    expectEmptyGauge();
   });
   it("keeps a historical report's actual rule in its explanation", async () => {
     const run = completedAutomaticRun();
@@ -1331,8 +2056,9 @@ describe("rag-eval-1.3 server conclusions", () => {
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
     await waitFor(() => expect(screen.getByTestId("rag-legacy-rule-notice").textContent).toContain("rag-eval-1.2"));
     expect(screen.queryByTestId("rag-current-rule")).toBeNull();
-    expect(within(screen.getByTestId("rag-evaluation-score")).getByTestId("rag-gauge-value").textContent).toBe("!");
+    expectUnavailableGauge();
     expect(evaluation().getByText("不可用，优先修复")).toBeTruthy();
+    if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
     expect(records.getByLabelText("重大问题，数值分不适用").textContent).toBe("!");
@@ -1352,25 +2078,46 @@ describe("rag-eval-1.4 checklist and radar presentation", () => {
     expect(screen.queryByTestId("rag-legacy-rule-notice")).toBeNull();
     expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("98");
     expect(screen.getByTestId("rag-evaluation-score").textContent).not.toContain("98.5");
-    openQualityDetails();
     fireEvent.click(screen.getByRole("button", { name: /清晰可行动 90%/ }));
     expect(screen.getByText(/同一句说明重复一次/)).toBeTruthy();
-    expect(screen.getAllByText(/可选建议 · 不扣分/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/可附示意图/)).toBeTruthy();
+    const plan = openQualityDetails();
+    expect(plan.getByRole("heading", { name: "可选建议" })).toBeTruthy();
+    expect(plan.getByText(/不扣分/)).toBeTruthy();
+    expect(plan.getByText(/可附示意图/)).toBeTruthy();
+    expect(plan.getAllByText(/有一处明确重复/)).toHaveLength(1);
+    expect(plan.queryByRole("heading", { name: "改写示例" })).toBeNull();
+    if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评分规则" }));
     const rules = within(screen.getByRole("dialog", { name: "评分规则" }));
     expect(rules.getByText("rag-eval-1.4")).toBeTruthy();
     expect(rules.getByText(/满足100%／部分满足50%／不满足0%/)).toBeTruthy();
+  });
+  it("keeps optional suggestions separate when a loaded report has no required adjustments", async () => {
+    const run = checklistAutomaticRun(false, true);
+    let resolveLatest!: (value: { latest: EnterpriseRagEvaluationRunDto; history: EnterpriseRagEvaluationRunDto[] }) => void;
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockReturnValue(new Promise(resolve => { resolveLatest = resolve; }));
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start");
+    render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
+    const plan = openQualityDetails();
+    expect(plan.getByTestId("rag-improvement-summary").textContent).toBe("先补齐当前回答的判断依据，再确定优化方向。");
+    await act(async () => { resolveLatest({ latest: run, history: [run] }); });
+    expect(plan.getByTestId("rag-improvement-summary").textContent).toContain("当前记录没有待修复项");
+    expect(plan.getByRole("heading", { name: "可选建议" })).toBeTruthy();
+    expect(plan.getByText(/不扣分/)).toBeTruthy();
+    expect(plan.getByText(/可附示意图/)).toBeTruthy();
+    expect(plan.queryByRole("list", { name: "调整步骤" })).toBeNull();
+    expect(plan.queryByRole("heading", { name: "改写示例" })).toBeNull();
+    expect(evaluation().getByRole("button", { name: "优化方案" }).hasAttribute("disabled")).toBe(true);
+    expect(start).not.toHaveBeenCalled();
   });
   it("keeps a pre-frozen N/A dimension distinct from pending in both chart and evidence", async () => {
     const run = checklistAutomaticRun(true);
     vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: run, history: [run] });
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
     await waitFor(() => expect(evaluation().getByText("待改进")).toBeTruthy());
-    openJudgmentDetails();
     expect(screen.getByRole("button", { name: /引用与时效 不适用/ })).toBeTruthy();
     expect(screen.queryByTestId("rag-radar-area")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "查看回答依据" }));
+    fireEvent.click(screen.getByRole("button", { name: "回答依据" }));
     const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
     const evidenceRadar = within(evidence.getByTestId("rag-evidence-radar"));
     fireEvent.click(evidenceRadar.getByRole("button", { name: /引用与时效 不适用/ }));

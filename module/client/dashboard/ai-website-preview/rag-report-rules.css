@@ -1,0 +1,40 @@
+.rag-report .rag-report-rules { min-width: 0; font-size: 16px; line-height: 1.75; }
+.rag-report .rag-report-rules h2 { margin: 0 0 32px; font-size: 28px; font-weight: 600; line-height: 1.35; }
+.rag-report .rag-report-rules h3 { margin: 0 0 16px; font-size: 20px; font-weight: 600; line-height: 1.5; }
+.rag-report .rag-report-rules h4 { margin: 24px 0 12px; font-size: 16px; font-weight: 600; line-height: 1.75; }
+.rag-report .rag-report-rules p { margin: 0 0 16px; }
+.rag-report .rag-report-rule-section { min-width: 0; margin-top: 48px; }
+.rag-report .rag-report-rule-section:first-of-type { margin-top: 0; }
+.rag-report .rag-report-rule-method + .rag-report-rule-method { margin-top: 32px; padding-top: 8px; border-top: 1px solid var(--fm-brand-line, rgba(0,0,0,.1)); }
+.rag-report .rag-report-rule-list { margin: 16px 0 24px; padding-left: 24px; }
+.rag-report .rag-report-rule-list li + li { margin-top: 12px; }
+.rag-report .rag-report-rule-list strong { font-weight: 600; }
+.rag-report .rag-report-table-scroll { max-width: 100%; min-width: 0; overflow-x: auto; margin: 24px 0; }
+.rag-report .rag-report-rule-table { width: 100%; min-width: 440px; border-collapse: collapse; font-size: 16px; line-height: 1.65; text-align: left; }
+.rag-report .rag-report-rule-table th,
+.rag-report .rag-report-rule-table td { padding: 16px 16px 16px 0; border-bottom: 1px solid var(--fm-brand-line, rgba(0,0,0,.1)); vertical-align: top; }
+.rag-report .rag-report-rule-table th:last-child,
+.rag-report .rag-report-rule-table td:last-child { padding-right: 0; }
+.rag-report .rag-report-rule-table thead th { color: var(--fm-brand-muted, #636366); font-size: 12px; font-weight: 500; }
+.rag-report .rag-report-rule-table tbody th { width: 34%; font-weight: 500; }
+.rag-report .rag-report-rule-table .rag-report-number { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rag-report .rag-report-rule-table--compact { min-width: 280px; }
+.rag-report .rag-report-formula { max-width: 100%; min-width: 0; overflow-x: auto; padding: 16px 0; margin: 16px 0; color: var(--fm-brand-ink, #1d1d1f); font-size: 16px; }
+.rag-report .rag-report-formula > .katex-display { min-width: max-content; margin: 0; text-align: center; }
+.rag-report .rag-report-formula .katex-display > .katex { text-align: center; }
+.rag-report .rag-report-inline-math { white-space: nowrap; }
+.rag-report .rag-report-rules .rag-report-formula-note { color: var(--fm-brand-muted, #636366); font-size: 12px; line-height: 1.75; }
+.rag-report .rag-report-symbols { margin: 8px 0 24px; color: var(--fm-brand-muted, #636366); font-size: 12px; line-height: 1.75; }
+.rag-report .rag-report-symbols > div { display: grid; grid-template-columns: 80px minmax(0,1fr); gap: 16px; margin-top: 8px; }
+.rag-report .rag-report-symbols dt { font-weight: 500; }
+.rag-report .rag-report-symbols dd { margin: 0; }
+.rag-report :is(.rag-report-formula, .rag-report-table-scroll):focus-visible { outline: 2px solid var(--fm-brand-accent, #7542b0); outline-offset: 4px; }
+
+/* Match the main answer-quality status marks, with text carrying the meaning. */
+.rag-report .rag-report-verdicts { list-style: none; padding-left: 0; }
+.rag-report .rag-report-verdicts > li { display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 8px; }
+.rag-report .rag-report-verdicts .rag-evaluation-status-orb { width: 20px; height: 20px; margin-top: 4px; display: grid; place-items: center; border-radius: 50%; background: var(--rag-status-glow); box-shadow: 0 0 12px var(--rag-status-glow); }
+.rag-report .rag-report-verdicts .rag-evaluation-status-orb::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--rag-status-color); }
+.rag-report .rag-report-verdicts .is-usable { --rag-status-color: #30b56f; --rag-status-glow: rgba(48,181,111,.2); }
+.rag-report .rag-report-verdicts .is-unusable { --rag-status-color: #d85b72; --rag-status-glow: rgba(216,91,114,.2); }
+.rag-report .rag-report-verdicts .is-pending { --rag-status-color: #ff9f0a; --rag-status-glow: rgba(255,159,10,.2); }

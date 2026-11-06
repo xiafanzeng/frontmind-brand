@@ -1,0 +1,80 @@
+/* Apple UI Design System – Verified: 8pt Grid, SF Pro Typography, Material-Depth, Natural Spring Motion */
+.rag-eval-root .rag-answer-windows { position:fixed; inset:0; z-index:900; pointer-events:none; }
+.rag-eval-root .rag-answer-windows[inert] { pointer-events:none; }
+.rag-eval-root .rag-answer-windows[inert] .rag-answer-window { pointer-events:none; }
+.rag-eval-root .rag-answer-window.rag-drawer { position:absolute; max-width:none; min-width:0; box-sizing:border-box; margin:0; border:.5px solid var(--sfp-line); border-radius:20px; background:rgba(255,255,255,.94); box-shadow:0 8px 28px rgba(29,29,31,.1); overflow:visible; pointer-events:auto; animation:rag-answer-window-enter 200ms cubic-bezier(.2,.8,.2,1); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window.rag-drawer { border:.5px solid var(--fm-brand-line); border-radius:20px; background:rgba(255,255,255,.94); box-shadow:0 8px 28px rgba(29,29,31,.1); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window.rag-drawer.is-active { border-color:rgba(117,66,176,.26); box-shadow:0 12px 32px rgba(29,29,31,.14); }
+.rag-eval-root .rag-answer-window[hidden] { display:none !important; }
+.rag-eval-root .rag-answer-window.is-dragging { user-select:none; }
+.rag-eval-root .rag-answer-window > .rag-answer-window__header { display:flex; flex-direction:column; align-items:stretch; justify-content:initial; gap:0; border-radius:20px 20px 0 0; cursor:grab; touch-action:none; }
+.rag-eval-root .rag-answer-window.is-dragging > .rag-answer-window__header { cursor:grabbing; }
+.rag-eval-root .rag-answer-window__header:focus-visible { outline:2px solid rgba(117,66,176,.45); outline-offset:-4px; }
+.rag-eval-root .rag-answer-window__heading { min-width:0; display:flex; align-items:center; gap:8px; }
+.rag-eval-root .rag-answer-window__heading > div:first-child { min-width:0; flex:1 1 auto; overflow-wrap:anywhere; }
+.rag-eval-root .rag-answer-window__heading h2 { font-size:22px; line-height:1.25; }
+.rag-eval-root .rag-answer-window__controls { flex:none; display:flex; align-items:center; gap:0; margin-right:-12px; }
+.rag-eval-root .rag-answer-window__controls > span { display:flex; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window__controls button,
+.rag-eval-root .rag-answer-window__controls button { width:44px; height:44px; min-height:44px; flex:none; padding:0; display:flex; position:relative; isolation:isolate; align-items:center; justify-content:center; border:0; border-radius:12px; background:transparent; box-shadow:none; color:#77777d; cursor:pointer; transform:none; }
+.rag-eval-root .rag-answer-window__controls button::before { content:""; position:absolute; width:32px; height:32px; inset:50% auto auto 50%; translate:-50% -50%; border-radius:10px; background:transparent; z-index:-1; pointer-events:none; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window__controls button:hover:not(:disabled) { color:var(--sfp-ink); background:transparent; box-shadow:none; transform:none; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window__controls button:hover:not(:disabled)::before { background:rgba(118,118,128,.09); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window__controls button:active:not(:disabled) { background:transparent; transform:none; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window__controls button:active:not(:disabled)::before { background:rgba(118,118,128,.15); }
+.rag-eval-root .rag-answer-window__controls button:disabled { opacity:.35; cursor:default; }
+.rag-eval-root .rag-answer-window > .rag-drawer-body { border-radius:0; }
+.rag-eval-root .rag-answer-window > footer { border-radius:0 0 20px 20px; }
+.rag-eval-root .rag-answer-window__resize { position:absolute; z-index:5; touch-action:none; }
+.rag-eval-root .rag-answer-window__resize.is-n { left:20px; right:20px; top:-4px; height:8px; cursor:ns-resize; }
+.rag-eval-root .rag-answer-window__resize.is-s { left:20px; right:20px; bottom:-4px; height:8px; cursor:ns-resize; }
+.rag-eval-root .rag-answer-window__resize.is-e { top:20px; bottom:20px; right:-4px; width:8px; cursor:ew-resize; }
+.rag-eval-root .rag-answer-window__resize.is-w { top:20px; bottom:20px; left:-4px; width:8px; cursor:ew-resize; }
+.rag-eval-root .rag-answer-window__resize:is(.is-ne,.is-nw,.is-se,.is-sw) { width:20px; height:20px; }
+.rag-eval-root .rag-answer-window__resize.is-ne { right:-4px; top:-4px; cursor:nesw-resize; }
+.rag-eval-root .rag-answer-window__resize.is-nw { left:-4px; top:-4px; cursor:nwse-resize; }
+.rag-eval-root .rag-answer-window__resize.is-se { right:-4px; bottom:-4px; cursor:nwse-resize; }
+.rag-eval-root .rag-answer-window__resize.is-sw { left:-4px; bottom:-4px; cursor:nesw-resize; }
+.rag-eval-root .rag-answer-windows__backdrop { position:absolute; inset:0; z-index:1; background:rgba(29,29,31,.28); backdrop-filter:blur(8px) saturate(140%); -webkit-backdrop-filter:blur(8px) saturate(140%); pointer-events:auto; }
+.rag-eval-root .rag-answer-windows__desktop-dim { position:absolute; inset:0; z-index:1; background:rgba(29,29,31,.16); pointer-events:none; animation:rag-answer-dim-enter 200ms ease-out both; }
+.rag-eval-root .rag-answer-windows.is-sheet .rag-answer-window { animation-name:rag-answer-sheet-enter; }
+.rag-eval-root .rag-answer-windows.is-sheet .rag-answer-window__header { padding-top:0; cursor:default; touch-action:auto; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-windows.is-sheet .rag-answer-window__header { padding-top:0; }
+.rag-eval-root .rag-answer-window__sheet-handle { height:24px; flex:none; display:flex; align-items:center; justify-content:center; touch-action:none; cursor:ns-resize; }
+.rag-eval-root .rag-answer-window__sheet-handle > span { width:32px; height:4px; border-radius:8px; background:rgba(118,118,128,.3); }
+.rag-eval-root .rag-answer-window__tabs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:16px; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window__tabs button,
+.rag-eval-root .rag-answer-window__tabs button { min-width:0; min-height:44px; padding:8px 0; border:0; border-radius:12px; background:transparent; color:var(--sfp-muted); font-size:14px; line-height:1.5; font-weight:600; box-shadow:none; transform:none; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window__tabs button[aria-current="page"] { color:var(--sfp-accent); background:var(--sfp-accent-soft); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window__tabs button:hover:not(:disabled) { background:rgba(118,118,128,.08); box-shadow:none; transform:none; }
+.rag-eval-root .rag-answer-window__tabs button:disabled { opacity:.4; }
+@keyframes rag-answer-window-enter { from { opacity:0; translate:0 8px; } to { opacity:1; translate:0 0; } }
+@keyframes rag-answer-sheet-enter { from { opacity:0; translate:0 48px; } to { opacity:1; translate:0 0; } }
+@keyframes rag-answer-dim-enter { from { opacity:0; } to { opacity:1; } }
+@media (prefers-reduced-motion:reduce) { .rag-eval-root .rag-answer-window.rag-drawer, .rag-eval-root .rag-answer-windows__desktop-dim { animation:none; } }
+
+.rag-eval-root .rag-answer-window > .rag-drawer-body:last-child { border-radius:0 0 20px 20px; }
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window > .rag-answer-window__header { padding-block:8px; background:var(--rag-window-header-background); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-windows.is-sheet .rag-answer-window__header { padding-top:0; }
+@media (min-width:768px) {
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window__controls button { width:36px; flex:0 0 36px; }
+  .rag-eval-root .rag-answer-window__controls { margin-right:-8px; }
+}
+
+/* Let the scrolling content pass beneath the translucent title bar. The
+   measured height includes wrapped mobile titles and changes when resized. */
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window > .rag-answer-window__header {
+  position: relative;
+  z-index: 3;
+  border-bottom: 0;
+  margin-bottom: calc(-1 * var(--rag-window-header-height, 0px));
+  background: rgba(244, 240, 249, .96);
+}
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window > .rag-drawer-body {
+  padding-top: calc(24px + var(--rag-window-header-height, 0px));
+  scroll-padding-top: calc(24px + var(--rag-window-header-height, 0px));
+}
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window:is(.rag-drawer--evidence, .rag-drawer--review) > .rag-drawer-body {
+  padding-top: var(--rag-window-header-height, 0px);
+}

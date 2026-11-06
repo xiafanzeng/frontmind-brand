@@ -2440,27 +2440,6 @@
   margin-bottom: 18px;
 }
 
-.erag-flow {
-  align-items: center;
-  background: #fff;
-  border: 1px solid var(--sfp-line);
-  border-radius: 14px;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) 52px minmax(0, 1fr) 52px minmax(0, 1fr);
-  margin: 0 auto 16px;
-  max-width: 1480px;
-  padding: 12px 16px;
-}
-
-.erag-flow > div {
-  align-items: center;
-  display: flex;
-  gap: 10px;
-  min-width: 0;
-}
-
-.erag-flow > div > span,
 .erag-card-icon {
   align-items: center;
   background: var(--sfp-accent-soft);
@@ -2471,35 +2450,6 @@
   height: 36px;
   justify-content: center;
   width: 36px;
-}
-
-.erag-flow p {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  min-width: 0;
-}
-
-.erag-flow strong {
-  font-size: var(--sfp-type-body);
-  font-weight: var(--sfp-weight-medium);
-}
-
-.erag-flow > i {
-  background: linear-gradient(90deg, #ddd2e5 50%, transparent 50%);
-  background-size: 8px 1px;
-  height: 1px;
-  position: relative;
-}
-
-.erag-flow > i::after {
-  border-bottom: 4px solid transparent;
-  border-left: 6px solid #b9a5c7;
-  border-top: 4px solid transparent;
-  content: "";
-  position: absolute;
-  right: -1px;
-  top: -4px;
 }
 
 .erag-layout {
@@ -3515,28 +3465,6 @@
 
   .sfp-panel {
     padding: 17px;
-  }
-
-  .erag-flow {
-    gap: 7px;
-    grid-template-columns: 1fr;
-  }
-
-  .erag-flow > i {
-    height: 18px;
-    justify-self: start;
-    margin-left: 18px;
-    width: 1px;
-  }
-
-  .erag-flow > i::after {
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 6px solid #b9a5c7;
-    bottom: -1px;
-    left: -4px;
-    right: auto;
-    top: auto;
   }
 
   .erag-composer,

@@ -17,7 +17,10 @@ export function RagEvaluationDisclosure({ children, label, testId }: RagEvaluati
       className="rag-evaluation-disclosure__trigger"
       aria-controls={contentId}
       aria-expanded={open}
-      onClick={() => setOpen((current) => !current)}
+      onClick={(event) => {
+        if (open) event.currentTarget.focus();
+        setOpen((current) => !current);
+      }}
     >
       <span>{label}</span>
       <ChevronDown className="rag-evaluation-disclosure__chevron" size={18} aria-hidden="true" />
