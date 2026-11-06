@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
+import { canRetryJudgeFailure } from "../contracts/response-logic-judge-failure.js";
 import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
 import {
   createTaskLifecycleReducer,
@@ -74,14 +75,17 @@ const delay = (signal: AbortSignal) =>
 /** Uses the existing task lifecycle. Recovery only GETs an authenticated task;
  * completion is never trusted from browser storage. Focus/online resumes queries. */
 export function useResponseLogicTask<T>(options: {
-  flow: "judge" | "optimizer";
+  flow: "judge" | "optimizer" | "regeneration";
   contextKey: string;
   enabled?: boolean;
+  canRetryFailure?: (code?: string) => boolean;
+  allowRestartCompleted?: boolean;
   recover?: (signal: AbortSignal) => Promise<RecoveryResult>;
   start: (retry?: Pointer, signal?: AbortSignal) => Promise<Pointer>;
   poll: (
     taskId: string,
     signal: AbortSignal,
+    attempt?: number,
   ) => Promise<
     | { status: "running"; execution?: GeneralExecutionDto }
     | { status: "completed"; result: T; execution?: GeneralExecutionDto }
@@ -90,7 +94,7 @@ export function useResponseLogicTask<T>(options: {
   const [state, dispatch] = useReducer(
     createTaskLifecycleReducer<T>({
       timeoutCode:
-        options.flow === "judge" ? "JUDGE_TIMEOUT" : "OPTIMIZATION_TIMEOUT",
+        options.flow === "judge" ? "JUDGE_TIMEOUT" : options.flow === "regeneration" ? "REGENERATION_TIMEOUT" : "OPTIMIZATION_TIMEOUT",
       timeoutMessage:
         "等待查询超时，任务可能仍在后台运行。请恢复查询，不会重新创建任务。",
     }),
@@ -122,7 +126,9 @@ export function useResponseLogicTask<T>(options: {
         if (!immediate || count > 0) await delay(controller.signal);
         if (controller.signal.aborted || contextRef.current !== context) return;
         try {
-          const result = await current.poll(pointer.taskId, controller.signal);
+          const result = await (current.flow === "regeneration"
+            ? current.poll(pointer.taskId, controller.signal, pointer.attempt)
+            : current.poll(pointer.taskId, controller.signal));
           if (controller.signal.aborted || contextRef.current !== context)
             return;
           dispatch({
@@ -161,7 +167,8 @@ export function useResponseLogicTask<T>(options: {
           // A forbidden/stale pointer must never be automatically restored again.
           if (
             [401, 403, 404, 409, 422].includes(e.status ?? 0) &&
-            !/_TASK_FAILED$/.test(e.code ?? "")
+            !/_TASK_FAILED$/.test(e.code ?? "") &&
+            !(current.flow === "judge" && canRetryJudgeFailure(e.code)) && !current.canRetryFailure?.(e.code)
           )
             savePointer(responseLogicRecoveryKey(current.flow, context), null);
           dispatch({
@@ -309,7 +316,7 @@ export function useResponseLogicTask<T>(options: {
         return;
       }
       if (taskStartBlocked(phaseRef.current)) return;
-      if (stateRef.current.phase === "completed") {
+      if (stateRef.current.phase === "completed" && !(input?.retry && optionsRef.current.allowRestartCompleted)) {
         return;
       }
       if (pointerRef.current && !input?.retry) {
@@ -321,8 +328,9 @@ export function useResponseLogicTask<T>(options: {
         epoch = ++serial.current;
       const retry =
         input?.retry &&
-        stateRef.current.phase === "failed" &&
-        stateRef.current.errorCode === "RESPONSE_LOGIC_JUDGE_TASK_FAILED"
+        ((stateRef.current.phase === "failed" &&
+          ((current.flow === "judge" && canRetryJudgeFailure(stateRef.current.errorCode)) || current.canRetryFailure?.(stateRef.current.errorCode))) ||
+          (stateRef.current.phase === "completed" && current.allowRestartCompleted))
           ? (pointerRef.current ?? undefined)
           : undefined;
       const previousPointer = pointerRef.current;

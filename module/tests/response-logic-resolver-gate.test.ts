@@ -125,6 +125,7 @@ async function startHarness(options: { credential: boolean }) {
   if (typeof address !== "object" || !address) throw new Error("listen failed");
   return {
     fake,
+    runtime,
     upstreamClient,
     url: `http://127.0.0.1:${address.port}`,
     async close() {
@@ -141,6 +142,22 @@ afterEach(async () => {
 });
 
 describe("response-logic resolver gate across all public endpoints", () => {
+  it("permits read-only candidate dispatch for a published draft while retaining the original readiness guards", async () => {
+    const harness = await startHarness({credential: true}); servers.push(harness);
+    const service = harness.runtime.responseLogicService;
+    const saved = await service.saveResponseLogicEntry({userId: USER, value: {...saveBody, conversationId: "c1", expectedRevision: 1, publish: true} as never});
+    const before = structuredClone(saved);
+    const input = {userId: USER, questionId: QUESTION_ID, conversationId: "c1", expectedOperationRevision: saved.revision,
+      expectedQuestionScope: {revision: 5, contractId: null, quotaPeriodId: "brand-intent"}};
+    await expect(service.requireResponseLogicProviderReadiness(input)).rejects.toThrow();
+    await expect(service.requireResponseLogicProviderReadiness({...input, candidateOnly: true})).resolves.toMatchObject({recordRevision: saved.revision});
+    await expect(service.requireResponseLogicProviderReadiness({...input, candidateOnly: true, expectedOperationRevision: 1})).rejects.toThrow();
+    await expect(service.requireResponseLogicProviderReadiness({...input, candidateOnly: true, conversationId: "other"})).rejects.toThrow();
+    harness.fake.ledgerRows[0].revision++;
+    await expect(service.requireResponseLogicProviderReadiness({...input, candidateOnly: true})).rejects.toThrow();
+    expect(await service.getResponseLogicEntry(USER, QUESTION_ID)).toEqual(before);
+    expect(harness.upstreamClient).not.toHaveBeenCalled();
+  });
   it("fails closed with 422 when the caller's ledger cannot resolve the question", async () => {
     const harness = await startHarness({ credential: true });
     servers.push(harness);

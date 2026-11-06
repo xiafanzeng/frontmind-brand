@@ -56,6 +56,9 @@ import "./response-logic-workspace.css";
 import {ResponseLogicEvaluationPanel} from "./response-logic/evaluation-panel.js";
 import {ResponseLogicOptimizationWorkflow} from "./response-logic/optimization-workflow.js";
 import {fingerprintLogic, type LogicSections} from "./response-logic/mock-evaluation.js";
+import {useResponseLogicRegeneration, canRetryRegeneration} from "./response-logic-regeneration-client.js";
+import {RegenerateButton, RegenerationConfirm, RegenerationReview} from "./response-logic/regeneration-review.js";
+import {canRetryJudgeFailure} from "../contracts/response-logic-judge-failure.js";
 import {useJudgeEvaluation} from "./use-judge-evaluation.js";
 import {useOptimizationGeneration} from "./use-optimization-generation.js";
 import {useQuestionFreshness} from "./use-question-freshness.js";
@@ -1291,6 +1294,13 @@ function ResponseLogicQuestionEditor({
     state: "idle",
   });
   const startLock = useRef(false);
+  const [regenerateConfirm, setRegenerateConfirm] = useState(false);
+  const [preparingRegeneration, setPreparingRegeneration] = useState(false);
+  const [regenerationStart, setRegenerationStart] = useState<number | null>(null);
+  const [candidateDismissed, setCandidateDismissed] = useState(false);
+  const [adoptingRegeneration, setAdoptingRegeneration] = useState(false);
+  const [regenerationError, setRegenerationError] = useState("");
+  const regenerationLock = useRef(false);
   const [demoView, setDemoView] = useState<"detail"|"evaluation"|"optimize">("detail");
 
   const persistedRecord = persistence.records?.find(
@@ -2027,6 +2037,70 @@ function ResponseLogicQuestionEditor({
     setDemoView("detail");
   };
 
+  const regeneration = useResponseLogicRegeneration({
+    questionId, recordIdentity: persistedRecord?.id, recordRevision: currentRevision,
+    sourceFingerprint: currentFingerprint, questionBasis, scope, enabled: showDemo && !generating,
+  });
+  const regenerating = ["starting", "running", "uncertain"].includes(regeneration.state.phase) && regeneration.state.errorCode !== "TASK_RECOVERING";
+  const regenerationFrozen = preparingRegeneration || regenerating || adoptingRegeneration;
+  const otherTaskActive = ["starting", "running", "uncertain"].includes(judge.state.phase) ||
+    ["starting", "running", "uncertain"].includes(optimization.state.phase);
+  const regenerateDisabled = generating || publishing || uploadingMaterials || regenerationFrozen || otherTaskActive;
+  const openRegeneration = () => {
+    if (regenerateDisabled) return;
+    setRegenerationError(""); setRegenerateConfirm(true);
+  };
+  const confirmRegeneration = async () => {
+    if (regenerationLock.current || regenerateDisabled) return;
+    regenerationLock.current = true;
+    setRegenerateConfirm(false); setPreparingRegeneration(true); setRegenerationError("");
+    try {
+      if (!(await questionFreshness.checkNow())) return;
+      // Flush the most recent keystroke even when the debounce has not fired.
+      stashQueue.enqueue(draftRef.current);
+      await stashQueue.runExclusive(() => stashQueue.flush());
+      const latest = await refreshQuestionRecord();
+      if (!latest || !sameDraftContent(latest.draft, draftRef.current)) throw new Error("草稿已变化，请先确认最新草稿再重新生成。");
+      setCandidateDismissed(false); setDemoView("detail");
+      setRegenerationStart(latest.revision);
+    } catch (error) {setRegenerationError(error instanceof Error ? error.message : "草稿暂存失败，尚未重新生成。");}
+    finally {setPreparingRegeneration(false); regenerationLock.current = false;}
+  };
+  useEffect(() => {
+    if (regenerationStart === null || regenerationStart !== currentRevision) return;
+    setRegenerationStart(null);
+    void regeneration.start({retry: true});
+  }, [regenerationStart, currentRevision, regeneration.start]);
+  const adoptRegeneration = async () => {
+    const result = regeneration.state.result;
+    if (!result || regenerationLock.current || adoptingRegeneration) return;
+    regenerationLock.current = true; setAdoptingRegeneration(true); setRegenerationError("");
+    const saveInput = questionFieldsRef.current({draft: {...draftRef.current, ...result.structuredDraft}, expectedRevision: result.recordRevision, publish: false});
+    const adoptingRecordId = recordRef.current?.id;
+    const finish = (record: ResponseLogicRecordDto) => {
+      applyAuthoritativeRecord(record);
+      judge.reset(); optimization.reset(); regeneration.reset();
+      setCandidateDismissed(true); setDemoView("detail");
+      setPublishNotice("新稿已采用到草稿，请重新评估；点击“更新应答逻辑”后才正式生效。");
+    };
+    try {
+      if (!(await questionFreshness.checkNow())) return;
+      const saved = await stashQueue.runExclusive(async () => {
+        await stashQueue.flush();
+        if (stashQueue.baselineRevision !== result.recordRevision) throw new Error("草稿已变化，不能采用旧版本的新稿。请保留当前稿后重新生成。");
+        return persistenceRef.current.save(saveInput);
+      });
+      finish(saved.record);
+    } catch (error) {
+      // A lost save response is not evidence that the write failed. Query
+      // once before offering another action; never submit a second write.
+      const latest = await refreshQuestionRecord().catch(() => null);
+      if (latest && latest.id === adoptingRecordId && latest.revision > result.recordRevision && sameDraftContent(latest.draft, saveInput.draft)) finish(latest);
+      else setRegenerationError(error instanceof Error ? error.message : "采用结果尚未确认，请刷新核查后再操作。");
+    }
+    finally {setAdoptingRegeneration(false); regenerationLock.current = false;}
+  };
+
   const showGenerationProcess =
     !generation?.completedAt &&
     (generating || generation?.phase === "failed");
@@ -2125,14 +2199,14 @@ function ResponseLogicQuestionEditor({
           )}
         </div>
       )}
-      {showDemo && demoView === "detail" && (
+      {showDemo && demoView === "detail" && !regenerationFrozen && !regenerationStart && (
         <div className="rl-eval-entry rl-eval-entry--row">
           <button type="button" className="rl-eval-entry-button" onClick={beginDemoEvaluation}>查看四维评估</button>
           <button type="button" className="rl-eval-entry-button" onClick={()=>setDemoView("optimize")}>生成优化应答逻辑</button>
         </div>
       )}
       {showDemo && demoView === "evaluation" && (
-        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} judgeErrorCode={judge.state.errorCode} judgeExecution={judge.state.execution} judgeTaskId={judge.state.taskId} onResume={judge.resume} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={retryDemoEvaluation}/>
+        <ResponseLogicEvaluationPanel question={question.question} intent={question.intent ?? ""} judgePhase={judge.state.phase} judgeResult={judge.state.result} judgeError={judgeErrorText} judgeErrorCode={judge.state.errorCode} judgeExecution={judge.state.execution} judgeTaskId={judge.state.taskId} onResume={judge.resume} dataSourceLabel="LLM 语义评估（异步模型任务）" onBack={()=>setDemoView("detail")} onOptimize={()=>setDemoView("optimize")} onRetry={canRetryJudgeFailure(judge.state.errorCode) ? retryDemoEvaluation : undefined} onRegenerate={openRegeneration} regenerateDisabled={regenerateDisabled}/>
       )}
       {showDemo && demoView === "optimize" && (
         <ResponseLogicOptimizationWorkflow key={`${questionId}:${currentVersion}:${currentRevision}:${currentFingerprint}`} question={question.question} intent={question.intent ?? ""} logic={currentLogic} judgeTaskId={judge.state.phase === "completed" && judge.state.taskId ? judge.state.taskId : ""} optimization={guardedOptimization} onAdopt={adoptOptimizationPatch} onBack={()=>setDemoView("evaluation")}/>
@@ -2141,9 +2215,20 @@ function ResponseLogicQuestionEditor({
         <div className="rl-eval-entry" role="status">当前应答逻辑或版本已变化，评估结果已失效。<button type="button" className="rl-text-button" onClick={beginDemoEvaluation}>重新查看评估</button><button type="button" className="rl-text-button" onClick={()=>setDemoView("detail")}>返回应答逻辑编辑</button></div>
       )}
 
+      {regenerateConfirm && <RegenerationConfirm onCancel={() => setRegenerateConfirm(false)} onConfirm={() => void confirmRegeneration()}/>}
+      {demoView === "detail" && (regenerating || regeneration.state.phase === "failed") && <TaskStageCard
+        flow="regeneration" phase={regeneration.state.phase} taskId={regeneration.state.taskId} execution={regeneration.state.execution}
+        error={regeneration.state.error} errorCode={regeneration.state.errorCode} onResume={regeneration.resume}
+        onRetry={canRetryRegeneration(regeneration.state.errorCode) ? openRegeneration : undefined} retryLabel="重新生成应答逻辑"/>}
+      {demoView === "detail" && regeneration.state.phase === "completed" && regeneration.state.result && !candidateDismissed && <RegenerationReview
+        current={currentLogic} candidate={regeneration.state.result.structuredDraft} adopting={adoptingRegeneration} error={regenerationError}
+        onAdopt={() => void adoptRegeneration()} onKeep={() => {setCandidateDismissed(true); setRegenerationError("");}}/>}
+      {regenerationError && (regeneration.state.phase !== "completed" || candidateDismissed) && <p role="alert" className="rl-regenerate-error">{regenerationError}</p>}
       {demoView === "detail" && <LogicEditorCard
         draft={draft}
-        frozen={generating || publishing}
+        frozen={generating || publishing || regenerationFrozen || regenerationStart !== null}
+        onRegenerate={showDemo ? openRegeneration : undefined}
+        regenerateDisabled={regenerateDisabled || regenerationStart !== null}
         publishing={publishing}
         stashStatus={stashStatus}
         dirty={dirty}
@@ -2196,6 +2281,8 @@ function LogicEditorCard({
   uploadingMaterials,
   onAddMaterials,
   onRemoveMaterial,
+  onRegenerate,
+  regenerateDisabled,
 }: {
   draft: LogicDraft;
   frozen: boolean;
@@ -2208,6 +2295,8 @@ function LogicEditorCard({
   uploadingMaterials: boolean;
   onAddMaterials: (event: ChangeEvent<HTMLInputElement>) => void;
   onRemoveMaterial: (fileId: string) => void;
+  onRegenerate?: () => void;
+  regenerateDisabled?: boolean;
 }) {
   const stashLabel =
     stashStatus.state === "saving"
@@ -2244,6 +2333,7 @@ function LogicEditorCard({
             <p>修改自动暂存；点击“更新应答逻辑”后正式生效。</p>
           </div>
         </div>
+        {onRegenerate && <RegenerateButton onClick={onRegenerate} disabled={regenerateDisabled}/>}
       </div>
       <fieldset className="rl-editor-scroll" disabled={frozen}>
         <EditorField

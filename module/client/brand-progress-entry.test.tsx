@@ -144,6 +144,28 @@ afterEach(() => {
   sessionStorage.clear();
 });
 describe("real Brand entry progress (only HTTP mocked)", () => {
+  it("retries a rejected Judge result with the failed task coordinates", async () => {
+    const starts: any[] = [];
+    h.router = async (url, init) => {
+      if (url.includes("/recovery?")) return response(url.includes("/judge/")
+        ? {status: "found", taskId: "invalid-quote", attempt: 0, recordRevision: 3, sourceFingerprint: fingerprintLogic(draft)}
+        : {status: "none"});
+      if (url.includes("question-context")) return response({questionId: record.questionId, question, intent: "", workspaceRevision: 1});
+      if (url.includes("/judge/tasks/invalid-quote/")) return response({error: {code: "JUDGE_EVIDENCE_EXCERPT_INVALID", message: "引用未在原文找到"}}, 422);
+      if (url.endsWith("/evaluation/judge") && init?.method === "POST") {
+        starts.push(JSON.parse(String(init.body)));
+        return response({taskId: "retry-quote", attempt: 1, recordRevision: 3, sourceFingerprint: fingerprintLogic(draft), knowledgeFingerprint: "none"});
+      }
+      if (url.includes("/judge/tasks/retry-quote/")) return response({status: "running", taskId: "retry-quote"}, 202);
+      return response({records: [record]});
+    };
+    render(<BrandResponseLogicEntry {...props} />);
+    await waitFor(() => expect(h.calls.some(c => c.includes("/judge/tasks/invalid-quote/"))).toBe(true));
+    fireEvent.click(await screen.findByRole("button", {name: "查看四维评估"}));
+    fireEvent.click(await screen.findByRole("button", {name: "重新发起评估"}));
+    await waitFor(() => expect(starts).toHaveLength(1));
+    expect(starts[0].retry).toEqual({taskId: "invalid-quote", attempt: 0});
+  });
   it("presents all four confirmed logic fields in a single 01–04 sequence", () => {
     const view = render(<ResponseLogicConfirmationPanel
       group={{id: "brand-intent", title: "品牌意图优化", subtitle: "", tone: "plum", questions: []}}
@@ -161,6 +183,7 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
   });
   it("restores a server task with no browser hint through the real entry without POST", async () => {
     h.router = async (url) => {
+      if (url.includes("/regeneration/")) return response({status: "none"});
       if (url.includes("/recovery?"))
         return response({
           status: "found",

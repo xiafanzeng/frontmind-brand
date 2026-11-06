@@ -181,7 +181,7 @@ async function makeApp(options: MockOptions = {}) {
       },
       listAllMessages: async ({taskId}: {taskId: string}) => {
         const task = [...options.attemptTasks!.values()].find(task => task.id === taskId);
-        return task ? [{id: "state", type: "status_update", timestamp: Date.now(), status_update: {agent_status: task.status}}] : [];
+        return task ? [...(options.upstreamEvents ?? []), {id: "state", type: "status_update", timestamp: Date.now(), status_update: {agent_status: task.status}}] : [];
       },
     },
     getUpstreamBaseUrl: () => "https://upstream.example.com",
@@ -326,13 +326,30 @@ describe("judge API: POST / (start)", () => {
 
   it.each(["running", "stopped", "waiting", "unknown"])("does not create a retry for a %s task", async status => {
     const attemptTasks: NonNullable<MockOptions["attemptTasks"]> = new Map();
-    const {url} = await makeApp({attemptTasks});
+    const {url} = await makeApp({attemptTasks, upstreamEvents: [judgeEvent(JSON.stringify(validJudge))]});
     const first = await (await postStart(url, {questionId: "q1", expectedRevision: 3})).json();
     [...attemptTasks.values()][0].status = status;
     const result = await postStart(url, {questionId: "q1", expectedRevision: 3, retry: {taskId: first.taskId, attempt: 0}});
     expect(result.status).toBe(409);
     expect((await result.json()).error.code).toBe("RESPONSE_LOGIC_JUDGE_RETRY_NOT_FAILED");
     expect(attemptTasks.size).toBe(1);
+  });
+
+  it("retries stopped invalid output once and recovers the child without dispatch", async () => {
+    const attemptTasks: NonNullable<MockOptions["attemptTasks"]> = new Map();
+    const {url, effects} = await makeApp({attemptTasks, upstreamEvents: [judgeEvent("invalid json")]});
+    const first = await (await postStart(url, {questionId: "q1", expectedRevision: 3})).json();
+    [...attemptTasks.values()][0].status = "stopped";
+    const retry = {questionId: "q1", expectedRevision: 3, retry: {taskId: first.taskId, attempt: 0}};
+    const results = await Promise.all([postStart(url, retry), postStart(url, retry)]);
+    const [second, duplicate] = await Promise.all(results.map(r => r.json()));
+    expect(second).toMatchObject({attempt: 1});
+    expect(duplicate.taskId).toBe(second.taskId);
+    expect(second.taskId).not.toBe(first.taskId);
+    const before = {...effects};
+    const restored = await (await fetch(`${url}/api/response-logic/evaluation/judge/recovery?questionId=q1&expectedRevision=3`)).json();
+    expect(restored).toMatchObject({taskId: second.taskId, attempt: 1});
+    expect(effects).toMatchObject({creates: before.creates, uploads: before.uploads, bindings: before.bindings});
   });
 
   it("rejects retries belonging to another context or account without dispatch", async () => {
