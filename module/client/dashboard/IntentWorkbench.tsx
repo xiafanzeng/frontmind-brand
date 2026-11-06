@@ -193,7 +193,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const questions = workspace?.state.questions ?? [];
   const evaluations = workspace?.state.evaluations ?? [];
   const activeJob = workspace?.state.jobs?.find(item => !["succeeded", "failed"].includes(item.status));
-  const receipt = workspace?.state.receipts.find(item => item.id === receiptId) ?? workspace?.state.receipts.at(-1);
+  const receipt = receiptId ? workspace?.state.receipts.find(item => item.id === receiptId) : workspace?.state.receipts.at(-1);
   const filtered = questions.filter(question => question.question.toLowerCase().includes(search.toLowerCase()) &&
     (category === "all" || question.category === category) &&
     (status === "all" || (["unevaluated", "supported", "partial", "missing"].includes(status) ? (() => {
@@ -298,10 +298,15 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       let current = workspace;
       for (const draft of validDrafts) current = await api.command({kind: "edit", expectedRevision: current.revision, questionId: draft.questionId,
         actions: draft.actions.map(({id, selected, after}) => ({id, selected, after}))});
+      // A rejected execution must keep the acknowledged draft and revision,
+      // rather than exposing an unrelated historical receipt as its result.
+      setWorkspace(current);
       setDraftDirty(false);
       executeId.current ??= crypto.randomUUID();
-      setReceiptId(executeId.current); setView("result");
       const result = await api.execute({expectedRevision: current.revision, clientRequestId: executeId.current, questionIds: scope});
+      if (!result.state.receipts.some(item => item.id === executeId.current))
+        throw new Error("尚未取得本次执行记录。方案和勾选已保留，请重新读取确认执行状态。");
+      setReceiptId(executeId.current);
       executeId.current = undefined;
       return result;
     }, "result");
