@@ -5,7 +5,8 @@ export interface IntentWorkbenchApi {
   command(input: unknown): Promise<IntentWorkspace>;
   execute(input: unknown): Promise<IntentWorkspace>;
   rollback(input: unknown): Promise<IntentWorkspace>;
-  waitForJob?(jobId: string, onUpdate: (value: IntentWorkspace) => void): Promise<IntentWorkspace>;
+  control?(input: {jobId: string; action: "pause" | "resume"}): Promise<IntentWorkspace>;
+  waitForJob?(jobId: string, onUpdate: (value: IntentWorkspace) => void, signal?: AbortSignal): Promise<IntentWorkspace>;
 }
 class IntentRequestError extends Error {
   constructor(message: string, readonly retryable = false) {super(message);}
@@ -64,14 +65,16 @@ export const liveIntentWorkbenchApi: IntentWorkbenchApi = {
   command: input => request("/command", input),
   execute: input => request("/execute", input),
   rollback: input => request("/rollback", input),
-  async waitForJob(jobId, onUpdate) {
-    const operation = captureWorkspaceRestOperation();
+  control: input => request("/control", input),
+  async waitForJob(jobId, onUpdate, signal) {
+    const captured = captureWorkspaceRestOperation();
+    const operation = signal ? forkWorkspaceRestOperation(captured, signal) : captured;
     let snapshot = await request("", undefined, operation);
     onUpdate(snapshot);
     const initialJob = snapshot.state.jobs?.find(item => item.id === jobId);
     if (!initialJob) throw new Error("当前工作区的优化任务已变化，请重新读取");
     if (initialJob.status === "failed") throw new Error(initialJob.error ?? "模型生成失败，请重新评估");
-    if (initialJob.status === "succeeded") return snapshot;
+    if (["succeeded", "paused"].includes(initialJob.status)) return snapshot;
     // Use fetch rather than EventSource so the captured workspace headers and
     // cancellation signal apply to the entire stream.
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -100,9 +103,11 @@ export const liveIntentWorkbenchApi: IntentWorkbenchApi = {
             if (!frame.startsWith("event: progress\n")) continue;
             const job = JSON.parse(frame.split("\n").find(line => line.startsWith("data: "))!.slice(6)) as IntentSkillJob;
             if (job.id !== jobId) continue;
-            snapshot = {...snapshot, state: {...snapshot.state, jobs: snapshot.state.jobs?.map(item => item.id === job.id ? job : item)}};
+            // A job-only stream cannot carry concurrent catalog/draft revisions.
+            // Read the ledger before publishing an update to the whole page.
+            snapshot = await request("", undefined, operation);
             onUpdate(snapshot);
-            if (["succeeded", "failed"].includes(job.status)) {terminal = true; break;}
+            if (["succeeded", "failed", "paused"].includes(job.status)) {terminal = true; break;}
           }
           if (terminal) break;
         }
@@ -115,6 +120,9 @@ export const liveIntentWorkbenchApi: IntentWorkbenchApi = {
       streamController.abort();
       if (reader) {await reader.cancel().catch(() => {}); reader.releaseLock();}
     }
+    const streamedJob = snapshot.state.jobs?.find(item => item.id === jobId);
+    if (terminal && streamedJob?.status === "failed") throw new Error(streamedJob.error ?? "模型生成失败，请重新评估");
+    if (terminal && streamedJob && ["succeeded", "paused"].includes(streamedJob.status)) return snapshot;
     for (let attempt = 0; attempt < 800; attempt++) {
       if (!terminal) await new Promise(resolve => setTimeout(resolve, 2500));
       const workspace = await request("", undefined, operation);
@@ -122,7 +130,7 @@ export const liveIntentWorkbenchApi: IntentWorkbenchApi = {
       const job = workspace.state.jobs?.find(item => item.id === jobId);
       if (!job) throw new Error("当前工作区的优化任务已变化，请重新读取");
       if (job.status === "failed") throw new Error(job.error ?? "模型生成失败，请重新评估");
-      if (job.status === "succeeded") return workspace;
+      if (["succeeded", "paused"].includes(job.status)) return workspace;
     }
     throw new Error("模型任务仍在处理，可重新读取继续查看");
   },

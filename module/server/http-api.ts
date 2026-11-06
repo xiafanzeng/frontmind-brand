@@ -67,7 +67,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
    res.json(await createEnterpriseRagEvaluationService(core,req).observe(operationId));
   } catch(error) {sendRagEvaluationError(res,error);}
  });
- for (const [path, method] of [["/intent/command","command"],["/intent/execute","execute"],["/intent/rollback","rollback"]] as const) {
+ for (const [path, method] of [["/intent/command","command"],["/intent/execute","execute"],["/intent/rollback","rollback"],["/intent/control","control"]] as const) {
   router.post(path, async (req,res) => {
    try {
     res.setHeader("Cache-Control","no-store");

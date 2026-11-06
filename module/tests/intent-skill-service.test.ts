@@ -64,6 +64,7 @@ function harness(options: {mysqlJsonPayload?: "object" | "string"} = {}) {
     findCreatedTask: vi.fn(async () => ({matches: [{id: "upstream-task"}], unique: {id: "upstream-task"}})),
     taskDetail: vi.fn(async () => ({status: "running"})),
     sendMessage: vi.fn(async () => ({taskId: "upstream-task"})),
+    stopTask: vi.fn(async () => ({taskId: "upstream-task"})),
     listAllMessages: vi.fn(async (): Promise<any[]> => []),
   };
   const latestState = vi.fn(() => "running");
@@ -103,6 +104,61 @@ function harness(options: {mysqlJsonPayload?: "object" | "string"} = {}) {
     core, storedEvents, ledger: () => ledger!};
 }
 describe("优化模型持久化任务", () => {
+  it("暂停真实上游执行、刷新不推进，继续同一任务并忽略暂停前的取消事件", async () => {
+    const h = harness();
+    await h.intake(); await h.service.command(h.request);
+    h.client.stopTask.mockImplementation(async () => {
+      h.client.taskDetail.mockResolvedValue({status: "cancelled"}); return {taskId: "upstream-task"};
+    });
+    const paused = await h.service.control({jobId: h.request.clientRequestId, action: "pause"});
+    expect(paused.state.jobs![0].status).toBe("paused");
+    await h.service.control({jobId: h.request.clientRequestId, action: "pause"});
+    const reads = h.client.listAllMessages.mock.calls.length;
+    await h.service.poll();
+    expect(h.client.listAllMessages).toHaveBeenCalledTimes(reads);
+    expect(h.client.stopTask).toHaveBeenCalledTimes(1);
+    h.client.listAllMessages.mockResolvedValue([{id: "old-stop", type: "user_stop", timestamp: Date.now()}]);
+    const resumed = await h.service.control({jobId: h.request.clientRequestId, action: "resume"});
+    expect(resumed.state.jobs![0].status).toBe("running");
+    expect(h.client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({taskId: "upstream-task", structuredOutputSchema: expect.any(Object)}));
+    await h.service.control({jobId: h.request.clientRequestId, action: "resume"});
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    h.send();
+    expect((await h.service.poll()).state.jobs![0].status).toBe("succeeded");
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
+  it("暂停请求结果不明时只读核对，不重复停止或误报已暂停", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.client.stopTask.mockRejectedValue(new TypeError("connection lost"));
+    expect((await h.service.control({jobId: h.request.clientRequestId, action: "pause"})).state.jobs![0].status).toBe("pausing");
+    await h.service.poll(); await h.service.control({jobId: h.request.clientRequestId, action: "pause"});
+    expect(h.client.stopTask).toHaveBeenCalledTimes(1);
+    h.client.taskDetail.mockResolvedValue({status: "cancelled"});
+    expect((await h.service.poll()).state.jobs![0].status).toBe("paused");
+  });
+  it("继续请求结果不明时不重复发送，观察到新执行后恢复原任务", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.client.taskDetail.mockResolvedValue({status: "cancelled"});
+    await h.service.control({jobId: h.request.clientRequestId, action: "pause"});
+    h.client.sendMessage.mockRejectedValue(new TypeError("connection lost"));
+    expect((await h.service.control({jobId: h.request.clientRequestId, action: "resume"})).state.jobs![0].status).toBe("resuming");
+    await h.service.poll(); await h.service.control({jobId: h.request.clientRequestId, action: "resume"});
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+    h.client.taskDetail.mockResolvedValue({status: "running"});
+    expect((await h.service.poll()).state.jobs![0].status).toBe("running");
+  });
+  it("保护当前问题，允许修改其他问题且不让原评估失效", async () => {
+    const h = harness(); await h.intake();
+    const withOther = await h.service.command({kind: "intake", expectedRevision: 1, questions: [{
+      id: "q2", question: "其他问题如何处理？", category: "产品", subdivision: "", tableId: "t", rowIndex: 1, sourceRevision: 1,
+    }]});
+    const started = await h.service.command({...h.request, expectedRevision: withOther.revision});
+    await expect(h.service.command({kind: "delete-question", questionId: "q", expectedRevision: started.revision}))
+      .rejects.toMatchObject({code: "OPERATION_ACTIVE"});
+    await h.service.command({kind: "delete-question", questionId: "q2", expectedRevision: started.revision});
+    h.send();
+    expect((await h.service.poll()).state.jobs![0].status).toBe("succeeded");
+  });
   it.each(["object", "string"] as const)("MySQL JSON %s round trip keeps GET stable and permits the first evaluation once", async mysqlJsonPayload => {
     const h = harness({mysqlJsonPayload});
     const questions = [{id: "q", question: "材料如何选择？", category: "product_scenario", subdivision: "",
@@ -203,7 +259,7 @@ describe("优化模型持久化任务", () => {
       questionId: "q", question: " ", category: "industry", subdivision: ""})).rejects.toThrow();
     expect((await h.service.observe()).state.questions).toEqual(second.state.questions);
     const running = await h.service.command({...h.request, expectedRevision: second.revision});
-    await expect(h.service.command({kind: "delete-question", expectedRevision: running.revision, questionId: "q"})).rejects.toThrow("等待当前");
+    await expect(h.service.command({kind: "delete-question", expectedRevision: running.revision, questionId: "q"})).rejects.toMatchObject({code: "OPERATION_ACTIVE"});
     expect((await h.service.observe()).state.questions).toHaveLength(2);
   });
   it("完成结果固化，修改方案和失败重评均不覆盖历史，刷新无需调用模型", async () => {
@@ -438,12 +494,14 @@ describe("优化模型持久化任务", () => {
     expect(result.state.jobs?.[0].error).toContain("自动修复后仍未通过");
     expect(result.state.evaluations).toEqual([]);
   });
-  it("任务处理中禁止修改清单及开启另一个任务", async () => {
+  it("任务处理中禁止开启另一个模型任务，仍可加入其他问题", async () => {
     const h = harness(); await h.intake(); const state = await h.service.command(h.request);
     await expect(h.service.command({...h.request, expectedRevision: state.revision, clientRequestId: "00000000-0000-4000-8000-000000000002"})).rejects.toThrow("等待当前");
-    await expect(h.service.command({kind: "intake", expectedRevision: state.revision, questions: [
+    const added = await h.service.command({kind: "intake", expectedRevision: state.revision, questions: [
       {id: "q2", question: "第二个问题", category: "", subdivision: "", tableId: "t", rowIndex: 1, sourceRevision: null},
-    ]})).rejects.toThrow("等待当前");
+    ]});
+    expect(added.state.questions).toHaveLength(2);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
   });
   it("执行和撤销后的分数由独立模型任务重评", async () => {
     const h = harness(); await h.intake();

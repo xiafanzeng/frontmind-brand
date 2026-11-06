@@ -14,7 +14,7 @@ export type IntentCatalogIntegration = {
 };
 export const answerStatusLabel = (status?: string) => status === "published" ? "已有正式应答" : status === "pending" ? "待制作应答" : "暂未同步";
 export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, category, status, selected, pending, page, pageCount, total, savedPlanIds,
-  onSearch, onCategory, onStatus, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback}: {
+  onSearch, onCategory, onStatus, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = []}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
   evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; received: string[];
   search: string; category: string; status: string; selected: string[]; pending: boolean;
@@ -25,6 +25,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
   onEvaluate: (ids: string[]) => void; onPage: (page: number) => void;
   onHistory: () => void; historyCount: number;
   headerStatus?: ReactNode; taskFeedback?: ReactNode;
+  mutationBlockedIds?: string[];
 }) {
   const categories = [...new Set(questions.map(question => question.category))];
   return <>
@@ -57,14 +58,14 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
         <td><div className="iw-catalog-actions">
           {savedPlanIds.includes(question.id)
             ? <button className="iw-primary" disabled={pending} onClick={() => onViewPlan(question.id)}>查看优化方案</button>
-            : <button className="iw-primary" disabled={pending} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
+            : <button className="iw-primary" title={activeJob ? "请先完成当前评估任务" : undefined} disabled={pending || Boolean(activeJob)} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
           <button disabled={pending || !integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
-          <button disabled={pending || !integration?.onEditQuestion} onClick={() => integration?.onEditQuestion?.(question)}>修改问题</button>
-          <button disabled={pending || !integration?.onDeleteQuestion} onClick={() => integration?.onDeleteQuestion?.(question)}>删除问题</button>
+          <button title={mutationBlockedIds.includes(question.id) ? "该问题正在评估，完成后可修改" : undefined} disabled={pending || mutationBlockedIds.includes(question.id) || !integration?.onEditQuestion} onClick={() => integration?.onEditQuestion?.(question)}>修改问题</button>
+          <button title={mutationBlockedIds.includes(question.id) ? "该问题正在评估，完成后可删除" : undefined} disabled={pending || mutationBlockedIds.includes(question.id) || !integration?.onDeleteQuestion} onClick={() => integration?.onDeleteQuestion?.(question)}>删除问题</button>
         </div></td>
       </tr>;})}</tbody>
     </table>{!visible.length && <div className="iw-empty">{questions.length ? "没有匹配问题，请调整筛选条件。" : "从推荐问题或已保存词库中选择词条，加入优化清单。"}</div>}</section>
     <div className="iw-pagination"><span>共 {total} 项</span>{pageCount > 1 && <><button disabled={page === 0} onClick={() => onPage(page - 1)}>上一页</button><span>{page + 1} / {pageCount}</span><button disabled={page + 1 >= pageCount} onClick={() => onPage(page + 1)}>下一页</button></>}</div>
-    {selected.length > 0 && <div className="iw-selection-bar"><span>已选择 <strong>{selected.length}</strong> 条问题</span><div><button onClick={onClear}>清空选择</button><button className="iw-primary" disabled={pending} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div></div>}
+    {selected.length > 0 && <div className="iw-selection-bar"><span>已选择 <strong>{selected.length}</strong> 条问题</span><div><button onClick={onClear}>清空选择</button><button className="iw-primary" disabled={pending || Boolean(activeJob)} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div></div>}
   </>;
 }
