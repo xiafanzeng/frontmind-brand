@@ -5,6 +5,7 @@ import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import ManagedKeywordTables, {type ManagedKeywordTablesProps} from "./ManagedKeywordTables";
 import {liveIntentWorkbenchApi, type IntentWorkbenchApi} from "./intent-workbench-api";
 import type {IntentWorkspace, IntentEvaluation, IntentPlan, IntentAction} from "../../contracts/intent-workbench";
+import {findSavedIntentPlan} from "../../contracts/intent-workbench";
 import "./intent-workbench.css";
 import "./saved-plan-result.css";
 import "./plan-confirm.css";
@@ -330,17 +331,15 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     ...history.flatMap(job => job.result!.plans.map(item => item.questionId)),
   ])];
   function openSavedPlan(id: string) {
-    const saved = workspace?.state.plans.find(item => item.questionId === id);
+    const saved = workspace && findSavedIntentPlan(workspace.state, id);
     if (saved) {
-      setScope([id]); setDrafts([structuredClone(saved)]); setDraftDirty(false); setView("plan");
-    } else {
-      const job = history.find(item => item.result!.plans.some(plan => plan.questionId === id));
-      if (job) {setHistoryId(job.id); setHistoryQuestionId(id); setView("history-detail");}
+      setScope([id]); setIndex(0); setExpanded([]); setSingleQueue([]);
+      setDrafts([structuredClone(saved)]); setDraftDirty(false); setView("plan");
     }
   }
   function openSection(section: "universe" | "list") {setView(section); emittedSection.current = section; onSectionChange?.(section);}
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending}>
-    {view === "plan" && <div className="iw-toolbar"><span>当前方案已保存；重新生成会创建新的模型任务。</span><button disabled={pending || draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>}
+    {view === "plan" && <div className="iw-toolbar" style={{justifyContent: "flex-end"}}><button disabled={pending || draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>}
     {view === "history" && workspace && <>
       <button className="iw-back" onClick={() => openSection("list")}><ArrowLeft size={15}/>返回问题列表</button>
       <header className="iw-header"><div><h1>历史记录</h1><p>保存评估、优化方案和执行记录，查看不会重新评估。</p></div></header>
@@ -442,7 +441,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         <p className="iw-method">AI 根据当前知识证据生成方案。请审核修改内容；执行后通过真实模型重新评估。</p>
       </section>)}
       <div className="iw-sticky"><span>已选择 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected).length, 0)}</strong> 项 · 执行后重新评估实际支撑</span><div>
-        {draftDirty ? <button disabled={pending} onClick={() => void saveDrafts()}>保存方案草稿</button> : <span role="status">方案已保存</span>}
+        {draftDirty && <button disabled={pending} onClick={() => void saveDrafts()}>保存方案草稿</button>}
         <button className="iw-primary" disabled={pending || !drafts.some(draft => draft.actions.some(action => action.selected))} onClick={() => void execute()}>确认并执行已选动作</button>
       </div></div>
     </>}

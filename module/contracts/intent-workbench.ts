@@ -109,6 +109,18 @@ export const emptyIntentState = (): IntentState => ({
   version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [], jobs: [],
 });
 
+/** Resolve a current draft or the latest accepted snapshot without changing either. */
+export function findSavedIntentPlan(state: IntentState, questionId: string): IntentPlan | undefined {
+  if (!state.questions.some(question => question.id === questionId)) return;
+  const current = state.plans.find(plan => plan.questionId === questionId);
+  if (current) return current;
+  for (const job of [...(state.jobs ?? [])].reverse()) {
+    if (job.kind !== "plan" || job.status !== "succeeded" || !job.questionIds.includes(questionId)) continue;
+    const saved = job.result?.plans.find(plan => plan.questionId === questionId);
+    if (saved) return {...saved, inputHash: saved.inputHash ?? job.inputHash};
+  }
+}
+
 /** A transparent lexical assessment, not an AI or search-volume measurement. */
 function tokens(text: string) {
   const normalized = text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");

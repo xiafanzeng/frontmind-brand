@@ -246,6 +246,52 @@ describe("优化模型持久化任务", () => {
     expect((await h.service.observe()).revision).toBe(revision);
     credentialRead.mockRestore();
   });
+  it("保存历史方案草稿时恢复已验收方案，保留输入依据和历史快照，不调用模型", async () => {
+    const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
+    const completed = await h.service.poll();
+    delete h.ledger().state.jobs![0].result!.plans[0].inputHash;
+    const snapshot = structuredClone(h.ledger().state.jobs![0].result);
+    h.ledger().state.plans = [];
+    const reopened = await h.service.observe();
+    const reads = h.client.listAllMessages.mock.calls.length;
+    expect(reopened.state.plans).toEqual([]);
+    const action = snapshot!.plans[0].actions[0];
+    const edited = await h.service.command({kind: "edit", expectedRevision: reopened.revision, questionId: "q",
+      actions: [{id: action.id, selected: true, after: "人工审核后的问题？"}]});
+    expect(edited.state.plans[0].inputHash).toBe(completed.state.jobs![0].inputHash);
+    expect(edited.state.plans[0].actions[0].after).toBe("人工审核后的问题？");
+    expect(edited.state.jobs![0].result).toEqual(snapshot);
+    expect((await h.service.observe()).state.plans).toEqual(edited.state.plans);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.client.listAllMessages).toHaveBeenCalledTimes(reads);
+  });
+  it("历史草稿恢复不绕过过期方案校验，执行拒绝时不产生回执", async () => {
+    const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
+    const completed = await h.service.poll();
+    h.ledger().state.plans = [];
+    h.nodes[0].content += "更新后的知识。";
+    const action = completed.state.plans[0].actions[0];
+    const edited = await h.service.command({kind: "edit", expectedRevision: completed.revision, questionId: "q",
+      actions: [{id: action.id, selected: true, after: "审核后的问题？"}]});
+    await expect(h.service.execute({expectedRevision: edited.revision,
+      clientRequestId: "00000000-0000-4000-8000-000000000098", questionIds: ["q"]})).rejects.toMatchObject({code: "PLAN_STALE"});
+    expect(h.ledger().state.receipts).toEqual([]);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
+  it("历史快照不能覆盖当前已编辑草稿，非法动作恢复失败不会写入方案", async () => {
+    const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
+    const completed = await h.service.poll();
+    const action = completed.state.plans[0].actions[0];
+    h.ledger().state.plans[0].actions[0].after = "当前已编辑草稿";
+    const current = await h.service.command({kind: "edit", expectedRevision: completed.revision, questionId: "q",
+      actions: [{id: action.id, selected: false, after: "保留当前编辑"}]});
+    expect(current.state.plans[0].actions[0].after).toBe("保留当前编辑");
+    h.ledger().state.plans = [];
+    await expect(h.service.command({kind: "edit", expectedRevision: current.revision, questionId: "q",
+      actions: [{id: "unknown-action", selected: true, after: "不应保存"}]})).rejects.toMatchObject({code: "ACTION_MISSING"});
+    expect(h.ledger().state.plans).toEqual([]);
+    expect(h.ledger().revision).toBe(current.revision);
+  });
   it("恢复历史拒绝伪造原文和错误任务关联，不影响现有清单", async () => {
     const h = harness(); await h.intake(); await h.service.command(h.request); h.send(); await h.service.poll();
     delete h.ledger().state.jobs![0].result;
