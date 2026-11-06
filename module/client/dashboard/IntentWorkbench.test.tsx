@@ -1,4 +1,4 @@
-import {act, cleanup, fireEvent, render, screen, waitFor} from "@testing-library/react";
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import type {IntentWorkspace} from "../../contracts/intent-workbench";
 import {emptyIntentState} from "../../contracts/intent-workbench";
@@ -44,6 +44,36 @@ function pendingApi(initial: IntentWorkspace) {
   return {api, finish};
 }
 describe("优化工作台任务入口", () => {
+  it("整张动作卡片切换预览，采纳操作独立，切换后保留编辑草稿且不发起业务请求", async () => {
+    const saved = workspace("succeeded");
+    saved.state.plans = [{questionId: "q1", actions: [
+      {id: "node", kind: "node", title: "补充节点正文", nodeId: "1.01", before: "原节点内容", after: "建议节点内容", source: "节点来源说明", selected: true},
+      {id: "question", kind: "question", title: "明确问题范围", nodeId: null, before: "原问题", after: "建议问题", source: "问题来源说明", selected: true},
+      {id: "todo", kind: "todo", title: "补充资料待办", nodeId: null, before: "", after: "待办内容", source: "待办来源说明", selected: true},
+    ]}];
+    const {api} = pendingApi(saved);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "查看优化方案"}));
+    const preview = screen.getByRole("region", {name: "优化动作修改前后"});
+    expect(within(preview).queryByText("节点来源说明")).toBeNull();
+    expect(screen.queryByText("节点正文须人工审核。资料待办不会直接消除知识缺口。")).toBeNull();
+    fireEvent.change(within(preview).getByRole("textbox", {name: "补充节点正文修改后"}), {target: {value: "人工编辑的节点草稿"}});
+    fireEvent.click(screen.getByRole("button", {name: "查看并编辑：明确问题范围"}));
+    expect(within(preview).getByText("原问题")).toBeTruthy();
+    expect(within(preview).getByRole("textbox", {name: "明确问题范围修改后"})).toHaveProperty("value", "建议问题");
+    fireEvent.click(screen.getByRole("checkbox", {name: "采纳：补充节点正文"}));
+    expect(screen.getByRole("button", {name: "查看并编辑：明确问题范围"}).getAttribute("aria-pressed")).toBe("true");
+    const todo = screen.getByRole("region", {name: "优化动作：补充资料待办"});
+    fireEvent.click(within(todo).getByRole("button", {name: "不采纳"}));
+    expect(within(todo).getByRole("checkbox")).toHaveProperty("checked", false);
+    expect(within(preview).getByRole("textbox")).toHaveProperty("value", "建议问题");
+    fireEvent.click(screen.getByRole("button", {name: "查看并编辑：补充资料待办"}));
+    expect(within(preview).getByText("暂无原内容")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "查看并编辑：补充节点正文"}));
+    expect(within(preview).getByRole("textbox")).toHaveProperty("value", "人工编辑的节点草稿");
+    expect(api.command).not.toHaveBeenCalled();
+    expect(api.execute).not.toHaveBeenCalled();
+  });
   it.each(["evaluate", "plan", "receipt"])("中断后重新读取已完成的%s任务，直接打开对应结果", async kind => {
     const initial = workspace("running", kind === "plan" ? "plan" : "evaluate");
     const completed = workspace("succeeded", kind === "plan" ? "plan" : "evaluate");

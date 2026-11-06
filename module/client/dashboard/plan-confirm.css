@@ -1,0 +1,143 @@
+.iw-workbench .iw-plan-editor {
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+}
+.iw-workbench .iw-plan-editor > * { min-width: 0; }
+.iw-workbench .iw-plan-editor .iw-tasks { padding: 10px; }
+.iw-workbench .iw-plan-editor .iw-tasks .iw-task {
+  position: relative;
+  isolation: isolate;
+  padding: 18px;
+  border-radius: 16px;
+  background: #fff;
+  border-color: #e7e5eb;
+  box-shadow: none;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.iw-workbench .iw-plan-editor .iw-tasks .iw-task:hover {
+  transform: none;
+  box-shadow: none;
+  background: #faf8fd;
+  border-color: #cdb7e4;
+}
+.iw-workbench .iw-plan-editor .iw-tasks .iw-task.is-active {
+  border-color: #9e74c3;
+  background: #f8f4fc;
+  box-shadow: inset 3px 0 #7545a0;
+}
+.iw-workbench .iw-plan-editor .iw-tasks .iw-task.selected:not(.is-active) {
+  border-color: #e7e5eb;
+  background: #fff;
+}
+.iw-workbench .iw-plan-editor .iw-task .iw-task-open {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  color: #7545a0;
+}
+.iw-workbench .iw-plan-editor .iw-task-open svg { position: absolute; right: 18px; bottom: 18px; }
+.iw-workbench .iw-plan-editor .iw-task .iw-task-open:focus-visible { outline: 3px solid #7545a0; outline-offset: 3px; }
+.iw-workbench .iw-plan-editor .iw-tasks .iw-task .iw-task-open:hover:not(:disabled),
+.iw-workbench .iw-plan-editor .iw-tasks .iw-task .iw-task-open:active:not(:disabled) {
+  transform: none;
+  background: transparent;
+  box-shadow: none;
+}
+.iw-workbench .iw-plan-editor .iw-task-content { pointer-events: none; }
+.iw-workbench .iw-plan-editor .iw-task-heading { display: flex; align-items: start; flex-wrap: wrap; gap: 10px; }
+.iw-workbench .iw-plan-editor .iw-task-heading b { flex: 1; min-width: 100px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.iw-workbench .iw-plan-editor .iw-task-heading .iw-tag { flex-shrink: 0; font-size: 11px; }
+.iw-workbench .iw-plan-editor .iw-task-heading input {
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 3px 0 0;
+  cursor: pointer;
+}
+.iw-workbench .iw-plan-editor .iw-task-content p { margin: 12px 0 16px; font-size: 12px; line-height: 1.75; overflow-wrap: anywhere; }
+.iw-workbench .iw-plan-editor .iw-task .iw-task-dismiss {
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
+  padding: 0 4px;
+  background: transparent;
+  box-shadow: none;
+  color: #6b6474;
+}
+.iw-workbench .iw-plan-editor .iw-preview > h3 { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; margin: 0; }
+.iw-workbench .iw-plan-editor .iw-preview > h3 .iw-tag { flex-shrink: 0; }
+.iw-workbench .iw-plan-editor .iw-preview-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 16px;
+  padding: 24px;
+}
+.iw-workbench .iw-plan-editor .iw-plan-before,
+.iw-workbench .iw-plan-editor .iw-plan-after {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #ead3d8;
+  border-radius: 14px;
+  background: #fff6f7;
+  font-size: 13px;
+}
+.iw-workbench .iw-plan-editor .iw-plan-before h4,
+.iw-workbench .iw-plan-editor .iw-plan-after > span { margin: 0 0 12px; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.iw-workbench .iw-plan-editor .iw-plan-before h4 { color: #a34c5b; }
+.iw-workbench .iw-plan-editor .iw-plan-before pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.85;
+  color: #654f56;
+}
+.iw-workbench .iw-plan-editor .iw-plan-after { border-color: #cce3d6; background: #f3faf6; color: #22704c; }
+.iw-workbench .iw-plan-editor .iw-preview .iw-plan-after textarea {
+  flex: 1;
+  display: block;
+  width: 100%;
+  min-height: 280px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  color: #263f33;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.85;
+  resize: vertical;
+}
+.iw-workbench .iw-plan-editor .iw-plan-after textarea:focus-visible { outline: 2px solid #7aad92; outline-offset: 5px; }
+.iw-workbench .iw-plan-editor .iw-plan-empty { margin: 0; color: #8b7c82; font-size: 13px; }
+@media (max-width: 1200px) {
+  .iw-workbench .iw-plan-editor .iw-preview-body { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 980px) {
+  .iw-workbench .iw-plan-editor { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+}
+@media (max-width: 600px) {
+  .iw-workbench .iw-plan-editor .iw-preview > h3 { padding: 16px; font-size: 15px; }
+  .iw-workbench .iw-plan-editor .iw-preview-body { padding: 16px; gap: 12px; }
+  .iw-workbench .iw-plan-editor .iw-plan-before,
+  .iw-workbench .iw-plan-editor .iw-plan-after { padding: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iw-workbench .iw-plan-editor .iw-tasks .iw-task { transition: none; }
+}
