@@ -1,6 +1,6 @@
-import {cleanup, fireEvent, render, screen, within} from "@testing-library/react";
+import {act, cleanup, fireEvent, render, screen, within} from "@testing-library/react";
 import {afterEach, beforeEach, expect, it, vi} from "vitest";
-import {emptyIntentState, type IntentChange, type IntentNode, type IntentReceipt} from "../../contracts/intent-workbench";
+import {emptyIntentState, type IntentChange, type IntentNode, type IntentReceipt, type IntentWorkspace} from "../../contracts/intent-workbench";
 import type {IntentWorkbenchApi} from "./intent-workbench-api";
 
 vi.mock("../host", () => ({
@@ -25,14 +25,20 @@ afterEach(cleanup);
 async function openChanges(changes: IntentChange[], nodes: IntentNode[] = [], status: IntentReceipt["status"] = "completed") {
   const receipt: IntentReceipt = {id: "receipt-1", status, createdAt: "2026-10-24T13:58:15Z",
     changes, before: [], after: []};
+  const running: IntentWorkspace = {revision: 1, preview: false, nodes,
+    state: {...emptyIntentState(), receipts: [receipt], jobs: [{id: "job-receipt", kind: "evaluate", status: "running", questionIds: ["q1"], receiptId: receipt.id} as any]}};
+  let finish!: (value: IntentWorkspace) => void;
+  const completed = new Promise<IntentWorkspace>(resolve => {finish = resolve;});
   const api: IntentWorkbenchApi = {
-    observe: vi.fn(async () => ({revision: 1, preview: false, nodes,
-      state: {...emptyIntentState(), receipts: [receipt]}})),
+    observe: vi.fn(async () => running), waitForJob: vi.fn(() => completed),
     command: vi.fn(), execute: vi.fn(), rollback: vi.fn(),
   };
   render(<IntentWorkbench api={api} initialView="list" keywordProps={{} as any}/>);
-  fireEvent.click(await screen.findByRole("button", {name: /历史记录/}));
-  fireEvent.click(await screen.findByRole("button", {name: "查看执行记录"}));
+  // The catalog no longer exposes history. Keep the real receipt-to-diff path
+  // covered by entering the current task and receiving its existing receipt.
+  fireEvent.click(await screen.findByRole("button", {name: "查看当前任务"}));
+  await act(async () => finish({...running, revision: 2, state: {...running.state,
+    jobs: [{...running.state.jobs![0], status: "succeeded"}]}}));
   fireEvent.click(await screen.findByRole("button", {name: "查看知识库变更"}));
   expect(api.command).not.toHaveBeenCalled();
   expect(api.execute).not.toHaveBeenCalled();
