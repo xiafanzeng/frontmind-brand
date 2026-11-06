@@ -14,7 +14,7 @@ export type IntentCatalogIntegration = {
 };
 export const answerStatusLabel = (status?: string) => status === "published" ? "已有正式应答" : status === "pending" ? "待制作应答" : "暂未同步";
 export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, category, status, selected, pending, page, pageCount, total, savedPlanIds,
-  onSearch, onCategory, onStatus, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount}: {
+  onSearch, onCategory, onStatus, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
   evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; received: string[];
   search: string; category: string; status: string; selected: string[]; pending: boolean;
@@ -24,11 +24,12 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
   onToggle: (id: string) => void; onSelectPage: (checked: boolean) => void; onClear: () => void;
   onEvaluate: (ids: string[]) => void; onPage: (page: number) => void;
   onHistory: () => void; historyCount: number;
+  headerStatus?: ReactNode; taskFeedback?: ReactNode;
 }) {
   const categories = [...new Set(questions.map(question => question.category))];
   return <>
     <header className="iw-header iw-catalog-header">
-      <div><h1>优化问题</h1><p>查看已保存评估，或评估新加入的推荐问题与历史词条。</p></div>
+      <div>{headerStatus ? <div className="iw-catalog-title-row"><h1>优化问题</h1>{headerStatus}</div> : <h1>优化问题</h1>}<p>查看已保存评估，或评估新加入的推荐问题与历史词条。</p></div>
       <div className="iw-header-tools">
         <button onClick={onHistory}>历史记录（{historyCount}）</button>
         <label className="iw-search"><Search size={17}/><input aria-label="搜索优化问题" placeholder="搜索问题" value={search} onChange={event => onSearch(event.target.value)}/></label>
@@ -37,6 +38,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
         {integration?.onAddQuestion && <button className="iw-primary" onClick={integration.onAddQuestion}>新增问题</button>}
       </div>
     </header>
+    {taskFeedback}
     {received.length > 0 && <div className="iw-handoff-banner" role="status"><div><strong>已接收所选 {received.length} 条问题</strong><p>{activeJob?.kind === "evaluate" && received.some(id => activeJob.questionIds.includes(id)) ? "问题价值正在评估；完成后可查看知识支撑并批量生成方案。" : received.every(id => evaluations.some(item => item.questionId === id)) ? "问题评估已完成，可复用已有结果并生成优化方案。" : "问题已加入清单，可继续评估问题价值与知识支撑。"}</p></div><span className="iw-tag">所选词条 → 问题优化</span></div>}
     <section className="iw-panel iw-table-wrap iw-catalog-table"><table>
       <thead><tr><th><input type="checkbox" aria-label="选择当前页问题" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => onSelectPage(event.target.checked)}/></th><th>候选问题</th><th>问题价值</th><th>知识支撑</th><th>主要缺口</th><th>优化状态</th><th>操作</th></tr></thead>
