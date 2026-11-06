@@ -153,6 +153,42 @@ describe("优化工作台任务入口", () => {
     expect(api.command).not.toHaveBeenCalled();
     expect(api.execute).not.toHaveBeenCalled();
   });
+  it("批量历史方案按点击问题展示，返回列表切换问题后不会串题，完整历史仍保留全部结果", async () => {
+    const saved = workspace("succeeded", "plan");
+    const second = {...question, id: "q2", question: "第二个问题的渠道核验"};
+    saved.state.questions.push(second);
+    const secondEvaluation = {...saved.state.evaluations[0], questionId: second.id, value: 63};
+    saved.state.evaluations.push(secondEvaluation);
+    saved.state.jobs![0].result = {
+      completedAt: "2026-10-28T00:00:00Z", questions: [question, second],
+      evaluations: saved.state.evaluations,
+      plans: [question, second].map((item, index) => ({questionId: item.id, actions: [{
+        id: `a-${index}`, kind: "todo", title: `方案-${item.question}`,
+        nodeId: null, before: "", after: `建议-${item.question}`, source: "资料缺口", selected: true,
+      }]})),
+    };
+    const {api} = pendingApi(saved), onOpenAnswer = vi.fn();
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api} catalogIntegration={{onOpenAnswer}}/>);
+    const buttons = await screen.findAllByRole("button", {name: "查看优化方案"});
+    fireEvent.click(buttons[1]);
+    expect(screen.getByRole("heading", {name: second.question})).toBeTruthy();
+    expect(screen.queryByRole("heading", {name: question.question})).toBeNull();
+    expect(screen.getByText(`方案-${second.question}`)).toBeTruthy();
+    expect(screen.queryByText(`方案-${question.question}`)).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "进入应答逻辑"}));
+    expect(onOpenAnswer).toHaveBeenLastCalledWith(second);
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    fireEvent.click(screen.getAllByRole("button", {name: "查看优化方案"})[0]);
+    expect(screen.getByRole("heading", {name: question.question})).toBeTruthy();
+    expect(screen.queryByRole("heading", {name: second.question})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    fireEvent.click(screen.getByRole("button", {name: "历史记录（1）"}));
+    fireEvent.click(screen.getByRole("button", {name: "查看任务结果"}));
+    expect(screen.getByRole("heading", {name: question.question})).toBeTruthy();
+    expect(screen.getByRole("heading", {name: second.question})).toBeTruthy();
+    expect(api.command).not.toHaveBeenCalled();
+    expect(api.execute).not.toHaveBeenCalled();
+  });
   it("刷新后恢复正在运行的评估，展示进度并进入完成详情，不重复派发", async () => {
     const {api, finish} = pendingApi(workspace("running"));
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);

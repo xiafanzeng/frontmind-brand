@@ -6,6 +6,7 @@ import ManagedKeywordTables, {type ManagedKeywordTablesProps} from "./ManagedKey
 import {liveIntentWorkbenchApi, type IntentWorkbenchApi} from "./intent-workbench-api";
 import type {IntentWorkspace, IntentEvaluation, IntentPlan, IntentAction} from "../../contracts/intent-workbench";
 import "./intent-workbench.css";
+import "./saved-plan-result.css";
 import KnowledgeChangesView from "./KnowledgeChangesView";
 import {useWorkspaceDraftGuard, projectWorkspaceUrl, requestWorkspaceNavigation} from "../host";
 import {navigate} from "wouter/use-browser-location";
@@ -66,6 +67,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [draftDirty, setDraftDirty] = useState(false);
   const [receiptId, setReceiptId] = useState<string>();
   const [historyId, setHistoryId] = useState<string>();
+  const [historyQuestionId, setHistoryQuestionId] = useState<string>();
   const [undoOpen, setUndoOpen] = useState(false);
   const [nodeId, setNodeId] = useState<string>();
   const [questionAction, setQuestionAction] = useState<{kind: "edit" | "delete"; question: IntentQuestion} | null>(null);
@@ -80,7 +82,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   useEffect(() => {
     mounted.current = true; generation.current++; running.current = false;
     setView(initialView); setProgressJobId(undefined);
-    setWorkspace(null); setDrafts([]); setDraftDirty(false); setReceived([]); setSelected([]); setHistoryId(undefined);
+    setWorkspace(null); setDrafts([]); setDraftDirty(false); setReceived([]); setSelected([]); setHistoryId(undefined); setHistoryQuestionId(undefined);
     setQuestionAction(null); setQuestionError("");
     void run(() => api.observe(), undefined, true);
     return () => {mounted.current = false; generation.current++;};
@@ -128,6 +130,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       const completed = restoreJob && view === "progress" ? data.state.jobs?.find(item =>
         item.id === progressJobId && item.status === "succeeded") : undefined;
       if (completed) {
+        setHistoryQuestionId(undefined);
         setScope(completed.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]);
         if (completed.receiptId && data.state.receipts.some(item => item.id === completed.receiptId)) {
           setReceiptId(completed.receiptId); setView("result");
@@ -305,7 +308,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       setScope([id]); setDrafts([structuredClone(saved)]); setDraftDirty(false); setView("plan");
     } else {
       const job = history.find(item => item.result!.plans.some(plan => plan.questionId === id));
-      if (job) {setHistoryId(job.id); setView("history-detail");}
+      if (job) {setHistoryId(job.id); setHistoryQuestionId(id); setView("history-detail");}
     }
   }
   function openSection(section: "universe" | "list") {setView(section); emittedSection.current = section; onSectionChange?.(section);}
@@ -316,21 +319,33 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       <header className="iw-header"><div><h1>历史记录</h1><p>保存评估、优化方案和执行记录，查看不会重新评估。</p></div></header>
       <section className="iw-panel iw-todo-list"><h2>已完成任务</h2>{history.length ? history.map(job => <div key={job.id}>
         <span>{new Date(job.result!.completedAt).toLocaleString("zh-CN")} · {job.kind === "plan" ? "评估与优化方案" : "问题评估"} · {job.result!.questions.length} 条问题</span>
-        <button onClick={() => {setHistoryId(job.id); setView("history-detail");}}>查看任务结果</button>
+        <button onClick={() => {setHistoryId(job.id); setHistoryQuestionId(undefined); setView("history-detail");}}>查看任务结果</button>
       </div>) : <p>暂无已完成任务记录。</p>}</section>
       {workspace.state.receipts.length > 0 && <section className="iw-panel iw-todo-list"><h2>执行记录</h2>{[...workspace.state.receipts].reverse().map(item => <div key={item.id}><span>{new Date(item.createdAt).toLocaleString("zh-CN")} · {item.changes.length} 项动作 · {({running: "待确认", completed: "已完成", partial: "部分完成", reverted: "已撤销"})[item.status]}</span><button onClick={() => {setReceiptId(item.id); setView("result");}}>查看执行记录</button></div>)}</section>}
     </>}
     {view === "history-detail" && workspace && <>
-      <button className="iw-back" onClick={() => {setHistoryId(undefined); setView("history");}}><ArrowLeft size={15}/>返回历史记录</button>
-      <header className="iw-header"><div><h1>已保存任务结果</h1><p>保留任务完成时的问题、评分、证据和优化方案。查看记录不会重新评估或调用模型。</p></div></header>
-      {archived && <section aria-label="已保存任务详情"><p className="iw-method">完成于 {new Date(archived.completedAt).toLocaleString("zh-CN")} · 以下为当时保存的结果</p>
-        {archived.evaluations.map(item => <section key={item.questionId} className="iw-plan-section">
-          <h2>{archived.questions.find(question => question.id === item.questionId)?.question}</h2><Evaluation item={item}/>
-          {catalogIntegration?.onOpenAnswer && questions.find(question => question.id === item.questionId) && <button onClick={() => catalogIntegration.onOpenAnswer?.(questions.find(question => question.id === item.questionId)!)}>进入应答逻辑</button>}
-          {archived.plans.filter(plan => plan.questionId === item.questionId).map(plan => <section className="iw-panel" key={plan.questionId}>
-            <h3>已保存优化方案</h3>{plan.actions.map(action => <details key={action.id}><summary>{action.title}</summary>
-              <p>{action.source}</p><h4>修改前</h4><MarkdownRenderer content={action.before || "无"}/><h4>建议内容</h4><MarkdownRenderer content={action.after}/>
-            </details>)}
+      <button className="iw-back" onClick={() => {
+        setHistoryId(undefined); setHistoryQuestionId(undefined); setView(historyQuestionId ? "list" : "history");
+      }}><ArrowLeft size={15}/>{historyQuestionId ? "返回问题列表" : "返回历史记录"}</button>
+      <header className="iw-header iw-saved-header"><h1>已保存任务结果</h1></header>
+      {archived && <section className="iw-saved-result" aria-label="已保存任务详情">
+        {archived.evaluations.filter(item => !historyQuestionId || item.questionId === historyQuestionId).map(item => <section key={item.questionId} className="iw-plan-section iw-saved-question">
+          <div className="iw-saved-question-header">
+            <h2>{archived.questions.find(question => question.id === item.questionId)?.question}</h2>
+            {catalogIntegration?.onOpenAnswer && questions.find(question => question.id === item.questionId) && <button onClick={() => catalogIntegration.onOpenAnswer?.(questions.find(question => question.id === item.questionId)!)}>进入应答逻辑<ArrowRight size={16}/></button>}
+          </div>
+          <Evaluation item={item}/>
+          {archived.plans.filter(plan => plan.questionId === item.questionId).map(plan => <section className="iw-panel iw-saved-plan" key={plan.questionId}>
+            <h3>已保存优化方案</h3><div className="iw-saved-actions">{plan.actions.map((action, actionIndex) => <details className="iw-saved-action" key={action.id}>
+              <summary><span className="iw-saved-action-index" aria-hidden="true">{actionIndex + 1}</span><span>{action.title}</span><ChevronDown size={18} aria-hidden="true"/></summary>
+              <div className="iw-saved-action-body">
+                <p className="iw-saved-action-source">{action.source}</p>
+                <div className="iw-saved-content-grid">
+                  <section><h4>修改前</h4><MarkdownRenderer content={action.before || "无"}/></section>
+                  <section><h4>建议内容</h4><MarkdownRenderer content={action.after}/></section>
+                </div>
+              </div>
+            </details>)}</div>
           </section>)}
         </section>)}
       </section>}
@@ -358,7 +373,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         onDeleteQuestion: catalogIntegration?.onDeleteQuestion ?? (question => openQuestionAction("delete", question)),
       }}
         savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan} onGeneratePlan={id => void plan(false, [id])}
-        historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setView("history");}}
+        historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setHistoryQuestionId(undefined); setView("history");}}
         search={search} category={category} status={status} selected={selected} pending={pending}
         page={currentPage} pageCount={pageCount} total={filtered.length}
         onSearch={value => {setSearch(value); setPage(0);}} onCategory={value => {setCategory(value); setPage(0);}} onStatus={value => {setStatus(value); setPage(0);}}
