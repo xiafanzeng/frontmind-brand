@@ -55,7 +55,9 @@
   max-height: min(460px, var(--radix-popover-content-available-height, 460px));
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px;
   border: 1px solid rgba(60, 60, 67, .12);
   border-radius: 16px;
@@ -73,7 +75,7 @@
 .rag-conversation-popover__message, .rag-conversation-popover__hint { margin: 0; padding: 12px; color: #636366; font-size: 14px; line-height: 1.5; }
 .rag-conversation-popover__message[role="alert"] { color: #a1324d; }
 .rag-conversation-popover__hint { padding-block: 4px 8px; font-size: 12px; }
-.rag-conversation-popover__list { min-height: 0; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
+.rag-conversation-popover__list { flex: none; min-height: 0; margin: 0; padding: 0; overflow: visible; list-style: none; }
 .rag-conversation-popover__item { display: flex; align-items: center; min-width: 0; border-radius: 10px; }
 .rag-conversation-popover__item:hover { background: rgba(118, 118, 128, .07); }
 .rag-conversation-popover button { font: inherit; }
@@ -97,6 +99,6 @@
 .rag-conversation-popover__recovery button:hover:not(:disabled) { background:rgba(118,118,128,.09); }
 .rag-conversation-popover__recovery button:disabled { opacity:.45; cursor:default; }
 
-.rag-conversation-popover__examples { margin-top:16px; padding-top:16px; border-top:1px solid rgba(0,0,0,.08); }
+.rag-conversation-popover__examples { flex: none; margin-top:16px; padding-top:16px; border-top:1px solid rgba(0,0,0,.08); }
 .rag-conversation-popover__examples h4 { margin:0 0 8px; color:#86868b; font-size:12px; font-weight:400; }
 .rag-conversation-popover__examples .rag-conversation-popover__choice { grid-column:1/-1; }
