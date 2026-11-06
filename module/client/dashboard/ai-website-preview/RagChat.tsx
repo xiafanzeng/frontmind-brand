@@ -3,6 +3,7 @@ import { Check, Copy, Send, Sparkles, Square, SquarePen } from "lucide-react";
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import { copyToClipboard } from "@frontmind/module-ui/lib/utils";
 import { ragChatActivityRows, type RagChatActivity, type RagChatActivityRow } from "./rag-chat-activity";
+import { RagAnswerProgress } from "./RagAnswerProgress";
 import "./rag-chat.css";
 
 export type RagChatSource = { id: string; title: string; kind?: string };
@@ -407,9 +408,7 @@ export function RagChat(props: Props) {
       <article aria-label="企业助手回复" aria-busy={waiting} className={props.answer && props.onSelectAnswer ? "rag-chat-selectable-answer" : undefined} data-answer-key={props.answerKey || undefined} data-selected={Boolean(props.answer && props.selectedAnswerKey === props.answerKey) || undefined} aria-current={props.answer && props.selectedAnswerKey === props.answerKey ? "true" : undefined} tabIndex={props.answer && props.onSelectAnswer ? 0 : undefined} aria-describedby={props.answer && props.onSelectAnswer ? `${tooltipId}-select` : undefined} onClick={event => { if (props.answer) selectAnswer(event, props.answerKey); }} onKeyDown={event => { if (props.answer) selectAnswerByKeyboard(event, props.answerKey); }}>
         <header><Sparkles size={16} aria-hidden="true" /><strong>{props.assistantName}</strong></header>
         <div className="rag-chat-response" data-phase={phase}>
-          {showWait && <div className="rag-chat-wait" data-testid="rag-chat-wait" role="status" aria-live="polite">
-            {visibleActivity.length ? visibleActivity.map(item => <div key={item.id} className={`rag-chat-activity is-${item.status}`} data-activity-status={item.status}><span>{item.text}</span></div>) : <span>正在处理…</span>}
-          </div>}
+          {showWait && <RagAnswerProgress key={runKey} rows={visibleActivity} submitting={submitting && !props.running} />}
           {props.answer ? <div className="rag-chat-answer" data-testid={props.live ? "rag-answer" : "rag-preview-answer"}>
             <div ref={markdownRef}><ChatMarkdown content={props.answer} /></div>
             {props.sources.length > 0 && <div className="erag-citations">{props.sources.map((source, index) => <button type="button" data-testid={props.live ? "rag-source" : undefined} key={`${source.kind ?? "source"}:${source.id}`} onClick={event => { event.stopPropagation(); props.onEvidence(props.answerKey); }}>[{index + 1}] {source.title}</button>)}</div>}

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -48,6 +49,8 @@ const mocks = vi.hoisted(() => {
     conversations: [] as Array<Record<string, unknown>>,
     syncError: "",
     busy: false,
+    running: false,
+    execution: undefined as GeneralExecutionDto | undefined,
     pendingDispatch: null as null | { question: string },
     setWorkbenchTaskQuery: vi.fn(),
     received: null as null | Record<string, unknown>,
@@ -122,7 +125,8 @@ vi.mock("../use-enterprise-qa-controller", () => ({
   useEnterpriseQaController: (options?: { activeConversationId?: string | null }) => ({
     active: options?.activeConversationId === undefined ? mocks.active : mocks.conversations.find(item => item.id === options.activeConversationId) ?? null,
     busy: mocks.busy,
-    running: false,
+    running: mocks.running,
+    execution: mocks.execution,
     notice: "",
     pendingDispatch: mocks.pendingDispatch,
     responseKnowledgeBase: mocks.responseKnowledgeBase,
@@ -172,6 +176,8 @@ beforeEach(() => {
   mocks.hydrated = true;
   mocks.loading = false;
   mocks.taskSources = {};
+  mocks.running = false;
+  mocks.execution = undefined;
   mocks.pendingDispatch = null;
   mocks.currentSource = {
     loaded: true,
@@ -214,6 +220,56 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("connected redesigned enterprise RAG workspace", () => {
+  it("projects immediate task-poll progress ahead of the hydrated conversation", () => {
+    mocks.running = true;
+    mocks.busy = true;
+    mocks.active = {
+      ...activeConversation(), status: "running", messages: [activeConversation().messages[0]],
+      execution: {
+        schemaVersion: 1, taskId: "task-frozen", coverage: "complete",
+        timeline: [{
+          id: "older-hydrated-progress", turnId: "turn-hydrated", userMessageId: "question-1", userSequence: 1,
+          kind: "tool", label: "读取文件", status: "running", timestamp: 5, rank: 1,
+        }],
+      },
+    };
+    mocks.execution = {
+      schemaVersion: 1, taskId: "task-frozen", coverage: "complete",
+      timeline: [{
+        id: "poll-progress", turnId: "turn-live", userMessageId: "question-1", userSequence: 1,
+        kind: "tool", label: "检索文本", status: "running", timestamp: 10, rank: 1,
+      }],
+    };
+    mocks.conversations = [mocks.active];
+    render(<EnterpriseRagWorkspace />);
+    expect(mocks.received?.live).toMatchObject({
+      running: true,
+      runningTurnId: "turn-live",
+      activity: [expect.objectContaining({ label: "检索文本", status: "running" })],
+    });
+  });
+
+  it("retains hydrated execution as a fallback until a task snapshot arrives", () => {
+    mocks.running = true;
+    mocks.busy = true;
+    mocks.active = {
+      ...activeConversation(), status: "running", messages: [activeConversation().messages[0]],
+      execution: {
+        schemaVersion: 1, taskId: "task-frozen", coverage: "complete",
+        timeline: [{
+          id: "hydrated-progress", turnId: "turn-hydrated", userMessageId: "question-1", userSequence: 1,
+          kind: "tool", label: "读取文件", status: "running", timestamp: 10, rank: 1,
+        }],
+      },
+    };
+    mocks.conversations = [mocks.active];
+    render(<EnterpriseRagWorkspace />);
+    expect(mocks.received?.live).toMatchObject({
+      runningTurnId: "turn-hydrated",
+      activity: [expect.objectContaining({ label: "读取文件", status: "running" })],
+    });
+  });
+
   it("lists conversations by recency and selects them without submitting a question", () => {
     mocks.conversations = [
       { ...activeConversation(), title: "企业问答", updatedAt: 100 },

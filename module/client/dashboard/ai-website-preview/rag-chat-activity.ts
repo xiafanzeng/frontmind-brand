@@ -1,3 +1,5 @@
+import { enterpriseQaProgressLabels } from "../../../contracts/enterprise-qa-progress";
+
 export type RagChatActivity = {
   id: string;
   label: string;
@@ -9,6 +11,7 @@ export type RagChatActivityRow = RagChatActivity & { text: string; count: number
 // Only public activity categories belong in the compact chat presentation.
 // Commands, paths and provider reasoning stay outside this component.
 const activityLabels = new Set([
+  ...enterpriseQaProgressLabels,
   "读取文件", "编辑文件", "执行命令", "搜索网页", "检索知识", "检索企业资料",
   "读取参考片段", "整理回答", "生成回答", "处理任务", "调用工具", "补充要求",
   "写入文件", "检索文本", "查找文件", "查看目录", "读取网页", "浏览网页", "运行代码", "调用扩展工具",

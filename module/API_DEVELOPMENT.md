@@ -44,6 +44,16 @@
 
 材料上传不使用模块命名空间，而是复用 Core 的本地资产端点 `POST /api/frontmind/v2/assets`：请求体为文件原始字节（`Content-Type: application/octet-stream`），头 `X-FrontMind-Mime`、`X-FrontMind-Filename`（URL 编码）、`X-FrontMind-Size`（与实际字节数一致）；响应 `localAssetId`（`asset_` 前缀）即后续 `POST /response-logic/materials` 绑定所用的文件 ID。上传材料的预览/内容读取用 `GET /api/frontmind/v2/assets/:localAssetId/content`（同源 Cookie 认证，服务端校验资产归属）。注意完整 Dashboard 的 `/api/frontmind/v1/*` 挂载在任何模块容器都不存在，模块代码不得引用。
 
+### 网站 AI 助手的等待进度
+
+网站及建设页助手试用仍使用 `POST /api/public/site-assistant/ask`。默认返回原有 JSON；请求声明 `Accept: application/x-ndjson` 时，在原校验和限流通过后逐行返回 `schemaVersion: 1` 的帧：
+
+- `type: "progress"`：`elapsedMs` 与 `activities: [{label, status}]`，仅投影当前问题的真实执行事件；没有事件时数组为空，客户端继续显示等待与耗时。
+- `type: "answer"`：保留原有 `session`、`answer`、`knowledge` 字段，并结束响应。
+- `type: "error"`：保留原有公开错误结构，并结束响应；开启流之前的校验错误仍使用原 HTTP 状态与 JSON。
+
+客户端需按流式 UTF-8 解析跨分块的完整行；未收到终止帧就断流视为失败。进度只含固定阶段与状态，不包含内部任务编号、工具参数、执行原文或推理正文。助手的 `assistant.js` / `assistant.css` 随网站产物构建，已有网站需重新构建才能使用新进度界面。
+
 ## 4. AI 流程边界
 
 业务工作流、提示、输入输出契约和确认/恢复规则在模块代码。通用 OpenAI Agents 执行进程、持久化会话、沙箱、认证与统一账务由宿主复用；没有为五仓复制五套通用引擎。修改本模块业务不需要修改该引擎；修改通用执行器自身需要主仓发布。

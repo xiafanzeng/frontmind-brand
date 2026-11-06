@@ -82,12 +82,15 @@ afterAll(async () => {
   await new Promise<void>((resolve) => listener.close(() => resolve()));
 });
 
-function mountApi(handlers: Handler[], limits?: Record<string, number>) {
+function mountApi(handlers: Handler[], limits?: Record<string, number>, timing?: {
+  now?: () => number; sleep?: (ms: number) => Promise<void>;
+}) {
   const {client, calls} = fakeClient(handlers);
   currentRouter = createSiteAssistantPublicApi({...config, ...(limits ? {limits} : {})}, {
     client,
     now: () => 1_700_000_000_000,
     sleep: async () => undefined,
+    ...timing,
   });
   return {calls};
 }
@@ -103,6 +106,105 @@ async function ask(body: unknown, init?: RequestInit) {
 }
 
 describe("public site assistant api", () => {
+  it("streams only current-turn public progress before the final answer", async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const {calls} = mountApi([
+      runtimeConfigWithKnowledge, conversationSync,
+      {match: call => call.path === "/api/frontmind/v2/tasks", json: () => ({
+        id: "internal-task-secret", status: "running", execution: {
+          schemaVersion: 1, taskId: "internal-task-secret", coverage: "complete", timeline: [
+            {id: "old-event-secret", kind: "tool", label: "读取文件", status: "completed", userMessageId: "old-question", userSequence: 1, turnId: "old-turn-secret", timestamp: 1, rank: 1},
+            {id: "event-secret", kind: "tool", label: "检索文本", status: "running", userMessageId: calls.find(call => call.path === "/api/frontmind/v2/tasks")?.body && (calls.find(call => call.path === "/api/frontmind/v2/tasks")!.body as {clientRequestId: string}).clientRequestId, userSequence: 2, turnId: "turn-secret", timestamp: 2, rank: 2, thinkingText: "private-reasoning-secret", arguments: "/private/path-secret"},
+          ],
+        },
+      })},
+      {match: call => call.path === "/api/frontmind/v2/tasks/internal-task-secret", json: completedTask},
+    ], undefined, {sleep: () => waiting});
+    const response = await fetch(`${baseUrl}/ask`, {method: "POST", headers: {
+      "content-type": "application/json", accept: "application/x-ndjson",
+    }, body: JSON.stringify({question: "请检索资料"})});
+    expect(response.headers.get("content-type")).toContain("application/x-ndjson");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let wire = decoder.decode((await reader.read()).value);
+    expect(wire).toContain('"type":"progress"');
+    expect(wire).not.toContain('"type":"answer"');
+    release();
+    for (;;) {
+      const chunk = await reader.read();
+      wire += decoder.decode(chunk.value, {stream: !chunk.done});
+      if (chunk.done) break;
+    }
+    const frames = wire.trim().split("\n").map(line => JSON.parse(line));
+    expect(frames.some(frame => frame.type === "progress" && frame.activities.some((item: {label: string; status: string}) => item.label === "检索文本" && item.status === "running"))).toBe(true);
+    expect(frames.at(-1)).toMatchObject({type: "answer", answer: {text: "FrontMind 提供品牌知识管理。"}});
+    expect(wire).not.toMatch(/internal-task-secret|old-event-secret|old-turn-secret|turn-secret|event-secret|private-reasoning-secret|path-secret|old-question/);
+    expect(wire).not.toContain("读取文件");
+    expect(calls.filter(call => call.path === "/api/frontmind/v2/tasks")).toHaveLength(1);
+  });
+
+  it("keeps rejected streaming requests as ordinary JSON before admission", async () => {
+    const {calls} = mountApi([]);
+    const response = await ask({question: ""}, {headers: {
+      "content-type": "application/json", accept: "application/x-ndjson",
+    }});
+    expect(response.status).toBe(400);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(response.body.error.code).toBe("ASSISTANT_QUESTION_INVALID");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("ends a started stream with a safe error frame on provider failure", async () => {
+    mountApi([runtimeConfigWithKnowledge, conversationSync,
+      {match: call => call.path === "/api/frontmind/v2/tasks", status: 502, json: {secret: "provider-secret"}},
+    ]);
+    const response = await fetch(`${baseUrl}/ask`, {method: "POST", headers: {
+      "content-type": "application/json", accept: "application/x-ndjson",
+    }, body: JSON.stringify({question: "你好"})});
+    const wire = await response.text();
+    const frames = wire.trim().split("\n").map(line => JSON.parse(line));
+    expect(frames[0]).toMatchObject({type: "progress", activities: []});
+    expect(frames.at(-1)).toMatchObject({type: "error", error: {code: "ASSISTANT_UNAVAILABLE"}});
+    expect(wire).not.toContain("provider-secret");
+  });
+
+  it("ends timed-out streams without inventing progress stages", async () => {
+    let clock = 1000;
+    const {calls} = mountApi([runtimeConfigWithKnowledge, conversationSync,
+      {match: call => call.path === "/api/frontmind/v2/tasks", json: {id: "task-running", status: "running"}},
+      {match: call => call.path === "/api/frontmind/v2/tasks/task-running", json: {id: "task-running", status: "running"}},
+    ], {askDeadlineMs: 10}, {now: () => clock, sleep: async () => { clock += 10; }});
+    const response = await fetch(`${baseUrl}/ask`, {method: "POST", headers: {
+      "content-type": "application/json", accept: "application/x-ndjson",
+    }, body: JSON.stringify({question: "你好"})});
+    const frames = (await response.text()).trim().split("\n").map(line => JSON.parse(line));
+    expect(frames.at(-1)).toMatchObject({type: "error", error: {code: "ASSISTANT_ANSWER_TIMEOUT"}});
+    expect(frames.filter(frame => frame.type === "progress").every(frame => frame.activities.length === 0)).toBe(true);
+    expect(calls.filter(call => call.path.endsWith("task-running"))).toHaveLength(1);
+  });
+
+  it("stops polling after the streaming caller disconnects", async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const {calls} = mountApi([runtimeConfigWithKnowledge, conversationSync,
+      {match: call => call.path === "/api/frontmind/v2/tasks", json: {id: "task-disconnected", status: "running"}},
+      {match: call => call.path.endsWith("task-disconnected"), json: completedTask},
+    ], undefined, {sleep: () => waiting});
+    const controller = new AbortController();
+    const response = await fetch(`${baseUrl}/ask`, {method: "POST", headers: {
+      "content-type": "application/json", accept: "application/x-ndjson",
+    }, signal: controller.signal, body: JSON.stringify({question: "你好"})});
+    await response.body!.getReader().read();
+    controller.abort();
+    // Let the local server observe socket closure while its task wait is held.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    release();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(calls.filter(call => call.method === "GET" && call.path.endsWith("task-disconnected"))).toHaveLength(0);
+  });
+
   it("extracts the newest assistant answer with validated sources", () => {
     const answer = extractAssistantAnswer(completedTask);
     expect(answer?.text).toBe("FrontMind 提供品牌知识管理。");

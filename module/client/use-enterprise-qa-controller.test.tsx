@@ -1,6 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrandConversationContext } from "./host";
+import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
 
 const mocks = vi.hoisted(() => ({
   context: null as BrandConversationContext | null,
@@ -322,6 +323,106 @@ function runningSteeringContext() {
   return context;
 }
 const jsonReply = (value: unknown, ok = true) => ({ ok, json: async () => value });
+
+function taskExecution(taskId: string, userId: string, entryId: string): GeneralExecutionDto {
+  return {
+    schemaVersion: 1,
+    taskId,
+    coverage: "complete",
+    timeline: [{
+      id: entryId, kind: "tool", label: "检索文本", status: "running",
+      turnId: `turn-${userId}`, userMessageId: userId, userSequence: 1,
+      timestamp: 10, rank: 1,
+    }],
+  };
+}
+
+describe("enterprise QA task execution snapshots", () => {
+  it("exposes dispatch execution while the conversation refresh is still pending", async () => {
+    const context = mocks.context!;
+    let finishRefresh!: () => void;
+    vi.mocked(context.refreshConversations).mockImplementation(() => new Promise<void>(resolve => { finishRefresh = resolve; }));
+    mocks.fetch.mockImplementation(async (_path, init) => {
+      const body = JSON.parse(init.body);
+      return jsonReply({
+        id: "task-dispatched", purpose: "enterprise_qa", status: "running",
+        execution: taskExecution("task-dispatched", body.clientRequestId, "dispatch-progress"),
+      });
+    });
+    const { result } = renderHook(() => useEnterpriseQaController());
+    let dispatched!: Promise<boolean>;
+    act(() => { dispatched = result.current.send("查看知识库"); });
+    await waitFor(() => expect(result.current.execution?.timeline[0]?.id).toBe("dispatch-progress"));
+    expect(context.activeConversation?.execution).toBeUndefined();
+    expect(context.refreshConversations).toHaveBeenCalledOnce();
+    await act(async () => { finishRefresh(); expect(await dispatched).toBe(true); });
+  });
+
+  it("shows the task poll snapshot before its conversation hydration finishes", async () => {
+    const context = runningSteeringContext();
+    context.activeConversation!.execution = taskExecution("task-running", "q-running", "hydrated-progress");
+    let finishRefresh!: () => void;
+    vi.mocked(context.refreshConversations).mockImplementation(() => new Promise<void>(resolve => { finishRefresh = resolve; }));
+    mocks.fetch.mockResolvedValue(jsonReply({
+      id: "task-running", purpose: "enterprise_qa", status: "running",
+      execution: taskExecution("task-running", "q-running", "polled-progress"),
+    }));
+    const { result, unmount } = renderHook(() => useEnterpriseQaController());
+    await waitFor(() => expect(result.current.execution?.timeline[0]?.id).toBe("polled-progress"));
+    expect(context.activeConversation?.execution?.timeline[0]?.id).toBe("hydrated-progress");
+    expect(result.current.running).toBe(true);
+    unmount();
+    await act(async () => { finishRefresh(); });
+  });
+
+  it("does not overwrite the current conversation with a late previous poll", async () => {
+    runningSteeringContext();
+    let finishOldPoll!: (value: ReturnType<typeof jsonReply>) => void;
+    mocks.fetch.mockImplementation(async (path) => path.endsWith("/task-running")
+      ? new Promise<ReturnType<typeof jsonReply>>(resolve => { finishOldPoll = resolve; })
+      : jsonReply({ id: "task-other", status: "running", execution: taskExecution("task-other", "q-other", "current-progress") }));
+    const { result, rerender } = renderHook(() => useEnterpriseQaController());
+    const next = conversationContext("task-other", "conversation-other");
+    Object.assign(next.activeConversation!, { status: "running", messages: [{ id: "q-other", role: "user", content: "新问题", timestamp: 2 }] });
+    mocks.context = next;
+    rerender();
+    await waitFor(() => expect(result.current.execution?.timeline[0]?.id).toBe("current-progress"));
+    await act(async () => { finishOldPoll(jsonReply({
+      id: "task-running", status: "running", execution: taskExecution("task-running", "q-running", "late-old-progress"),
+    })); });
+    expect(result.current.execution?.taskId).toBe("task-other");
+    expect(result.current.execution?.timeline[0]?.id).toBe("current-progress");
+    expect(next.refreshConversations).toHaveBeenCalledOnce();
+  });
+
+  it("binds cached progress to the latest user message even when the task is reused", async () => {
+    const context = runningSteeringContext();
+    let finishOldPoll!: (value: ReturnType<typeof jsonReply>) => void;
+    mocks.fetch
+      .mockImplementationOnce(() => new Promise<ReturnType<typeof jsonReply>>(resolve => { finishOldPoll = resolve; }))
+      .mockResolvedValue(jsonReply({ id: "task-running", status: "running", execution: taskExecution("task-running", "q-next", "next-question-progress") }));
+    const { result, rerender } = renderHook(() => useEnterpriseQaController());
+    context.activeConversation!.messages.push({ id: "q-next", role: "user", content: "继续追问", timestamp: 2 });
+    rerender();
+    await waitFor(() => expect(result.current.execution?.timeline[0]?.id).toBe("next-question-progress"));
+    await act(async () => { finishOldPoll(jsonReply({
+      id: "task-running", status: "running", execution: taskExecution("task-running", "q-running", "old-question-progress"),
+    })); });
+    expect(result.current.execution?.timeline[0]?.id).toBe("next-question-progress");
+  });
+
+  it("rejects a mismatched task snapshot and keeps hydrated evidence", async () => {
+    const context = runningSteeringContext();
+    const hydrated = taskExecution("task-running", "q-running", "hydrated-progress");
+    context.activeConversation!.execution = hydrated;
+    mocks.fetch.mockResolvedValue(jsonReply({
+      id: "task-running", status: "running", execution: taskExecution("task-foreign", "q-running", "foreign-progress"),
+    }));
+    const { result } = renderHook(() => useEnterpriseQaController());
+    await waitFor(() => expect(context.refreshConversations).toHaveBeenCalledOnce());
+    expect(result.current.execution).toBe(hydrated);
+  });
+});
 
 describe("same-turn enterprise QA supplements", () => {
   it("does not let an older poll replace a newer acknowledged supplement", async () => {

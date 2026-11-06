@@ -60,6 +60,7 @@ function EnterpriseRagLiveWorkspace({
   const [selectedAnswerKey, setSelectedAnswerKey] = useState<string | null>(null);
   const controller = useEnterpriseQaController({ evaluationIntent: "enterprise_rag_once", activeConversationId: newDraft ? null : undefined });
   const active = controller.active;
+  const execution = controller.execution ?? active?.execution;
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
   const activeIdRef = useRef(active?.id ?? null);
@@ -153,7 +154,7 @@ function EnterpriseRagLiveWorkspace({
   useEffect(() => { if (workspace.activeConversation) creating.current = false; }, [workspace.activeConversation]);
   useEffect(() => { setSelectedAnswerKey(null); }, [active?.id]);
 
-  const turns = ragLiveTurns(active, controller.running);
+  const turns = ragLiveTurns(active && execution !== active.execution ? { ...active, execution } : active, controller.running);
   const currentTurn = turns.at(-1);
   const selectedTurn = turns.find(turn => turn.answerKey === selectedAnswerKey && turn.answer) ?? currentTurn;
   const selectedTaskId = selectedTurn?.taskId;
@@ -204,10 +205,10 @@ function EnterpriseRagLiveWorkspace({
     sources: (selectedTurn?.sources ?? []) as EnterpriseRagLiveRuntime["sources"],
     busy: controller.busy,
     running: controller.running,
-    runningTurnId: steering?.turnId ?? active?.execution?.timeline.findLast(entry => entry.userMessageId === userMessage?.id || userMessage?.serverSequence !== undefined && entry.userSequence === userMessage.serverSequence)?.turnId,
+    runningTurnId: steering?.turnId ?? execution?.timeline.findLast(entry => entry.userMessageId === userMessage?.id || userMessage?.serverSequence !== undefined && entry.userSequence === userMessage.serverSequence)?.turnId,
     steeringSupported: steering?.supported === true,
     onSteer: controller.steer,
-    activity: ragLiveActivity({ execution: active?.execution, questionId: userMessage?.id, questionSequence: userMessage?.serverSequence, turnId: steering?.turnId, running: controller.running }),
+    activity: ragLiveActivity({ execution, questionId: userMessage?.id, questionSequence: userMessage?.serverSequence, turnId: steering?.turnId, running: controller.running }),
     pendingDispatchQuestion: controller.pendingDispatch?.question,
     notice: controller.notice || workspace.syncError || undefined,
     onAsk: async (question) => {

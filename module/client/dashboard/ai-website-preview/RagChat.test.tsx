@@ -36,7 +36,7 @@ describe("RAG chat presentation", () => {
   });
   it("animates only a new response after waiting and keeps references functional", () => {
     const props=base(); const view=render(<RagChat {...props} answer="历史回答" answerKey="old" />); expect(phase()).toBe("ready");
-    view.rerender(<RagChat {...props} busy running />); expect(screen.getByTestId("rag-chat-wait").textContent).toBe("正在处理…");
+    view.rerender(<RagChat {...props} busy running />); expect(screen.getByTestId("rag-chat-wait").textContent).toContain("正在处理，等待更多进展…");
     view.rerender(<RagChat {...props} answer="新回答" answerKey="new" sources={[{id:"s1",title:"企业资料"}]} />); expect(phase()).toBe("leaving");
     act(() => vi.advanceTimersByTime(120)); expect(phase()).toBe("revealing"); expect(screen.queryByTestId("rag-chat-wait")).toBeNull();
     fireEvent.click(screen.getByRole("button",{name:"[1] 企业资料"})); expect(props.onEvidence).toHaveBeenCalledTimes(1);
@@ -269,6 +269,46 @@ describe("RAG chat presentation", () => {
     expect(screen.queryByText("正在编辑文件…")).toBeNull();
     view.rerender(<RagChat {...props} scopeKey="other" busy={false} running={false} answer="恢复的回答" answerKey="b1" />);
     expect(screen.queryByTestId("rag-chat-wait")).toBeNull();
+  });
+
+  it("keeps an immediate waiting indicator without inventing retrieval stages as time passes", async () => {
+    const pending = deferred<void>();
+    const props = {...base(), onSubmit: vi.fn(() => pending.promise)};
+    const view = render(<RagChat {...props} />);
+    fireEvent.click(screen.getByRole("button", {name: "发送问题"}));
+    expect(screen.getByText("正在提交问题…")).toBeTruthy();
+    act(() => vi.advanceTimersByTime(30000));
+    expect(screen.queryByText(/正在检索|正在查找|已读取/u)).toBeNull();
+    view.rerender(<RagChat {...props} busy running startedAt={Date.now()} activity={[
+      {id: "prepared", label: "读取知识依据", status: "completed"},
+      {id: "search", label: "检索文本", status: "running"},
+    ]} />);
+    expect(screen.getByText("已读取知识依据")).toBeTruthy();
+    expect(screen.getByText("正在检索文本…")).toBeTruthy();
+    expect(screen.queryByText("正在处理，等待更多进展…")).toBeNull();
+    await act(async () => pending.resolve());
+  });
+
+  it("bounds a long progress history and resets expansion when switching turns", () => {
+    const props = {...base(), busy: true, running: true, turnKey: "first"};
+    const activity = Array.from({length: 7}, (_, index) => ({id: String(index), label: index % 2 ? "读取文件" : "检索文本", status: "completed" as const}));
+    const view = render(<RagChat {...props} activity={activity} />);
+    expect(screen.getByRole("list", {name: "本轮执行进展"}).children).toHaveLength(5);
+    fireEvent.click(screen.getByRole("button", {name: "查看全部 7 项进展"}));
+    expect(screen.getByRole("list", {name: "本轮执行进展"}).children).toHaveLength(8);
+    view.rerender(<RagChat {...props} turnKey="second" activity={[]} />);
+    expect(screen.queryByRole("button", {name: "收起进展"})).toBeNull();
+    expect(screen.queryByText("已检索文本")).toBeNull();
+    expect(screen.getByText("正在处理，等待更多进展…")).toBeTruthy();
+  });
+
+  it("keeps a still-running tool visible when newer completed work fills the compact history", () => {
+    render(<RagChat {...base()} busy running activity={[
+      {id: "search", label: "搜索网页", status: "running"},
+      ...Array.from({length: 6}, (_, index) => ({id: String(index), label: index % 2 ? "读取文件" : "检索文本", status: "completed" as const})),
+    ]} />);
+    expect(screen.getByText("正在搜索网页…")).toBeTruthy();
+    expect(screen.getByRole("list", {name: "本轮执行进展"}).children).toHaveLength(4);
   });
 
 });
