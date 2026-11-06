@@ -137,6 +137,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     return {...ledger, nodes: data.nodes, preview: false};
   }
   const activeJob = (job: IntentSkillJob) => !["succeeded", "failed"].includes(job.status);
+  const questionsHash = (job: IntentSkillJob, state: IntentState) => intentHash(job.questionsScope === "selected"
+    ? job.questionIds.map(id => state.questions.find(question => question.id === id)).filter(Boolean) : state.questions);
   const timeoutMessage = "模型任务超时，请查看账户任务记录后重新评估";
   const recoverableTimeout = (job: IntentSkillJob) => job.status === "failed" && job.error === timeoutMessage;
   // Migrate the previous stopped-as-failed diagnosis by observing the original task.
@@ -172,7 +174,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       const inputHash = intentHash(frozen);
       reserved = {id: clientRequestId, taskId: randomUUID(), kind, questionIds: selectedQuestions.map(q => q.id),
         status: "queued", createdAt: new Date().toISOString(), inputHash, knowledgeHash: intentHash(data.nodes),
-        questionsHash: intentHash(ledger.state.questions), credentialId: prepared.credential.id,
+        questionsScope: "selected", questionsHash: intentHash(selectedQuestions), credentialId: prepared.credential.id,
         credentialVersion: prepared.credential.version, skillHash: prepared.skillHash, model: prepared.credential.upstreamModel, receiptId};
       const input: IntentSkillInput = {...frozen, inputHash, operationToken: `brand-intent:${clientRequestId}`};
       await reserveIntentSkill(tx, reserved, input, prepared.credential, context.accountUserId, context.enterpriseProjectId);
@@ -186,6 +188,10 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     return observe();
   }
   async function advance(original: IntentSkillJob) {
+    if (["paused", "pausing", "resuming"].includes(original.status)) {
+      if (original.status !== "paused") await advanceControl(original);
+      return;
+    }
     if ((!activeJob(original) && !recoverableJob(original)) || (original.lease?.expiresAt ?? 0) > Date.now()) return;
     const owner = randomUUID();
     let job: IntentSkillJob | undefined;
@@ -218,7 +224,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         });
         phase = status;
       };
-      const timedOut = Date.now() - (job.repair?.claimedAt ?? Date.parse(job.createdAt)) > 30 * 60_000;
+      const timedOut = Date.now() - (job.repair?.claimedAt ?? job.continuation?.resumedAt ?? Date.parse(job.createdAt)) > 30 * 60_000;
       if (phase === "queued" || phase === "uploading") {
         if (timedOut) throw new IntentSkillRuntimeError(timeoutMessage);
         await update("uploading");
@@ -272,7 +278,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       progress = {stage: job.repair ? "repairing" : allEvents.some(event => event.type === "structured_output_result") ? "validating" : allEvents.length ? "analyzing" : "submitted",
         updatedAt: new Date().toISOString(), events: [...mergedEvents.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-24)};
       // A repair turn may never borrow the original turn's result or terminal event.
-      const baseline = new Set(job.repair?.baselineEventIds ?? []);
+      const baseline = new Set([...(job.continuation?.baselineEventIds ?? []), ...(job.repair?.baselineEventIds ?? [])]);
       const events = allEvents.filter(event => !baseline.has(event.id));
       const resultEvent = model.orderManusV2EventsByProviderRank(events, "newest_first").find(event => event.type === "structured_output_result");
       let invalidResult: string | undefined;
@@ -297,7 +303,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
           if (phase === "failed" && ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
             .some(later => later.questionIds.some(id => current.questionIds.includes(id))))
             throw new IntentSkillRuntimeError("已有更新的评估任务，旧任务结果不再发布");
-          if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash || intentHash(ledger.state.questions) !== job!.questionsHash)
+          if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash || questionsHash(job!, ledger.state) !== job!.questionsHash)
             throw new IntentSkillRuntimeError("任务期间知识或问题已更新，请重新评估");
           ledger.state.evaluations = [...ledger.state.evaluations.filter(e => !job!.questionIds.includes(e.questionId)), ...result.evaluations];
           if (job!.kind === "plan") ledger.state.plans = [...ledger.state.plans.filter(p => !job!.questionIds.includes(p.questionId)), ...result.plans];
@@ -349,7 +355,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
             if (ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
               .some(later => later.questionIds.some(id => current.questionIds.includes(id))))
               throw new IntentSkillRuntimeError("已有更新的评估任务，旧任务结果不再发布");
-            if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash || intentHash(ledger.state.questions) !== job!.questionsHash)
+            if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash || questionsHash(job!, ledger.state) !== job!.questionsHash)
               throw new IntentSkillRuntimeError("任务期间知识或问题已更新，请重新评估");
             current.repair = {intentId, claimedAt: Date.now(), baselineEventIds: allEvents.map(event => event.id), reason: invalidResult!};
             current.status = "running"; delete current.error; delete current.terminalObservedAt;
@@ -423,6 +429,113 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       });
     }
   }
+  // Control claims are durable before any provider mutation. An unanswered POST
+  // is reconciled by reads, never replayed by a refresh or a second browser.
+  async function advanceControl(original: IntentSkillJob) {
+    if (!original.control || (original.lease?.expiresAt ?? 0) > Date.now()) return;
+    const owner = randomUUID();
+    let job: IntentSkillJob | undefined;
+    await locked(undefined, async (_tx, ledger) => {
+      const current = ledger.state.jobs?.find(item => item.id === original.id);
+      if (!current?.control || !["pausing", "resuming"].includes(current.status) ||
+          (current.lease?.expiresAt ?? 0) > Date.now()) return;
+      current.lease = {owner, expiresAt: Date.now() + 120000};
+      job = structuredClone(current);
+    });
+    if (!job) return;
+    try {
+      const {client, repairClient, task, input} = await intentSkillClient(job, context.accountUserId, await database());
+      if (!task.providerTaskId) throw new IntentSkillRuntimeError("模型任务尚未提交，暂不能暂停");
+      const providerTaskId = task.providerTaskId;
+      const action = job.control!.action;
+      const events = await client.listAllMessages({taskId: providerTaskId, order: "asc"});
+      const state = (await client.taskDetail(providerTaskId)).status;
+      const settled = ["stopped", "finished", "completed", "cancelled", "failed", "error"].includes(state);
+      const finish = async (status: "paused" | "running") => locked(undefined, async (tx, ledger) => {
+        const current = ledger.state.jobs!.find(item => item.id === job!.id)!;
+        if (current.lease?.owner !== owner) return;
+        current.status = status;
+        current.control!.acknowledgedAt = Date.now();
+        delete current.control!.error;
+        if (status === "running") {delete current.error; delete current.terminalObservedAt; delete current.repair;}
+        const model = intentSkillPorts();
+        await tx.update(model.agentTasks).set({providerState: status, updatedAt: new Date()}).where(eq(model.agentTasks.id, current.taskId));
+      });
+      if (action === "pause" && settled) {await finish("paused"); return;}
+      if (action === "resume" && job.control!.dispatchedAt) {
+        // A new provider event or a running state confirms the same continuation.
+        const baseline = new Set(job.continuation?.baselineEventIds ?? []);
+        if (state === "running" || events.some((event: any) => !baseline.has(event.id)))
+          await finish("running");
+        return;
+      }
+      if (job.control!.dispatchedAt) return;
+      if (action === "pause" && !client.stopTask) throw new IntentSkillRuntimeError("当前模型服务不支持暂停执行");
+      await locked(undefined, async (_tx, ledger) => {
+        const current = ledger.state.jobs!.find(item => item.id === job!.id)!;
+        if (current.lease?.owner !== owner || current.control!.dispatchedAt)
+          throw new IntentSkillRuntimeError("任务控制权已变化");
+        current.control!.dispatchedAt = Date.now();
+        if (action === "resume") current.continuation = {
+          baselineEventIds: events.map((event: any) => event.id), resumedAt: Date.now(),
+        };
+      });
+      if (action === "pause") {
+        await client.stopTask!(providerTaskId);
+        if (["stopped", "finished", "completed", "cancelled", "failed", "error"].includes((await client.taskDetail(providerTaskId)).status))
+          await finish("paused");
+      } else {
+        if (!settled) throw new IntentSkillRuntimeError("模型尚未停止，请重新读取状态后继续");
+        await repairClient(job.control!.intentId).sendMessage({
+          taskId: providerTaskId, structuredOutputSchema: INTENT_WIRE_SCHEMA,
+          prompt: `继续用户暂停的评估。沿用本任务原附件 SKILL.md 和 input.json、已保存上下文及证据，完成原问题范围的完整评估。不得执行优化方案，不得更改任务标识。仅返回符合原结构的完整 JSON。\noperationToken=${input.operationToken}\ninputHash=${input.inputHash}\n继续标识=${job.control!.intentId}`,
+        });
+        await finish("running");
+      }
+    } catch (error) {
+      await locked(undefined, async (_tx, ledger) => {
+        const current = ledger.state.jobs!.find(item => item.id === job!.id)!;
+        if (current.lease?.owner !== owner) return;
+        current.control!.error = "任务控制结果尚未确认，请重新读取状态；系统不会重复提交。";
+        // Explicit rejection proves the mutation did not run. Restore the
+        // actionable state; transport ambiguity remains in reconciliation.
+        const upstream = error as {outcomeUnknown?: boolean; retryable?: boolean; status?: number};
+        if (error instanceof IntentSkillRuntimeError ||
+            (upstream.outcomeUnknown === false && upstream.retryable === false && Number(upstream.status) >= 400 && Number(upstream.status) < 500)) {
+          current.status = current.control!.action === "pause" ? "running" : "paused";
+          current.control!.error = error instanceof IntentSkillRuntimeError ? error.message : "模型服务拒绝了本次操作，请稍后重试";
+        }
+      });
+    } finally {
+      await locked(undefined, async (_tx, ledger) => {
+        const current = ledger.state.jobs!.find(item => item.id === job!.id);
+        if (current?.lease?.owner === owner) delete current.lease;
+      });
+    }
+  }
+  async function control(value: unknown) {
+    const input = z.object({jobId: z.string().uuid(), action: z.enum(["pause", "resume"])}).strict().parse(value);
+    let target!: IntentSkillJob;
+    await locked(undefined, async (_tx, ledger) => {
+      const job = ledger.state.jobs?.find(item => item.id === input.jobId);
+      if (!job) throw new IntentWorkbenchError("JOB_MISSING", "当前工作区没有此评估任务", 404);
+      if (["succeeded", "failed"].includes(job.status))
+        throw new IntentWorkbenchError("JOB_COMPLETED", "任务已结束，请查看结果");
+      if ((input.action === "pause" && ["pausing", "paused"].includes(job.status)) ||
+          (input.action === "resume" && ["resuming", "running"].includes(job.status) && job.control?.action === "resume")) {
+        target = structuredClone(job); return;
+      }
+      if ((job.lease?.expiresAt ?? 0) > Date.now())
+        throw new IntentWorkbenchError("JOB_BUSY", "任务正在同步，请稍后再试");
+      if (input.action === "pause" ? job.status !== "running" : job.status !== "paused")
+        throw new IntentWorkbenchError("CONTROL_UNAVAILABLE", "当前阶段暂不能执行此操作，请重新读取状态");
+      job.status = input.action === "pause" ? "pausing" : "resuming";
+      job.control = {action: input.action, intentId: randomUUID(), claimedAt: Date.now()};
+      target = structuredClone(job);
+    });
+    if (target.status !== "paused" && target.status !== "running") await advanceControl(target);
+    return observe();
+  }
   async function poll() {
     const workspace = await observe();
     const job = workspace.state.jobs?.find(activeJob) ??
@@ -439,7 +552,10 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     await locked(input.expectedRevision, async (_tx, ledger) => {
       if (ledger.state.receipts.some(receipt => receipt.status === "running" || (receipt.lease?.expiresAt ?? 0) > Date.now()))
         throw new IntentWorkbenchError("EXECUTION_ACTIVE", "请先继续完成当前执行");
-      if (ledger.state.jobs?.some(activeJob)) throw new IntentWorkbenchError("OPERATION_ACTIVE", "请等待当前优化评估完成");
+      const currentJob = ledger.state.jobs?.find(activeJob);
+      if (currentJob && (currentJob.questionsScope !== "selected" ||
+          ("questionId" in input && currentJob.questionIds.includes(input.questionId))))
+        throw new IntentWorkbenchError("OPERATION_ACTIVE", "此问题正在评估，请完成当前任务后修改；其他问题仍可操作");
       const state = ledger.state;
       if (input.kind === "intake") {
         for (const question of input.questions) {
@@ -498,7 +614,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         const plan = ledger.state.plans.find(item => item.questionId === questionId);
         if (!plan) throw new IntentWorkbenchError("PLAN_MISSING", "请先生成并审核方案");
         const source = ledger.state.jobs?.find(job => job.kind === "plan" && job.inputHash === plan.inputHash && job.status === "succeeded");
-        if (!source || source.knowledgeHash !== intentHash(executionKnowledge.nodes) || source.questionsHash !== intentHash(ledger.state.questions))
+        if (!source || source.knowledgeHash !== intentHash(executionKnowledge.nodes) || source.questionsHash !== questionsHash(source, ledger.state))
           throw new IntentWorkbenchError("PLAN_STALE", "方案依据的知识或问题已变化，请重新生成方案");
         return plan;
       });
@@ -650,5 +766,5 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       return observe();
     }
   }
-  return {observe, poll, command, execute, rollback};
+  return {observe, poll, command, execute, rollback, control};
 }

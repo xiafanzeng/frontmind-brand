@@ -48,12 +48,18 @@ export type IntentAction = {
 export type IntentPlan = {questionId: string; actions: IntentAction[]; inputHash?: string};
 export type IntentSkillJob = {
   id: string; taskId: string; kind: "evaluate" | "plan"; questionIds: string[];
-  status: "queued" | "uploading" | "create_unknown" | "running" | "succeeded" | "failed";
+  status: "queued" | "uploading" | "create_unknown" | "running" | "pausing" | "paused" | "resuming" | "succeeded" | "failed";
   createdAt: string; inputHash: string; knowledgeHash: string; questionsHash: string;
+  questionsScope?: "selected";
   credentialId: string; credentialVersion: number; skillHash: string; model: string;
   receiptId?: string; error?: string; lease?: {owner: string; expiresAt: number};
   createClaimedAt?: number;
   terminalObservedAt?: number;
+  control?: {
+    action: "pause" | "resume"; intentId: string; claimedAt: number;
+    dispatchedAt?: number; acknowledgedAt?: number; error?: string;
+  };
+  continuation?: {baselineEventIds: string[]; resumedAt: number};
   result?: {
     completedAt: string;
     questions: IntentQuestion[];

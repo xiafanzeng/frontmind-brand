@@ -35,7 +35,7 @@ function Evaluation({item}: {item: IntentEvaluation}) {
     <aside className="iw-panel iw-diagnosis"><h3>诊断摘要</h3>{item.findings.length ? item.findings.map(finding => <p key={finding}><Sparkles size={16}/>{finding}</p>) : <p><Check size={16}/>当前要点均有相关内容支撑。</p>}<div className="iw-method">{item.method === "skill_v1" ? "AI 基于当前知识证据评估" : "历史规则评估 / 演示数据"} · 非真实搜索热度<br/>更新时间：{new Date(item.evaluatedAt).toLocaleString("zh-CN")}<br/>引用待核验资料不计为充分支撑。</div></aside>
   </div>;
 }
-function PlanEditor({plan, onChange}: {plan: IntentPlan; onChange: (plan: IntentPlan) => void}) {
+export function PlanEditor({plan, onChange}: {plan: IntentPlan; onChange: (plan: IntentPlan) => void}) {
   const previewId = useId();
   const [active, setActive] = useState(plan.actions.find(item => item.kind === "node")?.id ?? plan.actions[0]?.id);
   const action = plan.actions.find(item => item.id === active) ?? plan.actions[0];
@@ -70,6 +70,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [view, setView] = useState<View>(initialView);
   const [pending, setPending] = useState(false);
   const [pendingRead, setPendingRead] = useState(false);
+  const [watching, setWatching] = useState(false);
   const [progressKind, setProgressKind] = useState<"evaluate" | "plan">("evaluate");
   const [progressJobId, setProgressJobId] = useState<string>();
   const [error, setError] = useState("");
@@ -97,6 +98,11 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const mounted = useRef(true);
   const generation = useRef(0);
   const running = useRef(false);
+  const watchController = useRef<AbortController | null>(null);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const draftDirtyRef = useRef(draftDirty);
+  draftDirtyRef.current = draftDirty;
   const emittedSection = useRef<"universe" | "list" | undefined>(undefined);
   const executeId = useRef<string | undefined>(undefined);
   const container = useRef<HTMLDivElement>(null);
@@ -106,7 +112,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     setWorkspace(null); setDrafts([]); setDraftDirty(false); setReceived([]); setSelected([]); setHistoryId(undefined); setHistoryQuestionId(undefined);
     setQuestionAction(null); setQuestionError("");
     void run(() => api.observe(), undefined, true, undefined, true);
-    return () => {mounted.current = false; generation.current++;};
+    return () => {mounted.current = false; generation.current++; watchController.current?.abort();};
   }, [api]);
   useEffect(() => {
     if (emittedSection.current === initialView) {emittedSection.current = undefined; return;}
@@ -132,6 +138,41 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     return Boolean(result);
   }
   useWorkspaceDraftGuard({dirty: draftDirty, label: "优化方案修改", save: saveDrafts, discard: async () => {setDraftDirty(false); return true;}});
+  function applyWorkspace(data: IntentWorkspace) {
+    setWorkspace(previous => previous && previous.revision > data.revision ? previous : data);
+  }
+  function watchJob(job: NonNullable<IntentWorkspace["state"]["jobs"]>[number], destination: View) {
+    watchController.current?.abort();
+    const controller = new AbortController();
+    watchController.current = controller;
+    if (!api.waitForJob || job.status === "paused") {setWatching(false); return;}
+    const version = generation.current;
+    const current = () => mounted.current && generation.current === version && !controller.signal.aborted;
+    setWatching(true);
+    void api.waitForJob(job.id, data => {
+      if (current()) applyWorkspace(data);
+    }, controller.signal).then(data => {
+      if (!current()) return;
+      applyWorkspace(data);
+      const finished = data.state.jobs?.find(item => item.id === job.id);
+      // Browsing, editing and host navigation must never be stolen by completion.
+      if (finished?.status !== "succeeded" || viewRef.current !== "progress" || draftDirtyRef.current) return;
+      setScope(finished.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]);
+      if (finished.receiptId) {setReceiptId(finished.receiptId); setView("result");}
+      else if (finished.kind === "plan") {
+        setDrafts(structuredClone(data.state.plans.filter(item => finished.questionIds.includes(item.questionId))));
+        setDraftDirty(false); setView("plan");
+      } else setView(destination === "plan" ? "evaluation" : destination);
+    }).catch(cause => {
+      if (current()) setError(cause instanceof Error ? cause.message : "任务状态读取失败，请重新读取");
+    }).finally(() => {if (current()) setWatching(false);});
+  }
+  async function controlJob(action: "pause" | "resume") {
+    if (!activeJob || !api.control || pending) return;
+    watchController.current?.abort(); setWatching(false);
+    const data = await run(() => api.control!({jobId: activeJob.id, action}));
+    if (!data && activeJob.status !== "paused") watchJob(activeJob, "evaluation");
+  }
   async function run(work: () => Promise<IntentWorkspace>, next?: View, restoreJob = false, modelKind?: "evaluate" | "plan", readOnly = false) {
     if (running.current) return;
     running.current = true; setPending(true); setPendingRead(readOnly); setError("");
@@ -143,7 +184,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     try {
       let data = await work();
       if (!current()) return;
-      setWorkspace(data);
+      applyWorkspace(data);
       const latest = data.state.jobs?.at(-1);
       if (latest?.status === "failed" && (latest.id !== priorJob?.id || priorJob?.status !== "failed"))
         throw new Error(latest.error ?? "模型生成失败，请重新评估");
@@ -169,24 +210,18 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         return data;
       }
       if (next) setView(next);
-      if (job && restoreJob) {
+      if (job && restoreJob && viewRef.current === "progress") {
         setScope(job.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]);
       }
-      if (job) {setProgressKind(job.kind); setProgressJobId(job.id); setView("progress");}
-      if (job && api.waitForJob) data = await api.waitForJob(job.id, value => {
-        if (!current()) throw new Error("工作区已切换");
-        setWorkspace(value);
-      });
+      if (job) {
+        setProgressKind(job.kind); setProgressJobId(job.id);
+        if (modelKind || viewRef.current === "progress") setView("progress");
+        watchJob(job, job.receiptId ? "result" : job.kind === "plan" ? "plan" : "evaluation");
+        return data;
+      }
       if (current()) {
-        setWorkspace(data);
-        const finished = data.state.jobs?.find(item => item.id === job?.id);
-        if (finished?.status === "failed") throw new Error(finished.error ?? "模型任务未完成");
-        if (job?.receiptId) setReceiptId(job.receiptId);
-        if (next || job || modelKind) setView(job?.receiptId ? "result" : restoreJob && job ? "evaluation" : destination);
-        if (job && restoreJob && job.kind === "plan") {
-          setDrafts(structuredClone(data.state.plans.filter(item => job.questionIds.includes(item.questionId))));
-          setDraftDirty(false); setView("plan");
-        }
+        applyWorkspace(data);
+        if (next || modelKind) setView(destination);
         return data;
       }
     }
@@ -197,7 +232,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const evaluations = workspace?.state.evaluations ?? [];
   const activeJob = workspace?.state.jobs?.find(item => !["succeeded", "failed"].includes(item.status));
   const initialListLoading = view === "list" && !workspace && !error;
-  const listEvaluation = view === "list" && activeJob?.kind === "evaluate" ? activeJob : undefined;
+  const listEvaluation = view === "list" ? activeJob ?? workspace?.state.jobs?.find(item => item.id === progressJobId) : undefined;
   const refreshingList = view === "list" && Boolean(workspace) && pending && pendingRead && !activeJob;
   const receipt = receiptId ? workspace?.state.receipts.find(item => item.id === receiptId) : workspace?.state.receipts.at(-1);
   const filtered = questions.filter(question => question.question.toLowerCase().includes(search.toLowerCase()) &&
@@ -215,7 +250,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const command = (input: Record<string, unknown>) => api.command({...input, expectedRevision: revision,
     ...(["evaluate", "plan"].includes(String(input.kind)) ? {clientRequestId: crypto.randomUUID()} : {})});
   function openQuestionAction(kind: "edit" | "delete", question: IntentQuestion) {
-    if (pending || running.current) return;
+    if (pending || running.current || (activeJob && (activeJob.questionsScope !== "selected" || activeJob.questionIds.includes(question.id)))) return;
     setQuestionError(""); setQuestionAction({kind, question});
     setQuestionDraft({question: question.question, category: question.category, subdivision: question.subdivision});
   }
@@ -253,6 +288,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       evaluations.some(evaluation => evaluation.questionId === item.id)).map(item => item.id)])] : []);
     const missing = force ? ids : ids.filter(id => !evaluations.some(item => item.questionId === id));
     if (!missing.length) {setView("evaluation"); return;}
+    if (activeJob) {setError("已有评估任务，请等待完成或继续暂停的任务。已保存的结果仍可查看。"); return;}
     await run(() => command({kind: "evaluate", questionIds: missing}), "evaluation", false, "evaluate");
   }
   async function nextEvaluation() {
@@ -281,6 +317,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     setSearch(""); setCategory("all"); setStatus("all"); setPage(0); setIntake(null);
     emittedSection.current = "list"; onSectionChange?.("list");
     const missing = ids.filter(id => !data.state.evaluations.some(item => item.questionId === id));
+    if (data.state.jobs?.some(item => !["succeeded", "failed"].includes(item.status))) return;
     if (missing.length) await run(() => api.command({kind: "evaluate", expectedRevision: data.revision,
       clientRequestId: crypto.randomUUID(), questionIds: missing}), "evaluation", false, "evaluate");
     else setView("evaluation");
@@ -293,11 +330,13 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       setDrafts(structuredClone(workspace.state.plans.filter(item => ids.includes(item.questionId))));
       setDraftDirty(false); setView("plan"); return;
     }
+    if (activeJob) {setError("已有评估任务，请等待完成或继续暂停的任务。已保存的方案仍可查看。"); return;}
     const data = await run(() => command({kind: "plan", questionIds: missing}), "plan", false, "plan");
-    if (data) {setDrafts(structuredClone(data.state.plans.filter(item => ids.includes(item.questionId)))); setDraftDirty(false); setView("plan");}
+    if (data && !data.state.jobs?.some(item => !["succeeded", "failed"].includes(item.status))) {setDrafts(structuredClone(data.state.plans.filter(item => ids.includes(item.questionId)))); setDraftDirty(false); setView("plan");}
   }
   async function execute() {
     if (!workspace) return;
+    if (activeJob) {setError("请先完成当前评估，再执行知识库修改。"); return;}
     const validDrafts = drafts.filter(draft => scope.includes(draft.questionId));
     if (validDrafts.some(draft => draft.actions.some(action => action.selected && !action.after.trim()))) {setError("请填写已选动作的修改内容"); return;}
     await run(async () => {
@@ -340,7 +379,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   }
   function openSection(section: "universe" | "list") {setView(section); emittedSection.current = section; onSectionChange?.(section);}
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending}>
-    {view === "plan" && <div className="iw-toolbar" style={{justifyContent: "flex-end"}}><button disabled={pending || draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>}
+    {view === "plan" && <div className="iw-toolbar" style={{justifyContent: "flex-end"}}><button disabled={pending || Boolean(activeJob) || draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>}
     {view === "history" && workspace && <>
       <button className="iw-back" onClick={() => openSection("list")}><ArrowLeft size={15}/>返回问题列表</button>
       <header className="iw-header"><div><h1>历史记录</h1><p>保存评估、优化方案和执行记录，查看不会重新评估。</p></div></header>
@@ -380,7 +419,9 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     </>}
     {error && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true, undefined, true)}>重新读取</button></div>}
     {view === "progress" && <IntentTaskProgress job={workspace?.state.jobs?.find(item => item.id === progressJobId)}
-      kind={progressKind} count={scope.length} error={error} pending={pending} onBack={() => setView("list")}
+      kind={progressKind} count={scope.length} error={error} pending={pending} updating={watching}
+      onPause={api.control ? () => void controlJob("pause") : undefined} onResume={api.control ? () => void controlJob("resume") : undefined}
+      onBack={() => setView("list")}
       onViewResult={() => void run(() => api.observe(), undefined, true, undefined, true)}
       onReload={() => void run(() => api.observe(), undefined, true, undefined, true)}/>}
     {pending && view !== "result" && view !== "progress" && !listEvaluation && !refreshingList && !initialListLoading && <div className="iw-panel" role="status">
@@ -401,12 +442,15 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         onDeleteQuestion: catalogIntegration?.onDeleteQuestion ?? (question => openQuestionAction("delete", question)),
       }}
         headerStatus={refreshingList ? <IntentListRefreshStatus/> : undefined}
-        taskFeedback={listEvaluation ? <IntentListEvaluationStatus job={listEvaluation} uncertain={Boolean(error)} onViewTask={() => {
+        taskFeedback={listEvaluation ? <IntentListEvaluationStatus job={listEvaluation} uncertain={Boolean(error)} pending={pending}
+          onPause={api.control ? () => void controlJob("pause") : undefined} onResume={api.control ? () => void controlJob("resume") : undefined}
+          onViewTask={() => {
           setScope(listEvaluation.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]); setProgressJobId(listEvaluation.id); setProgressKind(listEvaluation.kind); setView("progress");
         }}/> : undefined}
         savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan} onGeneratePlan={id => void plan(false, [id])}
         historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setHistoryQuestionId(undefined); setView("history");}}
         search={search} category={category} status={status} selected={selected} pending={pending}
+        mutationBlockedIds={activeJob ? activeJob.questionsScope === "selected" ? activeJob.questionIds : questions.map(question => question.id) : []}
         page={currentPage} pageCount={pageCount} total={filtered.length}
         onSearch={value => {setSearch(value); setPage(0);}} onCategory={value => {setCategory(value); setPage(0);}} onStatus={value => {setStatus(value); setPage(0);}}
         onToggle={toggle} onClear={() => setSelected([])} onEvaluate={ids => void evaluate(ids)} onPage={setPage}
@@ -426,10 +470,10 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         ["未充分支撑要点", `${evaluated.reduce((sum, item) => sum + item.points.filter(point => point.status !== "supported").length, 0)} 项`],
       ].map(([label, value]) => <section className="iw-panel" key={label}><span>{label}</span><strong>{value}</strong></section>)}</div></>}
       {scope.length === 1 ? <Evaluation item={activeEvaluation}/> : <section className="iw-panel iw-batch-list">{evaluated.map(item => <div key={item.questionId}><div className="iw-batch-row"><b>{questions.find(question => question.id === item.questionId)?.question}</b><span>问题价值 <Score value={item.value}/></span><span>知识支撑 <Score value={item.support}/></span><button aria-expanded={expanded.includes(item.questionId)} onClick={() => setExpanded(items => items.includes(item.questionId) ? items.filter(id => id !== item.questionId) : [...items, item.questionId])}><ChevronDown size={15}/>{expanded.includes(item.questionId) ? "收起细则" : "展开细则"}</button></div>{expanded.includes(item.questionId) && <div className="iw-batch-detail"><Evaluation item={item}/></div>}</div>)}</section>}
-      <div className="iw-sticky"><div><button disabled={pending} onClick={() => void evaluate(scope, true)}>重新评估</button>
+      <div className="iw-sticky"><div><button disabled={pending || Boolean(activeJob)} onClick={() => void evaluate(scope, true)}>重新评估</button>
         {scope.length === 1 && savedPlanIds.includes(scope[0])
           ? <button className="iw-primary" disabled={pending} onClick={() => openSavedPlan(scope[0])}>查看优化方案</button>
-          : <button className="iw-primary" disabled={pending} onClick={() => void plan()}>生成优化方案</button>}
+          : <button className="iw-primary" disabled={pending || Boolean(activeJob)} onClick={() => void plan()}>生成优化方案</button>}
       </div></div>
     </>}
     {view === "plan" && <>
@@ -444,7 +488,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       </section>)}
       <div className="iw-sticky"><span>已选择 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected).length, 0)}</strong> 项 · 执行后重新评估实际支撑</span><div>
         {draftDirty && <button disabled={pending} onClick={() => void saveDrafts()}>保存方案草稿</button>}
-        <button className="iw-primary" disabled={pending || !drafts.some(draft => draft.actions.some(action => action.selected))} onClick={() => void execute()}>确认并执行已选动作</button>
+        <button className="iw-primary" disabled={pending || Boolean(activeJob) || !drafts.some(draft => draft.actions.some(action => action.selected))} onClick={() => void execute()}>确认并执行已选动作</button>
       </div></div>
     </>}
     {view === "result" && receipt && !receipt.after.length && !pending && <div className="iw-panel" role="status">{receipt.reEvaluationError ?? "本次变更已保存，模型重评结果尚未生成。可重新读取任务状态。"}</div>}
