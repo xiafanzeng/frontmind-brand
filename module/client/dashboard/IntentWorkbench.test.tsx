@@ -183,14 +183,14 @@ describe("优化工作台任务入口", () => {
     expect(within(feedback).queryByRole("progressbar")).toBeNull();
     expect(api.command).not.toHaveBeenCalled();
   });
-  it("首次读取保持线上原提示，返回数据后切换为原列表", async () => {
+  it("首次读取显示单一列表骨架，返回数据后切换为原列表", async () => {
     const {api} = pendingApi(workspace());
     let finish!: (value: IntentWorkspace) => void;
     api.observe = vi.fn(() => new Promise<IntentWorkspace>(resolve => {finish = resolve;}));
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    expect(screen.queryByRole("heading", {name: "优化问题"})).toBeNull();
-    expect(screen.queryByRole("status", {name: "问题列表加载状态"})).toBeNull();
-    expect(screen.getAllByText("正在读取优化工作台…")).toHaveLength(2);
+    expect(screen.getByRole("heading", {name: "优化问题"})).toBeTruthy();
+    expect(screen.getByRole("status", {name: "问题列表加载状态"}).textContent).toBe("正在加载已保存的问题…");
+    expect(screen.queryByText("正在读取优化工作台…")).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByRole("button", {name: "评估问题"})).toBeNull();
     expect(screen.queryByRole("status", {name: "列表更新状态"})).toBeNull();
