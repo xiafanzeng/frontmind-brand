@@ -42,6 +42,7 @@
 .rag-reveal-screen-reader-text { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; user-select:none; }
 .rag-verdict.is-pending { --rag-status-color:#ff9f0a; --rag-status-glow:rgba(255,159,10,.2); border-color:#f0d9aa; background:#fffaf1; }
 .rag-verdict.is-danger { --rag-status-color:#d85b72; --rag-status-glow:rgba(216,91,114,.2); border-color:#e9b8c2; background:#fff4f5; }
+.rag-eval-root .rag-verdict.is-neutral { --rag-status-color:#aeaeb2; --rag-status-glow:rgba(174,174,178,.2); }
 .rag-danger-text { color:#a1324d; }
 .rag-automatic-evaluation { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border:1px solid #d9c9e5; border-radius:10px; background:#fbf8fd; }
 .rag-automatic-evaluation > div { min-width:0; display:flex; flex-direction:column; gap:4px; }

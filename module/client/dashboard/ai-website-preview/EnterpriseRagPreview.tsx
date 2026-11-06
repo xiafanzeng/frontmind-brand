@@ -706,9 +706,10 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
       evidenceIds: judgment?.evidenceIds ?? [],
     };
   });
-  const tone = result.gateStatus === "failed" || result.verdict === "unusable" ? "danger" : result.verdict === "improve" ? "pending" : result.complete ? "ready" : "pending";
+  const awaitingEvaluation = !answer.trim() && !automaticReport;
+  const tone = awaitingEvaluation ? "neutral" : result.gateStatus === "failed" || result.verdict === "unusable" ? "danger" : result.verdict === "improve" ? "pending" : result.complete ? "ready" : "pending";
   const hasPerfectScore = result.complete && result.score === 100 && tone !== "danger";
-  const displayVerdictLabel = displayVerdicts[result.verdict].replace(/\s*·\s*/g, " · ");
+  const displayVerdictLabel = awaitingEvaluation ? "待评估" : displayVerdicts[result.verdict].replace(/\s*·\s*/g, " · ");
   const evaluationSummary = automaticReport
     ? presentRagSummary(automaticReport.result.summary)
     : result.gateStatus === "failed"
