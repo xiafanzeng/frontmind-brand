@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from "react";
+import {useEffect, useId, useRef, useState} from "react";
 import {ArrowLeft, ArrowRight, Check, ChevronDown, Sparkles, Undo2} from "lucide-react";
 import {Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter} from "@frontmind/module-ui/components/ui/dialog";
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
@@ -7,6 +7,7 @@ import {liveIntentWorkbenchApi, type IntentWorkbenchApi} from "./intent-workbenc
 import type {IntentWorkspace, IntentEvaluation, IntentPlan, IntentAction} from "../../contracts/intent-workbench";
 import "./intent-workbench.css";
 import "./saved-plan-result.css";
+import "./plan-confirm.css";
 import KnowledgeChangesView from "./KnowledgeChangesView";
 import {useWorkspaceDraftGuard, projectWorkspaceUrl, requestWorkspaceNavigation} from "../host";
 import {navigate} from "wouter/use-browser-location";
@@ -32,14 +33,31 @@ function Evaluation({item}: {item: IntentEvaluation}) {
     <aside className="iw-panel iw-diagnosis"><h3>诊断摘要</h3>{item.findings.length ? item.findings.map(finding => <p key={finding}><Sparkles size={16}/>{finding}</p>) : <p><Check size={16}/>当前要点均有相关内容支撑。</p>}<div className="iw-method">{item.method === "skill_v1" ? "AI 基于当前知识证据评估" : "历史规则评估 / 演示数据"} · 非真实搜索热度<br/>更新时间：{new Date(item.evaluatedAt).toLocaleString("zh-CN")}<br/>引用待核验资料不计为充分支撑。</div></aside>
   </div>;
 }
-function PlanEditor({plan, question, onChange}: {plan: IntentPlan; question: string; onChange: (plan: IntentPlan) => void}) {
+function PlanEditor({plan, onChange}: {plan: IntentPlan; onChange: (plan: IntentPlan) => void}) {
+  const previewId = useId();
   const [active, setActive] = useState(plan.actions.find(item => item.kind === "node")?.id ?? plan.actions[0]?.id);
   const action = plan.actions.find(item => item.id === active) ?? plan.actions[0];
   const update = (id: string, patch: Partial<IntentAction>) => onChange({...plan, actions: plan.actions.map(item => item.id === id ? {...item, ...patch} : item)});
-  return <div className="iw-plan-grid"><div className="iw-panel iw-tasks">{plan.actions.map(item => <section key={item.id} className={`iw-task ${item.selected ? "selected" : ""} ${item.id === action?.id ? "is-active" : ""}`}>
-    <label><input type="checkbox" checked={item.selected} onChange={event => update(item.id, {selected: event.target.checked})}/><b>{item.title}</b><span className="iw-tag">{item.kind === "todo" ? "需补资料" : item.kind === "node" ? "需审核" : "低风险"}</span></label>
-    <p>{item.source}</p><button onClick={() => setActive(item.id)}>查看并编辑</button><button onClick={() => update(item.id, {selected: false})}>不采纳</button>
-  </section>)}</div><section className="iw-panel iw-preview"><h3>{action?.kind === "node" ? "知识节点变更预览" : action?.title}<span className="iw-tag">可编辑</span></h3>{action && <div className="iw-preview-body"><p className="iw-evidence">{question} · {action.source}</p>{action.before && <div className="iw-diff remove"><b>修改前</b><pre>{action.before}</pre></div>}<label className="iw-edit-label">修改后<textarea aria-label={`${action.title}修改后`} value={action.after} rows={action.kind === "node" ? 12 : 5} maxLength={action.kind === "question" ? 500 : 300000} onChange={event => update(action.id, {after: event.target.value})}/></label><p className="iw-method">节点正文须人工审核。资料待办不会直接消除知识缺口。</p></div>}</section></div>;
+  return <div className="iw-plan-grid iw-plan-editor">
+    <div className="iw-panel iw-tasks">{plan.actions.map(item => <section key={item.id} aria-label={`优化动作：${item.title}`} className={`iw-task ${item.selected ? "selected" : ""} ${item.id === action?.id ? "is-active" : ""}`}>
+      <button type="button" className="iw-task-open" aria-label={`查看并编辑：${item.title}`} aria-pressed={item.id === action?.id} aria-controls={previewId} onClick={() => setActive(item.id)}><ArrowRight size={18}/></button>
+      <div className="iw-task-content">
+        <div className="iw-task-heading">
+          <input type="checkbox" aria-label={`采纳：${item.title}`} checked={item.selected} onChange={event => update(item.id, {selected: event.target.checked})}/>
+          <b>{item.title}</b><span className="iw-tag">{item.kind === "todo" ? "需补资料" : item.kind === "node" ? "需审核" : "低风险"}</span>
+        </div>
+        <p>{item.source}</p>
+        <button type="button" className="iw-task-dismiss" onClick={() => update(item.id, {selected: false})}>不采纳</button>
+      </div>
+    </section>)}</div>
+    <section id={previewId} className="iw-panel iw-preview" aria-label="优化动作修改前后">
+      <h3>{action?.kind === "node" ? "知识节点变更预览" : action?.title ?? "内容变更预览"}<span className="iw-tag">可编辑</span></h3>
+      {action && <div className="iw-preview-body">
+        <section className="iw-plan-before"><h4>修改前</h4>{action.before ? <pre>{action.before}</pre> : <p className="iw-plan-empty">暂无原内容</p>}</section>
+        <label className="iw-plan-after"><span>修改后</span><textarea aria-label={`${action.title}修改后`} value={action.after} rows={12} maxLength={action.kind === "question" ? 500 : 300000} onChange={event => update(action.id, {after: event.target.value})}/></label>
+      </div>}
+    </section>
+  </div>;
 }
 export default function IntentWorkbench({keywordProps, initialView = "universe", api = liveIntentWorkbenchApi, onSectionChange, catalogIntegration}: {
   keywordProps: ManagedKeywordTablesProps; initialView?: "universe" | "list"; api?: IntentWorkbenchApi;
@@ -407,7 +425,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       {drafts.map(draft => <section className="iw-plan-section" key={draft.questionId}>
         <h2>{questions.find(item => item.id === draft.questionId)?.question}</h2>
         {catalogIntegration?.onOpenAnswer && questions.find(question => question.id === draft.questionId) && <button onClick={() => catalogIntegration.onOpenAnswer?.(questions.find(question => question.id === draft.questionId)!)}>进入应答逻辑</button>}
-        <PlanEditor plan={draft} question={questions.find(item => item.id === draft.questionId)?.question ?? ""} onChange={changeDraft}/>
+        <PlanEditor plan={draft} onChange={changeDraft}/>
         <p className="iw-method">AI 根据当前知识证据生成方案。请审核修改内容；执行后通过真实模型重新评估。</p>
       </section>)}
       <div className="iw-sticky"><span>已选择 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected).length, 0)}</strong> 项 · 执行后重新评估实际支撑</span><div>
