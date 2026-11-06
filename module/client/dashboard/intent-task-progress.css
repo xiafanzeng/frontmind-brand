@@ -1,6 +1,7 @@
 .iw-task-progress{max-width:1100px;margin:0 auto}
 .iw-progress-eyebrow{display:block;font-size:12px;font-weight:600;letter-spacing:.1em;color:#64748b;margin-bottom:10px}
-.iw-task-progress .iw-header>.iw-tag{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.iw-task-progress .iw-progress-header-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0}
+.iw-task-progress .iw-progress-header-actions>.iw-tag{display:flex;align-items:center;gap:7px;white-space:nowrap}
 .iw-progress-main{padding:32px!important}
 .iw-progress-heading{display:flex;align-items:center;gap:16px;margin-bottom:28px}
 .iw-progress-heading h2{font-size:20px;margin:0 0 6px}

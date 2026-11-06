@@ -18,24 +18,22 @@ const tables = [
   {id: "question-template-api:v1", title: "已保存的推荐问题", columns: ["问题", "核心词分类"], rows: [["新推荐问题", "行业排名词"], ["第二条推荐问题", "美誉舆情词"]]},
 ];
 describe("推荐保存与历史词库", () => {
-  it("推荐保存单独显示两条，历史保留160条并分页，选择交接实际推荐坐标", () => {
+  it("已保存词条合并展示来源，历史保留160条并分页，选择交接实际推荐坐标", () => {
     const onUseQuestions = vi.fn();
     render(<ManagedKeywordTables tables={tables} generationEnabled onUseQuestions={onUseQuestions}/>);
     fireEvent.click(screen.getByRole("button", {name: /已保存词条 162/}));
-    fireEvent.change(screen.getByRole("combobox", {name: "词条来源"}), {target: {value: "recommended"}});
+    expect(screen.queryByRole("combobox", {name: "词条来源"})).toBeNull();
     expect(screen.getByText("新推荐问题")).toBeTruthy();
-    expect(screen.queryByText("历史问题0")).toBeNull();
+    expect(screen.getByText("历史问题0")).toBeTruthy();
     fireEvent.click(screen.getByRole("checkbox", {name: "选择新推荐问题"}));
     fireEvent.click(screen.getByRole("button", {name: "批量加入优化清单（1）"}));
     expect(onUseQuestions).toHaveBeenCalledWith([{question: "新推荐问题", category: "industry", tableId: "question-template-api:v1", rowIndex: 0}]);
-    fireEvent.change(screen.getByRole("combobox", {name: "词条来源"}), {target: {value: "history"}});
     expect(screen.getByText("历史问题0")).toBeTruthy();
     expect(screen.queryByText("历史问题20")).toBeNull();
     expect(screen.getByText("1 / 8 页")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", {name: "下一页"}));
+    fireEvent.click(screen.getAllByRole("button", {name: "下一页"})[0]);
     expect(screen.getByText("历史问题20")).toBeTruthy();
     expect(screen.queryByText("历史问题0")).toBeNull();
-    fireEvent.change(screen.getByRole("combobox", {name: "词条来源"}), {target: {value: "recommended"}});
     expect(screen.getByRole("checkbox", {name: "选择新推荐问题"})).toHaveProperty("checked", true);
   });
   it("来源词条被优化改写后仍能找到已有评分并直接查看", () => {
@@ -45,7 +43,8 @@ describe("推荐保存与历史词库", () => {
     state.evaluations.push({questionId: "saved-1", value: 70, support: 64, method: "skill_v1", dimensions: [], points: [], findings: [], evaluatedAt: "2026-10-28T00:00:00Z"});
     render(<ManagedKeywordTables tables={tables} generationEnabled onUseQuestions={vi.fn()} optimizationState={state} onViewEvaluation={onViewEvaluation}/>);
     fireEvent.click(screen.getByRole("button", {name: /已保存词条 162/}));
-    expect(screen.getByText("价值 70 · 支撑 64")).toBeTruthy();
+    const score = screen.getByRole("button", {name: "查看评估：新推荐问题"});
+    expect(score.textContent).toBe("价值70支撑64");
     fireEvent.click(screen.getByRole("button", {name: "查看评估：新推荐问题"}));
     expect(onViewEvaluation).toHaveBeenCalledWith("saved-1");
   });

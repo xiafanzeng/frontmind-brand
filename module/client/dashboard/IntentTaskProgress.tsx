@@ -28,7 +28,10 @@ export default function IntentTaskProgress({job, count, kind, error, pending, on
     <header className="iw-header"><div>
       <h1>{completed ? kind === "plan" ? "优化方案已完成" : "评估已完成" : paused ? "评估已暂停" : controlling ? job.status === "pausing" ? "正在暂停评估" : "正在继续评估" : failed ? "评估任务需要处理" : kind === "plan" ? "正在生成优化方案" : `正在评估 ${job?.questionIds.length ?? count} 条问题`}</h1>
       <p>{paused ? "已中断模型执行；继续时沿用原任务上下文，可能重新处理被中断的部分。" : "可以返回列表，继续查看和处理其他问题。"}</p></div>
-      <span className="iw-tag"><Clock3 size={14}/>已用时 {Math.floor(seconds / 60)} 分 {seconds % 60} 秒</span></header>
+      <div className="iw-progress-header-actions">
+        <span className="iw-tag"><Clock3 size={14}/>已用时 {Math.floor(seconds / 60)} 分 {seconds % 60} 秒</span>
+        <IntentTaskControls job={job} pending={pending} onPause={onPause} onResume={onResume}/>
+      </div></header>
     <section className="iw-panel iw-progress-main">
       <div className="iw-progress-heading"><span className={`iw-progress-icon ${failed ? "failed" : ""}`}>{completed ? <Check size={25}/> : <LoaderCircle size={25}/>}</span>
         <div><h2>{completed ? "结果已校验并保存" : paused ? "当前执行已暂停" : failed ? "任务未完成" : stage === "repairing" ? "正在修复输出并重新校验" : stages[Math.min(step, 3)]}</h2>
@@ -39,7 +42,6 @@ export default function IntentTaskProgress({job, count, kind, error, pending, on
         <span>{index < step ? <Check size={16}/> : index + 1}</span><b>{label}</b><small>{index < step ? "已完成" : index === step ? paused ? "已暂停" : failed ? "待处理" : "进行中" : "等待"}</small></li>)}</ol>
       <div className="iw-progress-meta"><span>问题数量 <b>{job?.questionIds.length ?? count}</b></span><span>结果校验 <b>{job?.status === "succeeded" ? "已通过" : "待完成"}</b></span></div>
       {completed && <button className="iw-primary" disabled={pending} onClick={onViewResult}>{job?.receiptId ? "查看优化结果" : kind === "plan" ? "查看优化方案" : "查看评估结果"}</button>}
-      <IntentTaskControls job={job} pending={pending} onPause={onPause} onResume={onResume}/>
       {job?.control?.error && <p role="alert">{job.control.error}</p>}
     </section>
     <section className="iw-panel iw-progress-events"><h3><Radio size={17}/>实时任务动态<span className="iw-tag">{completed ? "已完成" : paused ? "已暂停" : updating ? "持续更新" : "等待更新"}</span></h3>
