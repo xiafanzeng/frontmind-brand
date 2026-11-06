@@ -1004,9 +1004,18 @@ export type EnterpriseRagEvaluationStartInput = {
   turnId: string;
 };
 
+/** Persisted admission outcome, never inferred or written by a history GET. */
+export type EnterpriseRagEvaluationAdmission = {
+  status: "blocked" | "retrying";
+  code: string;
+  message: string;
+  updatedAt: string;
+};
+
 export type EnterpriseRagEvaluationHistoryDto = {
   latest: EnterpriseRagEvaluationRunDto | null;
   history: EnterpriseRagEvaluationRunDto[];
   /** Trusted completed turn is awaiting its automatic operation reservation. */
   automaticExpected?: boolean;
+  automaticAdmission?: EnterpriseRagEvaluationAdmission;
 };

@@ -100,13 +100,13 @@ function ManualRecord({ record }: { record: RagReviewRecord }) {
   </details>;
 }
 
-type AutomaticState = { owner: string; runs: EnterpriseRagEvaluationRunDto[]; loading: boolean; error: string };
+type AutomaticState = { owner: string; runs: EnterpriseRagEvaluationRunDto[]; loading: boolean; awaiting: boolean; error: string };
 
 export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinate }: RagEvaluationReportRecordsProps) {
   const storageKey = enterpriseRagHistoryStorageKey(storageScopeKey);
   const [manual, setManual] = useState<{ key: string; value: RagReviewHistoryRead }>(() => ({ key: storageKey, value: readRagReviewHistory(storageKey) }));
   const owner = JSON.stringify([storageScopeKey, preview, coordinate?.sourceQaTaskId, coordinate?.turnId]);
-  const [automatic, setAutomatic] = useState<AutomaticState>({ owner, runs: [], loading: !preview && Boolean(coordinate), error: "" });
+  const [automatic, setAutomatic] = useState<AutomaticState>({ owner, runs: [], loading: !preview && Boolean(coordinate), awaiting: false, error: "" });
   const reloadAutomatic = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -124,9 +124,9 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
       clearTimeout(timer);
-      if (preview || !coordinate) { setAutomatic({ owner, runs: [], loading: false, error: "" }); return; }
+      if (preview || !coordinate) { setAutomatic({ owner, runs: [], loading: false, awaiting: false, error: "" }); return; }
       const sequence = ++request;
-      setAutomatic(previous => ({ owner, runs: previous.owner === owner ? previous.runs : [], loading: true, error: "" }));
+      setAutomatic(previous => ({ owner, runs: previous.owner === owner ? previous.runs : [], loading: true, awaiting: previous.owner === owner && previous.awaiting, error: "" }));
       try {
         const result = await liveEnterpriseRagEvaluationApi.latest(coordinate);
         if (!alive || sequence !== request) return;
@@ -135,11 +135,14 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
         const unique = new Map<string, EnterpriseRagEvaluationRunDto>();
         incoming.forEach(run => { if (!unique.has(run.operationId)) unique.set(run.operationId, run); });
         const runs = [...unique.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20);
-        setAutomatic({ owner, runs, loading: false, error: "" });
-        if (runs.some(run => !terminal.has(run.status)) && document.visibilityState === "visible") timer = setTimeout(() => void refresh(), 5000);
+        const hasReport = runs.some(run => Boolean(run.report));
+        const blocked = !hasReport && result.automaticAdmission?.status === "blocked";
+        const awaiting = !hasReport && !blocked && Boolean(result.automaticExpected || result.automaticAdmission?.status === "retrying");
+        setAutomatic({ owner, runs, loading: false, awaiting, error: blocked ? "评估未完成，请重新读取状态。" : "" });
+        if ((awaiting || runs.some(run => !terminal.has(run.status))) && document.visibilityState === "visible") timer = setTimeout(() => void refresh(), 5000);
       } catch (error) {
         if (!alive || sequence !== request) return;
-        setAutomatic(previous => ({ owner, runs: previous.owner === owner ? previous.runs : [], loading: false, error: error instanceof Error ? error.message : "暂时无法读取自动评估记录。" }));
+        setAutomatic(previous => ({ owner, runs: previous.owner === owner ? previous.runs : [], loading: false, awaiting: false, error: error instanceof Error ? error.message : "暂时无法读取自动评估记录。" }));
       }
     };
     const focus = () => { void refresh(); };
@@ -150,7 +153,7 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
   }, [owner]);
 
   const history = manual.key === storageKey ? manual.value : { records: [], status: "ready" as const, discarded: 0 };
-  const state = automatic.owner === owner ? automatic : { owner, runs: [], loading: !preview && Boolean(coordinate), error: "" };
+  const state = automatic.owner === owner ? automatic : { owner, runs: [], loading: !preview && Boolean(coordinate), awaiting: false, error: "" };
   const manualRecords = [...history.records].sort((a, b) => b.time.localeCompare(a.time));
   return <section id="records" className="rag-report-section rag-report-records" aria-labelledby="rag-report-records-title">
     <h2 id="rag-report-records-title"><span className="rag-report-section-number">02</span> 评估记录</h2>
@@ -158,8 +161,8 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
     <section className="rag-report-record-group" aria-labelledby="rag-report-auto-title"><h3 id="rag-report-auto-title">当前回答的自动评估</h3><p className="rag-report-record-note">仅展示打开此页时所选回答的记录，不包含工作区其他问答。</p>
       {coordinate && !preview && <Metadata rows={[["问答任务", coordinate.sourceQaTaskId], ["回答轮次", coordinate.turnId]]} />}
       {state.error && <div className="rag-report-record-notice" role="alert"><p>{state.error}</p>{state.runs.length > 0 && <p>下方保留上次成功读取的记录。</p>}<button type="button" onClick={() => reloadAutomatic.current()}>重新读取</button></div>}
-      {state.loading && <p className="rag-report-record-note" role="status">正在读取评估记录…</p>}
-      {preview ? <p className="rag-report-empty">本地预览使用合成示例，没有服务端自动评估记录。</p> : !coordinate ? <p className="rag-report-empty">未选择回答。请从企业 RAG 页面打开对应回答的评估记录。</p> : state.runs.length === 0 && !state.loading && !state.error ? <p className="rag-report-empty">当前回答暂无自动评估记录。</p> : null}
+      {state.awaiting ? <p className="rag-report-record-note" role="status">正在评估本次回答</p> : state.loading && <p className="rag-report-record-note" role="status">正在读取评估记录…</p>}
+      {preview ? <p className="rag-report-empty">暂无评估记录。</p> : !coordinate ? <p className="rag-report-empty">未选择回答。请从企业 RAG 页面打开对应回答的评估记录。</p> : state.runs.length === 0 && !state.loading && !state.awaiting && !state.error ? <p className="rag-report-empty">当前回答暂无自动评估记录。</p> : null}
       {state.runs.map(run => <AutomaticRecord key={run.operationId} run={run} />)}
     </section>
     <section className="rag-report-record-group" aria-labelledby="rag-report-manual-title"><h3 id="rag-report-manual-title">当前工作区的人工评审</h3><p className="rag-report-record-note">来自当前浏览器，最多保留30条已保存记录；包含工作区内不同回答。{preview ? "本地预览记录使用合成示例。" : ""}</p>

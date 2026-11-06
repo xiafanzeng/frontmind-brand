@@ -10,7 +10,7 @@ import {
   timestamp,
   varchar,
 } from "drizzle-orm/mysql-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ENTERPRISE_RAG_DIMENSION_IDS,
   ENTERPRISE_RAG_GATE_IDS,
@@ -43,6 +43,9 @@ const REQUEST_ID = "00000000-0000-4000-8000-000000000020";
 function hash(text: string) {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
+
+beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 function harness(documentCount = 2) {
   const operations = mysqlTable("operations_test", {
@@ -237,7 +240,7 @@ function harness(documentCount = 2) {
         return task ? [{ operation, task }] : [];
       });
       if (values.includes("managed_user")) {
-        joined = joined.filter(({ operation }) => values.includes(operation.accountUserId) && values.includes(operation.enterpriseProjectId));
+        joined = joined.filter(({ operation }) => values.includes(operation.accountUserId) && (!dialect.sqlToQuery(this.predicate).sql.includes("enterpriseProjectId") || values.includes(operation.enterpriseProjectId)));
       }
       if (values.includes("dashboard.general-chat")) {
         joined = joined.filter(({ operation }) => operation.operationType === "dashboard.general-chat");
@@ -280,6 +283,15 @@ function harness(documentCount = 2) {
     select(fields?: any) { return new Query(fields); },
     async execute(query: any) {
       const statement = dialect.sqlToQuery(query);
+      if (statement.sql.includes("UPDATE conversation_turns")) {
+        const target = statement.params.includes(TURN_ID) && statement.params.includes(SOURCE_TASK_ID) && statement.params.includes(42) && statement.params.includes("project") ? turnRows[0] : undefined;
+        const marker = target?.metadata.autoEvaluation as any;
+        if (target?.status === "completed" && marker?.eligible === true && marker?.intent === "enterprise_rag_once") {
+          if (statement.sql.includes("JSON_REMOVE")) delete marker.admission;
+          else marker.admission = JSON.parse(statement.params.find(value => typeof value === "string" && value.startsWith('{"status"')) as string);
+        }
+        return [{ affectedRows: target ? 1 : 0 }];
+      }
       if (statement.sql.includes("FROM conversation_turns")) {
         return [statement.params.includes(TURN_ID) && statement.params.includes(SOURCE_TASK_ID) && statement.params.includes(42) && statement.params.includes("project") ? turnRows.filter(row => row.status === "completed") : []];
       }
@@ -486,8 +498,16 @@ function harness(documentCount = 2) {
   function completeProvider() {
     pushProviderOutput();
   }
+  // Existing lifecycle tests represent successive worker observations. Keep
+  // their timing explicit while exposing the raw adapter for scheduling tests.
+  const observedService = { ...service, advance: async (id: string) => {
+    const next = taskRows.find(task => task.operationId === id)?.providerRuntime?.enterpriseRagEvaluation?.nextAdvanceAt;
+    if (typeof next === "number" && next > Date.now()) vi.setSystemTime(next);
+    return service.advance(id);
+  } };
   return {
-    service,
+    service: observedService,
+    rawService: service,
     core,
     db,
     turnRows,
@@ -508,6 +528,120 @@ function harness(documentCount = 2) {
 }
 
 describe("企业 RAG 自动评估持久化服务", () => {
+  it("持久记录入队阻塞，GET 仅投影且不会回填旧轮次", async () => {
+    const h = harness();
+    delete (h.messageRows[1].metadata as any).enterpriseQaAnswer;
+    const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
+    await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "SOURCE_ANSWER_META_INVALID" });
+    const writes = vi.spyOn(h.db, "execute"); writes.mockClear();
+    const result = await h.service.latest(SOURCE_TASK_ID, TURN_ID);
+    expect(result).toMatchObject({ latest: null, automaticExpected: false, automaticAdmission: { status: "blocked", code: "SOURCE_ANSWER_META_INVALID" } });
+    expect(writes.mock.calls.every(([query]) => !new MySqlDialect().sqlToQuery(query).sql.includes("UPDATE"))).toBe(true);
+    expect(await h.service.ensureAutomatic(coordinate)).toBeNull();
+    expect(h.client.createTask).not.toHaveBeenCalled();
+    expect(h.operationRows).toHaveLength(1);
+    h.turnRows[0].metadata = {};
+    await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "SOURCE_AUTO_EVALUATION_NOT_ELIGIBLE" });
+    expect(h.turnRows[0].metadata).toEqual({});
+  });
+
+  it("暂时入队失败退避一分钟后恢复，并清除持久阻塞提示", async () => {
+    const h = harness();
+    h.capability.mockRejectedValueOnce(new Error("private-upstream-failure"));
+    const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
+    await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "MODEL_UNAVAILABLE" });
+    expect(await h.service.latest(SOURCE_TASK_ID, TURN_ID)).toMatchObject({ automaticExpected: true, automaticAdmission: { status: "retrying", code: "EVALUATION_ENQUEUE_DEFERRED" } });
+    expect(JSON.stringify(h.turnRows[0].metadata)).not.toContain("private-upstream-failure");
+    expect(await h.service.ensureAutomatic(coordinate)).toBeNull();
+    vi.setSystemTime(Date.now() + 60_000);
+    expect((await h.service.ensureAutomatic(coordinate))?.status).toBe("queued");
+    expect((h.turnRows[0].metadata.autoEvaluation as any).admission).toBeUndefined();
+    expect((await h.service.latest(SOURCE_TASK_ID, TURN_ID)).automaticAdmission).toBeUndefined();
+  });
+
+  it("推进间隔与故障退避持久化，其他短生命周期适配器不能绕过", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const task = h.taskRows.find(row => row.operationId === REQUEST_ID);
+    const worker = createEnterpriseRagEvaluationRuntime(h.core, { accountUserId: 42, enterpriseProjectId: "project" }, { assertAccess() {}, async lockBusinessWrite() {} });
+    await worker.advance(REQUEST_ID);
+    expect(h.client.listAllMessages).not.toHaveBeenCalled();
+    vi.setSystemTime(task.providerRuntime.enterpriseRagEvaluation.nextAdvanceAt);
+    h.client.listAllMessages.mockRejectedValueOnce(new Error("temporary read failure"));
+    await worker.advance(REQUEST_ID);
+    let runtime = task.providerRuntime.enterpriseRagEvaluation;
+    expect(runtime.nextAdvanceAt - Date.now()).toBe(15_000);
+    vi.setSystemTime(runtime.nextAdvanceAt);
+    h.client.listAllMessages.mockRejectedValueOnce(new Error("temporary read failure"));
+    await worker.advance(REQUEST_ID);
+    runtime = task.providerRuntime.enterpriseRagEvaluation;
+    expect(runtime.nextAdvanceAt - Date.now()).toBe(30_000);
+    vi.setSystemTime(runtime.nextAdvanceAt);
+    await worker.advance(REQUEST_ID);
+    runtime = task.providerRuntime.enterpriseRagEvaluation;
+    expect(runtime.consecutiveReadFailures).toBe(0);
+    expect(runtime.nextAdvanceAt - Date.now()).toBe(10_000);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("同账户跨项目最多两个有效执行租约，过期租约自动释放预算", async () => {
+    const h = harness();
+    const run = await h.service.ensureAutomatic({ sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID });
+    const original = h.taskRows.find(row => row.operationId === run!.operationId);
+    const operation = h.operationRows.find(row => row.id === run!.operationId);
+    for (let i = 0; i < 2; i++) {
+      h.operationRows.push({ ...structuredClone(operation), id: `peer-${i}`, enterpriseProjectId: `other-project-${i}` });
+      const peer = { ...structuredClone(original), id: `peer-task-${i}`, operationId: `peer-${i}` };
+      peer.providerRuntime.enterpriseRagEvaluation.lease = { owner: `other-worker-${i}`, expiresAt: Date.now() + 120_000 };
+      h.taskRows.push(peer);
+    }
+    await h.rawService.advance(run!.operationId);
+    expect(h.client.createTask).not.toHaveBeenCalled();
+    vi.setSystemTime(Date.now() + 120_001);
+    await h.rawService.advance(run!.operationId);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("所有推进入口共享进程并发二预算", async () => {
+    const h = harness();
+    const run = await h.service.ensureAutomatic({ sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID });
+    const original = h.taskRows.find(row => row.operationId === run!.operationId);
+    const operation = h.operationRows.find(row => row.id === run!.operationId);
+    const ids = [run!.operationId];
+    for (let i = 1; i < 3; i++) {
+      const id = `00000000-0000-4000-8000-00000000010${i}`; ids.push(id);
+      h.operationRows.push({ ...structuredClone(operation), id });
+      h.taskRows.push({ ...structuredClone(original), id: `task-${i}`, operationId: id });
+    }
+    const releases: Array<(value: { fileId: string }) => void> = [];
+    h.client.uploadFile.mockImplementation(() => new Promise(resolve => releases.push(resolve)));
+    const pending = ids.map(id => h.rawService.advance(id));
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(h.client.uploadFile).toHaveBeenCalledTimes(2);
+    releases[0]({ fileId: "file-0" });
+    await vi.waitFor(() => expect(releases).toHaveLength(3));
+    releases[1]({ fileId: "file-1" }); releases[2]({ fileId: "file-2" });
+    await Promise.all(pending);
+    expect(h.client.createTask).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["queued", "uploading", "create_unknown", "running", "result_pending"])("%s 包括已确认修复但无新事件的路径均受总时限约束", async phase => {
+    const h = harness();
+    const run = await h.service.ensureAutomatic({ sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID });
+    const task = h.taskRows.find(row => row.operationId === run!.operationId);
+    const runtime = task.providerRuntime.enterpriseRagEvaluation;
+    runtime.phase = phase; runtime.createdAt = new Date(Date.now() - 30 * 60_000).toISOString();
+    runtime.nextAdvanceAt = Date.now() + 60_000;
+    runtime.repair = { attempt: 1, intentId: "repair", claimedAt: Date.now(), sentAt: Date.now(), reason: "invalid", baselineEventIds: [] };
+    const failed = await h.rawService.advance(run!.operationId);
+    expect(failed).toMatchObject({ status: "failed", error: { code: "EVALUATION_TIMEOUT" } });
+    expect(h.client.createTask).not.toHaveBeenCalled();
+    expect(h.client.listAllMessages).not.toHaveBeenCalled();
+    expect(h.client.sendMessage).not.toHaveBeenCalled();
+    expect((await h.service.ensureAutomatic({ sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID }))?.status).toBe("failed");
+    if (phase === "create_unknown") expect(h.operationRows.find(row => row.id === run!.operationId).status).toBe("attention_required");
+  });
+
   it("GET 历史及单条观察只读取；后台 sweep 在没有浏览器轮询时推进任务", async () => {
     const h = harness();
     const expected = await h.service.latest(SOURCE_TASK_ID, TURN_ID);

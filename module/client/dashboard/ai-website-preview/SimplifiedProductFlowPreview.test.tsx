@@ -517,6 +517,12 @@ describe("simplified AI website preview", () => {
   });
 
   it("keeps direct answer details in the RAG workspace without restoring removed website shortcuts", async () => {
+    // jsdom 26 cannot evaluate Floating UI top-layer pseudo-classes.
+    const nativeMatches = Element.prototype.matches;
+    vi.spyOn(Element.prototype, "matches").mockImplementation(function(this: Element, selector) {
+      if (selector === ":modal" || selector === ":fullscreen") return false;
+      return nativeMatches.call(this, selector);
+    });
     const onOpenWebsite = vi.fn();
     const onOpenWebsiteAssistant = vi.fn();
     render(
@@ -526,6 +532,12 @@ describe("simplified AI website preview", () => {
       />,
     );
 
+    expect(screen.getByRole("heading", { name: "待评估" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "历史问答" }));
+    const history = await screen.findByRole("dialog", { name: "历史问答" });
+    fireEvent.click(history.querySelector(".rag-conversation-popover__choice")!);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     const evaluation = screen.getByRole("region", { name: "本轮回答质量" });
     expect(within(evaluation).getByRole("heading", { name: "本轮回答质量" })).toBeTruthy();
     expect(within(evaluation).getByLabelText("六维诊断评分").textContent).toContain("84");
@@ -538,6 +550,7 @@ describe("simplified AI website preview", () => {
       if (entry === "优化方案") expect(within(dialog).getByRole("heading", { name: "改写示例" })).toBeTruthy();
       fireEvent.click(within(dialog).getByRole("button", { name: "关闭评估面板" }));
       await waitFor(() => expect(screen.queryByRole("dialog", { name: title })).toBeNull());
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     }
     expect(within(evaluation).queryByRole("button", { name: "理解本次判断" })).toBeNull();
     expect(screen.queryByRole("button", { name: "开始网站建设" })).toBeNull();

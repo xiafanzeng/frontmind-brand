@@ -55,23 +55,20 @@ function EnterpriseRagLiveWorkspace({
   const creating = useRef(false);
   const pendingDelete = useRef<{ id: string; wasActive: boolean; resolve: (ok: boolean) => void } | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [newDraft, setNewDraft] = useState<{ key: string; explicit: boolean } | null>(() => new URL(location.href).searchParams.has("workbenchTask") ? null : { key: `draft:${crypto.randomUUID()}`, explicit: false });
+  const [newDraft, setNewDraft] = useState<{ key: string; explicit: boolean } | null>(() => ({ key: `draft:${crypto.randomUUID()}`, explicit: true }));
   const [draftAdoptedFrom, setDraftAdoptedFrom] = useState<string>();
   const [selectedAnswerKey, setSelectedAnswerKey] = useState<string | null>(null);
   const controller = useEnterpriseQaController({ evaluationIntent: "enterprise_rag_once", activeConversationId: newDraft ? null : undefined });
   const active = controller.active;
-  const execution = controller.execution ?? active?.execution;
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
   const activeIdRef = useRef(active?.id ?? null);
-  const blockedRef = useRef(false);
-  blockedRef.current = controller.busy || Boolean(controller.pendingDispatch);
   useEffect(() => { activeIdRef.current = active?.id ?? null; }, [active?.id]);
   useEffect(() => () => { pendingDelete.current?.resolve(false); pendingDelete.current = null; }, []);
   const conversations = workspace.state.conversations.filter(item =>
     item.purpose === "enterprise_qa" || (!item.purpose && item.workbenchAgentId === "enterprise-qa"),
   ).sort((a, b) => b.updatedAt - a.updatedAt);
-  const historyBusy = controller.busy || Boolean(controller.pendingDispatch) || Boolean(deletingId);
+  const historyBusy = false;
   const localTaskId = active?.previousResponseId ?? active?.taskId ?? null;
   const { source: taskSource, retry: retryTaskSource } =
     useEnterpriseQaKnowledgeSource(localTaskId, Boolean(localTaskId));
@@ -106,13 +103,13 @@ function EnterpriseRagLiveWorkspace({
     (() => navigateWithinWorkspace("/?view=website&step=design"));
 
   const startNewConversation = useCallback(() => {
-    if (controller.busy || pendingDelete.current || creating.current) return;
+    if (creating.current) return;
     setNewDraft({ key: `draft:${crypto.randomUUID()}`, explicit: true });
     setDraftAdoptedFrom(undefined);
     setSelectedAnswerKey(null);
     const url = new URL(location.href); url.searchParams.delete("workbenchTask");
     history.replaceState(history.state, "", url);
-  }, [controller.busy]);
+  }, []);
 
   // The host deletion API reports errors via syncError and changes the list
   // only after the server confirms removal. Keep the selection until then.
@@ -148,15 +145,18 @@ function EnterpriseRagLiveWorkspace({
     pending.resolve(true);
   }, [workspace.state.conversations, workspace.activeConversation, workspace.syncError]);
 
+  // Opening or refreshing this page always starts at an independent blank draft.
+  // History hydration never becomes a navigation action.
   useEffect(() => {
-    if (workspace.hydrated && newDraft && !newDraft.explicit && conversations.length) setNewDraft(null);
-  }, [workspace.hydrated, newDraft, conversations.length]);
+    const url = new URL(location.href); url.searchParams.delete("workbenchTask");
+    history.replaceState(history.state, "", url);
+  }, []);
   useEffect(() => { if (workspace.activeConversation) creating.current = false; }, [workspace.activeConversation]);
   useEffect(() => { setSelectedAnswerKey(null); }, [active?.id]);
 
-  const turns = ragLiveTurns(active && execution !== active.execution ? { ...active, execution } : active, controller.running);
+  const turns = ragLiveTurns(active, controller.running);
   const currentTurn = turns.at(-1);
-  const selectedTurn = turns.find(turn => turn.answerKey === selectedAnswerKey && turn.answer) ?? currentTurn;
+  const selectedTurn = turns.find(turn => turn.answerKey === selectedAnswerKey && turn.answer && turn.evaluation !== "not_required") ?? currentTurn;
   const selectedTaskId = selectedTurn?.taskId;
   const { source: otherAnswerSource } = useEnterpriseQaKnowledgeSource(selectedTaskId, Boolean(selectedTaskId && selectedTaskId !== localTaskId));
   const reviewSource = selectedTaskId === localTaskId ? taskSource : otherAnswerSource;
@@ -199,16 +199,23 @@ function EnterpriseRagLiveWorkspace({
     previousTurns,
     answerId: selectedTurn?.answerId,
     answerCompletedAt: selectedTurn?.completedAt,
+    evaluationNotRequired: selectedTurn?.evaluation === "not_required",
     selectedAnswerKey: selectedTurn?.answerKey,
-    onSelectAnswer: key => { if (turns.some(turn => turn.answerKey === key && turn.answer)) setSelectedAnswerKey(key); },
-    chat: { question: effectiveQuestion, answer: currentTurn?.answer ?? "", answerKey: currentTurn?.answerKey ?? `draft:${newDraft?.key ?? active?.id ?? "new"}`, sources: currentTurn?.sources ?? [], completedAt: currentTurn?.completedAt },
+    onSelectAnswer: key => { if (turns.some(turn => turn.answerKey === key && turn.answer && turn.evaluation !== "not_required")) setSelectedAnswerKey(key); },
+    chat: { question: effectiveQuestion, answer: currentTurn?.answer ?? "", answerKey: currentTurn?.answerKey ?? `draft:${newDraft?.key ?? active?.id ?? "new"}`, sources: currentTurn?.sources ?? [], completedAt: currentTurn?.completedAt, evaluation: currentTurn?.evaluation },
     sources: (selectedTurn?.sources ?? []) as EnterpriseRagLiveRuntime["sources"],
     busy: controller.busy,
     running: controller.running,
-    runningTurnId: steering?.turnId ?? execution?.timeline.findLast(entry => entry.userMessageId === userMessage?.id || userMessage?.serverSequence !== undefined && entry.userSequence === userMessage.serverSequence)?.turnId,
+    runningTurnId: steering?.turnId ?? active?.execution?.timeline.findLast(entry => entry.userMessageId === userMessage?.id || userMessage?.serverSequence !== undefined && entry.userSequence === userMessage.serverSequence)?.turnId,
     steeringSupported: steering?.supported === true,
     onSteer: controller.steer,
-    activity: ragLiveActivity({ execution, questionId: userMessage?.id, questionSequence: userMessage?.serverSequence, turnId: steering?.turnId, running: controller.running }),
+    onFollowup: controller.enqueueFollowup,
+    followups: (controller.followups ?? []).flatMap(item => item.status === "completed" || item.status === "cancelled" ? [] : [{id:item.id,text:item.text,status:item.status,error:item.error}]),
+    followupsPaused: controller.followupsPaused,
+    onCancelFollowup: controller.cancelFollowup,
+    onResumeFollowups: controller.resumeFollowups,
+    onRetryFollowup: controller.retryFollowup,
+    activity: ragLiveActivity({ execution: active?.execution, questionId: userMessage?.id, questionSequence: userMessage?.serverSequence, turnId: steering?.turnId, running: controller.running }),
     pendingDispatchQuestion: controller.pendingDispatch?.question,
     notice: controller.notice || workspace.syncError || undefined,
     onAsk: async (question) => {
@@ -221,7 +228,9 @@ function EnterpriseRagLiveWorkspace({
         const now = Date.now();
         const draft: Conversation = { id, title: "企业问答", purpose: "enterprise_qa", workbenchAgentId: "enterprise-qa", messages: [], status: "idle", createdAt: now, updatedAt: now };
         setDraftAdoptedFrom(newDraft.key); setNewDraft(null); setWorkbenchTaskQuery(id);
-        return await controller.send(question, [], draft);
+        const submission = controller.send(question, [], draft);
+        creating.current = false;
+        return await submission;
       } finally { creating.current = false; }
     },
     onRetryPending: controller.retryPending,
@@ -237,7 +246,7 @@ function EnterpriseRagLiveWorkspace({
         const firstQuestion = item.messages.find(message => message.role === "user" && message.content.trim())?.content;
         const title = (!item.title || item.title === "企业问答") && firstQuestion ? firstQuestion.replace(/\s+/gu, " ").trim() : item.title || "新问答";
         return { id: item.id, title, subtitle: Number.isFinite(item.updatedAt) ? new Date(item.updatedAt).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : undefined,
-          disabled: item.status === "running" || item.status === "pending" };
+          deletingDisabled: item.status === "running" || item.status === "pending" || item.messages.some(message => Boolean(message.generalChatDispatch)) };
       }),
       activeId: newDraft ? null : active?.id,
       loading: !workspace.hydrated || workspace.loading,
@@ -247,7 +256,7 @@ function EnterpriseRagLiveWorkspace({
       onOpen: () => { void workspace.refreshConversations(); },
       onSelect: (id: string) => {
         const item = workspaceRef.current.state.conversations.find(candidate => candidate.id === id && (candidate.purpose === "enterprise_qa" || (!candidate.purpose && candidate.workbenchAgentId === "enterprise-qa")));
-        if (blockedRef.current || pendingDelete.current || !item || item.status === "running" || item.status === "pending") return false;
+        if (!item) return false;
         setNewDraft(null); setDraftAdoptedFrom(undefined); setSelectedAnswerKey(null);
         activeIdRef.current = id;
         workspaceRef.current.setActive(id);
@@ -256,7 +265,7 @@ function EnterpriseRagLiveWorkspace({
       },
       onDelete: (id: string) => {
         const item = workspaceRef.current.state.conversations.find(candidate => candidate.id === id && (candidate.purpose === "enterprise_qa" || (!candidate.purpose && candidate.workbenchAgentId === "enterprise-qa")));
-        if (blockedRef.current || !item || item.status === "running" || item.status === "pending" || pendingDelete.current) return Promise.resolve(false);
+        if (!item || item.status === "running" || item.status === "pending" || (id === activeIdRef.current && controller.pendingDispatch) || item.messages.some(message => Boolean(message.generalChatDispatch)) || pendingDelete.current) return Promise.resolve(false);
         return new Promise<boolean>(resolve => {
           workspaceRef.current.clearSyncError();
           pendingDelete.current = { id, wasActive: id === activeIdRef.current, resolve };

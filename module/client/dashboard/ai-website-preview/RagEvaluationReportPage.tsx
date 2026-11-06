@@ -76,7 +76,7 @@ export default function RagEvaluationReportPage({ storageScopeKey, preview, coor
         <p className="rag-report-kicker">FrontMind · 回答质量评估</p>
         <h1>企业 RAG<br />评估说明与记录</h1>
         <p className="rag-report-intro">了解回答如何评分，查看评估依据与结论。</p>
-        {preview && <p className="rag-report-caption">本地预览 · 合成示例，未执行真实问答或自动评估</p>}
+        {preview && <p className="rag-report-caption">示例</p>}
       </header>
       <div className="rag-report-layout">
         <aside className="rag-report-contents" aria-label="报告目录">

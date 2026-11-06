@@ -1,4 +1,4 @@
-import { createRef } from "react";
+import { createRef, useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { copyToClipboard } from "@frontmind/module-ui/lib/utils";
@@ -9,6 +9,11 @@ const phase = () => document.querySelector(".rag-chat-response")?.getAttribute("
 const deferred = <T,>() => { let resolve!: (value:T) => void; const promise = new Promise<T>(r => {resolve=r;}); return {promise,resolve}; };
 beforeEach(() => { vi.useFakeTimers(); vi.mocked(copyToClipboard).mockReset(); vi.mocked(copyToClipboard).mockResolvedValue(true); localStorage.clear(); vi.stubGlobal("matchMedia",vi.fn(() => ({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()}))); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+function ControlledChat(props: Parameters<typeof RagChat>[0]) {
+  const [input, setInput] = useState(props.input);
+  useEffect(() => setInput(props.input), [props.scopeKey, props.input]);
+  return <RagChat {...props} input={input} onInput={value => { setInput(value); props.onInput(value); }} />;
+}
 describe("RAG chat presentation", () => {
   it("shows earlier turns and keeps the preview-only editor after the speech action", () => {
     const edit = vi.fn();
@@ -36,7 +41,7 @@ describe("RAG chat presentation", () => {
   });
   it("animates only a new response after waiting and keeps references functional", () => {
     const props=base(); const view=render(<RagChat {...props} answer="历史回答" answerKey="old" />); expect(phase()).toBe("ready");
-    view.rerender(<RagChat {...props} busy running />); expect(screen.getByTestId("rag-chat-wait").textContent).toContain("正在处理，等待更多进展…");
+    view.rerender(<RagChat {...props} busy running />); expect(screen.getByTestId("rag-chat-wait").textContent).toBe("正在处理…");
     view.rerender(<RagChat {...props} answer="新回答" answerKey="new" sources={[{id:"s1",title:"企业资料"}]} />); expect(phase()).toBe("leaving");
     act(() => vi.advanceTimersByTime(120)); expect(phase()).toBe("revealing"); expect(screen.queryByTestId("rag-chat-wait")).toBeNull();
     fireEvent.click(screen.getByRole("button",{name:"[1] 企业资料"})); expect(props.onEvidence).toHaveBeenCalledTimes(1);
@@ -66,7 +71,7 @@ describe("RAG chat presentation", () => {
     expect(screen.getByRole("alert").textContent).toBe("提交失败"); expect(screen.queryByTestId("rag-chat-wait")).toBeNull(); expect(screen.getByRole("button",{name:"发送问题"}).hasAttribute("disabled")).toBe(false);
   });
   it("uses one action slot and locks stop requests while allowing retries after failure", async () => {
-    const stopping=deferred<boolean>(); const props={...base(),busy:true,running:true,onStop:vi.fn(() => stopping.promise)}; const view=render(<RagChat {...props} />);
+    const stopping=deferred<boolean>(); const props={...base(),busy:true,running:true,input:"",onStop:vi.fn(() => stopping.promise)}; const view=render(<RagChat {...props} />);
     expect(document.querySelectorAll(".rag-chat-send")).toHaveLength(1); expect(screen.getByRole("textbox").hasAttribute("disabled")).toBe(false);
     fireEvent.click(screen.getByRole("button",{name:"停止回答"})); fireEvent.submit(screen.getByRole("textbox").closest("form")!); expect(props.onStop).toHaveBeenCalledTimes(1); expect(props.onSubmit).not.toHaveBeenCalled(); expect(screen.getByRole("button",{name:"正在停止回答"}).hasAttribute("disabled")).toBe(true);
     await act(async () => stopping.resolve(false)); expect(screen.getByRole("alert").textContent).toContain("未能停止");
@@ -167,88 +172,120 @@ describe("RAG chat presentation", () => {
     const input=screen.getByRole("textbox");
     expect(input.hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button",{name:"试用问题"}).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("示例仅供查看，新建问答后可提问。")).toBeTruthy();
+    expect(screen.queryByText("示例仅供查看，新建问答后可提问。")).toBeNull();
     await act(async () => { fireEvent.submit(input.closest("form")!); fireEvent.keyDown(input,{key:"Enter"}); });
     expect(props.onSubmit).not.toHaveBeenCalled();
     expect(screen.getByText("示例回答")).toBeTruthy();
   });
 
-  it("submits a supplement once while keeping stop available, and clears only the accepted draft", async () => {
+  it("uses one slot to enqueue immediately, return to stop, and send again when edited", async () => {
     const request=deferred<boolean>();
-    const props={...base(),busy:true,running:true,turnKey:"turn-a",steeringSupported:true,onSteer:vi.fn(() => request.promise)};
-    render(<RagChat {...props} />);
-    const supplement=screen.getByRole("button",{name:"补充当前回答"});
-    expect(supplement.querySelector("svg")?.getAttribute("width")).toBe("18");
+    const props={...base(),busy:true,running:true,onFollowup:vi.fn(() => request.promise)};
+    render(<ControlledChat {...props} />);
+    expect(document.querySelectorAll(".rag-chat-composer button")).toHaveLength(1);
     fireEvent.keyDown(screen.getByRole("textbox"),{key:"Enter"});
+    expect(props.onFollowup).toHaveBeenCalledWith("部署问题");
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByRole("button",{name:"停止回答"})).toBeTruthy();
+    fireEvent.change(screen.getByRole("textbox"),{target:{value:"新的草稿"}});
+    expect(screen.queryByRole("button",{name:"停止回答"})).toBeNull();
+    expect(screen.getByRole("button",{name:"正在加入待发送"}).hasAttribute("disabled")).toBe(true);
     fireEvent.submit(screen.getByRole("textbox").closest("form")!);
-    expect(props.onSteer).toHaveBeenCalledTimes(1);
-    expect(props.onSteer).toHaveBeenCalledWith("部署问题");
-    expect(props.onSubmit).not.toHaveBeenCalled();
-    expect(screen.getByRole("button",{name:"正在补充当前回答"}).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button",{name:"停止回答"}).hasAttribute("disabled")).toBe(false);
+    expect(props.onFollowup).toHaveBeenCalledTimes(1);
     await act(async () => request.resolve(true));
-    expect(props.onInput).toHaveBeenCalledWith("");
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("新的草稿");
+    expect(screen.getByRole("button",{name:"发送问题"}).hasAttribute("disabled")).toBe(false);
+    fireEvent.change(screen.getByRole("textbox"),{target:{value:""}});
+    expect(screen.getByRole("button",{name:"停止回答"})).toBeTruthy();
   });
 
-  it("preserves characters typed while a supplement is being acknowledged", async () => {
+  it("blocks stopping until the cleared followup has been acknowledged", async () => {
     const request=deferred<boolean>();
-    const props={...base(),busy:true,running:true,turnKey:"turn-a",steeringSupported:true,onSteer:vi.fn(() => request.promise)};
-    const view=render(<RagChat {...props} />);
-    fireEvent.click(screen.getByRole("button",{name:"补充当前回答"}));
-    fireEvent.change(screen.getByRole("textbox"),{target:{value:"新的补充草稿"}});
-    view.rerender(<RagChat {...props} input="新的补充草稿" />);
-    props.onInput.mockClear();
+    const props={...base(),busy:true,running:true,onFollowup:vi.fn(() => request.promise)};
+    render(<ControlledChat {...props} />);
+    fireEvent.click(screen.getByRole("button",{name:"发送问题"}));
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+    const stop=screen.getByRole("button",{name:"停止回答"});
+    expect(document.querySelectorAll(".rag-chat-composer button")).toHaveLength(1);
+    expect(stop.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(stop);
+    expect(props.onStop).not.toHaveBeenCalled();
     await act(async () => request.resolve(true));
-    expect(props.onInput).not.toHaveBeenCalled();
-    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("新的补充草稿");
+    expect(stop.hasAttribute("disabled")).toBe(false);
+    await act(async () => fireEvent.click(stop));
+    expect(props.onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("retains a rejected supplement and permits an explicit retry", async () => {
-    const onSteer=vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    const props={...base(),busy:true,running:true,turnKey:"turn-a",steeringSupported:true,onSteer};
-    render(<RagChat {...props} />);
-    await act(async () => fireEvent.click(screen.getByRole("button",{name:"补充当前回答"})));
-    expect(screen.getByRole("alert").textContent).toContain("输入已保留");
-    expect(props.onInput).not.toHaveBeenCalled();
-    expect(screen.getByRole("button",{name:"停止回答"}).hasAttribute("disabled")).toBe(false);
-    await act(async () => fireEvent.click(screen.getByRole("button",{name:"补充当前回答"})));
-    expect(onSteer).toHaveBeenCalledTimes(2);
-    expect(props.onInput).toHaveBeenCalledWith("");
+  it("restores a failed queued question only when the draft remains untouched", async () => {
+    const request=deferred<boolean>();
+    const props={...base(),busy:true,running:true,onFollowup:vi.fn(() => request.promise)};
+    render(<ControlledChat {...props} />);
+    fireEvent.click(screen.getByRole("button",{name:"发送问题"}));
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+    await act(async () => request.resolve(false));
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("部署问题");
+    expect(screen.getByRole("alert").textContent).toContain("未能加入待发送");
+  });
+
+  it("never overwrites a newer draft after an enqueue failure", async () => {
+    const request=deferred<boolean>();
+    render(<ControlledChat {...base()} busy running onFollowup={() => request.promise} />);
+    fireEvent.click(screen.getByRole("button",{name:"发送问题"}));
+    fireEvent.change(screen.getByRole("textbox"),{target:{value:"新草稿"}});
+    await act(async () => request.resolve(false));
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("新草稿");
+  });
+
+  it("ignores late queue acknowledgements after switching conversations", async () => {
+    const request=deferred<boolean>();
+    const props={...base(),busy:true,running:true,onFollowup:vi.fn(() => request.promise)};
+    const view=render(<ControlledChat {...props} />);
+    fireEvent.click(screen.getByRole("button",{name:"发送问题"}));
+    view.rerender(<ControlledChat {...props} scopeKey="task-b" input="另一会话草稿" />);
+    await act(async () => request.resolve(false));
     expect(screen.queryByRole("alert")).toBeNull();
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("另一会话草稿");
   });
 
-  it("ignores a late supplement receipt after changing turns within the same conversation", async () => {
-    const first=deferred<boolean>(),second=deferred<boolean>();
-    const props={...base(),busy:true,running:true,steeringSupported:true,onSteer:vi.fn().mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)};
-    const view=render(<RagChat {...props} turnKey="turn-a" />);
-    fireEvent.click(screen.getByRole("button",{name:"补充当前回答"}));
-    view.rerender(<RagChat {...props} turnKey="turn-b" input="另一轮草稿" />);
-    fireEvent.click(screen.getByRole("button",{name:"补充当前回答"}));
-    await act(async () => first.resolve(false));
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(props.onInput).not.toHaveBeenCalled();
-    expect(screen.getByRole("button",{name:"正在补充当前回答"}).hasAttribute("disabled")).toBe(true);
-    await act(async () => second.resolve(true));
-    expect(props.onInput).toHaveBeenCalledWith("");
-  });
-
-  it("keeps unsupported supplements as drafts and guards Enter during Chinese composition", async () => {
-    const onSteer=vi.fn(async () => true);
-    const props={...base(),busy:true,running:true,turnKey:"turn-a",steeringSupported:false,onSteer};
-    const view=render(<RagChat {...props} />);
-    expect(screen.getByRole("button",{name:"补充当前回答"}).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("当前模型暂不支持本轮补充，输入会保留为草稿。")).toBeTruthy();
-    fireEvent.keyDown(screen.getByRole("textbox"),{key:"Enter"});
-    expect(onSteer).not.toHaveBeenCalled();
-    expect(props.onInput).not.toHaveBeenCalled();
-    view.rerender(<RagChat {...props} steeringSupported />);
+  it("queues through the server even without steering support and guards Chinese composition", async () => {
+    const onFollowup=vi.fn(async () => true),onSteer=vi.fn(async () => true);
+    render(<ControlledChat {...base()} busy running steeringSupported={false} onSteer={onSteer} onFollowup={onFollowup} />);
+    expect(screen.queryByText(/当前模型暂不支持/)).toBeNull();
     fireEvent.keyDown(screen.getByRole("textbox"),{key:"Enter",shiftKey:true});
     fireEvent.compositionStart(screen.getByRole("textbox"));
     fireEvent.keyDown(screen.getByRole("textbox"),{key:"Enter"});
     fireEvent.compositionEnd(screen.getByRole("textbox"));
-    expect(onSteer).not.toHaveBeenCalled();
+    expect(onFollowup).not.toHaveBeenCalled();
     await act(async () => fireEvent.keyDown(screen.getByRole("textbox"),{key:"Enter"}));
-    expect(onSteer).toHaveBeenCalledTimes(1);
+    expect(onFollowup).toHaveBeenCalledTimes(1);
+    expect(onSteer).not.toHaveBeenCalled();
+  });
+
+  it("keeps greetings selectable as text and copyable without opening an evaluation", async () => {
+    const onSelectAnswer=vi.fn();
+    render(<RagChat {...base()} answer="你好，有什么可以帮你？" answerKey="greet" selectedAnswerKey="greet" evaluationNotRequired onSelectAnswer={onSelectAnswer} previousTurns={[{id:"old",question:"你好",answer:"你好",evaluation:"not_required"}]} />);
+    const current=screen.getByRole("article",{name:"企业助手回复"});
+    const old=screen.getByRole("article",{name:"历史回答"});
+    for (const bubble of [current,old]) {
+      expect(bubble.hasAttribute("tabindex")).toBe(false);
+      expect(bubble.hasAttribute("data-selected")).toBe(false);
+      fireEvent.click(bubble);fireEvent.keyDown(bubble,{key:"Enter"});
+    }
+    expect(onSelectAnswer).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByRole("button",{name:"复制回答"})));
+    expect(copyToClipboard).toHaveBeenCalledWith("你好，有什么可以帮你？");
+    expect(screen.getByRole("button",{name:"朗读"})).toBeTruthy();
+  });
+
+  it("offers queue cancellation, retry and resume with isolated requests", async () => {
+    const onCancelFollowup=vi.fn(async () => true),onRetryFollowup=vi.fn(async () => true),onResumeFollowups=vi.fn(async () => true);
+    render(<RagChat {...base()} followups={[{id:"q1",text:"排队问题",status:"queued"},{id:"q2",text:"失败问题",status:"failed"}]} followupsPaused onCancelFollowup={onCancelFollowup} onRetryFollowup={onRetryFollowup} onResumeFollowups={onResumeFollowups} />);
+    await act(async () => fireEvent.click(screen.getByRole("button",{name:"取消发送排队问题"})));
+    expect(onCancelFollowup).toHaveBeenCalledWith("q1");
+    await act(async () => fireEvent.click(screen.getByRole("button",{name:"重试"})));
+    expect(onRetryFollowup).toHaveBeenCalledWith("q2");
+    await act(async () => fireEvent.click(screen.getByRole("button",{name:"继续发送"})));
+    expect(onResumeFollowups).toHaveBeenCalledTimes(1);
   });
 
   it("shows only real public activity while waiting and removes it after the answer transition", () => {
@@ -269,46 +306,6 @@ describe("RAG chat presentation", () => {
     expect(screen.queryByText("正在编辑文件…")).toBeNull();
     view.rerender(<RagChat {...props} scopeKey="other" busy={false} running={false} answer="恢复的回答" answerKey="b1" />);
     expect(screen.queryByTestId("rag-chat-wait")).toBeNull();
-  });
-
-  it("keeps an immediate waiting indicator without inventing retrieval stages as time passes", async () => {
-    const pending = deferred<void>();
-    const props = {...base(), onSubmit: vi.fn(() => pending.promise)};
-    const view = render(<RagChat {...props} />);
-    fireEvent.click(screen.getByRole("button", {name: "发送问题"}));
-    expect(screen.getByText("正在提交问题…")).toBeTruthy();
-    act(() => vi.advanceTimersByTime(30000));
-    expect(screen.queryByText(/正在检索|正在查找|已读取/u)).toBeNull();
-    view.rerender(<RagChat {...props} busy running startedAt={Date.now()} activity={[
-      {id: "prepared", label: "读取知识依据", status: "completed"},
-      {id: "search", label: "检索文本", status: "running"},
-    ]} />);
-    expect(screen.getByText("已读取知识依据")).toBeTruthy();
-    expect(screen.getByText("正在检索文本…")).toBeTruthy();
-    expect(screen.queryByText("正在处理，等待更多进展…")).toBeNull();
-    await act(async () => pending.resolve());
-  });
-
-  it("bounds a long progress history and resets expansion when switching turns", () => {
-    const props = {...base(), busy: true, running: true, turnKey: "first"};
-    const activity = Array.from({length: 7}, (_, index) => ({id: String(index), label: index % 2 ? "读取文件" : "检索文本", status: "completed" as const}));
-    const view = render(<RagChat {...props} activity={activity} />);
-    expect(screen.getByRole("list", {name: "本轮执行进展"}).children).toHaveLength(5);
-    fireEvent.click(screen.getByRole("button", {name: "查看全部 7 项进展"}));
-    expect(screen.getByRole("list", {name: "本轮执行进展"}).children).toHaveLength(8);
-    view.rerender(<RagChat {...props} turnKey="second" activity={[]} />);
-    expect(screen.queryByRole("button", {name: "收起进展"})).toBeNull();
-    expect(screen.queryByText("已检索文本")).toBeNull();
-    expect(screen.getByText("正在处理，等待更多进展…")).toBeTruthy();
-  });
-
-  it("keeps a still-running tool visible when newer completed work fills the compact history", () => {
-    render(<RagChat {...base()} busy running activity={[
-      {id: "search", label: "搜索网页", status: "running"},
-      ...Array.from({length: 6}, (_, index) => ({id: String(index), label: index % 2 ? "读取文件" : "检索文本", status: "completed" as const})),
-    ]} />);
-    expect(screen.getByText("正在搜索网页…")).toBeTruthy();
-    expect(screen.getByRole("list", {name: "本轮执行进展"}).children).toHaveLength(4);
   });
 
 });
