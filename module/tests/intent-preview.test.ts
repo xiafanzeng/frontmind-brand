@@ -36,18 +36,22 @@ describe("standalone intent interaction adapter", () => {
   it("executes only the selected non-first question and chosen action, survives refresh, then restores it", async () => {
     const api = createIntentPreviewApi("selective");
     let data = await prepare(api);
-    data = await editPlan(api, data, "q2", ["question"]);
+    const beforeNodes = structuredClone(data.nodes);
+    data = await editPlan(api, data, "q2", ["node"]);
+    const action = data.state.plans.find(item => item.questionId === "q2")!.actions.find(item => item.kind === "node")!;
     const request = {expectedRevision: data.revision, clientRequestId: crypto.randomUUID(), questionIds: ["q2"]};
     data = await api.execute(request);
     expect(data.state.receipts[0].changes).toHaveLength(1);
-    expect(data.state.receipts[0].changes[0].questionId).toBe("q2");
-    expect(data.state.questions[0].question).toBe(questions[0].question);
+    expect(data.state.receipts[0].changes[0]).toMatchObject({questionId: "q2", action: {kind: "node", nodeId: action.nodeId}, status: "succeeded"});
+    expect(data.state.questions).toEqual(questions);
+    expect(data.nodes.map(node => node.content)).toEqual(beforeNodes.map(node => node.id === action.nodeId ? action.after : node.content));
     expect(data.state.todos).toHaveLength(0);
     expect((await api.execute(request)).revision).toBe(data.revision);
     const refreshed = createIntentPreviewApi("selective");
     expect((await refreshed.observe()).state).toEqual(data.state);
     data = await refreshed.rollback({expectedRevision: data.revision, receiptId: request.clientRequestId});
-    expect(data.state.questions[1].question).toBe(questions[1].question);
+    expect(data.state.questions).toEqual(questions);
+    expect(data.nodes.map(node => node.content)).toEqual(beforeNodes.map(node => node.content));
     expect(data.state.receipts[0].status).toBe("reverted");
   });
   it("keeps missing knowledge unresolved when only a source task is created", async () => {
@@ -60,15 +64,19 @@ describe("standalone intent interaction adapter", () => {
     expect(data.state.todos[0].status).toBe("pending");
     expect(data.state.evaluations.find(item => item.questionId === "q1")!.support).toBe(before);
   });
-  it("rejects an undo after another execution modifies the same question", async () => {
+  it("rejects an undo after another execution modifies the same knowledge node", async () => {
     const api = createIntentPreviewApi("conflict");
     let data = await prepare(api);
-    data = await editPlan(api, data, "q1", ["question"]);
+    data = await editPlan(api, data, "q1", ["node"]);
     const original = crypto.randomUUID();
     data = await api.execute({expectedRevision: data.revision, clientRequestId: original, questionIds: ["q1"]});
+    const firstChange = data.state.receipts[0].changes[0];
     data = await api.command({kind: "plan", expectedRevision: data.revision, questionIds: ["q1"]});
-    data = await editPlan(api, data, "q1", ["question"]);
+    data = await editPlan(api, data, "q1", ["node"]);
     data = await api.execute({expectedRevision: data.revision, clientRequestId: crypto.randomUUID(), questionIds: ["q1"]});
+    expect(data.state.receipts[1].changes[0].action.nodeId).toBe(firstChange.action.nodeId);
+    expect(data.state.receipts[1].changes[0].action.after).not.toBe(firstChange.action.after);
+    expect(data.state.questions).toEqual(questions);
     await expect(api.rollback({expectedRevision: data.revision, receiptId: original})).rejects.toThrow("后续修改");
   });
 });

@@ -550,7 +550,7 @@ describe("simplified AI website preview", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "试用问题" })); });
     expect(screen.getByText("我想咨询新的具体业务问题")).toBeTruthy();
     expect(screen.getByText(/此问题不在示例库/)).toBeTruthy();
-    expect(within(evaluation).getByRole("heading", { name: "待核验" })).toBeTruthy();
+    expect(within(evaluation).getByRole("heading", { name: "待评估" })).toBeTruthy();
     const pendingScore = within(evaluation).getByLabelText("六维诊断评分");
     expect(pendingScore.classList.contains("is-empty")).toBe(true);
     expect(within(pendingScore).queryByTestId("rag-gauge-pending")).toBeNull();

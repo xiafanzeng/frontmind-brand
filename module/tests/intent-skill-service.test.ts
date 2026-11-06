@@ -214,7 +214,7 @@ describe("优化模型持久化任务", () => {
     expect(refreshed.state.questions.map(q => q.id)).toEqual(questions.map(q => q.id));
     expect(h.client.createTask).not.toHaveBeenCalled();
   });
-  it("正式题干动作要求原维护流程，不写投影、不启动无效复评", async () => {
+  it("正式问题的资料待办执行保留原题及来源，并启动独立复评", async () => {
     const h = harness();
     const initial = await h.intake();
     h.core.intentQuestionCatalog = async () => initial.state.questions.map(question => ({...question, tableId: "dashboard:confirmed"}));
@@ -222,12 +222,15 @@ describe("优化模型持久化任务", () => {
     await h.service.command({...h.request, kind: "plan", expectedRevision: synced.revision});
     h.send();
     const planned = await h.service.poll();
-    await expect(h.service.execute({expectedRevision: planned.revision,
-      clientRequestId: "00000000-0000-4000-8000-000000000007", questionIds: ["q"]}))
-      .rejects.toMatchObject({code: "FORMAL_QUESTION_MAINTENANCE_REQUIRED"});
-    expect(h.ledger().state.receipts).toEqual([]);
+    const executed = await h.service.execute({expectedRevision: planned.revision,
+      clientRequestId: "00000000-0000-4000-8000-000000000007", questionIds: ["q"]});
+    expect(executed.state.receipts[0]).toMatchObject({status: "completed", changes: [
+      {questionId: "q", action: {kind: "todo"}, status: "succeeded"},
+    ]});
+    expect(executed.state.todos).toMatchObject([{questionId: "q", title: "补充并核验材料适用条件的来源资料", status: "pending"}]);
     expect(h.ledger().state.questions).toEqual(synced.state.questions);
-    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    expect(executed.state.jobs?.at(-1)).toMatchObject({kind: "evaluate", status: "running"});
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
   });
   it("checks formal source freshness before reserving a paid command", async () => {
     const h = harness();
@@ -520,19 +523,23 @@ describe("优化模型持久化任务", () => {
     expect(h.client.createTask).toHaveBeenCalledTimes(1);
   });
   it("执行和撤销后的分数由独立模型任务重评", async () => {
-    const h = harness(); await h.intake();
+    const h = harness(); const initial = await h.intake();
     await h.service.command({...h.request, kind: "plan"}); h.send();
     const planned = await h.service.poll();
     const receiptId = "00000000-0000-4000-8000-000000000003";
     const executed = await h.service.execute({expectedRevision: planned.revision, clientRequestId: receiptId, questionIds: ["q"]});
-    expect(executed.state.questions[0].question).toBe("材料选择有哪些适用条件？");
+    expect(executed.state.questions).toEqual(initial.state.questions);
+    expect(executed.state.todos).toMatchObject([{questionId: "q", title: "补充并核验材料适用条件的来源资料", status: "pending"}]);
+    expect(executed.state.receipts[0].changes).toMatchObject([{questionId: "q", action: {kind: "todo"}, status: "succeeded"}]);
     expect(executed.state.receipts[0].status).toBe("completed");
     expect(executed.state.receipts[0].after).toEqual([]);
     expect(executed.state.jobs?.at(-1)?.status).toBe("running");
     h.send(); const reEvaluated = await h.service.poll();
     expect(reEvaluated.state.receipts[0].after[0].method).toBe("skill_v1");
     const reverted = await h.service.rollback({receiptId, expectedRevision: reEvaluated.revision});
-    expect(reverted.state.questions[0].question).toBe("材料如何选择？");
+    expect(reverted.state.questions).toEqual(initial.state.questions);
+    expect(reverted.state.todos).toEqual([]);
+    expect(reverted.state.receipts[0].changes[0].status).toBe("reverted");
     expect(reverted.state.receipts[0].status).toBe("reverted");
     expect(reverted.state.evaluations).toEqual([]);
     h.send(); expect((await h.service.poll()).state.evaluations[0].method).toBe("skill_v1");
