@@ -530,26 +530,39 @@ export default function ManagedKeywordTables({
                             : undefined;
                           const linked = optimizationState ? findCatalogQuestion({question, tableId: table.id, rowIndex}, optimizationState.questions) : undefined;
                           const evaluation = linked ? optimizationState?.evaluations.find(item => item.questionId === linked.id) : undefined;
+                          const selectionKey = `${table.id}:${rowIndex}`;
+                          const isSelected = Boolean(batchSelection[selectionKey]);
+                          const selectionDisabled = (isWorkbench && dashboardRevision == null) || !question || !category || quotaAccess?.available === false;
+                          const toggleSelection = () => {
+                            if (selectionDisabled || !category) return;
+                            setBatchSelection(current => {
+                              const next = {...current};
+                              if (next[selectionKey]) delete next[selectionKey];
+                              else next[selectionKey] = {question, category, tableId: table.id, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})};
+                              return next;
+                            });
+                          };
                           return (
                             <tr
                               key={`${table.id}-${rowIndex}`}
-                              className={onUseQuestions && batchSelection[`${table.id}:${rowIndex}`] ? "keyword-row-selected" : undefined}
-                              aria-selected={isWorkbench ? selectedKeyword?.tableId === table.id && selectedKeyword.rowIndex === rowIndex : undefined}
+                              className={onUseQuestions ? `keyword-row-selectable${isSelected ? " keyword-row-selected" : ""}${selectionDisabled ? " keyword-row-disabled" : ""}` : undefined}
+                              aria-selected={onUseQuestions ? isSelected : isWorkbench ? selectedKeyword?.tableId === table.id && selectedKeyword.rowIndex === rowIndex : undefined}
+                              tabIndex={onUseQuestions && !selectionDisabled ? 0 : undefined}
+                              onClick={onUseQuestions ? event => {
+                                if ((event.target as HTMLElement).closest("button, input, label, a, select, textarea, [role=button]")) return;
+                                toggleSelection();
+                              } : undefined}
+                              onKeyDown={onUseQuestions ? event => {
+                                if (event.target !== event.currentTarget || (event.key !== " " && event.key !== "Enter")) return;
+                                event.preventDefault();
+                                toggleSelection();
+                              } : undefined}
                             >
                               {onUseQuestions && <td className="keyword-selection-cell">
-                                <label><input type="checkbox" aria-label={`选择${question}`}
-                                  checked={Boolean(batchSelection[`${table.id}:${rowIndex}`])}
-                                  disabled={(isWorkbench && dashboardRevision == null) || !question || !category || quotaAccess?.available === false}
-                                  onChange={() => {
-                                    if (!category) return;
-                                    const key = `${table.id}:${rowIndex}`;
-                                    setBatchSelection(current => {
-                                      const next = {...current};
-                                      if (next[key]) delete next[key];
-                                      else next[key] = {question, category, tableId: table.id, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})};
-                                      return next;
-                                    });
-                                  }}/>{batchSelection[`${table.id}:${rowIndex}`] ? "已选择" : "选择词条"}</label>
+                                <label className="keyword-selection-label"><input type="checkbox" aria-label={`选择${question}`}
+                                  checked={isSelected}
+                                  disabled={selectionDisabled}
+                                  onChange={toggleSelection}/><span>{isSelected ? "已选择" : "选择词条"}</span></label>
                                 {evaluation && linked && onViewEvaluation ? <button type="button" className="keyword-evaluation-button" aria-label={`查看评估：${question}`} title="查看完整评估" onClick={() => onViewEvaluation(linked.id)}>
                                   <span className="keyword-evaluation-metric"><span>价值</span><strong>{evaluation.value}</strong></span>
                                   <span className="keyword-evaluation-divider" aria-hidden="true"/>
