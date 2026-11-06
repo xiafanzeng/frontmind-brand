@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { finalReplyIds } from "../lib/final-reply";
+import type { Conversation } from "../conversation-types";
+import { ragLiveTurns } from "./ai-website-preview/rag-live-turns";
 import {
   brandHost,
   ConversationPurposeProvider,
@@ -54,7 +55,10 @@ function EnterpriseRagLiveWorkspace({
   const creating = useRef(false);
   const pendingDelete = useRef<{ id: string; wasActive: boolean; resolve: (ok: boolean) => void } | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const controller = useEnterpriseQaController();
+  const [newDraft, setNewDraft] = useState<{ key: string; explicit: boolean } | null>(() => new URL(location.href).searchParams.has("workbenchTask") ? null : { key: `draft:${crypto.randomUUID()}`, explicit: false });
+  const [draftAdoptedFrom, setDraftAdoptedFrom] = useState<string>();
+  const [selectedAnswerKey, setSelectedAnswerKey] = useState<string | null>(null);
+  const controller = useEnterpriseQaController({ evaluationIntent: "enterprise_rag_once", activeConversationId: newDraft ? null : undefined });
   const active = controller.active;
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
@@ -101,22 +105,13 @@ function EnterpriseRagLiveWorkspace({
     (() => navigateWithinWorkspace("/?view=website&step=design"));
 
   const startNewConversation = useCallback(() => {
-    if (
-      !allowConversationCreation ||
-      controller.busy ||
-      pendingDelete.current ||
-      creating.current
-    )
-      return;
-    creating.current = true;
-    const conversationId = workspace.createConversation({
-      title: "企业问答",
-      reuseEmpty: false,
-      purpose: "enterprise_qa",
-      workbenchAgentId: "enterprise-qa",
-    });
-    setWorkbenchTaskQuery(conversationId);
-  }, [allowConversationCreation, controller.busy, workspace]);
+    if (controller.busy || pendingDelete.current || creating.current) return;
+    setNewDraft({ key: `draft:${crypto.randomUUID()}`, explicit: true });
+    setDraftAdoptedFrom(undefined);
+    setSelectedAnswerKey(null);
+    const url = new URL(location.href); url.searchParams.delete("workbenchTask");
+    history.replaceState(history.state, "", url);
+  }, [controller.busy]);
 
   // The host deletion API reports errors via syncError and changes the list
   // only after the server confirms removal. Keep the selection until then.
@@ -153,58 +148,21 @@ function EnterpriseRagLiveWorkspace({
   }, [workspace.state.conversations, workspace.activeConversation, workspace.syncError]);
 
   useEffect(() => {
-    if (
-      !allowConversationCreation ||
-      !workspace.hydrated ||
-      workspace.activeConversation ||
-      pendingDelete.current ||
-      creating.current
-    )
-      return;
-    if (conversations.length) {
-      creating.current = true;
-      workspace.setActive(conversations[0].id);
-      setWorkbenchTaskQuery(conversations[0].id);
-      return;
-    }
-    startNewConversation();
-  }, [
-    allowConversationCreation,
-    workspace.hydrated,
-    workspace.activeConversation,
-    workspace.state.conversations,
-    startNewConversation,
-  ]);
-  useEffect(() => {
-    if (workspace.activeConversation) creating.current = false;
-  }, [workspace.activeConversation]);
+    if (workspace.hydrated && newDraft && !newDraft.explicit && conversations.length) setNewDraft(null);
+  }, [workspace.hydrated, newDraft, conversations.length]);
+  useEffect(() => { if (workspace.activeConversation) creating.current = false; }, [workspace.activeConversation]);
+  useEffect(() => { setSelectedAnswerKey(null); }, [active?.id]);
 
-  const messages = active?.messages ?? [];
-  const lastUserIndex = messages.findLastIndex(
-    (message) => message.role === "user",
-  );
-  const finalIds = finalReplyIds(
-    messages,
-    active?.execution,
-    controller.running,
-  );
-  const answerIndex = messages.findLastIndex(
-    (message, index) =>
-      index > lastUserIndex &&
-      message.role === "assistant" &&
-      finalIds.has(message.id),
-  );
-  const userMessage = lastUserIndex >= 0 ? messages[lastUserIndex] : undefined;
-  const answerMessage = answerIndex >= 0 ? messages[answerIndex] : undefined;
-  const previousTurns = messages.flatMap((message, index) => {
-    if (message.role !== "user" || index >= lastUserIndex || !message.content.trim()) return [];
-    const nextUser = messages.findIndex((candidate, position) => position > index && candidate.role === "user");
-    const final = messages.slice(index + 1, nextUser < 0 ? undefined : nextUser).findLast(candidate =>
-      candidate.role === "assistant" && finalIds.has(candidate.id) && !candidate.isStepsPlaceholder && Boolean(candidate.content.trim()) &&
-      (!candidate.generalChat?.userMessageId || candidate.generalChat.userMessageId === message.id),
-    );
-    return [{ id: message.id, question: message.content, answer: final?.content ?? "" }];
-  });
+  const turns = ragLiveTurns(active, controller.running);
+  const currentTurn = turns.at(-1);
+  const selectedTurn = turns.find(turn => turn.answerKey === selectedAnswerKey && turn.answer) ?? currentTurn;
+  const selectedTaskId = selectedTurn?.taskId;
+  const { source: otherAnswerSource } = useEnterpriseQaKnowledgeSource(selectedTaskId, Boolean(selectedTaskId && selectedTaskId !== localTaskId));
+  const reviewSource = selectedTaskId === localTaskId ? taskSource : otherAnswerSource;
+  const reviewKnowledge = selectedTaskId ? selectedTaskId === localTaskId ? knowledgeBase : reviewSource.knowledgeBase : newDraft ? currentPublication.knowledgeBase : null;
+  const userMessage = active?.messages.findLast(message => message.role === "user");
+  const previousTurns = turns.slice(0, -1);
+
   const steering = controller.steering;
   const persistedQuestion = userMessage?.content || "";
   // A different device may have appended more input before this client receives
@@ -213,8 +171,8 @@ function EnterpriseRagLiveWorkspace({
     !persistedQuestion.startsWith(`${steering.effectiveQuestion}\n\n补充：`)
     ? steering.effectiveQuestion : persistedQuestion;
   const live: EnterpriseRagLiveRuntime = {
-    loaded,
-    failed,
+    loaded: selectedTaskId ? reviewSource.loaded || Boolean(reviewKnowledge) : loaded,
+    failed: selectedTaskId ? reviewSource.failed && !reviewKnowledge : failed,
     refreshFailed: Boolean(
       selectedSource.refreshFailed || currentPublication.refreshFailed,
     ),
@@ -224,24 +182,26 @@ function EnterpriseRagLiveWorkspace({
       localTaskId && !taskSource.loaded
         ? "任务绑定模型"
         : enterpriseQaProviderLabel(selectedSource.provider),
-    knowledgeBase,
+    knowledgeBase: reviewKnowledge ?? null,
     currentKnowledgeBase: currentPublication.knowledgeBase ?? null,
-    knowledgeBinding,
-    conversationId: active?.id,
-    taskId: localTaskId ?? undefined,
-    turnId: answerMessage?.generalChat?.turnId,
-    conversationReady: Boolean(active?.purpose === "enterprise_qa"),
-    question: effectiveQuestion,
-    questionId: userMessage?.id,
-    answer: answerMessage?.content ?? "",
+    knowledgeBinding: selectedTurn?.answer && !selectedTaskId ? "historical_unknown" : selectedTaskId ? reviewKnowledge ? "frozen_task" : "historical_unknown" : knowledgeBinding,
+    conversationId: newDraft?.key ?? active?.id ?? new URL(location.href).searchParams.get("workbenchTask") ?? undefined,
+    draftAdoptedFrom,
+    onDraftInput: () => { if (newDraft && !newDraft.explicit) setNewDraft({ ...newDraft, explicit: true }); },
+    taskId: selectedTurn?.taskId,
+    turnId: selectedTurn?.turnId,
+    conversationReady: Boolean(newDraft || active?.purpose === "enterprise_qa"),
+    canSend: !controller.busy && !controller.pendingDispatch && Boolean(newDraft || active?.purpose === "enterprise_qa"),
+    question: selectedTurn?.question ?? "",
+    questionId: selectedTurn?.questionId,
+    answer: selectedTurn?.answer ?? "",
     previousTurns,
-    answerId: answerMessage?.id,
-    answerCompletedAt: answerMessage?.timestamp,
-    questionStartedAt: userMessage?.timestamp,
-    answerDurationMs: answerMessage && userMessage && Number.isFinite(answerMessage.timestamp) && Number.isFinite(userMessage.timestamp) && answerMessage.timestamp >= userMessage.timestamp
-      ? answerMessage.timestamp - userMessage.timestamp
-      : undefined,
-    sources: answerMessage?.enterpriseQaAnswer?.sources ?? [],
+    answerId: selectedTurn?.answerId,
+    answerCompletedAt: selectedTurn?.completedAt,
+    selectedAnswerKey: selectedTurn?.answerKey,
+    onSelectAnswer: key => { if (turns.some(turn => turn.answerKey === key && turn.answer)) setSelectedAnswerKey(key); },
+    chat: { question: effectiveQuestion, answer: currentTurn?.answer ?? "", answerKey: currentTurn?.answerKey ?? `draft:${newDraft?.key ?? active?.id ?? "new"}`, sources: currentTurn?.sources ?? [], completedAt: currentTurn?.completedAt },
+    sources: (selectedTurn?.sources ?? []) as EnterpriseRagLiveRuntime["sources"],
     busy: controller.busy,
     running: controller.running,
     runningTurnId: steering?.turnId ?? active?.execution?.timeline.findLast(entry => entry.userMessageId === userMessage?.id || userMessage?.serverSequence !== undefined && entry.userSequence === userMessage.serverSequence)?.turnId,
@@ -250,7 +210,19 @@ function EnterpriseRagLiveWorkspace({
     activity: ragLiveActivity({ execution: active?.execution, questionId: userMessage?.id, questionSequence: userMessage?.serverSequence, turnId: steering?.turnId, running: controller.running }),
     pendingDispatchQuestion: controller.pendingDispatch?.question,
     notice: controller.notice || workspace.syncError || undefined,
-    onAsk: (question) => controller.send(question, []),
+    onAsk: async (question) => {
+      setSelectedAnswerKey(null);
+      if (!newDraft) return controller.send(question, []);
+      if (creating.current) return false;
+      creating.current = true;
+      try {
+        const id = workspaceRef.current.createConversation({ title: "企业问答", reuseEmpty: false, purpose: "enterprise_qa", workbenchAgentId: "enterprise-qa" });
+        const now = Date.now();
+        const draft: Conversation = { id, title: "企业问答", purpose: "enterprise_qa", workbenchAgentId: "enterprise-qa", messages: [], status: "idle", createdAt: now, updatedAt: now };
+        setDraftAdoptedFrom(newDraft.key); setNewDraft(null); setWorkbenchTaskQuery(id);
+        return await controller.send(question, [], draft);
+      } finally { creating.current = false; }
+    },
     onRetryPending: controller.retryPending,
     onStop: controller.stop,
     onRetryKnowledge: () => {
@@ -266,7 +238,7 @@ function EnterpriseRagLiveWorkspace({
         return { id: item.id, title, subtitle: Number.isFinite(item.updatedAt) ? new Date(item.updatedAt).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : undefined,
           disabled: item.status === "running" || item.status === "pending" };
       }),
-      activeId: active?.id,
+      activeId: newDraft ? null : active?.id,
       loading: !workspace.hydrated || workspace.loading,
       error: workspace.syncError || undefined,
       busy: historyBusy,
@@ -275,6 +247,7 @@ function EnterpriseRagLiveWorkspace({
       onSelect: (id: string) => {
         const item = workspaceRef.current.state.conversations.find(candidate => candidate.id === id && (candidate.purpose === "enterprise_qa" || (!candidate.purpose && candidate.workbenchAgentId === "enterprise-qa")));
         if (blockedRef.current || pendingDelete.current || !item || item.status === "running" || item.status === "pending") return false;
+        setNewDraft(null); setDraftAdoptedFrom(undefined); setSelectedAnswerKey(null);
         activeIdRef.current = id;
         workspaceRef.current.setActive(id);
         setWorkbenchTaskQuery(id);

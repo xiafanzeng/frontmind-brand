@@ -1,5 +1,11 @@
-.rag-eval-root .rag-chat { min-width: 0; overflow-anchor: none; }
+.rag-eval-root .rag-chat { min-width: 0; min-height: 0; flex: 1 1 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(118,118,128,.3) transparent; overflow-anchor: none; }
+.rag-eval-root .rag-chat > :is(article,p) { flex: none; }
 .rag-eval-root .rag-chat article { min-width: 0; }
+.rag-eval-root .rag-chat article.rag-chat-selectable-answer { cursor: pointer; }
+.rag-eval-root .rag-chat article[data-selected="true"],
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat article[data-selected="true"] { box-shadow: 0 0 0 1px rgba(117,66,176,.16), 0 0 16px rgba(117,66,176,.1); }
+.rag-eval-root .rag-chat article.rag-chat-selectable-answer:focus-visible { outline: 2px solid rgba(117,66,176,.38); outline-offset: 3px; }
+.rag-eval-root .rag-chat-readonly-note { margin: 6px 0 0; color: #8e8e93; font-size: 12px; line-height: 18px; }
 .rag-eval-root .rag-chat-response { position: relative; margin-top: 9px; }
 .rag-eval-root .rag-chat-wait { color: var(--sfp-muted); line-height: 1.65; }
 .rag-eval-root .rag-chat-wait > span {
@@ -91,7 +97,6 @@
 @media (prefers-reduced-motion: reduce) { .rag-eval-root .rag-chat-rating-menu { transition: none; } }
 
 .rag-eval-root .rag-chat-completed { align-self: center; margin-inline-start: auto; padding-inline-start: 4px; color: #8e8e93; font-size: 13px; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.rag-eval-root .rag-chat-elapsed { flex: 0 0 auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-feedback-trigger[data-rating]:hover:not(:disabled),
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-feedback-trigger[data-rating]:focus-visible,
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-feedback-trigger[data-rating]:active:not(:disabled) { color: var(--fm-brand-accent); }
@@ -102,7 +107,6 @@
   .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool { width: 20px; flex-basis: 20px; }
   .rag-eval-root .rag-chat-feedback { flex-basis: 20px; }
   .rag-eval-root .rag-chat article > header { grid-template-columns: 16px minmax(0,1fr); row-gap: 2px; }
-  .rag-eval-root .rag-chat-elapsed { grid-column: 2; justify-self: end; }
 }
 
 /* Keep overlapping and full-size gestures at the same optical weight. */

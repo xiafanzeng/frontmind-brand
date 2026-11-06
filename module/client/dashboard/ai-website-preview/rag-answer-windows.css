@@ -7,6 +7,10 @@
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window.rag-drawer.is-active { border-color:rgba(117,66,176,.26); box-shadow:0 12px 32px rgba(29,29,31,.14); }
 .rag-eval-root .rag-answer-window[hidden] { display:none !important; }
 .rag-eval-root .rag-answer-window.is-dragging { user-select:none; }
+/* Moving glass otherwise resamples the entire underlying page on every frame.
+   Restore the theme's unchanged material as soon as the frame settles. */
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-answer-window.rag-drawer:is([data-entering="true"], .is-dragging) { -webkit-backdrop-filter:none; backdrop-filter:none; }
+.rag-eval-root .rag-answer-window[data-entering="true"] { will-change:translate,opacity; }
 .rag-eval-root .rag-answer-window > .rag-answer-window__header { display:flex; flex-direction:column; align-items:stretch; justify-content:initial; gap:0; border-radius:20px 20px 0 0; cursor:grab; touch-action:none; }
 .rag-eval-root .rag-answer-window.is-dragging > .rag-answer-window__header { cursor:grabbing; }
 .rag-eval-root .rag-answer-window__header:focus-visible { outline:2px solid rgba(117,66,176,.45); outline-offset:-4px; }
@@ -51,7 +55,7 @@
 @keyframes rag-answer-window-enter { from { opacity:0; translate:0 8px; } to { opacity:1; translate:0 0; } }
 @keyframes rag-answer-sheet-enter { from { opacity:0; translate:0 48px; } to { opacity:1; translate:0 0; } }
 @keyframes rag-answer-dim-enter { from { opacity:0; } to { opacity:1; } }
-@media (prefers-reduced-motion:reduce) { .rag-eval-root .rag-answer-window.rag-drawer, .rag-eval-root .rag-answer-windows__desktop-dim { animation:none; } }
+@media (prefers-reduced-motion:reduce) { .rag-eval-root .rag-answer-windows .rag-answer-window.rag-drawer, .rag-eval-root .rag-answer-windows__desktop-dim { animation:none; } }
 
 .rag-eval-root .rag-answer-window > .rag-drawer-body:last-child { border-radius:0 0 20px 20px; }
 

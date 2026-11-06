@@ -88,6 +88,24 @@ describe("report records", () => {
     expect(summary.textContent).not.toContain("需修复");
   });
 
+  it("hides generated versions in record summaries and details without rewriting saved data", async () => {
+    const frozen = run();
+    frozen.report!.result.summary = "保留原有结论。（规则 rag-eval-1.3；六维分数仅作诊断）";
+    const serialized = JSON.stringify(frozen);
+    const storageKey = enterpriseRagHistoryStorageKey("live:a");
+    const manualData = JSON.stringify([manual("old", "rag-eval-1.2")]);
+    localStorage.setItem(storageKey, manualData);
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: frozen, history: [] });
+    const view = render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    await waitFor(() => expect(screen.getByTestId("rag-report-automatic-record")).toBeTruthy());
+    expect(view.container.textContent).not.toMatch(/rag-eval-\d/);
+    expect(view.container.textContent).not.toContain("评估器版本");
+    expect(view.container.textContent).not.toContain("判断器版本");
+    expect(screen.getAllByText("保留原有结论。（六维分数仅作诊断）")).toHaveLength(2);
+    expect(JSON.stringify(frozen)).toBe(serialized);
+    expect(localStorage.getItem(storageKey)).toBe(manualData);
+  });
+
   it("ignores a late request after the bound answer changes", async () => {
     let resolveOld!: (value: EnterpriseRagEvaluationHistoryDto) => void;
     vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockImplementation(({ sourceQaTaskId }) => sourceQaTaskId === "task-1" ? new Promise(resolve => { resolveOld = resolve; }) : Promise.resolve({ latest: run("new", "task-2"), history: [] }));

@@ -6,6 +6,7 @@ import {
   standaloneRagReportUrl,
   resolveStandaloneRagReport,
 } from "../../standalone/routes";
+import { RAG_SAMPLE_CASES } from "../client/dashboard/ai-website-preview/rag-evaluation-cases";
 
 describe("brand standalone business routes", () => {
   it("provides parallel knowledge and diagnosis subpages with stable answer selection", () => {
@@ -55,6 +56,23 @@ describe("brand standalone business routes", () => {
     expect(resolveStandaloneRagReport("?view=enterprise-qa&report=1&sourceQaTaskId=task", "workspace-a")?.error).toContain("标识不完整");
     expect(resolveStandaloneRagReport("?view=knowledge&report=1", "workspace-a")).toBeNull();
     expect(resolveStandaloneRagReport("?view=enterprise-qa", "workspace-a")).toBeNull();
+  });
+
+  it("opens only canonical examples and keeps them separate from live coordinates", () => {
+    const exampleId = RAG_SAMPLE_CASES[0].id;
+    const url = new URL(standaloneRagReportUrl("records", "workspace-a", undefined, exampleId), "https://brand.frontmind.cn");
+    expect(url.searchParams.get("example")).toBe(exampleId);
+    expect(url.searchParams.has("sourceQaTaskId")).toBe(false);
+    expect(resolveStandaloneRagReport(url.search, "workspace-a")).toEqual({ coordinate: undefined, exampleId, error: null });
+    expect(resolveStandaloneRagReport(`${url.search}&sourceQaTaskId=real&turnId=turn`, "workspace-a")?.error).toContain("不能混用");
+    expect(resolveStandaloneRagReport(`${url.search}&example=${exampleId}`, "workspace-a")?.error).toContain("标识无效");
+    for (const example of ["unknown", "", "../syn-capability", "rag-eval-1.2"]) {
+      const invalid = resolveStandaloneRagReport(`?view=enterprise-qa&report=1&example=${encodeURIComponent(example)}`, "workspace-a");
+      expect(invalid?.error).toContain("标识无效");
+      expect(invalid?.coordinate).toBeUndefined();
+      expect(invalid?.exampleId).toBeUndefined();
+    }
+    expect(() => standaloneRagReportUrl("records", "workspace-a", { sourceQaTaskId: "real", turnId: "turn" }, exampleId)).toThrow("不能混用");
   });
 });
 

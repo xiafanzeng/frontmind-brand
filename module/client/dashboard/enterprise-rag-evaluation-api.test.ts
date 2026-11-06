@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   assertActive: vi.fn(),
+  capture: vi.fn(),
   headers: vi.fn((extra: Record<string, string> = {}) => ({
     "X-Workspace": "workspace-1",
     ...extra,
@@ -10,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/workspace-rest-scope", () => ({
-  captureWorkspaceRestOperation: () => mocks,
+  captureWorkspaceRestOperation: () => mocks.capture(),
 }));
 
 import { liveEnterpriseRagEvaluationApi } from "./enterprise-rag-evaluation-api";
@@ -38,9 +39,79 @@ function json(value: unknown, status = 200) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.fetch.mockReset();
+  mocks.assertActive.mockReset();
+  mocks.capture.mockReset().mockReturnValue(mocks);
 });
+afterEach(() => vi.useRealTimers());
 
 describe("enterprise RAG evaluation API", () => {
+  it("retries only transient GET failures after 400ms and 1200ms while preserving automatic expectation", async () => {
+    vi.useFakeTimers();
+    mocks.fetch.mockResolvedValueOnce(json({ error: { message: "评分服务暂不可用。" } }, 503))
+      .mockResolvedValueOnce(json({ error: { message: "评分服务暂不可用。" } }, 503))
+      .mockResolvedValueOnce(json({ latest: null, history: [], automaticExpected: true }));
+    const pending = liveEnterpriseRagEvaluationApi.latest({ sourceQaTaskId: "task-1", turnId: "turn-1" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(399); expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1); expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1199); expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toEqual({ latest: null, history: [], automaticExpected: true });
+    expect(mocks.fetch).toHaveBeenCalledTimes(3);
+    expect(mocks.capture).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch.mock.calls.every(([, init]) => init.method === "GET" && init.body === undefined)).toBe(true);
+  });
+
+  it("never automatically retries an explicit paid POST, and presents a human error without HTTP suffix", async () => {
+    vi.useFakeTimers();
+    mocks.fetch.mockResolvedValue(json({ error: { message: "评估服务暂时无法读取数据，请稍后重试。" } }, 503));
+    await expect(liveEnterpriseRagEvaluationApi.start({ clientRequestId: "request-1", sourceQaTaskId: "task-1", turnId: "turn-1" }))
+      .rejects.toMatchObject({ message: "评估服务暂时无法读取数据，请稍后重试。" });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch.mock.calls[0][1].method).toBe("POST");
+  });
+
+  it("does not retry a permanent GET rejection", async () => {
+    vi.useFakeTimers();
+    mocks.fetch.mockResolvedValue(json({ error: { message: "当前账号无权读取此评估。" } }, 403));
+    await expect(liveEnterpriseRagEvaluationApi.observe("operation-1")).rejects.toThrow("当前账号无权读取此评估。");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops GET recovery after its two delayed retries", async () => {
+    vi.useFakeTimers();
+    mocks.fetch.mockImplementation(async () => json({ error: { message: "评分暂时无法读取。" } }, 503));
+    const pending = liveEnterpriseRagEvaluationApi.observe("operation-1").catch(error => error);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect((await pending).message).toBe("评分暂时无法读取。");
+    expect(mocks.fetch).toHaveBeenCalledTimes(3);
+    expect(mocks.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a delayed GET retry when the captured workspace is no longer active", async () => {
+    vi.useFakeTimers();
+    let active = true;
+    const changed = new Error("WORKSPACE_SCOPE_CHANGED");
+    const newFetch = vi.fn().mockResolvedValue(json({ latest: null, history: [] }));
+    const oldOperation = { ...mocks, assertActive: vi.fn(() => { if (!active) throw changed; }) };
+    const newOperation = { ...mocks, fetch: newFetch, assertActive: vi.fn(), headers: vi.fn(() => ({ "X-Workspace": "workspace-2" })) };
+    mocks.capture.mockReturnValueOnce(oldOperation).mockReturnValue(newOperation);
+    mocks.fetch.mockResolvedValueOnce(json({ error: { message: "暂时不可用。" } }, 503));
+    const pending = liveEnterpriseRagEvaluationApi.latest({ sourceQaTaskId: "task-1", turnId: "turn-1" }).catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    active = false;
+    await vi.advanceTimersByTimeAsync(400);
+    expect(await pending).toBe(changed);
+    expect(mocks.capture).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(newFetch).not.toHaveBeenCalled();
+  });
+
   it("loads server history with GET only and both immutable answer coordinates", async () => {
     mocks.fetch.mockResolvedValueOnce(
       json({ latest: run(), history: [run("completed")] }),

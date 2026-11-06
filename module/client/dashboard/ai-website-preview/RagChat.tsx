@@ -1,9 +1,22 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, useId, type RefObject } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useId, type RefObject, type MouseEvent, type KeyboardEvent } from "react";
 import { Check, Copy, Send, Sparkles, Square, SquarePen } from "lucide-react";
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import { copyToClipboard } from "@frontmind/module-ui/lib/utils";
 import { ragChatActivityRows, type RagChatActivity, type RagChatActivityRow } from "./rag-chat-activity";
 import "./rag-chat.css";
+
+export type RagChatSource = { id: string; title: string; kind?: string };
+export type RagChatTurn = {
+  /** Question identity retained for older conversation snapshots. */
+  id: string;
+  question: string;
+  answer: string;
+  answerKey?: string;
+  answerId?: string;
+  sources?: RagChatSource[];
+  completedAt?: number;
+  coordinate?: { sourceQaTaskId: string; turnId: string };
+};
 
 type Props = {
   scopeKey: string;
@@ -11,12 +24,15 @@ type Props = {
   assistantName: string;
   question: string;
   answer: string;
-  previousTurns?: Array<{ id: string; question: string; answer: string }>;
+  previousTurns?: RagChatTurn[];
   answerKey: string;
+  selectedAnswerKey?: string;
+  onSelectAnswer?: (answerKey: string) => void;
+  readOnly?: boolean;
   completedAt?: number;
   startedAt?: number;
   durationMs?: number;
-  sources: Array<{ id: string; title: string; kind?: string }>;
+  sources: RagChatSource[];
   busy: boolean;
   running: boolean;
   /** Stable identity of the current business turn, including its supplements. */
@@ -31,9 +47,14 @@ type Props = {
   onSubmit: () => Promise<void>;
   onStop: () => Promise<boolean>;
   onSteer?: (text: string) => Promise<boolean>;
-  onEvidence: () => void;
+  onEvidence: (answerKey: string) => void;
   onEditAnswer?: () => void;
 };
+
+// Selecting a response or opening its assessment must not reparse chat history.
+const ChatMarkdown = memo(function ChatMarkdown({ content }: { content: string }) {
+  return <MarkdownRenderer content={content} className="rag-chat-markdown" allowCopy={false} />;
+});
 
 function useReducedMotion() {
   const [reduced, setReduced] = useState(() => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
@@ -133,25 +154,19 @@ function readFeedback(scope: string): Record<string, "up" | "down"> {
   } catch { return {}; }
 }
 
-function RagChatElapsed({ busy, startedAt, durationMs }: { busy: boolean; startedAt?: number; durationMs?: number }) {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    if (!busy || !startedAt) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 500);
-    return () => clearInterval(timer);
-  }, [busy, startedAt]);
-  const milliseconds = busy && startedAt ? Math.max(0, now - startedAt) : durationMs;
-  if (milliseconds === undefined || !Number.isFinite(milliseconds) || milliseconds < 0) return null;
-  const seconds = milliseconds / 1000;
-  const label = seconds < 10 ? `${seconds.toFixed(1)} 秒` : seconds < 60 ? `${Math.floor(seconds)} 秒` : `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`;
-  return <small className="rag-chat-elapsed" aria-label={`本轮回答耗时 ${label}`}>用时 {label}</small>;
-}
+const completionTimeFormat = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+const completionDateFormat = new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" });
+const CompletionTime = memo(function CompletionTime({ value }: { value?: number }) {
+  const completed = value !== undefined && Number.isFinite(value) ? new Date(value) : null;
+  if (!completed || !Number.isFinite(completed.getTime())) return null;
+  const label = completionTimeFormat.format(completed);
+  const digits = label.replace(/\s*[AP]M$/, "");
+  return <time className="rag-chat-completed" dateTime={completed.toISOString()} title={`${completionDateFormat.format(completed)} ${label}`} aria-label={`回答完成于 ${label}`}><span className="rag-chat-completed-digits">{digits}</span>{label.slice(digits.length)}</time>;
+});
 
 export function RagChat(props: Props) {
   const { inputRef } = props;
   const [submitting, setSubmitting] = useState(false);
-  const [submittedAt, setSubmittedAt] = useState<number | undefined>();
   const [stopping, setStopping] = useState(false);
   const [steering, setSteering] = useState(false);
   const [stopped, setStopped] = useState(false);
@@ -200,7 +215,6 @@ export function RagChat(props: Props) {
     generation.current += 1;
     submitLock.current = false;
     stopLock.current = false;
-    setSubmittedAt(undefined);
     setSubmitting(false); setStopping(false); setStopped(false); setError("");
     return () => { generation.current += 1; };
   }, [props.scopeKey]);
@@ -248,10 +262,9 @@ export function RagChat(props: Props) {
   }, [props.input, inputRef]);
 
   const submit = async () => {
-    if (submitLock.current || busy || !props.canSubmit || !props.input.trim()) return;
+    if (props.readOnly || submitLock.current || busy || !props.canSubmit || !props.input.trim()) return;
     submitLock.current = true;
     const current = generation.current;
-    setSubmittedAt(Date.now());
     setSubmitting(true); setStopped(false); setError("");
     try { await props.onSubmit(); }
     catch (failure) {
@@ -278,7 +291,7 @@ export function RagChat(props: Props) {
     }
   };
   const steer = async () => {
-    if (steerLock.current || stopping || !props.running || !props.input.trim()) return;
+    if (props.readOnly || steerLock.current || stopping || !props.running || !props.input.trim()) return;
     if (!props.steeringSupported || !props.onSteer) {
       setError("当前模型暂不支持本轮补充，输入已保留。");
       return;
@@ -362,26 +375,44 @@ export function RagChat(props: Props) {
   const feedbackLabel = feedback === "up" ? "已赞，修改评价" : feedback === "down" ? "已踩，修改评价" : "评价回答";
   const speechLabel = !canSpeak ? "当前浏览器暂不支持朗读" : speaking ? "停止朗读" : "朗读";
 
-  const completed = props.completedAt && Number.isFinite(props.completedAt) ? new Date(props.completedAt) : null;
-  const completedLabel = completed ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true }).format(completed) : "";
-  const completedDigits = completedLabel.replace(/\s*[AP]M$/, "");
+  const selectAnswer = (event: MouseEvent<HTMLElement>, key: string) => {
+    if (!props.onSelectAnswer || !key) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+    if ((event.target as Element).closest("button,a,input,textarea,select,[role='menu']")) return;
+    props.onSelectAnswer(key);
+  };
+  const selectAnswerByKeyboard = (event: KeyboardEvent<HTMLElement>, key: string) => {
+    if (!props.onSelectAnswer || !key || event.target !== event.currentTarget || !["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    props.onSelectAnswer(key);
+  };
   const showWait = waiting || phase === "leaving";
   return <>
     <div className="erag-test-thread rag-chat" aria-label="企业助手问答">
-      {props.previousTurns?.map(turn => <Fragment key={turn.id}>
+      {props.onSelectAnswer && <span id={`${tooltipId}-select`} className="rag-chat-sr-status">按 Enter 或空格查看此回答的评估。</span>}
+      {props.previousTurns?.map(turn => {
+        const key = turn.answerKey ?? turn.answerId ?? turn.id;
+        return <Fragment key={turn.id}>
         <p className="erag-user-message">{turn.question}</p>
-        {turn.answer && <article aria-label="历史回答"><header><Sparkles size={16} aria-hidden="true" /><strong>{props.assistantName}</strong></header><div className="rag-chat-response"><MarkdownRenderer content={turn.answer} className="rag-chat-markdown" allowCopy={false} /></div></article>}
-      </Fragment>)}
+        {turn.answer && <article aria-label="历史回答" className={props.onSelectAnswer ? "rag-chat-selectable-answer" : undefined} data-answer-key={key} data-selected={props.selectedAnswerKey === key || undefined} aria-current={props.selectedAnswerKey === key ? "true" : undefined} tabIndex={props.onSelectAnswer ? 0 : undefined} aria-describedby={props.onSelectAnswer ? `${tooltipId}-select` : undefined} onClick={event => selectAnswer(event, key)} onKeyDown={event => selectAnswerByKeyboard(event, key)}>
+          <header><Sparkles size={16} aria-hidden="true" /><strong>{props.assistantName}</strong></header>
+          <div className="rag-chat-response"><ChatMarkdown content={turn.answer} /></div>
+          {Boolean(turn.sources?.length) && <div className="erag-citations">{turn.sources!.map((source, index) => <button type="button" key={`${source.kind ?? "source"}:${source.id}`} onClick={event => { event.stopPropagation(); props.onEvidence(key); }}>[{index + 1}] {source.title}</button>)}</div>}
+          {turn.completedAt !== undefined && <div className="rag-chat-answer-tools"><CompletionTime value={turn.completedAt} /></div>}
+        </article>}
+      </Fragment>;
+      })}
       {(props.question || props.live) && <p className="erag-user-message">{props.question || "输入一个企业相关问题开始真实问答。"}</p>}
-      <article aria-label="企业助手回复" aria-busy={waiting}>
-        <header><Sparkles size={16} aria-hidden="true" /><strong>{props.assistantName}</strong><RagChatElapsed busy={busy && !props.answer} startedAt={submittedAt ?? props.startedAt} durationMs={props.durationMs} /></header>
+      <article aria-label="企业助手回复" aria-busy={waiting} className={props.answer && props.onSelectAnswer ? "rag-chat-selectable-answer" : undefined} data-answer-key={props.answerKey || undefined} data-selected={Boolean(props.answer && props.selectedAnswerKey === props.answerKey) || undefined} aria-current={props.answer && props.selectedAnswerKey === props.answerKey ? "true" : undefined} tabIndex={props.answer && props.onSelectAnswer ? 0 : undefined} aria-describedby={props.answer && props.onSelectAnswer ? `${tooltipId}-select` : undefined} onClick={event => { if (props.answer) selectAnswer(event, props.answerKey); }} onKeyDown={event => { if (props.answer) selectAnswerByKeyboard(event, props.answerKey); }}>
+        <header><Sparkles size={16} aria-hidden="true" /><strong>{props.assistantName}</strong></header>
         <div className="rag-chat-response" data-phase={phase}>
           {showWait && <div className="rag-chat-wait" data-testid="rag-chat-wait" role="status" aria-live="polite">
             {visibleActivity.length ? visibleActivity.map(item => <div key={item.id} className={`rag-chat-activity is-${item.status}`} data-activity-status={item.status}><span>{item.text}</span></div>) : <span>正在处理…</span>}
           </div>}
           {props.answer ? <div className="rag-chat-answer" data-testid={props.live ? "rag-answer" : "rag-preview-answer"}>
-            <div ref={markdownRef}><MarkdownRenderer content={props.answer} className="rag-chat-markdown" allowCopy={false} /></div>
-            {props.sources.length > 0 && <div className="erag-citations">{props.sources.map((source, index) => <button type="button" data-testid={props.live ? "rag-source" : undefined} key={`${source.kind ?? "source"}:${source.id}`} onClick={props.onEvidence}>[{index + 1}] {source.title}</button>)}</div>}
+            <div ref={markdownRef}><ChatMarkdown content={props.answer} /></div>
+            {props.sources.length > 0 && <div className="erag-citations">{props.sources.map((source, index) => <button type="button" data-testid={props.live ? "rag-source" : undefined} key={`${source.kind ?? "source"}:${source.id}`} onClick={event => { event.stopPropagation(); props.onEvidence(props.answerKey); }}>[{index + 1}] {source.title}</button>)}</div>}
             <div className="rag-chat-answer-tools" role="group" aria-label="回答操作">
               <button type="button" className="rag-chat-tool rag-chat-copy" data-copied={copied || undefined} data-tooltip-suppressed={copyTipSuppressed || undefined} onPointerLeave={() => setCopyTipSuppressed(false)} onBlur={() => setCopyTipSuppressed(false)} onClick={() => void copy()} aria-label={copied ? "已复制" : "复制回答"} aria-describedby={copied ? undefined : `${tooltipId}-copy`}><span className="rag-chat-icon-stack" aria-hidden="true"><Copy size={14} className={copied ? "rag-chat-copy-glyph is-hidden" : "rag-chat-copy-glyph"} /><Check size={14} className={copied ? undefined : "is-hidden"} /></span><span className="rag-chat-tool-tip" id={`${tooltipId}-copy`} role="tooltip"><span className="rag-chat-tip-copy" key={copyLabel}>{copyLabel}</span></span></button>
               <div className="rag-chat-feedback" ref={feedbackBox} onKeyDown={event => {
@@ -406,7 +437,7 @@ export function RagChat(props: Props) {
               </div>
               <button type="button" className="rag-chat-tool rag-chat-speech" aria-label={speaking ? "停止朗读" : "朗读"} aria-pressed={speaking} aria-disabled={!canSpeak} aria-describedby={`${tooltipId}-speech`} onClick={readAloud}><span className="rag-chat-icon-stack" aria-hidden="true"><ReadAloudGlyph hidden={speaking} /><ReadAloudStopGlyph hidden={!speaking} /></span><span className="rag-chat-tool-tip" id={`${tooltipId}-speech`} role="tooltip"><span className="rag-chat-tip-copy" key={speechLabel}>{speechLabel}</span></span></button>
               {props.onEditAnswer && <button type="button" className="rag-chat-tool rag-chat-edit" data-answer-panel-trigger="answer" aria-label="编辑回答" aria-describedby={`${tooltipId}-edit`} onClick={props.onEditAnswer}><span className="rag-chat-icon-stack" aria-hidden="true"><SquarePen size={14} /></span><span className="rag-chat-tool-tip" id={`${tooltipId}-edit`} role="tooltip"><span className="rag-chat-tip-copy">编辑回答</span></span></button>}
-              {completed && <time className="rag-chat-completed" dateTime={completed.toISOString()} title={`${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(completed)} ${completedLabel}`} aria-label={`回答完成于 ${completedLabel}`}><span className="rag-chat-completed-digits">{completedDigits}</span>{completedLabel.slice(completedDigits.length)}</time>}
+              <CompletionTime value={props.completedAt} />
             </div>
           </div> : !waiting && <p className="rag-chat-empty" data-testid={props.live ? "rag-answer" : undefined}>{stopped ? "已停止回答。" : props.live ? "尚无待评估回答。请提交真实问题。" : "尚无待评估回答。"}{!props.live && props.onEditAnswer && <button type="button" className="rag-chat-enter-answer" data-answer-panel-trigger="answer" onClick={props.onEditAnswer}>录入回答</button>}</p>}
         </div>
@@ -415,12 +446,13 @@ export function RagChat(props: Props) {
     </div>
     {error && <p className="rag-chat-error" role="alert">{error}</p>}
     <form className="erag-composer rag-chat-composer" onSubmit={event => { event.preventDefault(); void (props.running ? steer() : submit()); }}>
-      <textarea ref={inputRef} className="rag-chat-input" rows={1} data-testid={props.live ? "rag-question-input" : undefined} aria-label={props.live ? "输入企业 RAG 问题" : "输入企业 RAG 示例问题"} aria-describedby={props.running && props.input.trim() && !props.steeringSupported ? `${tooltipId}-steer` : undefined} placeholder={props.running ? "继续输入，补充本轮回答的要求" : props.live ? "输入访客问题，基于已发布知识回答" : "输入访客问题，或选择上方示例"} value={props.input} disabled={!props.canEdit} onChange={event => { inputRevision.current += 1; latestInput.current = event.currentTarget.value; props.onInput(event.currentTarget.value); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => {
+      <textarea ref={inputRef} className="rag-chat-input" rows={1} data-testid={props.live ? "rag-question-input" : undefined} aria-label={props.live ? "输入企业 RAG 问题" : "输入企业 RAG 示例问题"} aria-describedby={props.readOnly ? `${tooltipId}-readonly` : props.running && props.input.trim() && !props.steeringSupported ? `${tooltipId}-steer` : undefined} placeholder={props.running ? "继续输入，补充本轮回答的要求" : props.live ? "输入访客问题，基于已发布知识回答" : "输入访客问题，或选择上方示例"} value={props.input} disabled={props.readOnly || !props.canEdit} onChange={event => { inputRevision.current += 1; latestInput.current = event.currentTarget.value; props.onInput(event.currentTarget.value); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !composing.current && event.keyCode !== 229) { event.preventDefault(); void (props.running ? steer() : submit()); }
       }} />
-      {props.running && props.input.trim() && <button className="rag-chat-steer" type="submit" disabled={!props.steeringSupported || !props.onSteer || steering || stopping} aria-label={steering ? "正在补充当前回答" : "补充当前回答"} title={props.steeringSupported ? "补充当前回答" : "当前模型暂不支持本轮补充"}><Send size={18} aria-hidden="true" /></button>}
-      <button className="rag-chat-send" data-testid={props.live ? "rag-submit" : undefined} type={props.running ? "button" : "submit"} disabled={props.running ? stopping : busy || !props.canSubmit || !props.input.trim()} onClick={props.running ? () => void stop() : undefined} aria-label={props.running ? stopping ? "正在停止回答" : "停止回答" : props.live ? "发送问题" : "试用问题"} title={props.running ? "停止回答" : "发送问题"}>{props.running ? <Square size={14} fill="currentColor" aria-hidden="true" /> : <Send size={18} aria-hidden="true" />}</button>
+      {props.running && props.input.trim() && <button className="rag-chat-steer" type="submit" disabled={props.readOnly || !props.steeringSupported || !props.onSteer || steering || stopping} aria-label={steering ? "正在补充当前回答" : "补充当前回答"} title={props.steeringSupported ? "补充当前回答" : "当前模型暂不支持本轮补充"}><Send size={18} aria-hidden="true" /></button>}
+      <button className="rag-chat-send" data-testid={props.live ? "rag-submit" : undefined} type={props.running ? "button" : "submit"} disabled={props.readOnly || (props.running ? stopping : busy || !props.canSubmit || !props.input.trim())} onClick={props.running ? () => void stop() : undefined} aria-label={props.running ? stopping ? "正在停止回答" : "停止回答" : props.live ? "发送问题" : "试用问题"} title={props.running ? "停止回答" : "发送问题"}>{props.running ? <Square size={14} fill="currentColor" aria-hidden="true" /> : <Send size={18} aria-hidden="true" />}</button>
     </form>
+    {props.readOnly && <p className="rag-chat-readonly-note" id={`${tooltipId}-readonly`}>示例仅供查看，新建问答后可提问。</p>}
     {props.running && props.input.trim() && !props.steeringSupported && <p className="rag-chat-steer-note" id={`${tooltipId}-steer`}>当前模型暂不支持本轮补充，输入会保留为草稿。</p>}
   </>;
 }

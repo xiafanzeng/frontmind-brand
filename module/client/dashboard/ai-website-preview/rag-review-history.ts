@@ -2,6 +2,7 @@ import type { DimensionJudgment, GateJudgment } from "./rag-evaluation";
 
 export type RagReviewRecord = {
   id: string;
+  subjectKey?: string;
   question: string;
   answer: string;
   need: string;

@@ -553,7 +553,7 @@ describe("simplified AI website preview", () => {
     expect(within(evaluation).getByRole("heading", { name: "待核验" })).toBeTruthy();
     const pendingScore = within(evaluation).getByLabelText("六维诊断评分");
     expect(pendingScore.classList.contains("is-empty")).toBe(true);
-    expect(within(pendingScore).getByTestId("rag-gauge-pending").textContent).toBe("N/A");
+    expect(within(pendingScore).queryByTestId("rag-gauge-pending")).toBeNull();
     expect(within(pendingScore).queryByTestId("rag-gauge-value")).toBeNull();
     expect(within(evaluation).queryByText(/可能分数/)).toBeNull();
   });

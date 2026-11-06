@@ -96,3 +96,7 @@
 .rag-conversation-popover__recovery button { min-height:36px; padding:4px 8px; border:0; border-radius:8px; background:transparent; color:#7542b0; cursor:pointer; }
 .rag-conversation-popover__recovery button:hover:not(:disabled) { background:rgba(118,118,128,.09); }
 .rag-conversation-popover__recovery button:disabled { opacity:.45; cursor:default; }
+
+.rag-conversation-popover__examples { margin-top:16px; padding-top:16px; border-top:1px solid rgba(0,0,0,.08); }
+.rag-conversation-popover__examples h4 { margin:0 0 8px; color:#86868b; font-size:12px; font-weight:400; }
+.rag-conversation-popover__examples .rag-conversation-popover__choice { grid-column:1/-1; }
