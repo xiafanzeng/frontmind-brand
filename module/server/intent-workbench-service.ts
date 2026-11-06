@@ -6,7 +6,7 @@ import type {ModuleHttpCore} from "./http-api.js";
 import {getKnowledgeNodeDetails, saveKnowledgeNodeContent} from "./knowledge-node-workspace-service.js";
 import {projectKnowledgeBaseCustomerMarkdown} from "../contracts/knowledge-base-materialized-contract.js";
 import {
-  emptyIntentState,
+  emptyIntentState, findSavedIntentPlan,
   type IntentState, type IntentNode, type IntentWorkspace, type IntentSkillJob,
 } from "../contracts/intent-workbench.js";
 import {intentHash, prepareIntentSkill, reserveIntentSkill, intentSkillClient, readIntentSkillInput, uploadIntentSkill,
@@ -455,7 +455,14 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
           throw cause;
         }
       } else if (input.kind === "edit") {
-        const plan = state.plans.find(item => item.questionId === input.questionId);
+        let plan = state.plans.find(item => item.questionId === input.questionId);
+        if (!plan) {
+          const saved = findSavedIntentPlan(state, input.questionId);
+          if (saved) {
+            plan = structuredClone(saved);
+            state.plans.push(plan);
+          }
+        }
         if (!plan) throw new IntentWorkbenchError("PLAN_MISSING", "请先生成方案");
         for (const edit of input.actions) {
           const action = plan.actions.find(item => item.id === edit.id);
