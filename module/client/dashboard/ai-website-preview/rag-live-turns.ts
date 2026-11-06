@@ -18,11 +18,13 @@ export function ragLiveTurns(conversation: Conversation | null | undefined, runn
     const next = messages.findIndex((item, position) => position > index && item.role === "user");
     const answer = messages.slice(index + 1, next < 0 ? undefined : next).findLast(item =>
       item.role === "assistant" && finalIds.has(item.id) && !item.isStepsPlaceholder && Boolean(item.content.trim()) &&
-      (!item.generalChat?.userMessageId || item.generalChat.userMessageId === question.id));
+      (!item.generalChat?.userMessageId || item.generalChat.userMessageId === question.id) &&
+      (!item.enterpriseQaLocalReply?.userMessageId || item.enterpriseQaLocalReply.userMessageId === question.id));
     const taskId = answer?.generalChat?.agentTaskId;
-    const turnId = answer?.generalChat?.turnId;
+    const turnId = answer?.enterpriseQaLocalReply?.turnId ?? answer?.generalChat?.turnId;
     return [{ id: question.id, questionId: question.id, question: question.content, answer: answer?.content ?? "",
       answerId: answer?.id, answerKey: JSON.stringify([conversation.id, taskId, turnId, answer?.id ?? question.id]),
+      evaluation: answer?.enterpriseQaLocalReply?.evaluation,
       taskId, turnId, coordinate: taskId && turnId ? { sourceQaTaskId: taskId, turnId } : undefined,
       sources: answer?.enterpriseQaAnswer?.sources ?? [], completedAt: answer?.timestamp }];
   });

@@ -105,7 +105,7 @@ export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = fals
     <div className="rag-radar-chart">
       <svg viewBox={`0 0 ${RADAR_VIEWBOX_WIDTH} ${RADAR_VIEWBOX_HEIGHT}`} role="img" aria-labelledby={`${id}-title ${id}-description`}>
         <title id={`${id}-title`}>六维质量雷达图</title>
-        <desc id={`${id}-description`}>五层六边形表示从0%到100%的相对范围，实际百分比标在各维度名称下方。中心保持透明，点选维度标记可查看分数与依据。{emptyQuestion ? "尚未输入问题，暂无评分。" : full ? "已绘制完整评分区域。" : "存在待核验或不适用项，仅绘制已知标记，不填充完整区域。"}</desc>
+        <desc id={`${id}-description`}>五层六边形表示从0%到100%的相对范围，实际百分比标在各维度名称下方。中心保持透明，点选维度标记可查看分数与依据。{emptyQuestion ? "暂无评分。" : full ? "已绘制完整评分区域。" : "存在待核验或不适用项，仅绘制已知标记，不填充完整区域。"}</desc>
         <defs>
           <mask id={maskId} data-testid="rag-radar-center-mask" maskUnits="userSpaceOnUse" x="0" y="0" width={RADAR_VIEWBOX_WIDTH} height={RADAR_VIEWBOX_HEIGHT}>
             <rect x="0" y="0" width={RADAR_VIEWBOX_WIDTH} height={RADAR_VIEWBOX_HEIGHT} fill="#fff" />

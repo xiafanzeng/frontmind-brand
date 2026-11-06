@@ -119,3 +119,21 @@ describe("local synthetic conversation history", () => {
     act(() => { expect(result.current.select(result.current.conversations.find(item => item.question === "内存")!.id)?.question).toBe("内存"); });
   });
 });
+
+
+it("starts fresh on every mount and scope change while preserving stored conversations", () => {
+  const first=renderHook(({scope})=>useRagPreviewHistory(scope,true,true),{initialProps:{scope:"project-a"}});
+  expect(first.result.current.activeSnapshot).toBeNull();
+  act(()=>{first.result.current.save(sample("已保存"));});
+  const savedId=first.result.current.activeId;
+  first.unmount();
+  const reopened=renderHook(({scope})=>useRagPreviewHistory(scope,true,true),{initialProps:{scope:"project-a"}});
+  expect(reopened.result.current.activeId).not.toBe(savedId);
+  expect(reopened.result.current.activeSnapshot).toBeNull();
+  expect(reopened.result.current.conversations.find(item=>item.id===savedId)?.question).toBe("已保存");
+  act(()=>{reopened.result.current.select(savedId);});
+  expect(reopened.result.current.activeSnapshot?.question).toBe("已保存");
+  reopened.rerender({scope:"b"}); reopened.rerender({scope:"project-a"});
+  expect(reopened.result.current.activeSnapshot).toBeNull();
+  expect(reopened.result.current.conversations.find(item=>item.id===savedId)?.question).toBe("已保存");
+});

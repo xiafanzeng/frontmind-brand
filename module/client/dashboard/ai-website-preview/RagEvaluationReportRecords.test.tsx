@@ -19,12 +19,12 @@ function run(id = "operation-1", task = "task-1"): EnterpriseRagEvaluationRunDto
 }
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockRejectedValue(new Error("must never start")); vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] }); });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("report records", () => {
   it("keeps preview and missing-answer reads offline", async () => {
     const view = render(<RagEvaluationReportRecords preview storageScopeKey="preview" coordinate={coordinate} />);
-    expect(screen.getByText("本地预览使用合成示例，没有服务端自动评估记录。")).toBeTruthy();
+    expect(screen.getByText("暂无评估记录。")).toBeTruthy();
     view.rerender(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" />);
     expect(screen.getByText(/未选择回答/)).toBeTruthy();
     expect(liveEnterpriseRagEvaluationApi.latest).not.toHaveBeenCalled();
@@ -124,6 +124,47 @@ describe("report records", () => {
     expect(screen.queryByText("当前回答暂无自动评估记录。")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     await waitFor(() => expect(screen.getByText("当前回答暂无自动评估记录。")).toBeTruthy());
+    expect(liveEnterpriseRagEvaluationApi.start).not.toHaveBeenCalled();
+  });
+
+  it("keeps admission waiting beyond sixty seconds with read-only polling", async () => {
+    vi.useFakeTimers();
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: null, history: [], automaticExpected: true });
+    render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole("status").textContent).toBe("正在评估本次回答");
+    expect(screen.queryByText("当前回答暂无自动评估记录。")).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(65_000); });
+    expect(vi.mocked(liveEnterpriseRagEvaluationApi.latest).mock.calls.length).toBeGreaterThan(12);
+    expect(screen.getByRole("status").textContent).toBe("正在评估本次回答");
+    expect(liveEnterpriseRagEvaluationApi.start).not.toHaveBeenCalled();
+  });
+
+  it("shows blocked admission and retries only its read without hiding a later report", async () => {
+    const admission = { status: "blocked" as const, code: "PREPARE_FAILED", message: "准备失败", updatedAt: "2026-11-06T02:00:00.000Z" };
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValueOnce({ latest: null, history: [], automaticExpected: false, automaticAdmission: admission });
+    render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("评估未完成"));
+    expect(screen.queryByText("当前回答暂无自动评估记录。")).toBeNull();
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: run(), history: [], automaticAdmission: admission });
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    await waitFor(() => expect(screen.getByTestId("rag-report-automatic-record")).toBeTruthy());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(liveEnterpriseRagEvaluationApi.latest).toHaveBeenCalledTimes(2);
+    expect(liveEnterpriseRagEvaluationApi.start).not.toHaveBeenCalled();
+  });
+
+  it("retains a completed report during refresh and after a failed read", async () => {
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: run(), history: [] });
+    render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    await waitFor(() => expect(screen.getByTestId("rag-report-automatic-record")).toBeTruthy());
+    let rejectRead!: (error: Error) => void;
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockImplementation(() => new Promise((_resolve, reject) => { rejectRead = reject; }));
+    fireEvent.focus(window);
+    expect(screen.getByTestId("rag-report-automatic-record").textContent).toContain("100 / 100");
+    await act(async () => { rejectRead(new Error("读取失败")); });
+    expect(screen.getByTestId("rag-report-automatic-record").textContent).toContain("100 / 100");
+    expect(screen.getByRole("alert").textContent).toContain("保留上次成功读取");
     expect(liveEnterpriseRagEvaluationApi.start).not.toHaveBeenCalled();
   });
 

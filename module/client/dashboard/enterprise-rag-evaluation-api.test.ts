@@ -46,6 +46,16 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("enterprise RAG evaluation API", () => {
+  it("reads persisted admission failures without starting an evaluation", async () => {
+    const automaticAdmission = { status: "blocked", code: "SOURCE_MESSAGES_INVALID", message: "本次回答的资料绑定不完整，暂时无法评估。", updatedAt: "2026-11-06T15:00:00.000Z" };
+    mocks.fetch.mockResolvedValue(json({ latest: null, history: [], automaticExpected: false, automaticAdmission }));
+    expect(await liveEnterpriseRagEvaluationApi.latest({ sourceQaTaskId: "task-1", turnId: "turn-1" })).toEqual({ latest: null, history: [], automaticAdmission });
+    expect(mocks.fetch.mock.calls[0][1].method).toBe("GET");
+  });
+  it("rejects malformed admission data instead of displaying an invented state", async () => {
+    mocks.fetch.mockResolvedValue(json({ latest: null, history: [], automaticAdmission: { status: "completed" } }));
+    await expect(liveEnterpriseRagEvaluationApi.latest({ sourceQaTaskId: "task-1", turnId: "turn-1" })).rejects.toThrow("自动评估状态暂时无法读取");
+  });
   it("retries only transient GET failures after 400ms and 1200ms while preserving automatic expectation", async () => {
     vi.useFakeTimers();
     mocks.fetch.mockResolvedValueOnce(json({ error: { message: "评分服务暂不可用。" } }, 503))

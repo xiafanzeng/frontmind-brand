@@ -36,7 +36,8 @@ describe("conversation history", () => {
     render(<RagConversationHistory {...callbacks} loading examples={examples} activeExampleId="example-capability" onSelectExample={onSelectExample} />);
     expect((screen.getByRole("button", { name: "新建问答" }) as HTMLButtonElement).disabled).toBe(false);
     const dialog = await open();
-    expect(within(dialog).getByRole("status").textContent).toContain("正在加载历史问答");
+    expect(within(dialog).getByRole("status", { name: "正在加载历史问答" }).textContent).toBe("");
+    expect(within(dialog).queryByText("正在加载历史问答…")).toBeNull();
     const section = within(dialog).getByRole("region", { name: "示例问答" });
     expect(within(section).getAllByText("示例 · 预设评审")).toHaveLength(2);
     expect(within(section).queryByRole("button", { name: /^删除/ })).toBeNull();
@@ -241,4 +242,17 @@ describe("conversation history", () => {
     expect((within(dialog).getByRole("button", { name: "删除正在回答" }) as HTMLButtonElement).disabled).toBe(true);
     expect((within(dialog).getByRole("button", { name: "部署要求" }) as HTMLButtonElement).disabled).toBe(false);
   });
+});
+
+
+it("allows selecting a running conversation while only its deletion is disabled", async () => {
+  const callbacks=props();
+  render(<RagConversationHistory {...callbacks} items={[{id:"running",title:"后台回答",deletingDisabled:true},{id:"idle",title:"旧对话"}]} />);
+  const dialog=await open();
+  expect(within(dialog).getByRole("button",{name:"后台回答"}).hasAttribute("disabled")).toBe(false);
+  expect(within(dialog).getByRole("button",{name:"删除后台回答"}).hasAttribute("disabled")).toBe(true);
+  expect(within(dialog).getByRole("button",{name:"删除旧对话"}).hasAttribute("disabled")).toBe(false);
+  expect(within(dialog).queryByText("当前回答完成后可切换或删除对话。")).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button",{name:"后台回答"}));
+  await waitFor(() => expect(callbacks.onSelect).toHaveBeenCalledWith("running"));
 });

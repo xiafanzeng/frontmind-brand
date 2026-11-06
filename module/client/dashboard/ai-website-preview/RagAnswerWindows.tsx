@@ -234,7 +234,8 @@ export function RagAnswerWindows({ panels, activePanel, onActivate, onClose, tit
     if (layerRef.current) layerRef.current.inert = modalBlocked;
   }, [modalBlocked]);
 
-  useEffect(() => {
+  // Synchronize the background before close restores keyboard focus.
+  useLayoutEffect(() => {
     onModalChange?.(modalOpen);
     return () => onModalChange?.(false);
   }, [modalOpen, onModalChange]);

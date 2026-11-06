@@ -1,5 +1,6 @@
 import type {
   EnterpriseRagEvaluationHistoryDto,
+  EnterpriseRagEvaluationAdmission,
   EnterpriseRagEvaluationRunDto,
   EnterpriseRagEvaluationStartInput,
 } from "../../contracts/enterprise-rag-evaluation-run";
@@ -119,6 +120,18 @@ function isReport(value: unknown): boolean {
   );
 }
 
+function parseAdmission(value: unknown): EnterpriseRagEvaluationAdmission | undefined {
+  if (value === undefined || value === null) return undefined;
+  const admission = record(value);
+  if (!admission || !["blocked", "retrying"].includes(String(admission.status)) ||
+      typeof admission.code !== "string" || typeof admission.message !== "string" ||
+      typeof admission.updatedAt !== "string" || !Number.isFinite(Date.parse(admission.updatedAt))) {
+    throw new Error("自动评估状态暂时无法读取，请稍后重试。");
+  }
+  return { status: admission.status as EnterpriseRagEvaluationAdmission["status"], code: admission.code,
+    message: admission.message, updatedAt: admission.updatedAt };
+}
+
 function isRun(value: unknown): value is EnterpriseRagEvaluationRunDto {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const run = value as Record<string, unknown>;
@@ -218,6 +231,7 @@ export const liveEnterpriseRagEvaluationApi = {
       latest,
       history: result.history.map(parseRun),
       ...(result.automaticExpected === true ? { automaticExpected: true } : {}),
+      ...(result.automaticAdmission ? { automaticAdmission: parseAdmission(result.automaticAdmission) } : {}),
     };
   },
 

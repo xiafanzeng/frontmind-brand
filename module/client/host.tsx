@@ -8,6 +8,7 @@ export interface BrandConversationContext {
   loading:boolean;hydrated:boolean;syncError:string|null;
   createConversation(options?:{title?:string;reuseEmpty?:boolean;purpose?:"enterprise_qa"|"content_production";workbenchAgentId?:string}):string;
   setActive(id:string):void;updateStatus(id:string,status:Conversation["status"],extra?:{taskId?:string;previousResponseId?:string;clearTaskPointer?:boolean;executionKind?:"general_chat_v2"|"response_logic";completedAt?:number;startedAt?:number}):void;
+  settleQueuedGeneralChatDispatch?(id:string,requestId:string):void;
   settleGeneralChatDispatch(id:string,requestId:string):void;deleteConversation(id:string):void|Promise<boolean>;
   flushConversation(id:string):Promise<boolean>;rollbackPendingKnowledgeBaseTurn(id:string,requestId:string):void;
   addMessage(id:string,message:LocalMessage):void;updateTitle(id:string,title:string):void;settleKnowledgeBaseStartFailure(id:string,requestId:string):void;
@@ -25,6 +26,8 @@ export type BrandChatInputProps={operatorWorkspace?:boolean;onComposerDirtyChang
 export type AgentWorkbenchShellProps={projectId:string;moduleId:string;title:string;main?:ReactNode;auxiliary?:ReactNode;composer?:ReactNode;layout?:"single"|"workflow"|"knowledge"|"workspace";toolbar?:ReactNode;taskTitle?:string;taskKey?:string;scrollMain?:boolean;showLatestControl?:boolean;auxiliaryScroll?:boolean;independentResourceScroll?:boolean;conversation?:ReactNode;children?:ReactNode;result?:ReactNode;resultTitle?:string;resultKey?:string;status?:string;embedded?:boolean;showResult?:boolean;conversationFocusRequest?:object|null;auxiliaryFocusRequest?:object|null;topbarActions?:ReactNode;titleRef?:React.RefObject<HTMLHeadingElement|null>};
 export type ProjectAgentWorkbenchProps={projectId:string;purpose:"enterprise_qa";children?:ReactNode;main?:ReactNode;autoCreate?:boolean;canCreateConversation?:boolean};
 export type BrandHost={
+  /** The Dashboard host already observes every running general-chat task. */
+  generalChatBackgroundPolling?:boolean;
   notifyUsageChanged?():void;
   useRuntimeContext():{workspaceId:string;accountId:number;enabled:boolean};
   useConversation():BrandConversationContext;

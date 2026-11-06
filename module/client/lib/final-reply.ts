@@ -7,9 +7,9 @@ export function finalReplyIds(messages: readonly LocalMessage[], execution?: Gen
   let user = "initial";
   for (const message of messages) {
     if (message.role === "user") { user = message.id; continue; }
-    const key = message.generalChat?.turnId ?? message.knowledgeBase?.turnId ?? user;
+    const key = message.enterpriseQaLocalReply?.turnId ?? message.generalChat?.turnId ?? message.knowledgeBase?.turnId ?? user;
     const group = groups.get(key) ?? { user, marked: false };
-    const marker = message.knowledgeBase ? (message.knowledgeBase.kind === "completion" || (message.knowledgeBase.kind === "presentation" && message.knowledgeBase.serverOwned === true && !!message.knowledgeBase.presentationKey && !!message.knowledgeBase.contentSha256)) : message.generalChat?.isFinalAnswer;
+    const marker = message.enterpriseQaLocalReply?.serverOwned === true ? true : message.knowledgeBase ? (message.knowledgeBase.kind === "completion" || (message.knowledgeBase.kind === "presentation" && message.knowledgeBase.serverOwned === true && !!message.knowledgeBase.presentationKey && !!message.knowledgeBase.contentSha256)) : message.generalChat?.isFinalAnswer;
     if (marker !== undefined) group.marked = true;
     if (message.content?.trim() && !message.isStepsPlaceholder) {
       if (marker === true) group.final = message;

@@ -5,6 +5,7 @@ import type { BrandConversationContext } from "./host";
 const mocks = vi.hoisted(() => ({
   context: null as BrandConversationContext | null,
   fetch: vi.fn(),
+  queueFetch: vi.fn(),
 }));
 
 vi.mock("./host", () => ({
@@ -12,7 +13,7 @@ vi.mock("./host", () => ({
   brandHost: () => ({
     captureWorkspaceRestOperation: () => ({
       assertActive: vi.fn(),
-      fetch: mocks.fetch,
+      fetch: (...args: [string, RequestInit?]) => args[0].includes("/followups") ? mocks.queueFetch(...args) : mocks.fetch(...args),
     }),
   }),
 }));
@@ -69,6 +70,7 @@ function conversationContext(
 
 beforeEach(() => {
   mocks.fetch.mockReset();
+  mocks.queueFetch.mockReset().mockResolvedValue({ok:true,json:async()=>({items:[],paused:false})});
   mocks.context = conversationContext();
 });
 afterEach(cleanup);
@@ -413,4 +415,150 @@ describe("same-turn enterprise QA supplements", () => {
     await act(async () => { await expect(result.current.steer("草稿")).rejects.toThrow("暂不支持"); });
     expect(mocks.fetch.mock.calls.some(([path]) => String(path).endsWith("/steer"))).toBe(false);
   });
+});
+
+
+describe("enterprise RAG durable followups and local replies", () => {
+  it("retries the original browser dispatch while its task and later FIFO questions are pending", async () => {
+    const context = conversationContext("original-task");
+    Object.assign(context.activeConversation!, { status: "running" });
+    context.activeConversation!.messages.push({
+      id: "original-request", role: "user", content: "原请求尚未确认", timestamp: 1,
+      generalChatDispatch: { schemaVersion: 1, kind: "pending_user", clientRequestId: "original-request",
+        providerPrompt: "原请求尚未确认", localAssetIds: [], localTaskId: null, modelProfile: "frontmind-base",
+        purpose: "enterprise_qa", evaluationIntent: "enterprise_rag_once" },
+    });
+    mocks.context = context;
+    mocks.queueFetch.mockResolvedValue(jsonReply({ items: [{ id: "later-question", text: "下一问", status: "queued", paused: false, canCancel: true, canRetry: false }], paused: false }));
+    mocks.fetch.mockResolvedValue(jsonReply({ id: "original-task", purpose: "enterprise_qa", status: "running" }));
+    const view = renderHook(() => useEnterpriseQaController({ evaluationIntent: "enterprise_rag_once" }));
+    await waitFor(() => expect(view.result.current.followups).toHaveLength(1));
+    await act(async () => expect(await view.result.current.retryPending()).toBe(true));
+    const submissions = mocks.fetch.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0][0]).toBe("/api/frontmind/v2/tasks");
+    expect(JSON.parse(submissions[0][1].body)).toMatchObject({ clientRequestId: "original-request", prompt: "原请求尚未确认", evaluationIntent: "enterprise_rag_once" });
+    expect(mocks.queueFetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    expect(context.addMessage).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a drained queue and discovers the worker's newly running task", async () => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderHook<ReturnType<typeof useEnterpriseQaController>, unknown>> | undefined;
+    try {
+      const context = conversationContext("completed-task"); mocks.context = context;
+      const queued = { id: "queued-question", text: "后台接着回答", status: "queued", paused: false, canCancel: true, canRetry: false };
+      mocks.queueFetch.mockResolvedValueOnce(jsonReply({ items: [queued], paused: false })).mockResolvedValue(jsonReply({ items: [], paused: false }));
+      let refreshes = 0;
+      vi.mocked(context.refreshConversations).mockImplementation(async () => {
+        if (++refreshes === 2) Object.assign(context.activeConversation!, { status: "running", taskId: "worker-task", previousResponseId: "worker-task" });
+      });
+      mocks.fetch.mockResolvedValue(jsonReply({ id: "worker-task", purpose: "enterprise_qa", status: "running" }));
+      view = renderHook(() => useEnterpriseQaController({ evaluationIntent: "enterprise_rag_once" }));
+      await act(async () => {});
+      expect(view.result.current.followups).toHaveLength(1);
+      expect(context.refreshConversations).toHaveBeenCalledTimes(1);
+      expect(mocks.fetch).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(view.result.current.followups).toHaveLength(0);
+      expect(vi.mocked(context.refreshConversations).mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(mocks.fetch.mock.calls.some(([path]) => path === "/api/frontmind/v2/tasks/worker-task")).toBe(true);
+    } finally { view?.unmount(); vi.useRealTimers(); }
+  });
+
+  it("leaves a worker-owned unknown dispatch to the durable worker instead of browser retry", async () => {
+    const context = conversationContext("worker-task"); mocks.context = context;
+    context.activeConversation!.messages.push({
+      id: "worker-request", role: "user", content: "后台提交的问题", timestamp: 1,
+      enterpriseQaFollowup: { schemaVersion: 1, queueId: "11111111-1111-4111-8111-111111111111", serverOwned: true },
+      generalChatDispatch: { schemaVersion: 1, kind: "pending_user", clientRequestId: "worker-request",
+        providerPrompt: "后台提交的问题", localAssetIds: [], localTaskId: null, modelProfile: "frontmind-base", purpose: "enterprise_qa" },
+    });
+    const view = renderHook(() => useEnterpriseQaController({ evaluationIntent: "enterprise_rag_once" }));
+    expect(view.result.current.pendingDispatch).toBeNull();
+    await act(async () => expect(await view.result.current.retryPending()).toBe(false));
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mocks.queueFetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    expect(context.settleGeneralChatDispatch).not.toHaveBeenCalled();
+    expect(context.addMessage).not.toHaveBeenCalled();
+  });
+
+  it("settles a rule greeting without replacing an existing model task pointer", async () => {
+    const context = conversationContext("existing-task"); mocks.context = context;
+    mocks.fetch.mockImplementation(async (_path, init) => {
+      const userMessageId = JSON.parse(init.body).clientRequestId;
+      return jsonReply({ object: "frontmind.local_reply", conversationId: "qa-conversation", turnId: "11111111-1111-4111-8111-111111111111",
+        userMessageId, answerMessageId: "greeting-answer", content: "你好，有什么可以帮你？", status: "completed", completedAt: 1793980800000,
+        reason: "greeting", evaluation: "not_required", enterpriseQaLocalReply: { schemaVersion: 1, kind: "local_reply", source: "rule", reason: "greeting",
+          turnId: "11111111-1111-4111-8111-111111111111", userMessageId, answerMessageId: "greeting-answer", serverOwned: true, evaluation: "not_required" } });
+    });
+    const view = renderHook(() => useEnterpriseQaController({evaluationIntent:"enterprise_rag_once"}));
+    await act(async () => expect(await view.result.current.send("你好")).toBe(true));
+    expect(context.updateStatus).toHaveBeenCalledWith("qa-conversation", "completed");
+    expect(context.activeConversation?.taskId).toBe("existing-task");
+    expect(context.addMessage).toHaveBeenLastCalledWith("qa-conversation",expect.objectContaining({id:"greeting-answer",enterpriseQaLocalReply:expect.objectContaining({evaluation:"not_required",turnId:"11111111-1111-4111-8111-111111111111"})}));
+    expect(context.settleGeneralChatDispatch).toHaveBeenCalledOnce();
+  });
+
+  it("does not settle the pending question when a same-conversation greeting receipt names another question", async () => {
+    const context = conversationContext("existing-task"); mocks.context = context;
+    mocks.fetch.mockResolvedValue(jsonReply({ object: "frontmind.local_reply", conversationId: "qa-conversation",
+      turnId: "11111111-1111-4111-8111-111111111111", userMessageId: "another-question", answerMessageId: "another-answer",
+      content: "另一轮问候回复", status: "completed", completedAt: 1793980800000, reason: "greeting", evaluation: "not_required",
+      enterpriseQaLocalReply: { schemaVersion: 1, kind: "local_reply", source: "rule", reason: "greeting",
+        turnId: "11111111-1111-4111-8111-111111111111", userMessageId: "another-question", answerMessageId: "another-answer", serverOwned: true, evaluation: "not_required" } }));
+    const view = renderHook(() => useEnterpriseQaController({ evaluationIntent: "enterprise_rag_once" }));
+    await act(async () => expect(await view.result.current.send("你好")).toBe(false));
+    expect(context.settleGeneralChatDispatch).not.toHaveBeenCalled();
+    expect(context.updateStatus).not.toHaveBeenCalled();
+    expect(context.activeConversation?.messages).toHaveLength(1);
+    expect(context.activeConversation?.messages[0]).toMatchObject({ role: "user", content: "你好", generalChatDispatch: expect.any(Object) });
+  });
+
+  it("keeps an unknown queue submission's identity on explicit retry and never adds a premature chat message", async () => {
+    const context=conversationContext("task"); mocks.context=context;
+    mocks.queueFetch.mockImplementation(async (_path,init) => {
+      if (!init?.method) return {ok:true,json:async()=>({items:[],paused:false})};
+      throw new Error("response lost");
+    });
+    const view=renderHook(()=>useEnterpriseQaController({evaluationIntent:"enterprise_rag_once"}));
+    await act(async()=>expect(await view.result.current.enqueueFollowup("请简短一些")).toBe(false));
+    const first=mocks.queueFetch.mock.calls.find(call=>call[1]?.method==="POST")!;
+    mocks.queueFetch.mockImplementation(async (_path,init)=>({ok:true,json:async()=>init?.method?{item:{id:"queue-1",text:"请简短一些",status:"queued",paused:false,canCancel:true,canRetry:false}}:{items:[],paused:false}}));
+    await act(async()=>expect(await view.result.current.enqueueFollowup("请简短一些")).toBe(true));
+    const posts=mocks.queueFetch.mock.calls.filter(call=>call[1]?.method==="POST");
+    expect(posts[1][1].body).toBe(first[1].body);
+    expect(context.addMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows a different conversation to submit before the first acknowledgement and keeps its errors isolated", async () => {
+    const context=conversationContext(undefined,"a"); mocks.context=context; const a=context.activeConversation!;
+    const b={...a,id:"b",messages:[]}; context.state.conversations.push(b);
+    vi.mocked(context.addMessage).mockImplementation((id,message)=>context.state.conversations.find(item=>item.id===id)!.messages.push(message));
+    vi.mocked(context.updateStatus).mockImplementation((id,status,extra)=>Object.assign(context.state.conversations.find(item=>item.id===id)!,{status,...extra}));
+    let rejectA!:(error:Error)=>void;
+    mocks.fetch.mockImplementation(async (_path,init)=>!init?.body?{ok:true,json:async()=>({id:"b-task",purpose:"enterprise_qa",status:"running"})}:JSON.parse(init.body).conversationId==="a"?new Promise((_resolve,reject)=>{rejectA=reject;}):{ok:true,json:async()=>({id:"b-task",purpose:"enterprise_qa",status:"running"})});
+    const view=renderHook(()=>useEnterpriseQaController()); let requestA!:Promise<boolean>;
+    act(()=>{requestA=view.result.current.send("A的问题");});
+    await waitFor(()=>expect(rejectA).toBeTypeOf("function"));
+    context.activeConversation=b; view.rerender();
+    await act(async()=>expect(await view.result.current.send("B的问题")).toBe(true));
+    await act(async()=>{rejectA(new Error("A断开"));expect(await requestA).toBe(false);});
+    expect(view.result.current.notice).toBe("");
+    expect(context.updateStatus).toHaveBeenCalledWith("b","running",expect.objectContaining({taskId:"b-task"}));
+  });
+});
+
+it("accepts an atomic cross-tab FIFO conversion without re-enqueueing or retaining the premature question", async () => {
+  const context=conversationContext();mocks.context=context;
+  context.settleQueuedGeneralChatDispatch=vi.fn((_id,requestId)=>{
+    context.activeConversation!.messages=context.activeConversation!.messages.filter(message=>message.generalChatDispatch?.clientRequestId!==requestId);
+  });
+  mocks.fetch.mockImplementation(async (_path,init)=>({ok:true,json:async()=>({object:"frontmind.queued_followup",conversationId:"qa-conversation",userMessageId:JSON.parse(init.body).clientRequestId,item:{id:"queue-race",text:"稍后再回答",status:"queued",paused:false,canCancel:true,canRetry:false}})}));
+  const view=renderHook(()=>useEnterpriseQaController({evaluationIntent:"enterprise_rag_once"}));
+  await act(async()=>expect(await view.result.current.send("稍后再回答")).toBe(true));
+  expect(context.settleQueuedGeneralChatDispatch).toHaveBeenCalledOnce();
+  expect(context.activeConversation!.messages).toHaveLength(0);
+  expect(context.updateStatus).not.toHaveBeenCalled();
+  expect(mocks.queueFetch.mock.calls.filter(call=>call[1]?.method==="POST")).toHaveLength(0);
 });

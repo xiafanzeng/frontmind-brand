@@ -74,9 +74,14 @@ function snapshotCopy(snapshot: RagPreviewConversationSnapshot): RagPreviewConve
 }
 
 /** Mutations are explicit: the caller saves the displayed snapshot before switching. */
-export function useRagPreviewHistory(scopeKey?: string, enabled = true) {
+export function useRagPreviewHistory(scopeKey?: string, enabled = true, startFresh = false) {
   const key = ragPreviewHistoryStorageKey(scopeKey);
-  const initial = useMemo(() => load(key, enabled), [key, enabled]);
+  // Reopening a workspace starts a new draft; persisted conversations remain
+  // available only through an explicit history selection.
+  const initial = useMemo(() => {
+    const loaded = load(key, enabled);
+    return startFresh ? { ...loaded, activeId: createId() } : loaded;
+  }, [key, enabled, startFresh]);
   const current = useRef(initial);
   const [view, setView] = useState(initial);
   if (current.current.key !== key || current.current.enabled !== enabled) current.current = initial;

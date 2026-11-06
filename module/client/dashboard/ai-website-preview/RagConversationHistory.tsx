@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Check, History, SquarePen, Trash2 } from "lucide-react";
+import { Check, History, LoaderCircle, SquarePen, Trash2 } from "lucide-react";
 import "./rag-conversation-history.css";
 
-export type RagConversationHistoryItem = { id: string; title: string; subtitle?: string; disabled?: boolean };
+export type RagConversationHistoryItem = { id: string; title: string; subtitle?: string; disabled?: boolean; deletingDisabled?: boolean };
 type ActionResult = void | boolean | Promise<void | boolean>;
 const pendingStorageKey = (scope: string) => `frontmind-rag-pending-deletions-v1.${encodeURIComponent(scope)}`;
 function readPending(key: string): string[] {
@@ -155,18 +155,15 @@ export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSel
       <Popover.Trigger asChild><button type="button" className="rag-conversation-action" aria-label="历史问答" title="历史问答" disabled={historyDisabled}><History size={18} strokeWidth={1.7} aria-hidden="true" /></button></Popover.Trigger>
       <Popover.Portal>
         <Popover.Content className="fm-brand-portal-theme rag-conversation-popover" side="bottom" align="end" sideOffset={8} collisionPadding={16} aria-labelledby={headingId}>
-          <header><h3 id={headingId}>历史问答</h3></header>
-          {loading && <p className="rag-conversation-popover__message" role="status">正在加载历史问答…</p>}
+          <header aria-busy={loading}><h3 id={headingId}>历史问答</h3><span className="rag-conversation-popover__loading" role={loading ? "status" : undefined} aria-label={loading ? "正在加载历史问答" : undefined}>{loading && <LoaderCircle size={16} aria-hidden="true" />}</span></header>
           {!loading && error && <p className="rag-conversation-popover__message" role="alert">{error}</p>}
           {actionError && <p className="rag-conversation-popover__message" role="alert">{actionError}</p>}
-          {committing && <p className="rag-conversation-popover__hint" role="status">正在删除对话…</p>}
           {!committing && pending.length > 0 && <div className="rag-conversation-popover__recovery" role="status">
             <span>有 {pending.length} 条对话删除未完成。</span>
             <button type="button" disabled={busy || loading || Boolean(error)} onClick={() => runPending(pending)}>重试删除</button>
             <button type="button" onClick={() => { if (writePending(pendingKey, [])) { setPending([]); setActionError(""); } else setActionError("浏览器存储不可用，无法取消待删除。"); }}>取消待删除</button>
           </div>}
           {!loading && !error && !items.length && <p className="rag-conversation-popover__message">暂无历史问答</p>}
-          {busy && <p className="rag-conversation-popover__hint">当前回答完成后可切换或删除对话。</p>}
           {items.length > 0 && <ul className="rag-conversation-popover__list" aria-label="历史对话">
             {items.map(item => <li className="rag-conversation-popover__item" key={item.id}>
               {staged.has(item.id) ? <div className="rag-conversation-popover__staged">
@@ -177,7 +174,7 @@ export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSel
                   <span className="rag-conversation-popover__copy"><span className="rag-conversation-popover__title">{item.title || "未命名对话"}</span>{item.subtitle && <span className="rag-conversation-popover__subtitle">{item.subtitle}</span>}</span>
                   {activeId === item.id && <Check className="rag-conversation-popover__check" size={16} aria-hidden="true" />}
                 </button>
-                <button ref={node => { if (node) removeRefs.current.set(item.id, node); else removeRefs.current.delete(item.id); }} type="button" className="rag-conversation-popover__remove" disabled={!canStage || item.disabled} aria-label={`删除${item.title || "未命名对话"}`} title={item.disabled ? "对话运行中，暂不能删除" : "删除对话"} onClick={() => stage(item.id)}><Trash2 size={16} strokeWidth={1.7} aria-hidden="true" /></button>
+                <button ref={node => { if (node) removeRefs.current.set(item.id, node); else removeRefs.current.delete(item.id); }} type="button" className="rag-conversation-popover__remove" disabled={!canStage || item.disabled || item.deletingDisabled} aria-label={`删除${item.title || "未命名对话"}`} title={item.deletingDisabled ? "对话运行中" : "删除对话"} onClick={() => stage(item.id)}><Trash2 size={16} strokeWidth={1.7} aria-hidden="true" /></button>
               </>}
             </li>)}
           </ul>}

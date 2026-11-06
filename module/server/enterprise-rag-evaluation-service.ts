@@ -21,6 +21,7 @@ import {
   type EnterpriseRagEvaluationFrozenInput,
   type EnterpriseRagEvaluationReport,
   type EnterpriseRagEvaluationRunDto,
+  type EnterpriseRagEvaluationAdmission,
   validateEnterpriseRagJudgeOutput,
   isGradedRagJudgment,
   isChecklistRagJudgment,
@@ -60,6 +61,36 @@ const RESULT_EVENT_TYPE = "enterprise_rag_evaluation_report";
 const MAX_EXECUTION_MS = 30 * 60_000;
 const LEASE_MS = 120_000;
 const RESULT_SYNC_GRACE_MS = 120_000;
+const ADVANCE_INTERVAL_MS = 10_000;
+const EXECUTION_CONCURRENCY = 2;
+const ACCOUNT_LEASE_LIMIT = 2;
+// All adapters in this process (worker, completion, explicit retry) share this budget.
+let activeExecutions = 0;
+const executionWaiters: Array<() => void> = [];
+async function acquireProcessSlot() {
+  if (activeExecutions < EXECUTION_CONCURRENCY) { activeExecutions += 1; return true; }
+  // Bound queued API work as well as running provider calls. Worker recovery
+  // retries overflow later; FIFO prevents one busy enterprise monopolizing it.
+  if (executionWaiters.length >= 64) return false;
+  await new Promise<void>(resolve => executionWaiters.push(resolve));
+  return true;
+}
+function releaseProcessSlot() {
+  const next = executionWaiters.shift();
+  if (next) next();
+  else activeExecutions -= 1;
+}
+const admissionSchema = z.object({
+  status: z.enum(["blocked", "retrying"]), code: z.string(), message: z.string(),
+  updatedAt: z.string().datetime(), nextAttemptAt: z.number().optional(),
+}).passthrough();
+const admissionBlockCodes = new Set(["SOURCE_QA_CONTEXT_INVALID", "SOURCE_MESSAGES_INVALID", "SOURCE_ANSWER_META_INVALID"]);
+function publicAdmission(value: unknown): EnterpriseRagEvaluationAdmission | undefined {
+  const parsed = admissionSchema.safeParse(value);
+  if (!parsed.success) return undefined;
+  const { status, code, message, updatedAt } = parsed.data;
+  return { status, code, message, updatedAt };
+}
 // Shared across short-lived runtime adapters. Every attempted active row moves
 // the cursor, including invalid old rows; a full page cannot starve later work.
 const sweepCursors = new Map<string, string>();
@@ -102,6 +133,10 @@ type RuntimeState = {
   phase: RunPhase;
   createdAt: string;
   automatic?: true;
+  nextAdvanceAt?: number;
+  consecutiveReadFailures?: number;
+  phaseStartedAt?: number;
+  timings?: Partial<Record<"uploading" | "running" | "result_pending" | "completed", number>>;
   lease?: { owner: string; expiresAt: number };
   createClaimedAt?: number;
   terminalObservedAt?: number;
@@ -823,17 +858,43 @@ export function createEnterpriseRagEvaluationRuntime(
 
   async function acquire(owned: OwnedOperation) {
     const owner = randomUUID();
-    let acquired: RuntimeState | null = null;
-    await mutateRuntime(owned.task.id, (runtime) => {
-      if (
-        runtime.phase === "completed" ||
-        runtime.phase === "failed" ||
-        (runtime.lease?.expiresAt ?? 0) > Date.now()
-      ) return;
-      runtime.lease = { owner, expiresAt: Date.now() + LEASE_MS };
-      acquired = structuredClone(runtime);
+    const db = await database();
+    return db.transaction(async tx => {
+      // This account row serializes the two-slot admission across API/worker
+      // processes and across enterprise projects owned by the same account.
+      await model.lockAccountRecord(tx, context.accountUserId);
+      await access.lockBusinessWrite(tx);
+      const peers = await tx.select({ operation: model.agentOperations, task: model.agentTasks })
+        .from(model.agentOperations).innerJoin(model.agentTasks, eq(model.agentTasks.operationId, model.agentOperations.id))
+        .where(and(eq(model.agentOperations.scope, "managed_user"),
+          eq(model.agentOperations.accountUserId, context.accountUserId),
+          eq(model.agentOperations.operationType, ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE),
+          inArray(model.agentOperations.status, ["queued", "running", "result_pending"])));
+      const now = Date.now();
+      const held = peers.filter((peer: OwnedOperation) => {
+        const runtime = jsonRecord(jsonRecord(peer.task.providerRuntime)?.[RUNTIME_KEY]);
+        const lease = jsonRecord(runtime?.lease);
+        return typeof lease?.expiresAt === "number" && lease.expiresAt > now;
+      });
+      if (held.length >= ACCOUNT_LEASE_LIMIT) return null;
+      const [task] = await tx.select().from(model.agentTasks).where(eq(model.agentTasks.id, owned.task.id)).limit(1).for("update");
+      if (!task) return null;
+      const runtime = runtimeFromTask(task);
+      const expired = now - Date.parse(runtime.createdAt) >= MAX_EXECUTION_MS;
+      if (runtime.phase === "completed" || runtime.phase === "failed" ||
+          (runtime.lease?.expiresAt ?? 0) > now || (!expired && (runtime.nextAdvanceAt ?? 0) > now)) return null;
+      runtime.lease = { owner, expiresAt: now + LEASE_MS };
+      await tx.update(model.agentTasks).set({ providerRuntime: runtimeContainer(task, runtime), updatedAt: new Date() })
+        .where(eq(model.agentTasks.id, task.id));
+      return { owner, runtime: structuredClone(runtime) };
     });
-    return acquired ? { owner, runtime: acquired as RuntimeState } : null;
+  }
+
+  function logStage(owned: OwnedOperation, runtime: RuntimeState, stage: string, extra: Record<string, number | string> = {}) {
+    console.info("[EnterpriseRagEvaluation] stage", {
+      correlation: intentHash([context.accountUserId, context.enterpriseProjectId, owned.operation.id]).slice(0, 16),
+      stage, elapsedMs: Math.max(0, Date.now() - Date.parse(runtime.createdAt)), ...extra,
+    });
   }
 
   async function updatePhase(
@@ -849,6 +910,11 @@ export function createEnterpriseRagEvaluationRuntime(
           "EVALUATION_LEASE_CHANGED",
           "评估任务执行权已变化，请重新读取。",
         );
+      }
+      if (runtime.phase !== phase) {
+        logStage(owned, runtime, phase, { previousPhaseMs: Math.max(0, Date.now() - (runtime.phaseStartedAt ?? Date.parse(runtime.createdAt))) });
+        runtime.phaseStartedAt = Date.now();
+        if (["uploading", "running", "result_pending"].includes(phase)) runtime.timings = { ...runtime.timings, [phase]: Date.now() };
       }
       runtime.phase = phase;
       runtime.lease.expiresAt = Date.now() + LEASE_MS;
@@ -882,6 +948,7 @@ export function createEnterpriseRagEvaluationRuntime(
   ) {
     await mutateRuntime(owned.task.id, async (runtime, _task, tx) => {
       if (runtime.lease?.owner !== owner) return;
+      logStage(owned, runtime, "failed", { code: error.code });
       runtime.phase = "failed";
       runtime.error = error;
       delete runtime.lease;
@@ -900,9 +967,14 @@ export function createEnterpriseRagEvaluationRuntime(
     });
   }
 
-  async function clearLease(owned: OwnedOperation, owner: string) {
+  async function clearLease(owned: OwnedOperation, owner: string, transientFailure: boolean) {
     await mutateRuntime(owned.task.id, (runtime) => {
-      if (runtime.lease?.owner === owner) delete runtime.lease;
+      if (runtime.lease?.owner !== owner) return;
+      delete runtime.lease;
+      runtime.consecutiveReadFailures = transientFailure ? (runtime.consecutiveReadFailures ?? 0) + 1 : 0;
+      const delay = transientFailure ? Math.min(60_000, 15_000 * 2 ** Math.min(2, runtime.consecutiveReadFailures - 1)) : ADVANCE_INTERVAL_MS;
+      runtime.nextAdvanceAt = Date.now() + delay;
+      if (transientFailure) logStage(owned, runtime, "retry_scheduled", { retryInMs: delay });
     });
   }
 
@@ -983,6 +1055,12 @@ export function createEnterpriseRagEvaluationRuntime(
     }];
   }
 
+  function assertExecutionDeadline(runtime: RuntimeState) {
+    if (Date.now() - Date.parse(runtime.createdAt) >= MAX_EXECUTION_MS) {
+      throw new EnterpriseRagEvaluationError("EVALUATION_TIMEOUT", "本次评估耗时过长，请稍后重试。");
+    }
+  }
+
   async function publishReport(
     owned: OwnedOperation,
     owner: string,
@@ -990,6 +1068,7 @@ export function createEnterpriseRagEvaluationRuntime(
     judgments: ReturnType<typeof validateEnterpriseRagJudgeOutput>,
     providerEvent: { id: string; timestamp: number },
   ) {
+    assertExecutionDeadline(runtime);
     const result = await scoreJudgments(runtime.input, judgments);
     if (result.status === "not_run" || result.status === "failed" || (runtime.input.schemaVersion === 1 && (result.status !== "completed" || result.coverage !== 100))) {
       throw new EnterpriseRagEvaluationError("EVALUATION_SCORE_INVALID", "企业 RAG 评分 Skill 未生成有效结果。");
@@ -1061,6 +1140,10 @@ export function createEnterpriseRagEvaluationRuntime(
           normalizedPayload: { kind: RESULT_EVENT_TYPE, report },
         });
       }
+      logStage(owned, current, "completed", {
+        providerResultAgeMs: Math.max(0, Date.now() - providerTimestampMs(providerEvent.timestamp)),
+      });
+      current.timings = { ...current.timings, completed: Date.now() };
       current.phase = "completed";
       delete current.error;
       delete current.lease;
@@ -1081,14 +1164,24 @@ export function createEnterpriseRagEvaluationRuntime(
   }
 
   async function advance(owned: OwnedOperation) {
+    if (!await acquireProcessSlot()) return false;
+    try { return await advanceWithinBudget(owned); }
+    finally { releaseProcessSlot(); }
+  }
+
+  async function advanceWithinBudget(owned: OwnedOperation) {
     const claim = await acquire(owned);
-    if (!claim) return;
+    if (!claim) return false;
     const { owner } = claim;
     let runtime = claim.runtime;
     let phase = runtime.phase;
     let leaveLease = false;
     let repairDispatch = false;
+    let transientFailure = false;
     try {
+      // Check before every provider interaction, including repair/no-event and
+      // create-unknown branches that can otherwise return before a deadline.
+      assertExecutionDeadline(runtime);
       const clients = await persistedClient(owned, runtime);
       const client = clients.client;
       const wireInput = clients.wireInput;
@@ -1127,6 +1220,7 @@ export function createEnterpriseRagEvaluationRuntime(
           client,
           wireInput,
         );
+        assertExecutionDeadline(runtime);
         await updatePhase(owned, owner, "create_unknown");
         phase = "create_unknown";
         const created = await client.createTask({
@@ -1195,6 +1289,7 @@ export function createEnterpriseRagEvaluationRuntime(
         timestamp: number;
         [key: string]: any;
       }> = await client.listAllMessages({ taskId: providerTaskId, order: "asc" });
+      assertExecutionDeadline(runtime);
       const baseline = new Set(runtime.repair?.baselineEventIds ?? []);
       const events = allEvents.filter((event) => !baseline.has(event.id));
       const resultEvent = model
@@ -1298,6 +1393,7 @@ export function createEnterpriseRagEvaluationRuntime(
               `模型结果自动修复后仍未通过校验：${invalidResult}；未写入评分，请重新评估。`,
             );
           }
+          assertExecutionDeadline(runtime);
           const attempt = (priorAttempt + 1) as 1 | 2;
           const intentId = randomUUID();
           await mutateRuntime(owned.task.id, async (current, _task, tx) => {
@@ -1322,6 +1418,10 @@ export function createEnterpriseRagEvaluationRuntime(
               baselineEventIds: allEvents.map((event) => event.id),
               reason: invalidResult!,
             };
+            if (current.phase !== "result_pending") {
+              logStage(owned, current, "result_pending");
+              current.timings = { ...current.timings, result_pending: Date.now() };
+            }
             current.phase = "result_pending";
             await tx.update(model.agentOperations).set({
               status: "result_pending",
@@ -1356,6 +1456,10 @@ export function createEnterpriseRagEvaluationRuntime(
           await mutateRuntime(owned.task.id, async (current, _task, tx) => {
             if (current.lease?.owner !== owner) return;
             current.terminalObservedAt = Date.now();
+            if (current.phase !== "result_pending") {
+              logStage(owned, current, "result_pending");
+              current.timings = { ...current.timings, result_pending: Date.now() };
+            }
             current.phase = "result_pending";
             await tx.update(model.agentOperations).set({
               status: "result_pending",
@@ -1399,7 +1503,7 @@ export function createEnterpriseRagEvaluationRuntime(
         ((phase === "running" || phase === "result_pending") && !repairRejected && !known) ||
         (phase === "create_unknown" && !creationRejected && !known) ||
         (phase === "uploading" && upstream.retryable)
-      ) return;
+      ) { transientFailure = true; return; }
       const runtimeError: RuntimeError = error instanceof z.ZodError
         ? { code: "EVALUATION_RESULT_INVALID", message: "模型输出字段格式不正确，请重新评估。" }
         : error instanceof EnterpriseRagEvaluationError
@@ -1412,7 +1516,7 @@ export function createEnterpriseRagEvaluationRuntime(
       await fail(owned, owner, runtimeError, phase === "create_unknown" && !creationRejected);
       leaveLease = true;
     } finally {
-      if (!leaveLease) await clearLease(owned, owner);
+      if (!leaveLease) await clearLease(owned, owner, transientFailure);
     }
   }
 
@@ -1683,6 +1787,7 @@ export function createEnterpriseRagEvaluationRuntime(
       }
     }));
     let automaticExpected = false;
+    let automaticAdmission: EnterpriseRagEvaluationAdmission | undefined;
     if (projected.length === 0 && automaticRagEvaluationEnabled(core.environment)) {
       const db = await database();
       const rows = resultRows(await db.execute(sql`
@@ -1695,37 +1800,99 @@ export function createEnterpriseRagEvaluationRuntime(
           AND status = 'completed'
         LIMIT 1
       `));
-      automaticExpected = rows.length === 1 &&
-        isAutomaticRagEvaluationEligible(jsonRecord(rows[0].metadata)?.autoEvaluation);
+      const marker = rows.length === 1 ? jsonRecord(jsonRecord(rows[0].metadata)?.autoEvaluation) : null;
+      if (isAutomaticRagEvaluationEligible(marker)) {
+        automaticAdmission = publicAdmission(marker?.admission);
+        automaticExpected = automaticAdmission?.status !== "blocked";
+      }
     }
-    return { latest: projected[0] ?? null, history: projected, automaticExpected };
+    return { latest: projected[0] ?? null, history: projected, automaticExpected,
+      ...(automaticAdmission ? { automaticAdmission } : {}) };
+  }
+
+  async function readAdmission(coordinate: { sourceQaTaskId: string; turnId: string }) {
+    const db = await database();
+    const rows = resultRows(await db.execute(sql`
+      SELECT metadata FROM conversation_turns
+      WHERE id = ${coordinate.turnId} AND upstreamTaskId = ${coordinate.sourceQaTaskId}
+        AND userId = ${context.accountUserId} AND enterpriseProjectId <=> ${context.enterpriseProjectId}
+        AND operationType = 'general_chat_v2' AND status = 'completed' LIMIT 1
+    `));
+    const marker = rows.length === 1 ? jsonRecord(jsonRecord(rows[0].metadata)?.autoEvaluation) : null;
+    return isAutomaticRagEvaluationEligible(marker) ? admissionSchema.safeParse(marker?.admission) : null;
+  }
+
+  async function writeAdmission(coordinate: { sourceQaTaskId: string; turnId: string }, error?: unknown) {
+    if (error instanceof EnterpriseRagEvaluationError &&
+        ([401, 403].includes(error.status) || error.code === "SOURCE_AUTO_EVALUATION_NOT_ELIGIBLE")) return;
+    const code = error instanceof EnterpriseRagEvaluationError ? error.code : "EVALUATION_ENQUEUE_DEFERRED";
+    const blocked = admissionBlockCodes.has(code);
+    const admission = error ? {
+      status: blocked ? "blocked" : "retrying",
+      code: blocked ? code : "EVALUATION_ENQUEUE_DEFERRED",
+      message: blocked ? "本次回答的资料绑定不完整，暂时无法评估。" : "评分准备暂时受阻，正在重试。",
+      updatedAt: new Date().toISOString(),
+      ...(blocked ? {} : { nextAttemptAt: Date.now() + 60_000 }),
+    } : undefined;
+    const db = await database();
+    await db.transaction(async tx => {
+      await model.lockAccountRecord(tx, context.accountUserId);
+      await access.lockBusinessWrite(tx);
+      const next = admission
+        ? sql`JSON_SET(metadata, '$.autoEvaluation.admission', CAST(${JSON.stringify(admission)} AS JSON))`
+        : sql`JSON_REMOVE(metadata, '$.autoEvaluation.admission')`;
+      await tx.execute(sql`UPDATE conversation_turns SET metadata = ${next}
+        WHERE id = ${coordinate.turnId} AND upstreamTaskId = ${coordinate.sourceQaTaskId}
+          AND userId = ${context.accountUserId} AND enterpriseProjectId <=> ${context.enterpriseProjectId}
+          AND operationType = 'general_chat_v2' AND status = 'completed'
+          AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.autoEvaluation.intent')) = 'enterprise_rag_once'
+          AND JSON_EXTRACT(metadata, '$.autoEvaluation.eligible') = true`);
+    });
+    if (admission) console.warn("[EnterpriseRagEvaluation] admission", {
+      correlation: intentHash([context.accountUserId, context.enterpriseProjectId, coordinate]).slice(0, 16),
+      status: admission.status, code: admission.code,
+    });
   }
 
   async function ensureAutomatic(value: unknown) {
     assertActor();
     if (!automaticRagEvaluationEnabled(core.environment)) return null;
     const coordinate = latestSchema.parse(value);
-    const frozen = await resolveFrozenInput(coordinate.sourceQaTaskId, coordinate.turnId, "automatic-pending", true);
-    const operationId = automaticRagEvaluationOperationId({
-      ...context,
-      ...coordinate,
-      answerMessageId: frozen.answerMessageId,
-      answerHash: sha256(frozen.answer),
-    });
-    // The ID is independent of browser lifecycle and evaluator revisions. A
-    // terminal failure or unknown create is a permanent fence for this answer.
-    const existing = await findOwnedOperation(operationId);
-    if (existing) return dto(existing);
-    // An explicitly requested evaluation may already own this exact answer.
-    const previous = (await ownedHistory(coordinate.sourceQaTaskId, coordinate.turnId)).find(owned => {
-      const runtime = runtimeFromTask(owned.task);
-      return runtime.input.answerMessageId === frozen.answerMessageId && sha256(runtime.input.answer) === sha256(frozen.answer);
-    });
-    if (previous) return dto(previous);
-    return start({ ...coordinate, clientRequestId: operationId }, {
-      automatic: true,
-      frozen: { ...frozen, operationToken: `brand-rag-evaluation:${operationId}` },
-    });
+    const admission = await readAdmission(coordinate);
+    if (admission?.success && (admission.data.status === "blocked" || (admission.data.nextAttemptAt ?? 0) > Date.now())) return null;
+    try {
+      const frozen = await resolveFrozenInput(coordinate.sourceQaTaskId, coordinate.turnId, "automatic-pending", true);
+      const operationId = automaticRagEvaluationOperationId({
+        ...context,
+        ...coordinate,
+        answerMessageId: frozen.answerMessageId,
+        answerHash: sha256(frozen.answer),
+      });
+      // The ID is independent of browser lifecycle and evaluator revisions. A
+      // terminal failure or unknown create is a permanent fence for this answer.
+      const existing = await findOwnedOperation(operationId);
+      if (existing) return dto(existing);
+      // An explicitly requested evaluation may already own this exact answer.
+      const previous = (await ownedHistory(coordinate.sourceQaTaskId, coordinate.turnId)).find(owned => {
+        const runtime = runtimeFromTask(owned.task);
+        return runtime.input.answerMessageId === frozen.answerMessageId && sha256(runtime.input.answer) === sha256(frozen.answer);
+      });
+      if (previous) return dto(previous);
+      const result = await start({ ...coordinate, clientRequestId: operationId }, {
+        automatic: true,
+        frozen: { ...frozen, operationToken: `brand-rag-evaluation:${operationId}` },
+      });
+      if (admission?.success) await writeAdmission(coordinate);
+      console.info("[EnterpriseRagEvaluation] admitted", {
+        correlation: intentHash([context.accountUserId, context.enterpriseProjectId, result.operationId]).slice(0, 16),
+      });
+      return result;
+    } catch (error) {
+      // Only this explicit background write path records admission failures.
+      // A failed write is retried by recovery; reads never repair/backfill rows.
+      try { await writeAdmission(coordinate, error); } catch { /* preserve the original failure */ }
+      throw error;
+    }
   }
 
   async function advanceOperation(operationId: string) {
@@ -1734,11 +1901,6 @@ export function createEnterpriseRagEvaluationRuntime(
     const parsed = z.string().uuid().parse(operationId);
     const owned = await findOwnedOperation(parsed);
     if (!owned) throw new EnterpriseRagEvaluationError("EVALUATION_NOT_FOUND", "评估任务不存在。", 404);
-    const db = await database();
-    await db.transaction(async tx => {
-      await model.lockAccountRecord(tx, context.accountUserId);
-      await access.lockBusinessWrite(tx);
-    });
     await advance(owned);
     return dto((await findOwnedOperation(parsed))!);
   }
@@ -1768,18 +1930,18 @@ export function createEnterpriseRagEvaluationRuntime(
       candidates = await page() as OwnedOperation[];
     }
     let advanced = 0, deferred = 0;
-    for (const candidate of candidates) {
-      try {
-        await db.transaction(async tx => {
-          await model.lockAccountRecord(tx, context.accountUserId);
-          await access.lockBusinessWrite(tx);
-        });
-        await advance(candidate);
-        advanced += 1;
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(EXECUTION_CONCURRENCY, candidates.length) }, async () => {
+      while (next < candidates.length) {
+        const candidate = candidates[next++]!;
+        try {
+          const result = await advance(candidate);
+          if (result === false) deferred += 1;
+          else advanced += 1;
+        } catch { deferred += 1; }
       }
-      catch { deferred += 1; }
-      finally { sweepCursors.set(scopeKey, String(candidate.operation.id)); }
-    }
+    }));
+    if (candidates.length) sweepCursors.set(scopeKey, String(candidates.at(-1)!.operation.id));
     return { advanced, deferred };
   }
 

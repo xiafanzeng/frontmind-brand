@@ -70,7 +70,11 @@
   outline: none;
 }
 .rag-conversation-popover *, .rag-conversation-popover *::before, .rag-conversation-popover *::after { box-sizing: border-box; }
-.rag-conversation-popover header { flex: none; padding: 8px 12px; }
+.rag-conversation-popover header { flex: none; display:flex; align-items:center; gap:8px; padding: 8px 12px; }
+.rag-conversation-popover__loading { display:inline-flex; flex:0 0 16px; width:16px; height:16px; color:#8e8e93; }
+.rag-conversation-popover__loading svg { animation:rag-history-loading 1s linear infinite; }
+@keyframes rag-history-loading { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .rag-conversation-popover__loading svg { animation:none; } }
 .rag-conversation-popover h3 { margin: 0; color: #1d1d1f; font-size: 16px; font-weight: 600; line-height: 24px; }
 .rag-conversation-popover__message, .rag-conversation-popover__hint { margin: 0; padding: 12px; color: #636366; font-size: 14px; line-height: 1.5; }
 .rag-conversation-popover__message[role="alert"] { color: #a1324d; }

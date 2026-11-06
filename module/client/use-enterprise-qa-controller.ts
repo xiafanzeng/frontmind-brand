@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GeneralChatDispatchMetadata } from "@frontmind/module-contracts/chat-dispatch";
+import { enterpriseQaLocalReplyMetadataSchema } from "@frontmind/module-contracts/enterprise-qa-experience";
+import type { EnterpriseQaLocalReply as LocalReply, EnterpriseQaQueuedFollowupReceipt as QueuedReply, EnterpriseQaFollowupItem as EnterpriseQaFollowup, EnterpriseQaFollowupSnapshot as FollowupSnapshot } from "@frontmind/module-contracts/enterprise-qa-experience";
 import { brandHost, useConversation } from "./host";
 import type { Conversation, LocalMessage } from "./conversation-types";
 import type { TaskResponse } from "./lib/frontmind-api";
@@ -10,6 +12,7 @@ import {
 } from "./enterprise-qa-polling";
 
 type QaTask = {
+  object?: "frontmind.local_task";
   id: string;
   purpose?: string;
   status: string;
@@ -65,23 +68,24 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
   const contextRef = useRef(context);
   const selectedActive = activeConversationId === undefined ? context.activeConversation : context.state.conversations.find(item => item.id === activeConversationId) ?? null;
   contextRef.current = { ...context, activeConversation: selectedActive };
-  const [sending, setSending] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [responseKnowledge, setResponseKnowledge] = useState<{
-    conversationId: string;
-    taskId: string;
-    knowledgeBase: QaKnowledgeBase;
-  } | null>(null);
-  const lock = useRef(false);
+  const [, redraw] = useState(0);
+  const sendingOwners = useRef(new Set<string>());
+  const notices = useRef(new Map<string, string>());
+  const pollNotices = useRef(new Map<string, string>());
+  const queueVersions = useRef(new Map<string, number>());
+  const responseKnowledges = useRef(new Map<string, {taskId: string; knowledgeBase: QaKnowledgeBase}>());
+  const followupStates = useRef(new Map<string, FollowupSnapshot>());
+  const followupRequests = useRef(new Map<string, string>());
+  const followupLocks = useRef(new Set<string>());
+  const setOwnerNotice = (id: string, message: string) => { notices.current.set(id, message); redraw(value => value + 1); };
   const steerLock = useRef<string | null>(null);
   const steerRequests = useRef(new Map<string, string>());
   const [steeringState, setSteering] = useState<SteeringSnapshot | null>(null);
   const active = selectedActive;
   const activeUserId = active?.messages.findLast(message => message.role === "user")?.id;
 
-  useEffect(() => {
-    setNotice("");
-  }, [active?.id]);
+  const sending = Boolean(active && sendingOwners.current.has(active.id));
+  const notice = active ? notices.current.get(active.id) ?? "" : "";
 
   const request = useCallback(
     async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
@@ -105,62 +109,108 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
     [],
   );
 
+  // Standalone and Dashboard both keep all owned running conversations alive.
+  const polling = useRef(new Map<string, () => void>());
   useEffect(() => {
-    if (
-      preview ||
-      !active?.taskId ||
-      active.purpose !== "enterprise_qa" ||
-      isQaTaskTerminal(active.status)
-    ) {
-      return;
+    const expected = new Set<string>();
+    if (!preview && !brandHost().generalChatBackgroundPolling) for (const conversation of context.state.conversations) {
+      if (conversation.purpose !== "enterprise_qa" || !conversation.taskId || isQaTaskTerminal(conversation.status) || conversation.status === "idle") continue;
+      const taskId = conversation.taskId, conversationId = conversation.id;
+      const userId = conversation.messages.findLast(message => message.role === "user")?.id;
+      const key = JSON.stringify([conversationId, taskId, userId]); expected.add(key);
+      if (polling.current.has(key)) continue;
+      polling.current.set(key, startEnterpriseQaPolling({
+        read: async () => {
+          const result = await request<QaTask>(`/api/frontmind/v2/tasks/${encodeURIComponent(taskId)}`);
+          if (pollNotices.current.delete(conversationId)) redraw(value => value + 1);
+          const current = contextRef.current.state.conversations.find(item => item.id === conversationId);
+          const value = readEnterpriseQaSteering(result.steering);
+          if (value && userId && current && (current.previousResponseId ?? current.taskId) === taskId && current.messages.findLast(message => message.role === "user")?.id === userId)
+            setSteering(previous => latestSteering(previous, { conversationId, taskId, userId, value }));
+          return result;
+        },
+        refresh: () => contextRef.current.refreshConversations(),
+        onError: error => { pollNotices.current.set(conversationId, error instanceof Error ? error.message : String(error)); redraw(value => value + 1); },
+      }));
     }
-    const taskId = active.taskId;
-    const conversationId = active.id;
-    const userId = activeUserId;
-    return startEnterpriseQaPolling({
-      read: async () => {
-        const result = await request<QaTask>(
-          `/api/frontmind/v2/tasks/${encodeURIComponent(taskId)}`,
-        );
-        const current = contextRef.current.activeConversation;
-        const value = readEnterpriseQaSteering(result.steering);
-        if (value && userId && current?.id === conversationId &&
-          (current.previousResponseId ?? current.taskId) === taskId &&
-          current.messages.findLast(message => message.role === "user")?.id === userId) {
-          setSteering(previous => latestSteering(previous, { conversationId, taskId, userId, value }));
-        }
-        return result;
-      },
-      refresh: async () => {
-        if (contextRef.current.activeConversation?.id === conversationId) {
-          await contextRef.current.refreshConversations();
-        }
-      },
-      onError: (error) =>
-        setNotice(error instanceof Error ? error.message : String(error)),
-    });
-  }, [preview, active?.id, active?.taskId, active?.status, activeUserId, request]);
+    for (const [key, stop] of polling.current) if (!expected.has(key)) { stop(); polling.current.delete(key); }
+  });
+  useEffect(() => () => { polling.current.forEach(stop => stop()); polling.current.clear(); }, []);
+
+  const queuePath = (id: string) => `/api/frontmind/v2/enterprise-qa/conversations/${encodeURIComponent(id)}/followups`;
+  const readFollowups = useCallback(async (id: string) => {
+    const version = queueVersions.current.get(id) ?? 0;
+    const hadPending = Boolean(followupStates.current.get(id)?.items.length);
+    const snapshot = await request<FollowupSnapshot>(queuePath(id));
+    if (!Array.isArray(snapshot.items)) throw new Error("暂时无法读取待发送内容。");
+    if ((queueVersions.current.get(id) ?? 0) === version) {
+      followupStates.current.set(id, snapshot); redraw(value => value + 1);
+      if (hadPending || snapshot.items.length) await contextRef.current.refreshConversations().catch(() => undefined);
+    } return snapshot;
+  }, [request]);
+  useEffect(() => {
+    if (preview || !evaluationIntent || !active?.id) return;
+    let cancelled = false; let timer: ReturnType<typeof setTimeout> | undefined;
+    const id = active.id;
+    const poll = async () => {
+      try { await readFollowups(id); } catch { /* Existing queue stays visible during a transient read failure. */ }
+      if (!cancelled) timer = setTimeout(poll, 3000);
+    };
+    void poll(); return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [preview, evaluationIntent, active?.id, readFollowups]);
+  const enqueueFollowup = useCallback(async (text: string) => {
+    const conversation = contextRef.current.activeConversation, value = text.trim();
+    if (!conversation || !value || preview) return false;
+    const id = conversation.id, identity = JSON.stringify([id, value]);
+    if (followupLocks.current.has(id)) return false;
+    const clientRequestId = followupRequests.current.get(identity) ?? crypto.randomUUID();
+    followupRequests.current.set(identity, clientRequestId); followupLocks.current.add(id);
+    queueVersions.current.set(id, (queueVersions.current.get(id) ?? 0) + 1);
+    try {
+      if (!(await contextRef.current.flushConversation(id))) throw new Error("暂时无法保存本次输入。");
+      const {item} = await request<{item: EnterpriseQaFollowup}>(queuePath(id), {
+        method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({clientRequestId, text:value}),
+      });
+      if (!item?.id) throw new Error("待发送内容尚未确认，请重试。");
+      const previous = followupStates.current.get(id) ?? {items: [], paused: false};
+      followupStates.current.set(id, {...previous, items: [...previous.items.filter(entry => entry.id !== item.id), item]});
+      followupRequests.current.delete(identity);
+      void readFollowups(id).catch(() => undefined); return true;
+    } catch { return false; }
+    finally { followupLocks.current.delete(id); redraw(value => value + 1); }
+  }, [preview, request, readFollowups]);
+  const changeFollowups = useCallback(async (action: string) => {
+    const id = contextRef.current.activeConversation?.id; if (!id || preview) return false;
+    queueVersions.current.set(id, (queueVersions.current.get(id) ?? 0) + 1);
+    try {
+      const snapshot = await request<FollowupSnapshot>(`${queuePath(id)}/${action}`, {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+      followupStates.current.set(id, snapshot); redraw(value => value + 1);
+      await contextRef.current.refreshConversations().catch(() => undefined); return true;
+    } catch { return false; }
+  }, [preview, request]);
 
   const send = useCallback(
     async (text: string, attachments: File[] = [], newConversation?: Conversation) => {
-      const conversation = newConversation ?? contextRef.current.activeConversation;
-      if (lock.current || !conversation || !text.trim()) return false;
+      const conversation = newConversation && typeof newConversation.id === "string" && Array.isArray(newConversation.messages)
+        ? newConversation : contextRef.current.activeConversation;
+      if (!conversation || !text.trim() || sendingOwners.current.has(conversation.id)) return false;
       if (preview) {
-        setNotice(
+        setOwnerNotice(conversation.id,
           "本地预览不调用企业问答供应商；请在开发子域名验证真实回答与引用。",
         );
         return false;
       }
       if (conversation.purpose !== "enterprise_qa") {
-        setNotice("请先选择企业问答任务");
+        setOwnerNotice(conversation.id, "请先选择企业问答任务");
         return false;
       }
-      lock.current = true;
-      setSending(true);
-      setNotice("");
+      const ownedPending = conversation.messages.findLast(message => message.role === "user" && message.generalChatDispatch && !message.enterpriseQaFollowup?.serverOwned);
+      if (!ownedPending && evaluationIntent && !attachments.length && (["running", "pending"].includes(conversation.status) || (followupStates.current.get(conversation.id)?.items.some(item => ["queued", "dispatching", "failed"].includes(item.status)) ?? false))) return enqueueFollowup(text);
+      sendingOwners.current.add(conversation.id); redraw(value => value + 1);
+      setOwnerNotice(conversation.id, "");
       try {
         let pending = conversation.messages.findLast(
-          (message) => message.role === "user" && message.generalChatDispatch,
+          (message) => message.role === "user" && message.generalChatDispatch && !message.enterpriseQaFollowup?.serverOwned,
         );
         if (pending && pending.content !== text) {
           throw new Error("上一条消息尚未确认，请先重试该消息。");
@@ -229,7 +279,7 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
           throw new Error("输入尚未保存，已保留本次消息，请重试。");
         }
         const dispatch = pending.generalChatDispatch! as GeneralChatDispatchMetadata & { evaluationIntent?: "enterprise_rag_once" };
-        const result = await request<QaTask>(
+        const result = await request<QaTask | LocalReply | QueuedReply>(
           `/api/frontmind/v2/tasks${
             dispatch.localTaskId
               ? `/${encodeURIComponent(dispatch.localTaskId)}/messages`
@@ -253,22 +303,46 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
             }),
           },
         );
-        if (result.purpose && result.purpose !== "enterprise_qa") {
+        if (result.object === "frontmind.queued_followup") {
+          if (result.conversationId !== conversation.id || result.userMessageId !== pending.id || !result.item?.id) throw new Error("待发送内容身份尚未确认，请重试读取。");
+          // The server atomically moved this unsent draft behind an earlier
+          // cross-tab enqueue. Never create another queue item for its receipt.
+          contextRef.current.settleQueuedGeneralChatDispatch?.(conversation.id, pending.id);
+          queueVersions.current.set(conversation.id, (queueVersions.current.get(conversation.id) ?? 0) + 1);
+          const previous = followupStates.current.get(conversation.id) ?? {items:[],paused:false};
+          followupStates.current.set(conversation.id, {items:[...previous.items.filter(item => item.id !== result.item.id), result.item],paused:previous.paused || result.item.paused});
+          redraw(value => value + 1);
+          await contextRef.current.refreshConversations().catch(() => undefined);
+          void readFollowups(conversation.id).catch(() => undefined);
+          return true;
+        }
+        if (result.object === "frontmind.local_reply") {
+          const marker = enterpriseQaLocalReplyMetadataSchema.safeParse(result.enterpriseQaLocalReply);
+          if (result.conversationId !== conversation.id || result.userMessageId !== pending.id || result.evaluation !== "not_required" || !marker.success || marker.data.turnId !== result.turnId || marker.data.answerMessageId !== result.answerMessageId || marker.data.userMessageId !== result.userMessageId) throw new Error("回复身份尚未确认，请重试读取。");
+          contextRef.current.addMessage(conversation.id, {
+            id: result.answerMessageId, role: "assistant", content: result.content, timestamp: result.completedAt,
+            enterpriseQaLocalReply: result.enterpriseQaLocalReply,
+          });
+          contextRef.current.settleGeneralChatDispatch(conversation.id, pending.id);
+          contextRef.current.updateStatus(conversation.id, "completed");
+          // The server already committed the reply. A browser snapshot failure
+          // must never turn its acknowledgement into another send attempt.
+          try { await contextRef.current.flushConversation(conversation.id); } catch { /* Refresh restores the committed server reply. */ }
+          await contextRef.current.refreshConversations().catch(() => undefined); return true;
+        }
+        const task = result;
+        if (task.purpose && task.purpose !== "enterprise_qa") {
           throw new Error("返回任务不属于企业问答");
         }
-        if (validKnowledgeBase(result.knowledgeBase)) {
-          setResponseKnowledge({
-            conversationId: conversation.id,
-            taskId: result.id,
-            knowledgeBase: result.knowledgeBase,
-          });
+        if (validKnowledgeBase(task.knowledgeBase)) {
+          responseKnowledges.current.set(conversation.id, { taskId: task.id, knowledgeBase: task.knowledgeBase });
         }
         contextRef.current.updateStatus(
           conversation.id,
-          conversationStatus(result.status),
+          conversationStatus(task.status),
           {
-            taskId: result.id,
-            previousResponseId: result.id,
+            taskId: task.id,
+            previousResponseId: task.id,
             executionKind: "general_chat_v2",
           },
         );
@@ -276,28 +350,32 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
           conversation.id,
           pending.id,
         );
-        const steering = readEnterpriseQaSteering(result.steering);
-        if (steering) setSteering(previous => latestSteering(previous, { conversationId: conversation.id, taskId: result.id, userId: pending.id, value: steering }));
+        const steering = readEnterpriseQaSteering(task.steering);
+        if (steering) setSteering(previous => latestSteering(previous, { conversationId: conversation.id, taskId: task.id, userId: pending.id, value: steering }));
         if (!(await contextRef.current.flushConversation(conversation.id))) {
           throw new Error("回答已开始，任务绑定尚未保存；请刷新恢复原任务。");
         }
-        await contextRef.current.refreshConversations();
+        await contextRef.current.refreshConversations().catch(() => undefined);
         return true;
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : String(error));
+        setOwnerNotice(conversation.id, error instanceof Error ? error.message : String(error));
         return false;
       } finally {
-        lock.current = false;
-        setSending(false);
+        sendingOwners.current.delete(conversation.id); redraw(value => value + 1);
       }
     },
-    [preview, request, evaluationIntent],
+    [preview, request, evaluationIntent, enqueueFollowup, readFollowups],
   );
 
   const stop = useCallback(async () => {
     const conversation = contextRef.current.activeConversation;
     if (!conversation?.taskId) return false;
     try {
+      if (evaluationIntent) {
+        queueVersions.current.set(conversation.id, (queueVersions.current.get(conversation.id) ?? 0) + 1);
+        const snapshot = await request<FollowupSnapshot>(`${queuePath(conversation.id)}/pause`, {method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+        followupStates.current.set(conversation.id, snapshot); redraw(value => value + 1);
+      }
       await request(
         `/api/frontmind/v2/tasks/${encodeURIComponent(conversation.taskId)}/stop`,
         {
@@ -309,18 +387,17 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
       await contextRef.current.refreshConversations();
       return true;
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
       return false;
     }
-  }, [request]);
+  }, [request, evaluationIntent]);
 
   const running = ["running", "pending"].includes(active?.status ?? "");
   const pendingMessage = active?.messages.findLast(
-    (message) => message.role === "user" && Boolean(message.generalChatDispatch),
+    (message) => message.role === "user" && Boolean(message.generalChatDispatch) && !message.enterpriseQaFollowup?.serverOwned,
   );
   const retryPending = useCallback(async () => {
     const pending = contextRef.current.activeConversation?.messages.findLast(
-      (message) => message.role === "user" && Boolean(message.generalChatDispatch),
+      (message) => message.role === "user" && Boolean(message.generalChatDispatch) && !message.enterpriseQaFollowup?.serverOwned,
     );
     return pending ? send(pending.content, []) : false;
   }, [send]);
@@ -372,14 +449,16 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
       if (steerLock.current === owner) steerLock.current = null;
     }
   }, [preview, request, steering, steeringState]);
-  const responseKnowledgeBase =
-    responseKnowledge &&
-    responseKnowledge.conversationId === active?.id &&
-    responseKnowledge.taskId === activeTaskId
-      ? responseKnowledge.knowledgeBase
-      : null;
+  const responseKnowledge = active ? responseKnowledges.current.get(active.id) : undefined;
+  const responseKnowledgeBase = responseKnowledge?.taskId === activeTaskId ? responseKnowledge?.knowledgeBase ?? null : null;
+  const followups = active ? followupStates.current.get(active.id) : undefined;
   return {
     context,
+    followups: followups?.items ?? [], followupsPaused: followups?.paused ?? false,
+    enqueueFollowup,
+    cancelFollowup: (id: string) => changeFollowups(`${encodeURIComponent(id)}/cancel`),
+    resumeFollowups: () => changeFollowups("resume"),
+    retryFollowup: (id: string) => changeFollowups(`${encodeURIComponent(id)}/retry`),
     active,
     sending,
     running,
