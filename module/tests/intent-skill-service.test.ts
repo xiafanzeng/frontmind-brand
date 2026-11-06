@@ -159,6 +159,22 @@ describe("优化模型持久化任务", () => {
     h.send();
     expect((await h.service.poll()).state.jobs![0].status).toBe("succeeded");
   });
+  it("正式问题仅来源版本和位置变化时保留评估，实际题干变化时拒绝评分", async () => {
+    for (const semanticChange of [false, true]) {
+      const h = harness();
+      let questions = [{id: "q", question: "材料如何选择？", category: "产品", subdivision: "",
+        tableId: "dashboard:confirmed", rowIndex: 1, sourceRevision: 4}];
+      h.core.intentQuestionCatalog = async () => questions;
+      const first = await h.service.observe();
+      await h.service.command({...h.request, expectedRevision: first.revision});
+      questions = questions.map(question => ({...question, sourceRevision: 5, rowIndex: 0,
+        question: semanticChange ? "材料如何保养？" : question.question}));
+      h.send();
+      const completed = await h.service.poll();
+      expect(completed.state.jobs![0].status).toBe(semanticChange ? "failed" : "succeeded");
+      expect(completed.state.evaluations).toHaveLength(semanticChange ? 0 : 1);
+    }
+  });
   it.each(["object", "string"] as const)("MySQL JSON %s round trip keeps GET stable and permits the first evaluation once", async mysqlJsonPayload => {
     const h = harness({mysqlJsonPayload});
     const questions = [{id: "q", question: "材料如何选择？", category: "product_scenario", subdivision: "",

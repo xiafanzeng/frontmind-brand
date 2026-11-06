@@ -137,8 +137,16 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     return {...ledger, nodes: data.nodes, preview: false};
   }
   const activeJob = (job: IntentSkillJob) => !["succeeded", "failed"].includes(job.status);
+  // Host-wide source revisions and row positions can change when another
+  // question is maintained. Only semantic changes invalidate a selected pin.
+  const questionContent = (question: IntentState["questions"][number]) => ({
+    id: question.id, question: question.question, category: question.category, subdivision: question.subdivision,
+  });
   const questionsHash = (job: IntentSkillJob, state: IntentState) => intentHash(job.questionsScope === "selected"
-    ? job.questionIds.map(id => state.questions.find(question => question.id === id)).filter(Boolean) : state.questions);
+    ? job.questionIds.flatMap(id => {
+      const question = state.questions.find(question => question.id === id);
+      return question ? [questionContent(question)] : [];
+    }) : state.questions);
   const timeoutMessage = "模型任务超时，请查看账户任务记录后重新评估";
   const recoverableTimeout = (job: IntentSkillJob) => job.status === "failed" && job.error === timeoutMessage;
   // Migrate the previous stopped-as-failed diagnosis by observing the original task.
@@ -174,7 +182,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       const inputHash = intentHash(frozen);
       reserved = {id: clientRequestId, taskId: randomUUID(), kind, questionIds: selectedQuestions.map(q => q.id),
         status: "queued", createdAt: new Date().toISOString(), inputHash, knowledgeHash: intentHash(data.nodes),
-        questionsScope: "selected", questionsHash: intentHash(selectedQuestions), credentialId: prepared.credential.id,
+        questionsScope: "selected", questionsHash: intentHash(selectedQuestions.map(questionContent)), credentialId: prepared.credential.id,
         credentialVersion: prepared.credential.version, skillHash: prepared.skillHash, model: prepared.credential.upstreamModel, receiptId};
       const input: IntentSkillInput = {...frozen, inputHash, operationToken: `brand-intent:${clientRequestId}`};
       await reserveIntentSkill(tx, reserved, input, prepared.credential, context.accountUserId, context.enterpriseProjectId);
