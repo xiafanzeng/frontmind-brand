@@ -69,8 +69,8 @@ describe("real Brand regeneration entry, HTTP boundary only", () => {
     await screen.findByText(/新稿已采用到草稿/);
     fireEvent.click(screen.getByRole("button", {name: target === "evaluation" ? "查看四维评估" : "生成优化应答逻辑"}));
     await waitFor(() => expect(screen.queryByText(/新稿已采用到草稿/)).toBeNull());
-    if (target === "optimization") fireEvent.click(screen.getByRole("button", {name: "← 返回评估详情", exact: true}));
-    fireEvent.click(screen.getByRole("button", {name: "← 返回应答逻辑详情", exact: true}));
+    if (target === "optimization") fireEvent.click(screen.getByRole("button", {name: "← 返回评估详情"}));
+    fireEvent.click(screen.getByRole("button", {name: "← 返回应答逻辑详情"}));
     expect(screen.getByDisplayValue(candidate.concern)).toBeTruthy();
     expect(screen.queryByText(/新稿已采用到草稿/)).toBeNull();
     expect(record.draft).toEqual({...original, ...candidate});
