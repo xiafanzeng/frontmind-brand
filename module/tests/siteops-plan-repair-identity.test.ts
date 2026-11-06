@@ -2,8 +2,15 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { siteContentPlanWireV2Schema } from "../contracts/siteops-content-plan.js";
-import { siteContentPlanSchemaRepairIssues } from "../server/siteops/manus-provider.js";
+import {
+  SiteContentPlanValidationError,
+  siteContentPlanV2FromWire,
+  siteContentPlanWireV2Schema,
+} from "../contracts/siteops-content-plan.js";
+import {
+  siteContentPlanRepairIssues,
+  siteContentPlanSchemaRepairIssues,
+} from "../server/siteops/manus-provider.js";
 
 const TOKEN = "siteops-content-plan:test-op:1";
 const SHA =
@@ -55,6 +62,26 @@ function baseWire() {
         sourceDocumentId: "doc-1",
         status: "used",
         routeIds: ["home"],
+        omissionReason: null,
+      },
+    ],
+  };
+}
+
+function completeWire() {
+  return {
+    ...baseWire(),
+    routes: [route("home", "/", "首页"), route("visit", "/visit/", "就诊指引")],
+    sections: [section("home", "home-hero"), section("visit", "visit-appointments")],
+    navigation: [
+      { label: "首页", targetPath: "/" },
+      { label: "就诊信息", targetPath: "/visit/" },
+    ],
+    coverage: [
+      {
+        sourceDocumentId: "doc-1",
+        status: "used",
+        routeIds: ["home", "visit"],
         omissionReason: null,
       },
     ],
@@ -130,6 +157,78 @@ describe("content plan repair issue identity", () => {
     ]);
     expect(siteContentPlanSchemaRepairIssues(error)).toEqual([
       "CONTENT_PLAN_SCHEMA_INVALID_TYPE@operationToken",
+    ]);
+  });
+
+  it("preserves the materialized navigation failure when a valid wire repeats an appointment target", () => {
+    const wire = completeWire();
+    wire.navigation.push({ label: "预约指引", targetPath: "/visit/" });
+    const parsed = siteContentPlanWireV2Schema.safeParse(wire);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw parsed.error;
+
+    let materializedError: unknown;
+    try {
+      siteContentPlanV2FromWire(parsed.data, {
+        operationToken: TOKEN,
+        inventorySha256: SHA,
+      });
+    } catch (error) {
+      materializedError = error;
+    }
+    expect(materializedError).toBeInstanceOf(z.ZodError);
+    if (!(materializedError instanceof z.ZodError)) {
+      throw new Error("expected materialized content-plan validation to fail");
+    }
+    expect(materializedError.issues).toEqual([
+      expect.objectContaining({
+        path: ["navigation"],
+        message: "Navigation route coordinates must be unique",
+      }),
+    ]);
+    expect(siteContentPlanRepairIssues(materializedError)).toEqual([
+      "CONTENT_PLAN_SCHEMA_CUSTOM@navigation: Navigation route coordinates must be unique",
+    ]);
+  });
+
+  it("materializes the same complete plan once its navigation targets are unique", () => {
+    const wire = completeWire();
+    const parsed = siteContentPlanWireV2Schema.safeParse(wire);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw parsed.error;
+
+    const plan = siteContentPlanV2FromWire(parsed.data, {
+      operationToken: TOKEN,
+      inventorySha256: SHA,
+    });
+    expect(plan.navigation).toEqual(wire.navigation);
+    expect(plan.routes.map((item) => ({
+      id: item.id,
+      path: item.path,
+      sections: item.sections.map((block) => block.id),
+    }))).toEqual([
+      { id: "home", path: "/", sections: ["home-hero"] },
+      { id: "visit", path: "/visit/", sections: ["visit-appointments"] },
+    ]);
+  });
+
+  it("preserves precise semantic repair issues without replacing them with a schema token", () => {
+    const issues = [
+      "CONTENT_PLAN_REQUIRED_MEDIA_UNBOUND",
+      "CONTENT_PLAN_REQUIRED_DOCUMENT_NOT_RENDER_BOUND",
+    ];
+    expect(siteContentPlanRepairIssues(
+      new SiteContentPlanValidationError(issues),
+    )).toEqual(issues);
+  });
+
+  it.each([
+    new Error("untrusted provider response details"),
+    { issues: ["untrusted issue text"], message: "untrusted response details" },
+    null,
+  ])("uses a safe fallback for an unknown error (%#)", (error) => {
+    expect(siteContentPlanRepairIssues(error)).toEqual([
+      "CONTENT_PLAN_SCHEMA_INVALID",
     ]);
   });
 });
