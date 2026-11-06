@@ -123,22 +123,14 @@ export function RagEvaluationGauge({ score, preciseScore, unavailable = false }:
           r={RAG_GAUGE_DOT_RADIUS}
           fill={pending || unavailable ? "#aeaeb2" : "#7542b0"}
         />}
-        {valid ? <text
+        {valid && <text
           data-testid="rag-gauge-value"
           className="rag-evaluation-gauge-value"
           x={RAG_GAUGE_CENTER_X}
           y={RAG_GAUGE_SCORE_Y}
           dominantBaseline="central"
           textAnchor="middle"
-        >{scoreText}</text> : <text
-          data-testid="rag-gauge-pending"
-          className="rag-evaluation-gauge-pending"
-          x={RAG_GAUGE_CENTER_X}
-          y={RAG_GAUGE_SCORE_Y}
-          dominantBaseline="central"
-          textAnchor="middle"
-          aria-hidden="true"
-        >N/A</text>}
+        >{scoreText}</text>}
         <text
           data-testid="rag-gauge-min"
           className="rag-evaluation-gauge-endpoint"

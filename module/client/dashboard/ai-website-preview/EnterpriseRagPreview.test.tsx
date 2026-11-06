@@ -28,7 +28,7 @@ function showPage() {
 function expectEmptyGauge() {
   const gauge = screen.getByTestId("rag-evaluation-score");
   expect(gauge.classList.contains("is-empty")).toBe(true);
-  expect(within(gauge).getByTestId("rag-gauge-pending").textContent).toBe("N/A");
+  expect(within(gauge).queryByTestId("rag-gauge-pending")).toBeNull();
   expect(within(gauge).queryByTestId("rag-gauge-value")).toBeNull();
   const marker = within(gauge).getByTestId("rag-gauge-marker");
   expect(marker.classList.contains("is-pending")).toBe(true);
@@ -40,7 +40,7 @@ function expectEmptyGauge() {
 function expectUnavailableGauge() {
   const gauge = screen.getByTestId("rag-evaluation-score");
   expect(gauge.classList.contains("is-danger")).toBe(true);
-  expect(within(gauge).getByTestId("rag-gauge-pending").textContent).toBe("N/A");
+  expect(within(gauge).queryByTestId("rag-gauge-pending")).toBeNull();
   expect(within(gauge).queryByTestId("rag-gauge-value")).toBeNull();
   const marker = within(gauge).getByTestId("rag-gauge-marker");
   expect(marker.classList.contains("is-unavailable")).toBe(true);

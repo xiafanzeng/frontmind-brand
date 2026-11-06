@@ -31,11 +31,7 @@ describe("approved RAG evaluation gauge", () => {
     expect(screen.getByTestId("rag-evaluation-score").classList.contains("is-empty")).toBe(true);
     expect(screen.queryByTestId("rag-gauge-empty-symbol")).toBeNull();
     expect(screen.queryByTestId("rag-gauge-value")).toBeNull();
-    const pending = screen.getByTestId("rag-gauge-pending");
-    expect(pending.textContent).toBe("N/A");
-    expect(pending.getAttribute("x")).toBe("60");
-    expect(pending.getAttribute("y")).toBe("41");
-    expect(pending.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByTestId("rag-gauge-pending")).toBeNull();
     const marker = screen.getByTestId("rag-gauge-marker");
     expect(marker.classList.contains("is-pending")).toBe(true);
     expect(marker.getAttribute("fill")).toBe("#aeaeb2");
@@ -44,7 +40,7 @@ describe("approved RAG evaluation gauge", () => {
     expect(screen.getByTestId("rag-gauge-cutout").getAttribute("cx")).toBe(marker.getAttribute("cx"));
     expect(screen.queryByRole("button")).toBeNull();
     const graphic = screen.getByRole("img", { name: "六维诊断分待评估，量程 0 至 100；灰色圆点位于量程起点，不代表零分" });
-    expect(graphic.querySelectorAll("text")).toHaveLength(3); // N/A and the endpoint labels.
+    expect([...graphic.querySelectorAll("text")].map(node => node.textContent)).toEqual(["0", "100"]);
     expect(graphic.querySelectorAll("circle")).toHaveLength(2); // Track cutout and decorative marker.
     view.rerender(<RagEvaluationGauge score={0} />);
     expect(screen.getByTestId("rag-evaluation-score").classList.contains("is-empty")).toBe(false);
@@ -57,8 +53,9 @@ describe("approved RAG evaluation gauge", () => {
     view.rerender(<RagEvaluationGauge score={null} unavailable />);
     expect(screen.getByTestId("rag-evaluation-score").classList.contains("is-empty")).toBe(false);
     expect(screen.getByTestId("rag-evaluation-score").classList.contains("is-muted")).toBe(true);
-    expect(screen.getByTestId("rag-gauge-pending").textContent).toBe("N/A");
+    expect(screen.queryByTestId("rag-gauge-pending")).toBeNull();
     expect(screen.queryByTestId("rag-gauge-value")).toBeNull();
+    expect([...screen.getByRole("img").querySelectorAll("text")].map(node => node.textContent)).toEqual(["0", "100"]);
     expect(screen.getByTestId("rag-gauge-marker").classList.contains("is-pending")).toBe(false);
     expect(screen.getByTestId("rag-gauge-marker").classList.contains("is-unavailable")).toBe(true);
     expect(screen.getByTestId("rag-gauge-marker").getAttribute("fill")).toBe("#aeaeb2");
@@ -339,7 +336,8 @@ describe("approved RAG evaluation gauge", () => {
       );
       expect(screen.queryByTestId("rag-gauge-empty-symbol")).toBeNull();
       expect(screen.queryByTestId("rag-gauge-value")).toBeNull();
-      expect(screen.getByTestId("rag-gauge-pending").textContent).toBe("N/A");
+      expect(screen.queryByTestId("rag-gauge-pending")).toBeNull();
+      expect([...screen.getByRole("img").querySelectorAll("text")].map(node => node.textContent)).toEqual(["0", "100"]);
       expect(screen.getByTestId("rag-gauge-marker").classList.contains("is-pending")).toBe(true);
       expect(screen.getByTestId("rag-gauge-marker").getAttribute("fill")).toBe("#aeaeb2");
       expect(screen.getByTestId("rag-gauge-cutout")).toBeTruthy();
@@ -352,8 +350,9 @@ describe("approved RAG evaluation gauge", () => {
     render(<RagEvaluationGauge score={score} unavailable />);
 
     expect(screen.getByRole("img", { name: "重大问题，评分不适用；灰色圆点位于量程起点，不代表数值分" })).toBeTruthy();
-    expect(screen.getByTestId("rag-gauge-pending").textContent).toBe("N/A");
+    expect(screen.queryByTestId("rag-gauge-pending")).toBeNull();
     expect(screen.queryByTestId("rag-gauge-value")).toBeNull();
+    expect([...screen.getByRole("img").querySelectorAll("text")].map(node => node.textContent)).toEqual(["0", "100"]);
     const marker = screen.getByTestId("rag-gauge-marker");
     expect(marker.classList.contains("is-unavailable")).toBe(true);
     expect(marker.getAttribute("fill")).toBe("#aeaeb2");
