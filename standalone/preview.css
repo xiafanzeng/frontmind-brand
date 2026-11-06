@@ -1,10 +1,10 @@
-/* Enterprise RAG uses the same desktop canvas in preview and live mode.
-   Other website views retain their preview-only layout. */
+/* Enterprise RAG and website construction share the reviewed page canvas
+   and navigation treatment in preview and live mode. Business content is unchanged. */
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   :is(.agent-workbench-topbar__canvas,.agent-workbench-shell__layout),
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   .agent-workbench-shell__main-content.is-scrollable > .agent-workspace-frame,
 .brand-standalone--preview
   .agent-workbench-shell:is(.module-website-builder,.module-enterprise-rag,.module-enterprise-qa)
@@ -20,7 +20,7 @@
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   :is(.agent-workbench-topbar__canvas,.agent-workspace-frame),
 .brand-standalone--preview
   .agent-workbench-shell:is(.module-website-builder,.module-enterprise-rag,.module-enterprise-qa)
@@ -28,10 +28,10 @@
   padding-inline: clamp(20px, 2.5vw, 56px);
 }
 
-/* Keep the RAG navigation on the same reading measure as its page content.
-   The page has both the workspace-frame gutter and the RAG's own inset. */
+/* Keep the product navigation on the same reading measure as its page content.
+   Both pages share the workspace-frame gutter and inner page inset. */
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   > .agent-workbench-topbar {
   --rag-nav-outer-gutter: clamp(20px, 2.5vw, 56px);
   --rag-nav-content-gutter: clamp(16px, 3vw, 40px);
@@ -47,19 +47,19 @@
 
 /* Let the content scroll underneath the translucent navigation without moving its initial position. */
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   .agent-workbench-shell__main-content.is-scrollable {
   scroll-padding-top: 56px;
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   .agent-workbench-shell__main-content.is-scrollable > .agent-workspace-frame {
   padding-top: 82px;
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   > .agent-workbench-topbar > .agent-workbench-topbar__canvas {
   width: calc(min(100%, 2400px) - 2 * var(--rag-nav-outer-gutter) - 2 * var(--rag-nav-content-gutter));
   max-width: 1480px;
@@ -67,13 +67,13 @@
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   > .agent-workbench-topbar .agent-workbench-topbar__inner {
   gap: 16px;
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   > .agent-workbench-topbar .agent-workbench-topbar__group {
   padding-right: 16px;
   border-right-color: rgba(0, 0, 0, 0.1);
@@ -84,13 +84,13 @@
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   > .agent-workbench-topbar .agent-workbench-subagents--bar {
   gap: 16px;
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   > .agent-workbench-topbar .agent-workbench-subagents--bar button {
   position: relative;
   min-height: 44px;
@@ -105,14 +105,14 @@
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   > .agent-workbench-topbar .agent-workbench-subagents--bar button:is(.is-active, :hover:not(:disabled)) {
   background: transparent;
   color: var(--rag-nav-accent);
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   > .agent-workbench-topbar .agent-workbench-subagents--bar button.is-active::after {
   position: absolute;
   right: 12px;
@@ -125,7 +125,7 @@
 }
 
 .brand-standalone
-  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+  .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
   > .agent-workbench-topbar .agent-workbench-subagents--bar button:focus-visible {
   outline: 2px solid rgba(117, 66, 176, 0.5);
   outline-offset: -2px;
@@ -133,25 +133,25 @@
 
 @media (max-width: 560px) {
   .brand-standalone
-    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
     > .agent-workbench-topbar :is(.agent-workbench-topbar__inner, .agent-workbench-subagents--bar) {
     gap: 8px;
   }
 
   .brand-standalone
-    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
     > .agent-workbench-topbar .agent-workbench-topbar__group {
     padding-right: 8px;
   }
 
   .brand-standalone
-    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
     > .agent-workbench-topbar .agent-workbench-subagents--bar button {
     padding-inline: 8px;
   }
 
   .brand-standalone
-    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
     > .agent-workbench-topbar .agent-workbench-subagents--bar button.is-active::after {
     right: 8px;
     left: 8px;
@@ -160,8 +160,15 @@
 
 @media (prefers-reduced-motion: reduce) {
   .brand-standalone
-    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa)
+    .agent-workbench-shell:is(.module-enterprise-rag,.module-enterprise-qa,.module-website)
     > .agent-workbench-topbar .agent-workbench-subagents--bar button {
     transition: none;
   }
+}
+
+/* Website construction keeps its content and surfaces; only its page background follows RAG. */
+.brand-standalone
+  .fm-brand-theme[data-brand-page="website"]
+  .sfp-root[data-step] {
+  background: transparent;
 }
