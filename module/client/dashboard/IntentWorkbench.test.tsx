@@ -44,6 +44,63 @@ function pendingApi(initial: IntentWorkspace) {
   return {api, finish};
 }
 describe("优化工作台任务入口", () => {
+  it.each(["执行被拒绝", "没有本次回执"])("%s时保留全选草稿，不把旧回执当成本次结果，重试成功后只展示匹配回执", async failure => {
+    const saved = workspace("succeeded");
+    const actions = [
+      {id: "question", kind: "question" as const, title: "修改当前问题", nodeId: null, before: "原问题", after: "建议问题", source: "问题证据", selected: true},
+      {id: "node", kind: "node" as const, title: "修改知识节点正文", nodeId: "1.01", before: "原正文", after: "建议正文", source: "节点证据", selected: true},
+      {id: "todo", kind: "todo" as const, title: "补充当前资料", nodeId: null, before: "", after: "待核验资料", source: "资料缺口", selected: true},
+    ];
+    saved.state.plans = [{questionId: "q1", actions}];
+    saved.state.receipts = [{id: "old-receipt", status: "completed", createdAt: "2026-10-28T00:00:00Z",
+      changes: [{questionId: "q1", action: {...actions[0], title: "旧记录里的问题操作"}, status: "succeeded"}],
+      before: [], after: saved.state.evaluations}];
+    const acknowledged = {...saved, revision: 2};
+    const api: IntentWorkbenchApi = {
+      observe: vi.fn().mockResolvedValue(saved),
+      command: vi.fn().mockResolvedValue(acknowledged),
+      execute: vi.fn().mockImplementationOnce(async () => {
+        if (failure === "执行被拒绝") throw new Error("方案依据的知识或问题已变化，请重新生成方案（HTTP 409）");
+        return acknowledged;
+      }).mockImplementation(async (input: any) => ({
+        ...acknowledged, revision: 3, state: {...saved.state, receipts: [
+          {id: input.clientRequestId, status: "completed", createdAt: "2026-11-06T00:00:00Z",
+            changes: actions.map(action => ({questionId: "q1", action, status: "succeeded"})),
+            before: [], after: saved.state.evaluations},
+          ...saved.state.receipts,
+        ]},
+      })),
+      rollback: vi.fn(),
+    };
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "查看优化方案"}));
+    fireEvent.change(screen.getByRole("textbox", {name: "修改知识节点正文修改后"}), {target: {value: "审核后的正文"}});
+    fireEvent.click(screen.getByRole("button", {name: "确认并执行已选动作"}));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("heading", {name: "确认优化方案"})).toBeTruthy();
+    expect(screen.queryByRole("heading", {name: "优化执行完成"})).toBeNull();
+    expect(screen.queryByText("旧记录里的问题操作")).toBeNull();
+    expect(screen.queryByRole("button", {name: "查看知识库变更"})).toBeNull();
+    expect(screen.getByRole("textbox", {name: "修改知识节点正文修改后"})).toHaveProperty("value", "审核后的正文");
+    for (const action of actions) expect(screen.getByRole("checkbox", {name: `采纳：${action.title}`})).toHaveProperty("checked", true);
+    expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "edit", actions: [
+      {id: "question", selected: true, after: "建议问题"},
+      {id: "node", selected: true, after: "审核后的正文"},
+      {id: "todo", selected: true, after: "待核验资料"},
+    ]}));
+    expect(api.execute).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", {name: "重新生成方案"})).toHaveProperty("disabled", false);
+    fireEvent.click(screen.getByRole("button", {name: "确认并执行已选动作"}));
+    await screen.findByRole("heading", {name: "优化执行完成"});
+    expect(vi.mocked(api.command).mock.calls[1][0]).toMatchObject({expectedRevision: 2});
+    expect(vi.mocked(api.execute).mock.calls[1][0]).toMatchObject({
+      clientRequestId: (vi.mocked(api.execute).mock.calls[0][0] as any).clientRequestId,
+    });
+    expect(screen.queryByText("旧记录里的问题操作")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "查看知识库变更"}));
+    expect(screen.getByRole("heading", {name: /历史节点 · 1\.01/})).toBeTruthy();
+    expect(screen.queryByRole("heading", {name: "本次未修改知识库正文"})).toBeNull();
+  });
   it("整张动作卡片切换预览，采纳操作独立，切换后保留编辑草稿且不发起业务请求", async () => {
     const saved = workspace("succeeded");
     saved.state.plans = [{questionId: "q1", actions: [
