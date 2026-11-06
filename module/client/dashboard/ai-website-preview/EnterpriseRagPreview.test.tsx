@@ -1753,6 +1753,8 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByText(/尚无待评估回答/)).toBeTruthy();
     expect(screen.queryAllByRole("button", { name: /^\[\d+\] / })).toHaveLength(0);
     expectEmptyGauge();
+    expect(evaluation().getByRole("heading", { name: "待评估" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "当前评估摘要" }).classList.contains("is-neutral")).toBe(true);
     expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
     expect(evaluation().getByText("关键风险待核验")).toBeTruthy();
     expect(screen.getByRole("button", { name: "录入回答" }).hasAttribute("disabled")).toBe(false);
