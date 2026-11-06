@@ -1,4 +1,4 @@
-import {createIntentPlan, emptyIntentState, evaluateIntent, type IntentWorkspace, type IntentState, type IntentNode, type IntentQuestion} from "../module/contracts/intent-workbench";
+import {createIntentPlan, emptyIntentState, evaluateIntent, knowledgeOnlyIntentPlan, type IntentWorkspace, type IntentState, type IntentNode, type IntentQuestion} from "../module/contracts/intent-workbench";
 import type {IntentWorkbenchApi} from "../module/client/dashboard/intent-workbench-api";
 import {updateIntentQuestionSchema, deleteIntentQuestionSchema, mutateIntentQuestion} from "../module/contracts/intent-question-mutations";
 const demoNodes: IntentNode[] = [
@@ -33,6 +33,8 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       }
       if (input.kind === "edit") {
         const plan = memory.state.plans.find(item => item.questionId === input.questionId)!;
+        plan.actions = knowledgeOnlyIntentPlan(plan).actions;
+        if (!plan.actions.length) throw new Error("请重新生成知识库优化方案");
         for (const edit of input.actions) Object.assign(plan.actions.find(item => item.id === edit.id)!, edit);
       }
       if (input.kind === "todo") Object.assign(memory.state.todos.find(todo => todo.id === input.todoId)!, {status: "completed", source: input.source});
@@ -42,7 +44,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       const input = value as any;
       if (memory.state.receipts.some(receipt => receipt.id === input.clientRequestId)) return snapshot();
       check(input.expectedRevision);
-      const plans = memory.state.plans.filter(plan => input.questionIds.includes(plan.questionId));
+      const plans = memory.state.plans.filter(plan => input.questionIds.includes(plan.questionId)).map(knowledgeOnlyIntentPlan);
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({action: structuredClone(action), questionId: plan.questionId, status: "pending" as const})));
       if (!changes.length) throw new Error("请至少选择一项动作");
       const nodeIds = changes.filter(change => change.action.kind === "node").map(change => change.action.nodeId);
@@ -50,7 +52,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       const receipt: IntentState["receipts"][number] = {id: input.clientRequestId, status: "running", createdAt: new Date().toISOString(), before: structuredClone(memory.state.evaluations.filter(item => input.questionIds.includes(item.questionId))), after: [], changes};
       for (const change of receipt.changes) {
         const action = change.action;
-        if (action.kind === "question") memory.state.questions.find(item => item.id === change.questionId)!.question = action.after;
+        if (action.kind === "question") {change.status = "failed"; change.error = "知识优化不得修改原问题"; continue;}
         else if (action.kind === "node") {
           const node = memory.nodes.find(item => item.id === action.nodeId)!;
           if (node.content !== action.before) {change.status = "failed"; change.error = "节点已有后续修改"; continue;}

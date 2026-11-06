@@ -94,7 +94,7 @@ function harness(options: {mysqlJsonPayload?: "object" | "string"} = {}) {
       dimensions: ["意图明确度", "品牌关联度", "决策相关度", "问题清晰度", "内容独特度", "知识支撑初评"].map(label => ({label, score: 100, reason: "知识证据"})),
       points: [{title: "适用条件", terms: ["条件"], status: "supported", nodeId: "node", evidence: "材料选择依据适用条件。", issue: "已确认"}], findings: [],
     }], plans: input.kind === "plan" ? [{questionId: "q", actions: [{
-      kind: "question", title: "明确适用条件", nodeId: null, after: "材料选择有哪些适用条件？", source: "选材节点",
+      kind: "todo", title: "补充适用条件资料", nodeId: null, after: "补充并核验材料适用条件的来源资料", source: "选材节点",
     }]}] : []};
   }
   const send = (value = output()) => client.listAllMessages.mockResolvedValue([{

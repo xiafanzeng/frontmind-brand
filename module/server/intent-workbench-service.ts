@@ -6,7 +6,7 @@ import type {ModuleHttpCore} from "./http-api.js";
 import {getKnowledgeNodeDetails, saveKnowledgeNodeContent} from "./knowledge-node-workspace-service.js";
 import {projectKnowledgeBaseCustomerMarkdown} from "../contracts/knowledge-base-materialized-contract.js";
 import {
-  emptyIntentState, findSavedIntentPlan,
+  emptyIntentState, findSavedIntentPlan, knowledgeOnlyIntentPlan,
   type IntentState, type IntentNode, type IntentWorkspace, type IntentSkillJob,
 } from "../contracts/intent-workbench.js";
 import {intentHash, prepareIntentSkill, reserveIntentSkill, intentSkillClient, readIntentSkillInput, uploadIntentSkill,
@@ -588,10 +588,11 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
           }
         }
         if (!plan) throw new IntentWorkbenchError("PLAN_MISSING", "请先生成方案");
+        plan.actions = knowledgeOnlyIntentPlan(plan).actions;
+        if (!plan.actions.length) throw new IntentWorkbenchError("PLAN_REGENERATION_REQUIRED", "旧方案仅包含题干修改，请重新生成知识库优化方案");
         for (const edit of input.actions) {
           const action = plan.actions.find(item => item.id === edit.id);
           if (!action) throw new IntentWorkbenchError("ACTION_MISSING", "方案动作不存在");
-          if (action.kind === "question" && edit.after.length > 500) throw new IntentWorkbenchError("QUESTION_TOO_LONG", "问题最多 500 字");
           action.selected = edit.selected;
           if (action.kind === "node") {
             const node = data.nodes.find(item => item.id === action.nodeId);
@@ -624,12 +625,12 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         const source = ledger.state.jobs?.find(job => job.kind === "plan" && job.inputHash === plan.inputHash && job.status === "succeeded");
         if (!source || source.knowledgeHash !== intentHash(executionKnowledge.nodes) || source.questionsHash !== questionsHash(source, ledger.state))
           throw new IntentWorkbenchError("PLAN_STALE", "方案依据的知识或问题已变化，请重新生成方案");
-        return plan;
+        const safe = knowledgeOnlyIntentPlan(plan);
+        if (!safe.actions.length) throw new IntentWorkbenchError("PLAN_REGENERATION_REQUIRED", "旧方案仅包含题干修改，请重新生成知识库优化方案");
+        return safe;
       });
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({questionId: plan.questionId, action: structuredClone(action), status: "pending" as const})));
       if (!changes.length) throw new IntentWorkbenchError("EMPTY_PLAN", "请至少选择一项动作");
-      if (changes.some(change => change.action.kind === "question" && isHostIntentQuestion(ledger.state.questions.find(question => question.id === change.questionId))))
-        throw new IntentWorkbenchError("FORMAL_QUESTION_MAINTENANCE_REQUIRED", "正式问题的题干修改请通过修改问题入口采用；取消该题干动作后可继续执行知识优化");
       const nodeIds = changes.filter(change => change.action.kind === "node").map(change => change.action.nodeId);
       if (new Set(nodeIds).size !== nodeIds.length) throw new IntentWorkbenchError("NODE_CONFLICT", "多个方案修改同一知识节点，请分别执行并重新生成方案");
       ledger.state.receipts.push({id: input.clientRequestId, status: "running", createdAt: new Date().toISOString(), changes,
@@ -675,10 +676,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         if (ledger.state.receipts.find(item => item.id === receipt.id)!.lease?.owner !== leaseOwner) throw new IntentWorkbenchError("LEASE_CHANGED", "执行权已变化");
         if (target.status !== "pending") return;
         if (!failure && change.action.kind === "question") {
-          const question = ledger.state.questions.find(item => item.id === change.questionId);
-          if (!question || question.question !== change.action.before) failure = "问题已被修改，请重新评估";
-          else if (isHostIntentQuestion(question)) failure = "正式问题请通过问题维护入口采用此题干；原应答与历史记录会保留";
-          else question.question = change.action.after;
+          failure = "已拦截旧方案的题干修改；知识优化必须保持原问题不变";
         }
         if (!failure && change.action.kind === "todo") {
           const todoId = `${receipt.id}:${change.action.id}`;

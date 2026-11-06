@@ -115,15 +115,20 @@ export const emptyIntentState = (): IntentState => ({
   version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [], jobs: [],
 });
 
+/** Legacy question actions remain readable in history, but never become executable drafts. */
+export function knowledgeOnlyIntentPlan(plan: IntentPlan): IntentPlan {
+  return {...plan, actions: plan.actions.filter(action => action.kind === "node" || action.kind === "todo")};
+}
+
 /** Resolve a current draft or the latest accepted snapshot without changing either. */
 export function findSavedIntentPlan(state: IntentState, questionId: string): IntentPlan | undefined {
   if (!state.questions.some(question => question.id === questionId)) return;
   const current = state.plans.find(plan => plan.questionId === questionId);
-  if (current) return current;
+  if (current) return knowledgeOnlyIntentPlan(current);
   for (const job of [...(state.jobs ?? [])].reverse()) {
     if (job.kind !== "plan" || job.status !== "succeeded" || !job.questionIds.includes(questionId)) continue;
     const saved = job.result?.plans.find(plan => plan.questionId === questionId);
-    if (saved) return {...saved, inputHash: saved.inputHash ?? job.inputHash};
+    if (saved) return knowledgeOnlyIntentPlan({...saved, inputHash: saved.inputHash ?? job.inputHash});
   }
 }
 
@@ -196,16 +201,10 @@ export function evaluateIntent(question: IntentQuestion, nodes: IntentNode[], ca
 }
 export function createIntentPlan(question: IntentQuestion, evaluation: IntentEvaluation, nodes: IntentNode[]): IntentPlan {
   const target = matchIntentNode(question.question, nodes.filter(node => node.editable));
-  const rewritten = /哪家好|哪家专业/.test(question.question)
-    ? `${question.question.replace(/哪家好|哪家专业/g, "")}应从哪些资质、经验与风险标准进行选择？`
-    : /怎么选|如何选择|应该怎么/.test(question.question)
-      ? `${question.question.replace(/应该怎么选|怎么选|如何选择/g, "")}有哪些适用条件、选择标准与风险限制？`
-      : `${question.question.replace(/[？?]$/, "")}，有哪些适用条件与判断依据？`;
-  const actions: IntentAction[] = [{id: `${question.id}:question`, kind: "question", title: "优化问题表述", selected: true,
-    nodeId: null, before: question.question, after: rewritten, source: "原问题与当前诊断；可编辑后确认"}];
+  const actions: IntentAction[] = [];
   if (target) actions.push({id: `${question.id}:node`, kind: "node", title: "补充知识节点正文", selected: false,
     nodeId: target.id, before: target.content,
-    after: `${target.content.trim()}\n\n## 回答口径与选择边界\n\n针对“${rewritten}”，回答应引用本节点已经确认的事实，说明适用条件与判断依据。尚未确认的资料不得作为确定结论；涉及风险和专业决策时，应说明限制并建议进一步核验。\n`,
+    after: `${target.content.trim()}\n\n## 回答口径与选择边界\n\n针对“${question.question}”，回答应引用本节点已经确认的事实，说明适用条件与判断依据。尚未确认的资料不得作为确定结论；涉及风险和专业决策时，应说明限制并建议进一步核验。\n`,
     source: `${target.branch} / ${target.title}；仅新增回答边界，不生成未经证实的产品或医疗事实`});
   const gaps = evaluation.points.filter(point => point.status !== "supported");
   if (gaps.length) actions.push({id: `${question.id}:todo`, kind: "todo", title: "创建资料待办", selected: true, nodeId: null, before: "",

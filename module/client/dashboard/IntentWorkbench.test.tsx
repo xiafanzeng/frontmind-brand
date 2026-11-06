@@ -124,9 +124,9 @@ describe("优化工作台任务入口", () => {
     expect(screen.queryByText("旧记录里的问题操作")).toBeNull();
     expect(screen.queryByRole("button", {name: "查看知识库变更"})).toBeNull();
     expect(screen.getByRole("textbox", {name: "修改知识节点正文修改后"})).toHaveProperty("value", "审核后的正文");
-    for (const action of actions) expect(screen.getByRole("checkbox", {name: `采纳：${action.title}`})).toHaveProperty("checked", true);
+    expect(screen.queryByRole("checkbox", {name: "采纳：修改当前问题"})).toBeNull();
+    for (const action of actions.filter(action => action.kind !== "question")) expect(screen.getByRole("checkbox", {name: `采纳：${action.title}`})).toHaveProperty("checked", true);
     expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "edit", actions: [
-      {id: "question", selected: true, after: "建议问题"},
       {id: "node", selected: true, after: "审核后的正文"},
       {id: "todo", selected: true, after: "待核验资料"},
     ]}));
@@ -157,15 +157,16 @@ describe("优化工作台任务入口", () => {
     expect(within(preview).queryByText("节点来源说明")).toBeNull();
     expect(screen.queryByText("节点正文须人工审核。资料待办不会直接消除知识缺口。")).toBeNull();
     fireEvent.change(within(preview).getByRole("textbox", {name: "补充节点正文修改后"}), {target: {value: "人工编辑的节点草稿"}});
-    fireEvent.click(screen.getByRole("button", {name: "查看并编辑：明确问题范围"}));
-    expect(within(preview).getByText("原问题")).toBeTruthy();
-    expect(within(preview).getByRole("textbox", {name: "明确问题范围修改后"})).toHaveProperty("value", "建议问题");
+    expect(screen.queryByRole("button", {name: "查看并编辑：明确问题范围"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "查看并编辑：补充资料待办"}));
+    expect(within(preview).getByText("暂无原内容")).toBeTruthy();
+    expect(within(preview).getByRole("textbox", {name: "补充资料待办修改后"})).toHaveProperty("value", "待办内容");
     fireEvent.click(screen.getByRole("checkbox", {name: "采纳：补充节点正文"}));
-    expect(screen.getByRole("button", {name: "查看并编辑：明确问题范围"}).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", {name: "查看并编辑：补充资料待办"}).getAttribute("aria-pressed")).toBe("true");
     const todo = screen.getByRole("region", {name: "优化动作：补充资料待办"});
     fireEvent.click(within(todo).getByRole("button", {name: "不采纳"}));
     expect(within(todo).getByRole("checkbox")).toHaveProperty("checked", false);
-    expect(within(preview).getByRole("textbox")).toHaveProperty("value", "建议问题");
+    expect(within(preview).getByRole("textbox")).toHaveProperty("value", "待办内容");
     fireEvent.click(screen.getByRole("button", {name: "查看并编辑：补充资料待办"}));
     expect(within(preview).getByText("暂无原内容")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", {name: "查看并编辑：补充节点正文"}));

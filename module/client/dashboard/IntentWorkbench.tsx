@@ -5,7 +5,7 @@ import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import ManagedKeywordTables, {type ManagedKeywordTablesProps} from "./ManagedKeywordTables";
 import {liveIntentWorkbenchApi, type IntentWorkbenchApi} from "./intent-workbench-api";
 import type {IntentWorkspace, IntentEvaluation, IntentPlan, IntentAction} from "../../contracts/intent-workbench";
-import {findSavedIntentPlan} from "../../contracts/intent-workbench";
+import {findSavedIntentPlan, knowledgeOnlyIntentPlan} from "../../contracts/intent-workbench";
 import "./intent-workbench.css";
 import "./saved-plan-result.css";
 import "./plan-confirm.css";
@@ -35,11 +35,13 @@ function Evaluation({item}: {item: IntentEvaluation}) {
     <aside className="iw-panel iw-diagnosis"><h3>诊断摘要</h3>{item.findings.length ? item.findings.map(finding => <p key={finding}><Sparkles size={16}/>{finding}</p>) : <p><Check size={16}/>当前要点均有相关内容支撑。</p>}<div className="iw-method">{item.method === "skill_v1" ? "AI 基于当前知识证据评估" : "历史规则评估 / 演示数据"} · 非真实搜索热度<br/>更新时间：{new Date(item.evaluatedAt).toLocaleString("zh-CN")}<br/>引用待核验资料不计为充分支撑。</div></aside>
   </div>;
 }
-export function PlanEditor({plan, onChange}: {plan: IntentPlan; onChange: (plan: IntentPlan) => void}) {
+export function PlanEditor({plan: savedPlan, onChange}: {plan: IntentPlan; onChange: (plan: IntentPlan) => void}) {
+  const plan = knowledgeOnlyIntentPlan(savedPlan);
   const previewId = useId();
   const [active, setActive] = useState(plan.actions.find(item => item.kind === "node")?.id ?? plan.actions[0]?.id);
   const action = plan.actions.find(item => item.id === active) ?? plan.actions[0];
   const update = (id: string, patch: Partial<IntentAction>) => onChange({...plan, actions: plan.actions.map(item => item.id === id ? {...item, ...patch} : item)});
+  if (!plan.actions.length) return <div className="iw-panel" role="status">此方案没有可执行的知识库优化动作，请重新生成方案。</div>;
   return <div className="iw-plan-grid iw-plan-editor">
     <div className="iw-panel iw-tasks">{plan.actions.map(item => <section key={item.id} aria-label={`优化动作：${item.title}`} className={`iw-task ${item.selected ? "selected" : ""} ${item.id === action?.id ? "is-active" : ""}`}>
       <button type="button" className="iw-task-open" aria-label={`查看并编辑：${item.title}`} aria-pressed={item.id === action?.id} aria-controls={previewId} onClick={() => setActive(item.id)}><ArrowRight size={18}/></button>
@@ -56,7 +58,7 @@ export function PlanEditor({plan, onChange}: {plan: IntentPlan; onChange: (plan:
       <h3>{action?.kind === "node" ? "知识节点变更预览" : action?.title ?? "内容变更预览"}<span className="iw-tag">可编辑</span></h3>
       {action && <div className="iw-preview-body">
         <section className="iw-plan-before"><h4>修改前</h4>{action.before ? <pre>{action.before}</pre> : <p className="iw-plan-empty">暂无原内容</p>}</section>
-        <label className="iw-plan-after"><span>修改后</span><textarea aria-label={`${action.title}修改后`} value={action.after} rows={12} maxLength={action.kind === "question" ? 500 : 300000} onChange={event => update(action.id, {after: event.target.value})}/></label>
+        <label className="iw-plan-after"><span>修改后</span><textarea aria-label={`${action.title}修改后`} value={action.after} rows={12} maxLength={300000} onChange={event => update(action.id, {after: event.target.value})}/></label>
       </div>}
     </section>
   </div>;
@@ -139,7 +141,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   }
   useWorkspaceDraftGuard({dirty: draftDirty, label: "优化方案修改", save: saveDrafts, discard: async () => {setDraftDirty(false); return true;}});
   function applyWorkspace(data: IntentWorkspace) {
-    setWorkspace(previous => previous && previous.revision > data.revision ? previous : data);
+    const safe = {...data, state: {...data.state, plans: data.state.plans.map(knowledgeOnlyIntentPlan)}};
+    setWorkspace(previous => previous && previous.revision > data.revision ? previous : safe);
   }
   function watchJob(job: NonNullable<IntentWorkspace["state"]["jobs"]>[number], destination: View) {
     watchController.current?.abort();
@@ -160,7 +163,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       setScope(finished.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]);
       if (finished.receiptId) {setReceiptId(finished.receiptId); setView("result");}
       else if (finished.kind === "plan") {
-        setDrafts(structuredClone(data.state.plans.filter(item => finished.questionIds.includes(item.questionId))));
+        setDrafts(structuredClone(data.state.plans.filter(item => finished.questionIds.includes(item.questionId)).map(knowledgeOnlyIntentPlan)));
         setDraftDirty(false); setView("plan");
       } else setView(destination === "plan" ? "evaluation" : destination);
     }).catch(cause => {
@@ -200,7 +203,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
           const saved = data.state.plans.filter(item => completed.questionIds.includes(item.questionId) &&
             (!completed.inputHash || item.inputHash === completed.inputHash));
           if (saved.length === completed.questionIds.length) {
-            setDrafts(structuredClone(saved)); setDraftDirty(false); setView("plan");
+            setDrafts(structuredClone(saved.map(knowledgeOnlyIntentPlan))); setDraftDirty(false); setView("plan");
           } else if (completed.result) {setHistoryId(completed.id); setView("history-detail");}
           else setView("evaluation");
         } else if (completed.result && completed.questionIds.some(id =>
@@ -325,19 +328,20 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   async function plan(force = false, ids = scope) {
     if (pending || running.current || !workspace || !ids.length) return;
     setScope(ids);
-    const missing = force ? ids : ids.filter(id => !workspace.state.plans.some(item => item.questionId === id));
+    const missing = force ? ids : ids.filter(id => !findSavedIntentPlan(workspace.state, id)?.actions.length);
     if (!missing.length) {
-      setDrafts(structuredClone(workspace.state.plans.filter(item => ids.includes(item.questionId))));
+      setDrafts(ids.map(id => structuredClone(findSavedIntentPlan(workspace.state, id)!)));
       setDraftDirty(false); setView("plan"); return;
     }
     if (activeJob) {setError("已有评估任务，请等待完成或继续暂停的任务。已保存的方案仍可查看。"); return;}
     const data = await run(() => command({kind: "plan", questionIds: missing}), "plan", false, "plan");
-    if (data && !data.state.jobs?.some(item => !["succeeded", "failed"].includes(item.status))) {setDrafts(structuredClone(data.state.plans.filter(item => ids.includes(item.questionId)))); setDraftDirty(false); setView("plan");}
+    if (data && !data.state.jobs?.some(item => !["succeeded", "failed"].includes(item.status))) {setDrafts(structuredClone(data.state.plans.filter(item => ids.includes(item.questionId)).map(knowledgeOnlyIntentPlan))); setDraftDirty(false); setView("plan");}
   }
   async function execute() {
     if (!workspace) return;
     if (activeJob) {setError("请先完成当前评估，再执行知识库修改。"); return;}
-    const validDrafts = drafts.filter(draft => scope.includes(draft.questionId));
+    const validDrafts = drafts.filter(draft => scope.includes(draft.questionId)).map(knowledgeOnlyIntentPlan);
+    if (!validDrafts.length || validDrafts.some(draft => !draft.actions.length)) {setError("方案没有可执行的知识库优化动作，请重新生成方案"); return;}
     if (validDrafts.some(draft => draft.actions.some(action => action.selected && !action.after.trim()))) {setError("请填写已选动作的修改内容"); return;}
     await run(async () => {
       let current = workspace;
