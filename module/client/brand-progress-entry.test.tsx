@@ -433,7 +433,9 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "生成优化方案 →" }),
     );
-    await screen.findByText("真实契约样例摘要");
+    await screen.findByRole("region", {name: "原文与优化候选对照"});
+    expect(screen.queryByText("真实契约样例摘要")).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
     expect(h.calls.filter((c) => c.startsWith("POST")).length).toBe(posts);
     expect(h.calls.some((c) => /adopt|^PUT|^PATCH/.test(c))).toBe(false);
     expect(
