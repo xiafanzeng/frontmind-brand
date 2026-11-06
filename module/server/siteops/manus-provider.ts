@@ -4880,7 +4880,7 @@ SiteContentPlanWireV2 必须是以下精确扁平形状，不得省略任何字�
 - sections 是独立顶层数组，每项仅允许 routeId、sectionId、blockKind、heading、purpose、body、sourceDocumentIds、evidenceExcerpts、mediaIds、entityIds、faqIds。sourceDocumentIds 与 evidenceExcerpts 按下标一一对应。
 - routes 中每个路由的 routeId 必须至少被一个 section 引用；没有任何内容区块可绑定的路由必须并入相邻路由或从 routes 中删除，绝不能留下零 section 的路由。
 - 每个 section（包括 hero、CTA 和纯结构区块）的 sourceDocumentIds 与 evidenceExcerpts 都必须至少各有一项；若区块无法绑定逐字来源，就合并进有来源的区块或省略该区块，绝不能输出空来源数组。
-- navigation 每项仅允许 label、targetPath。coverage 每项仅允许 sourceDocumentId、status、routeIds、omissionReason；used 时 routeIds 非空且 omissionReason=null，omitted 时 routeIds=[] 且 omissionReason 为具体字符串。
+- navigation 每项仅允许 label、targetPath，targetPath 与 label 必须分别唯一；同一目标路径在 navigation 中只能出现一次。移动预约等入口时，应复用并移动已有导航项，不能追加指向同一 targetPath 的重复项。coverage 每项仅允许 sourceDocumentId、status、routeIds、omissionReason；used 时 routeIds 非空且 omissionReason=null，omitted 时 routeIds=[] 且 omissionReason 为具体字符串。
 
 严禁自创替代 schema 或别名：不得使用 schemaVersion、pages、routeManifest、blocks、coverages、menu、navItems；routes 项不得使用 id、slug、children、navOrder 或嵌套 sections；sections 项不得使用 id、sourceBindings、sources 或 evidence；coverage 项不得使用 documentId、routes 或 reason。只有允许为空的集合才输出 []；section 的来源与摘录数组不得为空。可空坐标必须输出 null，不得改名或删字段。${repair}
 
@@ -4909,6 +4909,14 @@ export function siteContentPlanSchemaRepairIssues(error: unknown) {
       }),
     ),
   ];
+}
+
+export function siteContentPlanRepairIssues(error: unknown): readonly string[] {
+  const issues =
+    error instanceof SiteContentPlanValidationError
+      ? error.issues
+      : siteContentPlanSchemaRepairIssues(error);
+  return issues.length > 0 ? issues : ["CONTENT_PLAN_SCHEMA_INVALID"];
 }
 
 const SITEOPS_CONTENT_PLAN_WIRE_V2_CONTRACT_FILENAME =
@@ -4942,6 +4950,9 @@ function siteContentPlanWireContractAttachment(input: {
       sectionsAreTopLevelAndFlat: true,
       everySectionHasAtLeastOneVerbatimSource: true,
       everySourceDocumentMustAppearExactlyOnceInCoverage: true,
+      navigationTargetPathsAreUnique: true,
+      navigationLabelsAreUnique: true,
+      movingNavigationReusesExistingEntry: true,
       additionalPropertiesAllowed: false,
     },
     jsonSchema: siteContentPlanOutputSchema({
@@ -6501,10 +6512,7 @@ async function handleNativeReactSiteBuild(input: {
         );
       }
     } catch (error) {
-      const issues =
-        error instanceof SiteContentPlanValidationError
-          ? error.issues
-          : ["CONTENT_PLAN_SCHEMA_INVALID"];
+      const issues = siteContentPlanRepairIssues(error);
       console.warn(
         "[siteops-manus] content_plan_rejected",
         JSON.stringify({
