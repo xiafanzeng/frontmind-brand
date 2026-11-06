@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { createHash, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
+import { enterpriseQaProgress } from "../contracts/enterprise-qa-progress.js";
 import {
   siteAssistantBindingKnowledgeKey,
   siteAssistantBindingSecret,
@@ -140,11 +141,15 @@ function publicError(
   message: string,
   extra?: Record<string, unknown>,
 ) {
-  response.status(status).json({
+  if (response.destroyed || response.writableEnded) return;
+  const payload = {
     schemaVersion: 1,
     error: { code, message },
     ...(extra ?? {}),
-  });
+  };
+  if (response.locals.siteAssistantStream) {
+    response.end(`${JSON.stringify({ type: "error", status, ...payload })}\n`);
+  } else response.status(status).json(payload);
 }
 
 type RateWindow = { hits: number[] };
@@ -500,6 +505,21 @@ export function createSiteAssistantPublicApi(
     perIpWindows.set(ipHash, ipWindow);
     globalWindow.hits.push(timestamp);
 
+    // Validation and admission stay identical for JSON and streaming callers.
+    // The stream contains only public progress categories, never task objects.
+    const streaming = (req.get("accept") ?? "").split(",").some(value =>
+      value.trim().split(";")[0] === "application/x-ndjson");
+    const disconnected = () => req.aborted || res.destroyed || res.writableEnded;
+    if (disconnected()) return;
+    if (streaming) {
+      res.locals.siteAssistantStream = true;
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store, no-transform");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.vary("Accept");
+      res.flushHeaders();
+    }
+
     try {
       // The task contract requires the conversation, the exact user message
       // (id == clientRequestId) and a matching generalChatDispatch metadata
@@ -507,6 +527,17 @@ export function createSiteAssistantPublicApi(
       // conversation client: base profile for the opening turn, the bound
       // task for continuations.
       const clientRequestId = randomUUID();
+      const emitProgress = (task?: unknown) => {
+        if (!streaming || disconnected()) return;
+        const execution = task && typeof task === "object"
+          ? (task as { execution?: unknown }).execution : undefined;
+        const activities = enterpriseQaProgress({execution, questionId: clientRequestId, running: true})
+          .slice(-8).map(({label, status}) => ({label, status}));
+        res.write(`${JSON.stringify({type: "progress", schemaVersion: 1,
+          elapsedMs: Math.max(0, now() - timestamp), activities})}\n`);
+      };
+      emitProgress();
+      if (disconnected()) return;
       const generalChatDispatch = {
         schemaVersion: 1,
         kind: "pending_user" as const,
@@ -560,6 +591,7 @@ export function createSiteAssistantPublicApi(
           internalStatus: sync.status,
         });
       }
+      if (disconnected()) return;
 
       const dispatch = session.taskId
         ? await client.json(
@@ -601,14 +633,17 @@ export function createSiteAssistantPublicApi(
         throw new Error("ASSISTANT_TASK_ID_MISSING");
       }
       session.taskId = taskId;
+      if (disconnected()) return;
 
       const deadline = timestamp + limits.askDeadlineMs;
       let task: unknown = dispatch.json;
       let status = (dispatch.json as { status?: unknown }).status;
+      emitProgress(task);
       while (
         typeof status !== "string" ||
         !TERMINAL_TASK_STATUSES.has(status)
       ) {
+        if (disconnected()) return;
         if (now() >= deadline) {
           return publicError(
             res,
@@ -619,6 +654,7 @@ export function createSiteAssistantPublicApi(
           );
         }
         await wait(limits.pollIntervalMs);
+        if (disconnected()) return;
         const poll = await client.json(
           "GET",
           `/api/frontmind/v2/tasks/${encodeURIComponent(taskId)}`,
@@ -630,6 +666,7 @@ export function createSiteAssistantPublicApi(
         }
         task = poll.json;
         status = (poll.json as { status?: unknown }).status;
+        emitProgress(task);
       }
 
       if (status !== "completed") {
@@ -652,12 +689,15 @@ export function createSiteAssistantPublicApi(
         );
       }
       session.messages = syncedMessages;
-      res.json({
+      if (disconnected()) return;
+      const payload = {
         schemaVersion: 1,
         session: session.token,
         answer: { text: answer.text, sources: answer.sources },
         knowledge: { version: knowledge.knowledgeBase.version },
-      });
+      };
+      if (streaming) res.end(`${JSON.stringify({type: "answer", ...payload})}\n`);
+      else res.json(payload);
     } catch (error) {
       console.warn("[site-assistant] ask_failed", {
         code: error instanceof Error ? error.message : "UNKNOWN",

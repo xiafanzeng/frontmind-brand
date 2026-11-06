@@ -1,3 +1,5 @@
+import { enterpriseQaProgressLabels } from "../../contracts/enterprise-qa-progress.js";
+
 /**
  * Host-owned floating AI assistant for every trusted static website build.
  *
@@ -86,6 +88,13 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_CSS = String.raw`.fma-root{--fma-acce
 .fm-assistant-close:focus-visible{outline:2px solid currentColor;outline-offset:1px}
 .fm-assistant-messages{flex:1;min-height:0;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:transparent}
 .fm-assistant-note{font-size:12px;color:var(--fma-ink);opacity:.72;align-self:center;text-align:center}
+.fm-assistant-progress{align-self:flex-start;max-width:92%;padding:12px 14px;border-radius:12px;background:var(--fma-muted);font-size:12px;line-height:1.6}
+.fm-assistant-progress-heading{display:flex;align-items:center;gap:8px;font-weight:600}
+.fm-assistant-progress-spinner{width:13px;height:13px;border:2px solid var(--fma-border);border-top-color:var(--fma-accent);border-radius:50%;animation:fma-spin .9s linear infinite;flex:none}
+.fm-assistant-progress-time{display:block;margin-top:4px;opacity:.65;font-variant-numeric:tabular-nums}
+.fm-assistant-progress-steps{margin:8px 0 0;padding-left:17px;color:var(--fma-ink)}
+.fm-assistant-progress-steps li{margin:3px 0}.fm-assistant-progress-steps li[data-status="completed"]{opacity:.65}
+@keyframes fma-spin{to{transform:rotate(360deg)}}
 .fm-assistant-bubble{max-width:86%;padding:10px 12px;border-radius:12px;font-size:14px;line-height:1.6;white-space:normal;word-break:break-word}
 .fm-assistant-bubble p{margin:0 0 8px}
 .fm-assistant-bubble p:last-child{margin-bottom:0}
@@ -103,7 +112,7 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_CSS = String.raw`.fma-root{--fma-acce
 .fm-assistant-send:disabled{opacity:.45;cursor:default}
 .fm-assistant-send:focus-visible{outline:2px solid var(--fma-accent);outline-offset:2px}
 @media (max-width:560px){.fm-assistant-launcher{right:14px;bottom:14px}.fm-assistant-panel{right:8px;left:8px;bottom:78px;width:auto;height:min(70vh,520px)}.fm-assistant-bubble{max-width:92%}}
-@media (prefers-reduced-motion:reduce){.fm-assistant-launcher,.fm-assistant-panel{transition:none}}
+@media (prefers-reduced-motion:reduce){.fm-assistant-launcher,.fm-assistant-panel{transition:none}.fm-assistant-progress-spinner{animation:none}}
 `;
 
 export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
@@ -425,6 +434,93 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
       .then(function () { state.configInFlight = false; });
   }
 
+  function showPendingProgress() {
+    var started = Date.now();
+    var pending = document.createElement("div");
+    pending.className = "fm-assistant-progress";
+    pending.setAttribute("role", "status");
+    pending.innerHTML = '<div class="fm-assistant-progress-heading"><span class="fm-assistant-progress-spinner" aria-hidden="true"></span><span>正在处理问题…</span></div><ol class="fm-assistant-progress-steps" hidden></ol><span class="fm-assistant-progress-time" aria-hidden="true"></span>';
+    var steps = pending.querySelector(".fm-assistant-progress-steps");
+    var clock = pending.querySelector(".fm-assistant-progress-time");
+    messages.appendChild(pending);
+    messages.scrollTop = messages.scrollHeight;
+    function tick() {
+      var seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      clock.textContent = "已等待 " + (seconds < 60 ? seconds + " 秒" : Math.floor(seconds / 60) + " 分 " + seconds % 60 + " 秒");
+    }
+    tick();
+    var timer = setInterval(tick, 1000);
+    var labels = ${JSON.stringify(enterpriseQaProgressLabels)};
+    var previousActivities = "";
+    return {
+      update: function (activities) {
+        if (!Array.isArray(activities)) return;
+        var safe = activities.filter(function (item) {
+          return item && labels.indexOf(item.label) >= 0 && ["running", "completed", "waiting", "failed", "unconfirmed"].indexOf(item.status) >= 0;
+        }).slice(-4).map(function (item) { return { label: item.label, status: item.status }; });
+        var signature = JSON.stringify(safe);
+        if (signature === previousActivities) return;
+        previousActivities = signature;
+        steps.textContent = "";
+        steps.hidden = safe.length === 0;
+        safe.forEach(function (item) {
+          var row = document.createElement("li");
+          row.setAttribute("data-status", item.status);
+          row.textContent = item.status === "running" ? "正在" + item.label + "…"
+            : item.status === "completed" ? "已" + item.label
+            : item.status === "waiting" ? item.label + "，等待确认"
+            : item.status === "failed" ? item.label + "失败"
+            : item.label + "，结果待确认";
+          steps.appendChild(row);
+        });
+        messages.scrollTop = messages.scrollHeight;
+      },
+      remove: function () { clearInterval(timer); pending.remove(); },
+    };
+  }
+
+  async function readAnswerResponse(response, pending) {
+    var contentType = response.headers.get("content-type") || "";
+    if (contentType.indexOf("application/x-ndjson") < 0) {
+      return { status: response.status, body: await response.json() };
+    }
+    if (!response.body || !response.body.getReader) throw new Error("STREAM_UNAVAILABLE");
+    var reader = response.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = "";
+    var terminal = null;
+    function consume(line) {
+      if (!line.trim()) return;
+      var frame = JSON.parse(line);
+      if (!frame || frame.schemaVersion !== 1) throw new Error("INVALID_STREAM_FRAME");
+      if (frame.type === "progress") pending.update(frame.activities);
+      else if (frame.type === "answer" || frame.type === "error") {
+        terminal = { status: frame.type === "answer" ? 200 : typeof frame.status === "number" ? frame.status : 503, body: frame };
+      }
+    }
+    try {
+      while (!terminal) {
+        var chunk = await reader.read();
+        buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+        if (buffer.length > 2000000) throw new Error("STREAM_FRAME_TOO_LARGE");
+        var boundary;
+        while (!terminal && (boundary = buffer.indexOf("\n")) >= 0) {
+          consume(buffer.slice(0, boundary));
+          buffer = buffer.slice(boundary + 1);
+        }
+        if (chunk.done) {
+          if (!terminal && buffer.trim()) consume(buffer);
+          if (!terminal) throw new Error("STREAM_INTERRUPTED");
+          break;
+        }
+      }
+      return terminal;
+    } finally {
+      try { await reader.cancel(); } catch (error) { /* response already closed */ }
+      reader.releaseLock();
+    }
+  }
+
   function ask() {
     if (state.busy) return;
     // Never swallow a send silently: an unavailable assistant gets one
@@ -446,22 +542,21 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
     state.busy = true;
     send.disabled = true;
     input.disabled = true;
-    var pending = { kind: "note", text: "正在思考…" };
-    appendBubble(pending);
+    var pending = showPendingProgress();
     var controller = new AbortController();
     var timeout = setTimeout(function () { controller.abort(); }, 170000);
     fetch(apiBase + "/ask", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", accept: "application/x-ndjson" },
       body: JSON.stringify({ question: question, session: session, binding: binding }),
       signal: controller.signal,
     })
       .then(function (response) {
-        return response.json().then(function (body) { return { status: response.status, body: body }; });
+        return readAnswerResponse(response, pending);
       })
       .then(function (result) {
-        if (messages.lastElementChild && messages.lastElementChild.textContent === pending.text) messages.removeChild(messages.lastElementChild);
-        if (result.status === 200 && result.body && result.body.answer) {
+        pending.remove();
+        if (result.status === 200 && result.body && result.body.answer && typeof result.body.answer.text === "string") {
           transcript.push({ kind: "answer", text: result.body.answer.text, sources: result.body.answer.sources || [], session: result.body.session });
           persist(result.body.session || session);
           appendBubble(transcript[transcript.length - 1]);
@@ -476,8 +571,8 @@ export const TRUSTED_SITE_ASSISTANT_WIDGET_SOURCE = String.raw`(function () {
         }
       })
       .catch(function () {
-        if (messages.lastElementChild && messages.lastElementChild.textContent === pending.text) messages.removeChild(messages.lastElementChild);
-        transcript.push({ kind: "error", text: "网络连接失败，请稍后再试。" });
+        pending.remove();
+        transcript.push({ kind: "error", text: controller.signal.aborted ? "回答等待超时，请稍后再试。" : "网络连接失败，请稍后再试。" });
         appendBubble(transcript[transcript.length - 1]);
       })
       .then(function () {

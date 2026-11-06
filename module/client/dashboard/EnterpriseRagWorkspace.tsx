@@ -56,6 +56,7 @@ function EnterpriseRagLiveWorkspace({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const controller = useEnterpriseQaController();
   const active = controller.active;
+  const execution = controller.execution ?? active?.execution;
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
   const activeIdRef = useRef(active?.id ?? null);
@@ -185,7 +186,7 @@ function EnterpriseRagLiveWorkspace({
   );
   const finalIds = finalReplyIds(
     messages,
-    active?.execution,
+    execution,
     controller.running,
   );
   const answerIndex = messages.findLastIndex(
@@ -244,10 +245,10 @@ function EnterpriseRagLiveWorkspace({
     sources: answerMessage?.enterpriseQaAnswer?.sources ?? [],
     busy: controller.busy,
     running: controller.running,
-    runningTurnId: steering?.turnId ?? active?.execution?.timeline.findLast(entry => entry.userMessageId === userMessage?.id || userMessage?.serverSequence !== undefined && entry.userSequence === userMessage.serverSequence)?.turnId,
+    runningTurnId: steering?.turnId ?? execution?.timeline.findLast(entry => entry.userMessageId === userMessage?.id || userMessage?.serverSequence !== undefined && entry.userSequence === userMessage.serverSequence)?.turnId,
     steeringSupported: steering?.supported === true,
     onSteer: controller.steer,
-    activity: ragLiveActivity({ execution: active?.execution, questionId: userMessage?.id, questionSequence: userMessage?.serverSequence, turnId: steering?.turnId, running: controller.running }),
+    activity: ragLiveActivity({ execution, questionId: userMessage?.id, questionSequence: userMessage?.serverSequence, turnId: steering?.turnId, running: controller.running }),
     pendingDispatchQuestion: controller.pendingDispatch?.question,
     notice: controller.notice || workspace.syncError || undefined,
     onAsk: (question) => controller.send(question, []),

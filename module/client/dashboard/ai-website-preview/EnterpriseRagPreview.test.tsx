@@ -897,7 +897,7 @@ describe("enterprise RAG evidence-based review UI", () => {
       const originalQuestion = document.querySelector(".erag-user-message")!.textContent!;
       fireEvent.change(question, { target: { value: originalQuestion } });
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "试用问题" })));
-      expect(screen.getByTestId("rag-chat-wait").textContent).toBe("正在读取文件…");
+      expect(screen.getByTestId("rag-chat-wait").textContent).toContain("正在读取文件…");
       fireEvent.change(question, { target: { value: "下一条草稿" } });
       await act(async () => vi.advanceTimersByTime(899));
       expect(screen.queryByTestId("rag-preview-answer")).toBeNull();

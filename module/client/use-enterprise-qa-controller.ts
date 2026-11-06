@@ -14,6 +14,7 @@ type QaTask = {
   purpose?: string;
   status: string;
   error?: { message?: string };
+  execution?: TaskResponse["execution"];
   knowledgeBase?: TaskResponse["knowledgeBase"];
   steering?: EnterpriseQaSteering;
 };
@@ -22,6 +23,19 @@ type QaKnowledgeBase = NonNullable<TaskResponse["knowledgeBase"]>;
 type SteeringSnapshot = {
   conversationId: string; taskId: string; userId: string; value: EnterpriseQaSteering;
 };
+type ExecutionSnapshot = {
+  conversationId: string; taskId: string; userId: string;
+  execution?: TaskResponse["execution"];
+};
+
+function ownsQaSnapshot(
+  conversation: Conversation | null | undefined,
+  snapshot: Pick<ExecutionSnapshot, "conversationId" | "taskId" | "userId">,
+) {
+  return conversation?.id === snapshot.conversationId &&
+    (conversation.previousResponseId ?? conversation.taskId) === snapshot.taskId &&
+    conversation.messages.findLast(message => message.role === "user")?.id === snapshot.userId;
+}
 
 function latestSteering(previous: SteeringSnapshot | null, next: SteeringSnapshot) {
   return previous && previous.conversationId === next.conversationId && previous.taskId === next.taskId &&
@@ -75,6 +89,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
   const steerLock = useRef<string | null>(null);
   const steerRequests = useRef(new Map<string, string>());
   const [steeringState, setSteering] = useState<SteeringSnapshot | null>(null);
+  const [executionState, setExecution] = useState<ExecutionSnapshot | null>(null);
   const active = context.activeConversation;
   const activeUserId = active?.messages.findLast(message => message.role === "user")?.id;
 
@@ -104,6 +119,24 @@ export function useEnterpriseQaController({ preview = false } = {}) {
     [],
   );
 
+  const rememberExecution = useCallback((task: QaTask, owner: Pick<ExecutionSnapshot, "conversationId" | "taskId" | "userId">, dispatchTaskId?: string | null) => {
+    const current = contextRef.current.activeConversation;
+    // updateStatus may not have rendered the new task binding yet when its
+    // dispatch receipt arrives, so accept only that request's previous binding.
+    const dispatchOwner = dispatchTaskId !== undefined && current?.id === owner.conversationId &&
+      (current.previousResponseId ?? current.taskId ?? null) === dispatchTaskId &&
+      current.messages.findLast(message => message.role === "user")?.id === owner.userId;
+    if (task.id !== owner.taskId || (task.purpose && task.purpose !== "enterprise_qa") ||
+      (!ownsQaSnapshot(current, owner) && !dispatchOwner)) return;
+    const execution = task.execution?.schemaVersion === 1 && task.execution.taskId === owner.taskId &&
+      Array.isArray(task.execution.timeline) ? task.execution : undefined;
+    setExecution(previous => ({
+      ...owner,
+      execution: execution ?? (previous && previous.conversationId === owner.conversationId &&
+        previous.taskId === owner.taskId && previous.userId === owner.userId ? previous.execution : undefined),
+    }));
+  }, []);
+
   useEffect(() => {
     if (
       preview ||
@@ -116,14 +149,16 @@ export function useEnterpriseQaController({ preview = false } = {}) {
     const taskId = active.taskId;
     const conversationId = active.id;
     const userId = activeUserId;
-    return startEnterpriseQaPolling({
+    let currentPoll = true;
+    const stopPolling = startEnterpriseQaPolling({
       read: async () => {
         const result = await request<QaTask>(
           `/api/frontmind/v2/tasks/${encodeURIComponent(taskId)}`,
         );
         const current = contextRef.current.activeConversation;
         const value = readEnterpriseQaSteering(result.steering);
-        if (value && userId && current?.id === conversationId &&
+        if (currentPoll && userId) rememberExecution(result, { conversationId, taskId, userId });
+        if (currentPoll && value && userId && current?.id === conversationId &&
           (current.previousResponseId ?? current.taskId) === taskId &&
           current.messages.findLast(message => message.role === "user")?.id === userId) {
           setSteering(previous => latestSteering(previous, { conversationId, taskId, userId, value }));
@@ -131,14 +166,15 @@ export function useEnterpriseQaController({ preview = false } = {}) {
         return result;
       },
       refresh: async () => {
-        if (contextRef.current.activeConversation?.id === conversationId) {
+        if (currentPoll && contextRef.current.activeConversation?.id === conversationId) {
           await contextRef.current.refreshConversations();
         }
       },
       onError: (error) =>
         setNotice(error instanceof Error ? error.message : String(error)),
     });
-  }, [preview, active?.id, active?.taskId, active?.status, activeUserId, request]);
+    return () => { currentPoll = false; stopPolling(); };
+  }, [preview, active?.id, active?.taskId, active?.status, activeUserId, request, rememberExecution]);
 
   const send = useCallback(
     async (text: string, attachments: File[] = []) => {
@@ -269,6 +305,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
             executionKind: "general_chat_v2",
           },
         );
+        rememberExecution(result, { conversationId: conversation.id, taskId: result.id, userId: pending.id }, dispatch.localTaskId ?? null);
         contextRef.current.settleGeneralChatDispatch(
           conversation.id,
           pending.id,
@@ -288,7 +325,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
         setSending(false);
       }
     },
-    [preview, request],
+    [preview, request, rememberExecution],
   );
 
   const stop = useCallback(async () => {
@@ -311,6 +348,8 @@ export function useEnterpriseQaController({ preview = false } = {}) {
     }
   }, [request]);
 
+  const executionSnapshot = executionState && ownsQaSnapshot(active, executionState) ? executionState : null;
+  const execution = executionSnapshot?.execution ?? active?.execution;
   const running = ["running", "pending"].includes(active?.status ?? "");
   const pendingMessage = active?.messages.findLast(
     (message) => message.role === "user" && Boolean(message.generalChatDispatch),
@@ -380,6 +419,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
     active,
     sending,
     running,
+    execution,
     steering,
     steer,
     busy: sending || running,
