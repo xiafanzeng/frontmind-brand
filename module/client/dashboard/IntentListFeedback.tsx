@@ -11,6 +11,32 @@ const stageLabels = {
   repairing: "正在修复评估结果并重新校验",
 };
 
+export function IntentListInitialLoading() {
+  return <>
+    <header className="iw-header iw-catalog-header">
+      <div><h1>优化问题</h1><p>查看已保存评估，或评估新加入的推荐问题与历史词条。</p></div>
+      <div className="iw-list-skeleton-tools" aria-hidden="true">
+        <span/><span/><span/>
+      </div>
+    </header>
+    <section className="iw-list-initial" aria-label="问题列表" aria-busy="true">
+      <div className="iw-list-initial-status" role="status" aria-label="问题列表加载状态">
+        <LoaderCircle size={16} aria-hidden="true"/><span>正在加载已保存的问题…</span>
+      </div>
+      <div className="iw-list-skeleton" aria-hidden="true">
+        <div className="iw-list-skeleton-head"><span/><span/><span/><span/><span/><span/><span/></div>
+        {[0, 1, 2].map(row => <div className="iw-list-skeleton-row" key={row}>
+          <span className="iw-list-skeleton-check"/>
+          <div className="iw-list-skeleton-copy"><span/><span/><span/></div>
+          <span/><span/>
+          <div className="iw-list-skeleton-copy"><span/><span/></div>
+          <span/><span/>
+        </div>)}
+      </div>
+    </section>
+  </>;
+}
+
 export function IntentListRefreshStatus() {
   return <span className="iw-list-refresh" role="status" aria-label="列表更新状态"><RefreshCw size={14} aria-hidden="true"/>正在更新</span>;
 }

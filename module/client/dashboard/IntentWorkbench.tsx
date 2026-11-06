@@ -13,7 +13,7 @@ import {useWorkspaceDraftGuard, projectWorkspaceUrl, requestWorkspaceNavigation}
 import {navigate} from "wouter/use-browser-location";
 import IntentQuestionCatalog, {type IntentCatalogIntegration} from "./IntentQuestionCatalog";
 import IntentTaskProgress from "./IntentTaskProgress";
-import {IntentListEvaluationStatus, IntentListRefreshStatus} from "./IntentListFeedback";
+import {IntentListEvaluationStatus, IntentListInitialLoading, IntentListRefreshStatus} from "./IntentListFeedback";
 import {findCatalogQuestion} from "./intent-catalog-link";
 import {KEYWORD_CATEGORY_OPTIONS} from "@frontmind/module-ui/keyword-categories";
 import type {IntentQuestion} from "../../contracts/intent-workbench";
@@ -195,6 +195,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const questions = workspace?.state.questions ?? [];
   const evaluations = workspace?.state.evaluations ?? [];
   const activeJob = workspace?.state.jobs?.find(item => !["succeeded", "failed"].includes(item.status));
+  const initialListLoading = view === "list" && !workspace && !error;
   const listEvaluation = view === "list" && activeJob?.kind === "evaluate" ? activeJob : undefined;
   const refreshingList = view === "list" && Boolean(workspace) && pending && pendingRead && !activeJob;
   const receipt = receiptId ? workspace?.state.receipts.find(item => item.id === receiptId) : workspace?.state.receipts.at(-1);
@@ -383,7 +384,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       kind={progressKind} count={scope.length} error={error} pending={pending} onBack={() => setView("list")}
       onViewResult={() => void run(() => api.observe(), undefined, true, undefined, true)}
       onReload={() => void run(() => api.observe(), undefined, true, undefined, true)}/>}
-    {pending && view !== "result" && view !== "progress" && !listEvaluation && !refreshingList && <div className="iw-panel" role="status">
+    {pending && view !== "result" && view !== "progress" && !listEvaluation && !refreshingList && !initialListLoading && <div className="iw-panel" role="status">
       {activeJob?.repair ? "正在自动修复模型结果并重新校验，请稍候…" : activeJob ? `正在${activeJob.kind === "plan" ? "生成优化方案" : "评估问题"} · ${activeJob.questionIds.length} 条问题，AI 生成可能需要几分钟…` : "正在读取优化工作台…"}
       {activeJob && <><p>已有任务正在处理，完成前暂不能重复评估。</p><button onClick={() => {
         setScope(activeJob.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]); setProgressJobId(activeJob.id); setProgressKind(activeJob.kind); setView("progress");
@@ -392,7 +393,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     {!pending && !error && view !== "progress" && workspace?.state.jobs?.at(-1)?.status === "failed" && <div className="iw-error" role="alert">{workspace.state.jobs.at(-1)?.error}</div>}
     {view === "universe" && <><header className="iw-header iw-universe-header"><div><h1>词条生成</h1><p>推荐核心词 → 生成问题 → 勾选加入优化清单</p></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => setIntake([selection])} onUseQuestions={items => setIntake(items)}
       optimizationState={workspace?.state} onViewEvaluation={id => void evaluate([id])}/></>}
-    {view !== "universe" && !workspace && !error && <div role="status" className="iw-empty">正在读取优化工作台…</div>}
+    {initialListLoading && <IntentListInitialLoading/>}
+    {view !== "universe" && view !== "list" && !workspace && !error && <div role="status" className="iw-empty">正在读取优化工作台…</div>}
     {view === "list" && workspace && <>
       <IntentQuestionCatalog questions={questions} visible={visible} evaluations={evaluations} activeJob={activeJob} received={received} integration={{
         ...catalogIntegration,
