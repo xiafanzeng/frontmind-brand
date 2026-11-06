@@ -200,19 +200,17 @@ describe("optimization workflow rendering", () => {
   it("renders the completed candidate strictly from the model output", () => {
     const result = validOptimization();
     const html = optimizationFlow({ ...initialOptimizationLifecycleState, phase: "completed", result, taskId: "t" });
-    // summary, four sections with before/after, change reasons and evidence
-    expect(html).toContain("补充来源绑定与适用前提");
+    // The compact review shows the active section, not the removed summary.
+    expect(html).not.toContain("补充来源绑定与适用前提");
     expect(html).toContain("关心原文");
     expect(html).toContain("核心结论与执行口径");
     expect(html).toContain("企业材料与官方依据");
-    expect(html).toContain("主要优化建议与修改依据");
-    expect(html).toContain("直接回应问题主语");
-    expect(html).toContain("「结论原文」");
-    expect(html).toContain("草稿原文");
+    expect(html).not.toContain("优化摘要");
+    expect(html).toContain("回答边界与禁止表达");
     expect(html).toContain("采用选中项到草稿");
     // candidate provenance is stated; no auto-publish claims
-    expect(html).toContain("未写入正式内容");
-    expect(html).toContain("不会自动发布");
+    expect(html).toContain("尚未采用");
+    expect(html).toContain("仍需更新应答逻辑");
     // no demo/heuristic artifacts
     expect(html).not.toContain("决策场景：");
     expect(html).not.toContain("在意点：");
@@ -220,9 +218,9 @@ describe("optimization workflow rendering", () => {
 
   it("renders empty evidence lists as no evidence (never fabricates)", () => {
     const result = validOptimization();
+    result.changes = [{field: "concern", summary: "补来源标记", evidence: []}];
     const html = optimizationFlow({ ...initialOptimizationLifecycleState, phase: "completed", result, taskId: "t" });
-    // facts change has empty evidence → only its reason appears, no fake excerpt
     expect(html).toContain("补来源标记");
-    expect((html.match(/「结论原文」/g) || []).length).toBe(1);
+    expect(html).not.toContain("rl-judge-evidence");
   });
 });

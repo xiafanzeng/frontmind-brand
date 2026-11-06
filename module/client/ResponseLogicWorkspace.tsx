@@ -124,6 +124,7 @@ export type ResponseLogicWorkspaceProps = {
   initialQuestionId?: string | null;
   onSelectedQuestionChange?: (questionId: string) => void;
   onPublished?: (questionId: string) => void;
+  onReturnToCatalog?: () => void;
   questionGroups?: IntentQuestionGroup[];
 };
 
@@ -1208,6 +1209,7 @@ function ResponseLogicPageHeader({
 
 function ResponseLogicWorkspaceContent({
   initialQuestionId,
+  onReturnToCatalog,
   onSelectedQuestionChange,
   questionGroups,
   persistence,
@@ -1268,6 +1270,7 @@ function ResponseLogicWorkspaceContent({
       group={selectedEntry.group}
       question={selectedEntry.question}
       persistence={persistence}
+      onReturnToCatalog={onReturnToCatalog}
     />
   );
 }
@@ -1276,11 +1279,16 @@ function ResponseLogicQuestionEditor({
   group,
   question,
   persistence,
+  onReturnToCatalog,
 }: {
   group: IntentQuestionGroup;
   question: IntentQuestion;
   persistence: ResponseLogicPersistence;
+  onReturnToCatalog?: () => void;
 }) {
+  const [returningToCatalog, setReturningToCatalog] = useState(false);
+  const [returnError, setReturnError] = useState("");
+  const returningRef = useRef(false);
   const scope = activeEnterpriseProjectId() ?? "account";
   const questionId = question.id;
   const generation = useResponseLogicGeneration(scope, questionId);
@@ -2112,12 +2120,34 @@ function ResponseLogicQuestionEditor({
     finally {setAdoptingRegeneration(false); regenerationLock.current = false;}
   };
 
+  const returnToCatalog = async () => {
+    if (!onReturnToCatalog || returningRef.current || stashQueue.status.state === "saving") return;
+    returningRef.current = true;
+    setReturningToCatalog(true);
+    setReturnError("");
+    try {
+      await stashQueue.runExclusive(() => stashQueue.flush());
+      if (stashQueue.pendingLocalEdits()) {
+        setReturnError("草稿尚未保存成功，当前输入已保留，请重试后返回。");
+        return;
+      }
+      onReturnToCatalog();
+    } finally {
+      returningRef.current = false;
+      setReturningToCatalog(false);
+    }
+  };
+
   const showGenerationProcess =
     !generation?.completedAt &&
     (generating || generation?.phase === "failed");
 
   return (
     <section className="rl-single-page">
+      {onReturnToCatalog && demoView === "detail" && <div className="rl-catalog-return">
+        <button type="button" disabled={returningToCatalog || publishing || stashQueue.status.state === "saving"} onClick={() => void returnToCatalog()}>{returningToCatalog || stashQueue.status.state === "saving" ? "正在保存草稿…" : "← 返回候选问题"}</button>
+        {returnError && <p role="alert">{returnError}</p>}
+      </div>}
       <ResponseLogicPageHeader
         group={group}
         question={question}

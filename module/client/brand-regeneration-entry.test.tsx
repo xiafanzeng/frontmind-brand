@@ -162,3 +162,63 @@ describe("real Brand regeneration entry, HTTP boundary only", () => {
     expect(record.draft).toEqual({...original, ...candidate});
   });
 });
+
+
+describe("return to candidate catalog preserves server-backed drafts", () => {
+  it("cannot leave while an automatic save is already in flight", async () => {
+    record.questionId="q-return-inflight";
+    const onBack=vi.fn();
+    let release!:()=>void;
+    const waiting=new Promise<void>(resolve=>{release=resolve;});
+    const base=h.router;
+    h.router=async(url,init)=>{if(init?.method==="POST")await waiting;return base(url,init);};
+    render(<BrandResponseLogicEntry {...props} question={{...props.question,id:record.questionId}} onBack={onBack}/>);
+    const field=await screen.findByDisplayValue("原稿关注点");
+    vi.useFakeTimers();
+    fireEvent.change(field,{target:{value:"正在自动暂存的输入"}});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(750);});
+    const saving=screen.getByRole("button",{name:"正在保存草稿…"});
+    expect(saving).toHaveProperty("disabled",true);
+    fireEvent.click(saving);
+    expect(onBack).not.toHaveBeenCalled();
+    await act(async()=>{release();});
+    fireEvent.click(screen.getByRole("button",{name:"← 返回候选问题"}));
+    await act(async()=>{});
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(record.draft.concern).toBe("正在自动暂存的输入");
+    expect(posts).toHaveLength(1);
+  });
+
+  it("waits for the existing save endpoint before returning and never publishes", async () => {
+    record.questionId="q-return-save";
+    const onBack=vi.fn();
+    let release!:()=>void;
+    const wait=new Promise<void>(resolve=>{release=resolve;});
+    const base=h.router;
+    h.router=async (url,init)=>{if(init?.method==="POST")await wait;return base(url,init);};
+    render(<BrandResponseLogicEntry {...props} question={{...props.question,id:record.questionId}} onBack={onBack}/>);
+    fireEvent.change(await screen.findByDisplayValue("原稿关注点"),{target:{value:"返回前修改的关注点"}});
+    fireEvent.click(screen.getByRole("button",{name:"← 返回候选问题"}));
+    expect(onBack).not.toHaveBeenCalled();
+    expect(screen.getByRole("button",{name:"正在保存草稿…"})).toHaveProperty("disabled",true);
+    await act(async()=>{release();});
+    await waitFor(()=>expect(onBack).toHaveBeenCalledTimes(1));
+    expect(posts).toHaveLength(1);
+    expect(posts[0].url).toMatch(/response-logic$/);
+    expect(posts[0].body).toMatchObject({questionId:"q-return-save",expectedRevision:3,publish:false,draft:{concern:"返回前修改的关注点"}});
+  });
+  it("stays on the editor after a revision conflict and preserves input for retry",async()=>{
+    record.questionId="q-return-conflict";saveFails=true;
+    const onBack=vi.fn();
+    render(<BrandResponseLogicEntry {...props} question={{...props.question,id:record.questionId}} onBack={onBack}/>);
+    fireEvent.change(await screen.findByDisplayValue("原稿关注点"),{target:{value:"不能丢失的修改"}});
+    fireEvent.click(screen.getByRole("button",{name:"← 返回候选问题"}));
+    await screen.findByText("草稿尚未保存成功，当前输入已保留，请重试后返回。");
+    expect(onBack).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue("不能丢失的修改")).toBeTruthy();
+    saveFails=false;
+    fireEvent.click(screen.getByRole("button",{name:"← 返回候选问题"}));
+    await waitFor(()=>expect(onBack).toHaveBeenCalledTimes(1));
+    expect(record.draft.concern).toBe("不能丢失的修改");
+  });
+});

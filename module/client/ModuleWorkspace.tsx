@@ -1,4 +1,4 @@
-import {useState,type ReactNode} from 'react';
+import {useState,useRef,type ReactNode} from 'react';
 import EmbeddedKnowledgeBasePanel from './components/EmbeddedKnowledgeBasePanel';
 import type {ManagedKeywordTable} from './dashboard/ManagedKeywordTables';
 import EnterpriseRagWorkspace from './dashboard/EnterpriseRagWorkspace';
@@ -14,6 +14,8 @@ import BrandResponseLogicEntry from './BrandResponseLogicEntry';
 import BrandDiagnosticWorkspace from './BrandDiagnosticWorkspace';
 import type {IntentQuestion as BrandIntentQuestion} from '../contracts/intent-workbench';
 import './brand-apple-theme.css';
+import './dashboard/catalog-review.css';
+import type {IntentCatalogViewState} from './dashboard/intent-catalog-view';
 import type {RagReportUrlBuilder} from './dashboard/ai-website-preview/rag-report-navigation';
 export type BrandPage='reports'|'knowledge'|'diagnostics'|'keywords'|'intent'|'response-logic'|'enterprise-qa'|'website'|'website-settings';
 export interface ModuleContext {module:'brand';workspace:{id:string;ownerUserId:number};capabilities:string[];marketEdition?:'cn'|'international'}
@@ -24,6 +26,8 @@ export default function ModuleWorkspace({context,page='knowledge',keywordData,pr
  onResponseLogicBack?:()=>void}){
  const [knowledgePage,setKnowledgePage]=useState<'build'|'display'>('build');
  const [responseLogicQuestion,setResponseLogicQuestion]=useState<BrandIntentQuestion|null>(null);
+ const catalogReturn = useRef<{scope:string;state:IntentCatalogViewState}|null>(null);
+ const catalogScope = `${context.workspace.ownerUserId}:${context.workspace.id}`;
  let content:ReactNode;
  if(page==='knowledge')content=<EmbeddedKnowledgeBasePanel key={context.workspace.id} page={knowledgePage} onPageChange={setKnowledgePage} mode="workspace" workbench projectId={context.workspace.id} preview={preview} previewData={previewKnowledge}/>;
  else if(page==='diagnostics'||page==='reports')content=<BrandDiagnosticWorkspace key={context.workspace.id} storageKey={`brand-diagnostics:${context.workspace.ownerUserId}:${context.workspace.id}`} preview={preview} onOpenKnowledge={onOpenKnowledge}/>;
@@ -32,7 +36,7 @@ export default function ModuleWorkspace({context,page='knowledge',keywordData,pr
   <p>请从「优化问题」列表中选择问题并点击「进入应答逻辑」。</p>
   <button type='button' className="fm-brand-button fm-brand-button--secondary" onClick={onResponseLogicBack}>返回优化问题</button>
  </section>;
- else if(page==='keywords'||page==='intent')content=<IntentWorkbench key={context.workspace.id} initialView={page==='intent'?'list':'universe'} api={intentApi} onSectionChange={onIntentSectionChange} catalogIntegration={{...intentCatalogIntegration,onOpenAnswer:(question:BrandIntentQuestion)=>{setResponseLogicQuestion(question);onEnterResponseLogic?.();}}} keywordProps={{tables:keywordData.tables,dashboardRevision:keywordData.revision,loading:keywordData.loading,error:keywordData.error,generationEnabled:!preview||Boolean(intentApi),knowledgePublished:keywordData.knowledgePublished}}/>;
+ else if(page==='keywords'||page==='intent')content=<IntentWorkbench key={context.workspace.id} initialView={page==='intent'?'list':'universe'} initialCatalogState={catalogReturn.current?.scope===catalogScope?catalogReturn.current.state:undefined} onCatalogExit={state=>{catalogReturn.current={scope:catalogScope,state};}} api={intentApi} onSectionChange={onIntentSectionChange} catalogIntegration={{...intentCatalogIntegration,onOpenAnswer:(question:BrandIntentQuestion)=>{setResponseLogicQuestion(question);onEnterResponseLogic?.();}}} keywordProps={{tables:keywordData.tables,dashboardRevision:keywordData.revision,loading:keywordData.loading,error:keywordData.error,generationEnabled:!preview||Boolean(intentApi),knowledgePublished:keywordData.knowledgePublished}}/>;
  else if(page==='enterprise-qa')content=preview?(previewQa??<section role="status">企业 RAG 预览数据未提供；预览模式不会连接真实问答服务。</section>):<EnterpriseRagWorkspace projectId={context.workspace.id} storageScopeKey={`live:${context.workspace.ownerUserId}:${context.workspace.id}`} onOpenWebsite={enterpriseRagNavigation?.onOpenWebsite} onOpenWebsiteAssistant={enterpriseRagNavigation?.onOpenWebsiteAssistant} websiteEntryLabel={enterpriseRagNavigation?.websiteEntryLabel} buildReportUrl={enterpriseRagNavigation?.buildReportUrl}/>;
  else if(page==='website')content=preview?(previewSiteOps??<section role="status">网站建设预览数据未提供；预览模式不会打开真实建站项目。</section>):<ConnectedSimplifiedWebsiteBuilderPreview key={`website:${context.workspace.ownerUserId}:${context.workspace.id}`} initialStep={websiteBuilderNavigation?.initialStep} initialSection={websiteBuilderNavigation?.initialSection} onOpenRag={websiteBuilderNavigation?.onOpenRag} onStepChange={websiteBuilderNavigation?.onStepChange} storageScope={`live:${context.workspace.ownerUserId}:${context.workspace.id}`}/>;
  else if(page==='website-settings')content=<KnowledgeFrontendSettings ownerId={context.workspace.ownerUserId} projectId={context.workspace.id} demo={preview}/>;

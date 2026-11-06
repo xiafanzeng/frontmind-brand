@@ -70,6 +70,7 @@ export default function BrandResponseLogicEntry({ question, onBack, visual, toas
         preview={false}
         questionGroups={groups as never}
         initialQuestionId={question.id}
+        onReturnToCatalog={onBack}
         onPublished={() => {
           toast.success("应答逻辑已更新");
         }}
