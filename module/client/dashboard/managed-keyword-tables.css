@@ -546,6 +546,19 @@
 :where(.brand-keyword-workspace) .keyword-selection-cell input {width:16px;height:16px}
 :where(.brand-keyword-workspace) .keyword-selection-cell small {display:block;font-size:12px;font-weight:400;margin:6px 0;color:#716a80;white-space:nowrap}
 :where(.brand-keyword-workspace) .keyword-selection-cell button {white-space:nowrap}
+:where(.brand-keyword-workspace) .keyword-row-selectable {cursor:pointer}
+:where(.brand-keyword-workspace) .keyword-row-selectable>td {transition:background-color .15s}
+:where(.brand-keyword-workspace) .keyword-row-selectable:hover>td {background:#faf8fc}
+:where(.brand-keyword-workspace) .keyword-row-selected>td,
+:where(.brand-keyword-workspace) .keyword-row-selected:hover>td {background:#f4eef9}
+:where(.brand-keyword-workspace) .keyword-row-selectable:focus-visible {outline:2px solid #7545a0;outline-offset:-2px}
+:where(.brand-keyword-workspace) .keyword-row-disabled {cursor:default}
+:where(.brand-keyword-workspace) .keyword-row-disabled:hover>td {background:#fff}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-selection-label {display:flex;width:max-content;gap:8px;min-height:32px;padding:5px 9px;border:1px solid #e6e1ec;border-radius:8px;background:#faf9fc;color:#756b80;font-size:12px;font-weight:500;line-height:20px;cursor:pointer;transition:color .15s,border-color .15s,background-color .15s}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-label input {width:16px;height:16px;margin:0;accent-color:#7545a0;cursor:inherit}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-row-selected .keyword-selection-label {border-color:#cdb6df;background:#eee3f7;color:#64338b;font-weight:600}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-label:has(input:focus-visible) {outline:2px solid #7545a0;outline-offset:3px}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-row-disabled .keyword-selection-label {opacity:.55;cursor:default}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button{display:inline-flex;align-items:center;justify-content:flex-start;gap:9px;height:36px;min-height:36px;margin-top:8px;padding:0 10px;border:1px solid #e4dceb;border-radius:8px;background:#faf8fc;color:#645171;font-size:13px;line-height:18px;text-decoration:none;box-shadow:none;transform:none;cursor:pointer;transition:background-color .15s,border-color .15s}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:hover{background:#f2edf7;border-color:#c5b0d6;box-shadow:none;transform:none}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:active{background:#eae1f2;box-shadow:none;transform:none}
