@@ -1575,6 +1575,8 @@
 
 /* Enterprise RAG */
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root {
+  --rag-chat-surface: rgba(0, 0, 0, 0.04);
+  --rag-window-header-background: #f4f0f9;
   --sfp-accent: var(--fm-brand-accent);
   --sfp-accent-dark: var(--fm-brand-accent-strong);
   --sfp-accent-soft: var(--fm-brand-accent-soft);
@@ -1584,9 +1586,7 @@
   --sfp-line: var(--fm-brand-line);
   --sfp-soft: rgba(0, 0, 0, 0.04);
   padding: var(--fm-brand-space-3) clamp(var(--fm-brand-space-2), 3vw, var(--fm-brand-space-5)) var(--fm-brand-space-8);
-  background:
-    radial-gradient(circle at 82% 0%, rgba(117, 66, 176, 0.1), transparent 30%),
-    var(--fm-brand-page);
+  background: transparent;
   color: var(--fm-brand-ink);
   font-family: var(--fm-brand-font);
   font-weight: 400;
@@ -1617,33 +1617,7 @@
   transform: scale(0.96);
 }
 
-/* Enterprise RAG static disclosure interaction */
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-disclosure__trigger {
-  transition: none;
-}
 
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-disclosure__trigger:hover:not(:disabled),
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-disclosure__trigger:active:not(:disabled) {
-  background: transparent;
-  box-shadow: none;
-  transform: none;
-}
-
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-priority-copy__statement > strong {
-  color: var(--fm-brand-ink);
-}
-
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-button--ghost.rag-detail-action--full:disabled {
-  opacity: 1;
-  border-color: rgba(60, 60, 67, 0.12);
-  background: #f5f5f7;
-  color: #86868b;
-  -webkit-text-fill-color: #86868b;
-  box-shadow: none;
-  transform: none;
-  cursor: not-allowed;
-}
-/* End Enterprise RAG static disclosure interaction */
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :where(input, textarea, select) {
   padding: var(--fm-brand-space-1) var(--fm-brand-space-2);
@@ -1653,26 +1627,80 @@
 }
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "copy actions";
+  align-items: start;
   gap: var(--fm-brand-space-3);
-  margin-bottom: var(--fm-brand-space-3);
+  margin-bottom: 48px;
+  padding-top: 16px;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading > div:first-child {
+  grid-area: copy;
+  min-width: 0;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading > .rag-toolbar {
+  grid-area: actions;
+  justify-self: end;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin: 0;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-toolbar .rag-report-link {
+  display: inline-flex;
+  align-items: flex-start;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--fm-brand-accent);
+  font-size: 14px;
+  line-height: 24px;
+  font-weight: 400;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 160ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-toolbar .rag-report-link:hover { color: var(--fm-brand-muted); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-toolbar .rag-report-link:focus-visible { outline: 2px solid var(--fm-brand-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :is(.rag-report-link, .rag-knowledge-link) { transition: none; }
+}
+
+@container sfp (max-width: 760px) {
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "actions" "copy";
+  }
 }
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-heading h1 {
-  margin-bottom: var(--fm-brand-space-1);
-  font-size: clamp(28px, 3vw, 40px);
+  margin-bottom: 16px;
+  font-size: 40px;
   font-weight: 600;
   letter-spacing: -0.022em;
 }
 
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-heading p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+}
+
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :where(
   .sfp-panel,
-  .erag-flow,
   .rag-automatic-evaluation,
-  .rag-verdict,
+  .rag-evaluation-overview,
   .rag-task-panel,
   .rag-radar-detail,
   .rag-context,
-  .rag-review-field,
+  .rag-review-card,
   .rag-evidence
 ) {
   border: 0.5px solid var(--fm-brand-line);
@@ -1683,13 +1711,7 @@
   backdrop-filter: blur(20px) saturate(180%);
 }
 
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-flow {
-  gap: var(--fm-brand-space-2);
-  margin-bottom: var(--fm-brand-space-2);
-  padding: var(--fm-brand-space-2);
-}
-
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :where(.erag-flow > div > span, .erag-card-icon) {
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-card-icon {
   width: 40px;
   height: 40px;
   border-radius: var(--fm-brand-radius-small);
@@ -1715,15 +1737,57 @@
   padding: var(--fm-brand-space-3);
 }
 
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-panel.erag-knowledge-card {
+  padding-bottom: var(--fm-brand-space-2);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-knowledge-row {
+  margin-top: var(--fm-brand-space-2);
+  line-height: 24px;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-knowledge-link {
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fm-brand-accent);
+  font-weight: 400;
+  line-height: 24px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 160ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-knowledge-link:focus-visible {
+  box-shadow: none;
+  outline: 2px solid var(--fm-brand-accent);
+  outline-offset: 2px;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-knowledge-link:hover:not(:disabled),
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-knowledge-link:active:not(:disabled) {
+  background: transparent;
+  color: var(--fm-brand-muted);
+  box-shadow: none;
+  text-decoration: none;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-knowledge-link { transition: none; }
+}
+
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-evaluation-panel {
   gap: var(--fm-brand-space-2);
-  padding-bottom: var(--fm-brand-space-2);
+  padding-bottom: var(--fm-brand-space-3);
 }
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :where(.erag-stats > div, .erag-test-thread) {
   border: 0.5px solid var(--fm-brand-line);
   border-radius: var(--fm-brand-radius-control);
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--rag-chat-surface);
 }
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-stats {
@@ -1754,6 +1818,29 @@
   background: var(--fm-brand-accent);
 }
 
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-citations {
+  align-items: flex-start;
+  gap: var(--fm-brand-space-1);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-citations > button {
+  min-height: 0;
+  max-width: 100%;
+  padding: 4px var(--fm-brand-space-1);
+  border-radius: var(--fm-brand-radius-small);
+  line-height: 16px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  transition: none;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-citations > button:hover:not(:disabled),
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-citations > button:active:not(:disabled) {
+  box-shadow: none;
+  transform: none;
+}
+
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :where(.sfp-button--primary, .erag-composer button[type="submit"]) {
   border: 0.5px solid var(--fm-brand-accent);
   background: var(--fm-brand-accent);
@@ -1769,15 +1856,39 @@
   backdrop-filter: blur(20px) saturate(180%);
 }
 
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-gauge-card {
-  border-color: var(--fm-brand-line);
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: var(--fm-brand-shadow-sm);
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-action {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.045);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-action:hover:not(:disabled) {
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.07);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-action:active:not(:disabled) {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-action:focus-visible {
+  box-shadow: 0 0 0 3px var(--fm-brand-accent-focus), 0 2px 6px rgba(0, 0, 0, 0.045);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-action:disabled {
+  box-shadow: none;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-overview > :is(.rag-verdict, .rag-evaluation-gauge-card) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-gauge-marker {
   fill: var(--fm-brand-accent);
 }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-gauge-marker:is(.is-pending, .is-unavailable) { fill: #aeaeb2; }
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :where(.rag-radar-detail, .rag-automatic-evaluation) {
   padding: var(--fm-brand-space-2);
@@ -1813,7 +1924,8 @@
   box-shadow: 0 4px 12px rgba(117, 66, 176, 0.14);
 }
 
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar-point-control.is-zero[aria-expanded="true"]::before {
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar-point-control.is-zero[aria-expanded="true"]::before,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar-point-control.is-empty[aria-expanded="true"]::before {
   border-color: rgba(174, 174, 178, 0.52);
   background: rgba(174, 174, 178, 0.16);
   box-shadow: 0 4px 12px rgba(174, 174, 178, 0.22);
@@ -1840,12 +1952,41 @@
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer > header,
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer > footer {
-  padding: var(--fm-brand-space-2) var(--fm-brand-space-3);
+  padding: 16px var(--rag-drawer-inline-space);
   border-color: var(--fm-brand-line);
 }
 
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer > footer {
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer-body {
-  padding: var(--fm-brand-space-3);
+  padding: 24px var(--rag-drawer-inline-space);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer-section :is(.rag-context,.rag-review-card,.rag-evidence) {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.045);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--review :is(input:not([type="checkbox"]), textarea, select) {
+  padding: 10px 12px;
+  border-color: var(--fm-brand-line);
+  background: rgba(0, 0, 0, 0.035);
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--review .rag-check input {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+  border-radius: 4px;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evidence-evaluation .rag-panel-actions {
+  padding-top: 0;
+  border-top: 0;
 }
 
 /* Website builder and management */
@@ -2523,13 +2664,12 @@
   .erag-stats > div,
   .erag-test-thread,
   .rag-automatic-evaluation,
-  .rag-verdict,
+  .rag-evaluation-overview,
   .rag-task-panel,
   .rag-radar-detail,
   .rag-context,
-  .rag-review-field,
-  .rag-evidence,
-  .rag-evaluation-gauge-card
+  .rag-review-card,
+  .rag-evidence
 ) {
   border-radius: var(--fm-brand-radius-card);
 }

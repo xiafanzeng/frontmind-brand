@@ -1,0 +1,156 @@
+.rag-eval-root .rag-chat { min-width: 0; overflow-anchor: none; }
+.rag-eval-root .rag-chat article { min-width: 0; }
+.rag-eval-root .rag-chat-response { position: relative; margin-top: 9px; }
+.rag-eval-root .rag-chat-wait { color: var(--sfp-muted); line-height: 1.65; }
+.rag-eval-root .rag-chat-wait > span {
+  background: linear-gradient(100deg, var(--sfp-muted) 35%, color-mix(in srgb, var(--sfp-muted) 55%, transparent) 50%, var(--sfp-muted) 65%);
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: rag-chat-shimmer 1.6s linear infinite;
+}
+.rag-eval-root .rag-chat-response[data-phase="leaving"] .rag-chat-wait { position: absolute; inset: 0 auto auto 0; animation: rag-chat-wait-out 120ms linear forwards; }
+.rag-eval-root .rag-chat-response[data-phase="leaving"] .rag-chat-answer { visibility: hidden; }
+.rag-eval-root .rag-chat-response[data-phase="revealing"] .rag-chat-answer { animation: rag-chat-answer-in 240ms cubic-bezier(.25,.1,.25,1) both; }
+.rag-eval-root .rag-chat-markdown { color: var(--sfp-ink); font: inherit; font-size: var(--sfp-type-body); line-height: 1.65; overflow-wrap: anywhere; min-width: 0; }
+.rag-eval-root .rag-chat-markdown :where(p, ul, ol, blockquote, pre, table, h1, h2, h3, h4, h5, h6) { margin: 0 0 12px; }
+.rag-eval-root .rag-chat-markdown > :last-child { margin-bottom: 0; }
+.rag-eval-root .rag-chat-markdown :where(h1,h2,h3,h4,h5,h6) { font-size: inherit; font-weight: 600; line-height: 1.65; color: inherit; }
+.rag-eval-root .rag-chat-markdown :where(ul,ol) { padding-inline-start: 1.5em; list-style-position: outside; }
+.rag-eval-root .rag-chat-markdown ul { list-style-type: disc; }
+.rag-eval-root .rag-chat-markdown ol { list-style-type: decimal; }
+.rag-eval-root .rag-chat-markdown li { margin: 4px 0; }
+.rag-eval-root .rag-chat-markdown li > p { margin-bottom: 4px; }
+.rag-eval-root .rag-chat-markdown a { color: var(--sfp-accent); }
+.rag-eval-root .rag-chat-markdown pre { max-width: 100%; overflow-x: auto; white-space: pre; padding: 12px; border: .5px solid var(--sfp-line); border-radius: 8px; background: rgba(0,0,0,.035); }
+.rag-eval-root .rag-chat-markdown code { font-size: .9em; color: inherit; }
+.rag-eval-root .rag-chat-markdown pre code { padding: 0; background: none; }
+.rag-eval-root .rag-chat-markdown blockquote { padding-inline-start: 12px; border-inline-start: 2px solid var(--sfp-line); font-style: normal; color: var(--sfp-muted); }
+.rag-eval-root .rag-chat-markdown table { width: 100%; border-collapse: collapse; font-size: inherit; }
+.rag-eval-root .rag-chat-markdown :where(th,td) { padding: 8px 12px; text-align: start; border-bottom: .5px solid var(--sfp-line); white-space: nowrap; }
+.rag-eval-root .rag-chat-markdown img { max-width: 100%; height: auto; }
+.rag-eval-root .rag-chat .erag-citations { margin-top: 12px; }
+.rag-eval-root .rag-chat-answer-tools { display: flex; margin-top: 8px; }
+.rag-eval-root .rag-chat-empty { margin: 0; color: var(--sfp-muted); line-height: 1.65; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-enter-answer { min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--fm-brand-accent); font: inherit; box-shadow: none; cursor: pointer; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-enter-answer:hover:not(:disabled) { color: var(--fm-brand-muted); background: transparent; box-shadow: none; transform: none; }
+.rag-eval-root .rag-chat-error { margin: 8px 0 0; color: var(--sfp-ink); font-size: var(--sfp-type-caption); }
+.rag-eval-root .rag-chat-sr-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.rag-eval-root .rag-chat-composer { display: flex; flex-direction: row; align-items: flex-end; }
+.rag-eval-root .rag-chat-composer textarea { flex: 1; width: 0; min-width: 0; box-sizing: border-box; min-height: 44px; resize: none; padding: 10px 12px; font: inherit; font-size: var(--sfp-type-body); line-height: 22px; border: .5px solid var(--sfp-line); border-radius: 12px; background: rgba(255,255,255,.82); color: var(--sfp-ink); }
+.rag-eval-root .rag-chat-composer :is(.rag-chat-send, .rag-chat-steer) { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 0; justify-content: center; border-radius: 12px; transform: none; }
+.rag-eval-root .rag-chat-composer :is(.rag-chat-send, .rag-chat-steer):hover:not(:disabled), .rag-eval-root .rag-chat-composer :is(.rag-chat-send, .rag-chat-steer):active:not(:disabled) { transform: none; }
+@keyframes rag-chat-shimmer { from { background-position: 100% 0; } to { background-position: -120% 0; } }
+@keyframes rag-chat-wait-out { to { opacity: 0; } }
+@keyframes rag-chat-answer-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .rag-eval-root .rag-chat-wait > span { animation: none; background: none; color: var(--sfp-muted); }
+  .rag-eval-root .rag-chat-response .rag-chat-answer { animation: none; visibility: visible; }
+}
+
+.rag-eval-root .rag-chat-markdown > div:has(> table) { max-width: 100%; overflow-x: auto; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-composer :is(.rag-chat-send, .rag-chat-steer) { border: .5px solid var(--fm-brand-accent); background: var(--fm-brand-accent); color: #fff; box-shadow: 0 4px 12px rgba(117,66,176,.2); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-composer :is(.rag-chat-send, .rag-chat-steer):hover:not(:disabled),
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-composer :is(.rag-chat-send, .rag-chat-steer):active:not(:disabled) { transform: none; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-answer-tools { gap: 0; margin-inline-start: -6px; flex-wrap: wrap; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; min-height: 28px; flex: 0 0 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #8e8e93; cursor: pointer; transform: none; box-shadow: none; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool:hover:not(:disabled),
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool:focus-visible,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool:active:not(:disabled),
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool[aria-pressed="true"],
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool[data-feedback] { background: rgba(0,0,0,.045); color: #6e6e73; transform: none; box-shadow: none; }
+.rag-eval-root .rag-chat-tool[aria-disabled="true"] { opacity: .42; cursor: default; }
+.rag-eval-root .rag-chat-tool-tip { position: absolute; z-index: 5; inset: auto auto calc(100% + 6px) 0; padding: 4px 7px; border-radius: 6px; background: rgba(52,52,54,.94); color: #fff; font-size: 12px; font-weight: 400; line-height: 18px; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 180ms cubic-bezier(.25,.1,.25,1), visibility 0s linear 180ms; }
+.rag-eval-root .rag-chat-tool:hover .rag-chat-tool-tip,
+.rag-eval-root .rag-chat-tool:focus-visible .rag-chat-tool-tip,
+.rag-eval-root .rag-chat-tool[data-feedback] .rag-chat-tool-tip { opacity: 1; visibility: visible; transition-delay: 0s; }
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool { transition: background-color 160ms cubic-bezier(.25,.1,.25,1), color 160ms cubic-bezier(.25,.1,.25,1); }
+.rag-eval-root .rag-chat-icon-stack { position: relative; display: grid; place-items: center; width: 16px; height: 16px; }
+.rag-eval-root .rag-chat-edit .rag-chat-icon-stack { transform: translateX(-1px); }
+.rag-eval-root .rag-chat-speech .rag-chat-icon-stack { transform: translateX(1px); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :is(.rag-chat-speech, .rag-chat-edit) { left: .5px; }
+.rag-eval-root .rag-chat-icon-stack > svg { position: absolute; opacity: 1; transition: opacity 140ms cubic-bezier(.25,.1,.25,1); }
+.rag-eval-root .rag-chat-icon-stack > svg.is-hidden { opacity: 0; }
+.rag-eval-root .rag-chat-tip-copy { display: block; animation: rag-chat-answer-in 140ms cubic-bezier(.25,.1,.25,1); }
+@media (prefers-reduced-motion: reduce) {
+  .rag-eval-root .rag-chat-tool-tip, .rag-eval-root .rag-chat-icon-stack > svg { transition: none; }
+  .rag-eval-root .rag-chat-tip-copy { animation: none; }
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool { transition: none; }
+}
+
+.rag-eval-root .rag-chat-feedback { position: relative; display: flex; flex: 0 0 28px; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-feedback-trigger[data-rating] { color: var(--fm-brand-accent); }
+.rag-eval-root .rag-chat-feedback-trigger[data-popup-open] .rag-chat-tool-tip { visibility: hidden; opacity: 0; }
+.rag-eval-root .rag-chat-rating-menu { position: absolute; z-index: 6; display: flex; gap: 2px; padding: 6px; bottom: calc(100% + 6px); left: -6px; border: .5px solid var(--sfp-line); border-radius: 12px; background: rgba(255,255,255,.96); box-shadow: 0 3px 12px rgba(0,0,0,.08); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 180ms cubic-bezier(.25,.1,.25,1), visibility 0s linear 180ms; }
+.rag-eval-root .rag-chat-rating-menu[data-open="true"] { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-rating-menu > button { display: grid; place-items: center; width: 32px; height: 32px; min-height: 32px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #8e8e93; transform: none; box-shadow: none; transition: background-color 160ms linear, color 160ms linear; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-rating-menu > button:hover { background: rgba(0,0,0,.045); transform: none; box-shadow: none; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-rating-menu > button[aria-checked="true"] { color: var(--fm-brand-accent); }
+@media (prefers-reduced-motion: reduce) { .rag-eval-root .rag-chat-rating-menu { transition: none; } }
+
+.rag-eval-root .rag-chat-completed { align-self: center; margin-inline-start: auto; padding-inline-start: 4px; color: #8e8e93; font-size: 13px; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rag-eval-root .rag-chat-elapsed { flex: 0 0 auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-feedback-trigger[data-rating]:hover:not(:disabled),
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-feedback-trigger[data-rating]:focus-visible,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-feedback-trigger[data-rating]:active:not(:disabled) { color: var(--fm-brand-accent); }
+.rag-eval-root .rag-chat article { container-name: rag-chat-reply; container-type: inline-size; }
+.rag-eval-root .rag-chat article > header { display: grid; grid-template-columns: 16px minmax(0,1fr) auto; }
+.rag-eval-root .rag-chat article > header strong { min-width: 0; overflow-wrap: anywhere; }
+@container rag-chat-reply (max-width: 240px) {
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool { width: 20px; flex-basis: 20px; }
+  .rag-eval-root .rag-chat-feedback { flex-basis: 20px; }
+  .rag-eval-root .rag-chat article > header { grid-template-columns: 16px minmax(0,1fr); row-gap: 2px; }
+  .rag-eval-root .rag-chat-elapsed { grid-column: 2; justify-self: end; }
+}
+
+/* Keep overlapping and full-size gestures at the same optical weight. */
+.rag-eval-root .rag-chat-tool svg :is(path, rect, line, polyline, polygon, circle),
+.rag-eval-root .rag-chat-rating-menu svg :is(path, rect, line, polyline, polygon, circle) { stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.rag-eval-root .rag-chat-copy-glyph { transform: scaleX(-1); transform-origin: center; }
+
+.rag-eval-root .rag-chat-tool svg .rag-chat-overlap-clearance { stroke-width: 2.6px; }
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool.rag-chat-copy:active:not(:disabled),
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool.rag-chat-copy[data-copied],
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool.rag-chat-copy[data-tooltip-suppressed] { background: transparent; color: #8e8e93; }
+.rag-eval-root .rag-chat-copy[data-tooltip-suppressed] .rag-chat-tool-tip { opacity: 0; visibility: hidden; transition-delay: 0s, 180ms; }
+.rag-eval-root .rag-chat-speech-stop { color: #8e8e93; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat.erag-test-thread article { padding-bottom: 10px; }
+
+.rag-eval-root .rag-chat-completed-digits { letter-spacing: -0.1px; }
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root.erag-root .erag-composer.rag-chat-composer textarea.rag-chat-input {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 0, 0, .1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .82);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 22px;
+  outline: none;
+  box-shadow: none;
+}
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root.erag-root .erag-composer.rag-chat-composer textarea.rag-chat-input:focus {
+  border-color: rgba(117, 66, 176, .35);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(117, 66, 176, .08);
+}
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root.erag-root .erag-composer.rag-chat-composer textarea.rag-chat-input::placeholder { color: #8e8e93; opacity: 1; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root.erag-root .erag-composer.rag-chat-composer textarea.rag-chat-input:placeholder-shown { white-space: nowrap; }
+.rag-eval-root .rag-chat-steer-note { margin: 6px 0 0; color: #6e6e73; font-size: 12px; line-height: 18px; }
+.rag-eval-root .rag-chat-activity { color: #6e6e73; font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.rag-eval-root .rag-chat-activity + .rag-chat-activity { margin-top: 2px; }
+.rag-eval-root .rag-chat-activity.is-running > span {
+  background: linear-gradient(100deg, #8e8e93 35%, #c7c7cc 50%, #8e8e93 65%);
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: rag-chat-shimmer 1.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rag-eval-root .rag-chat-activity.is-running > span { animation: none; background: none; color: #8e8e93; }
+}

@@ -222,3 +222,104 @@ describe("enterprise QA controller", () => {
   });
 });
 
+
+const steeringBase = { supported: true, turnId: "turn-current", revision: 0, effectiveQuestion: "原问题", supplements: [] as Array<{clientRequestId: string; text: string; revision: number}> };
+function runningSteeringContext() {
+  const context = conversationContext("task-running");
+  Object.assign(context.activeConversation!, { status: "running", messages: [{ id: "q-running", role: "user", content: "原问题", timestamp: 1 }] });
+  mocks.context = context;
+  return context;
+}
+const jsonReply = (value: unknown, ok = true) => ({ ok, json: async () => value });
+
+describe("same-turn enterprise QA supplements", () => {
+  it("does not let an older poll replace a newer acknowledged supplement", async () => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderHook<ReturnType<typeof useEnterpriseQaController>, unknown>> | undefined;
+    try {
+      runningSteeringContext();
+      let reads = 0;
+      let releaseOldRead!: (value: ReturnType<typeof jsonReply>) => void;
+      mocks.fetch.mockImplementation(async (_path, init) => {
+        if (!init.method) {
+          if (++reads === 2) return new Promise<ReturnType<typeof jsonReply>>(resolve => { releaseOldRead = resolve; });
+          return jsonReply({ id: "task-running", status: "running", steering: steeringBase });
+        }
+        const body = JSON.parse(init.body);
+        return jsonReply({ ...steeringBase, revision: 1, effectiveQuestion: "原问题\n\n补充：请简短", supplements: [{ clientRequestId: body.clientRequestId, text: body.text, revision: 1 }] });
+      });
+      view = renderHook(() => useEnterpriseQaController());
+      await act(async () => {});
+      expect(view.result.current.steering?.revision).toBe(0);
+      await act(async () => { vi.advanceTimersByTime(3000); });
+      expect(reads).toBe(2);
+      await act(async () => expect(await view!.result.current.steer("请简短")).toBe(true));
+      expect(view.result.current.steering?.revision).toBe(1);
+      await act(async () => { releaseOldRead(jsonReply({ id: "task-running", status: "running", steering: steeringBase })); });
+      expect(view.result.current.steering).toMatchObject({ revision: 1, effectiveQuestion: "原问题\n\n补充：请简短" });
+    } finally {
+      view?.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a separate acknowledged request without creating a second user message", async () => {
+    const context = runningSteeringContext();
+    mocks.fetch.mockImplementation(async (_path, init) => {
+      if (!init.method) return jsonReply({ id: "task-running", status: "running", purpose: "enterprise_qa", steering: steeringBase });
+      const body = JSON.parse(init.body);
+      return jsonReply({ ...steeringBase, revision: 1, effectiveQuestion: "原问题\n\n补充：请简短", supplements: [{ clientRequestId: body.clientRequestId, text: body.text, revision: 1 }] });
+    });
+    const { result } = renderHook(() => useEnterpriseQaController());
+    await waitFor(() => expect(result.current.steering?.supported).toBe(true));
+    await act(async () => expect(await result.current.steer("请简短")).toBe(true));
+    const [path, init] = mocks.fetch.mock.calls.find(([path]) => String(path).endsWith("/steer"))!;
+    expect(path).toBe("/api/frontmind/v2/tasks/task-running/steer");
+    expect(JSON.parse(init.body)).toMatchObject({ conversationId: "qa-conversation", expectedTurnId: "turn-current", text: "请简短" });
+    expect(result.current.steering?.effectiveQuestion).toContain("补充：请简短");
+    expect(context.addMessage).not.toHaveBeenCalled();
+    expect(context.activeConversation?.messages).toHaveLength(1);
+  });
+  it("retries the same request identity after an unknown delivery result", async () => {
+    runningSteeringContext();
+    let attempts = 0;
+    mocks.fetch.mockImplementation(async (_path, init) => {
+      if (!init.method) return jsonReply({ id: "task-running", status: "running", steering: steeringBase });
+      if (++attempts === 1) throw new Error("network lost");
+      const body = JSON.parse(init.body);
+      return jsonReply({ ...steeringBase, revision: 1, supplements: [{ clientRequestId: body.clientRequestId, text: body.text, revision: 1 }] });
+    });
+    const { result } = renderHook(() => useEnterpriseQaController());
+    await waitFor(() => expect(result.current.steering).toBeTruthy());
+    await act(async () => { await expect(result.current.steer("补充内容")).rejects.toThrow("network lost"); });
+    await act(async () => expect(await result.current.steer("补充内容")).toBe(true));
+    const sent = mocks.fetch.mock.calls.filter(([path]) => String(path).endsWith("/steer")).map(([, init]) => JSON.parse(init.body));
+    expect(sent[0].clientRequestId).toBe(sent[1].clientRequestId);
+  });
+  it("ignores a late receipt after switching conversations", async () => {
+    runningSteeringContext();
+    let accept!: () => void;
+    mocks.fetch.mockImplementation(async (_path, init) => {
+      if (!init.method) return jsonReply({ id: "task-running", status: "running", steering: steeringBase });
+      await new Promise<void>(resolve => { accept = resolve; });
+      const body = JSON.parse(init.body);
+      return jsonReply({ ...steeringBase, revision: 1, supplements: [{ clientRequestId: body.clientRequestId, text: body.text, revision: 1 }] });
+    });
+    const { result, rerender } = renderHook(() => useEnterpriseQaController());
+    await waitFor(() => expect(result.current.steering).toBeTruthy());
+    let pending!: Promise<boolean>;
+    act(() => { pending = result.current.steer("迟到补充"); });
+    mocks.context = conversationContext("other-task", "other-conversation");
+    rerender();
+    await act(async () => { accept(); expect(await pending).toBe(false); });
+    expect(result.current.steering).toBeNull();
+  });
+  it("does not submit to an unsupported provider", async () => {
+    runningSteeringContext();
+    mocks.fetch.mockResolvedValue(jsonReply({ id: "task-running", status: "running", steering: { ...steeringBase, supported: false } }));
+    const { result } = renderHook(() => useEnterpriseQaController());
+    await waitFor(() => expect(result.current.steering?.supported).toBe(false));
+    await act(async () => { await expect(result.current.steer("草稿")).rejects.toThrow("暂不支持"); });
+    expect(mocks.fetch.mock.calls.some(([path]) => String(path).endsWith("/steer"))).toBe(false);
+  });
+});

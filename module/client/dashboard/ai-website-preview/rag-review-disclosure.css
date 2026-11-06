@@ -1,0 +1,128 @@
+/* The established plain disclosure interaction, scoped to manual review. */
+.rag-eval-root .rag-drawer--review > .rag-drawer-body,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--review > .rag-drawer-body {
+  gap: 0;
+  padding: 0;
+}
+
+.rag-eval-root .rag-review-overview,
+.rag-eval-root .rag-review-topic,
+.rag-eval-root .rag-review-confirmation {
+  padding: 24px var(--rag-drawer-inline-space);
+}
+
+.rag-eval-root .rag-review-overview {
+  flex: none;
+  margin: 0;
+  padding-bottom: 0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.rag-eval-root .rag-review-topic {
+  background: transparent;
+}
+
+.rag-eval-root .rag-review-topic--risks {
+  background: var(--rag-list-surface);
+}
+
+.rag-eval-root .rag-review-dimensions,
+.rag-eval-root .rag-review-risks {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0;
+}
+
+.rag-eval-root .rag-review-dimensions > .rag-review-topic__heading {
+  margin-bottom: 16px;
+}
+
+.rag-eval-root .rag-review-topic__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rag-eval-root .rag-review-topic__heading > svg {
+  flex: none;
+  color: var(--sfp-accent);
+}
+
+.rag-eval-root .rag-review-topic__heading > h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.rag-eval-root .rag-drawer--review .rag-evaluation-disclosure {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rag-eval-root .rag-drawer--review .rag-evaluation-disclosure + .rag-evaluation-disclosure {
+  border-top: .5px solid var(--rag-list-divider);
+}
+
+.rag-eval-root .rag-drawer--review .rag-evaluation-disclosure__trigger,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--review .rag-evaluation-disclosure__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--sfp-ink);
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  transform: none;
+  transition: none;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--review .rag-evaluation-disclosure__trigger:is(:hover, :active):not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.rag-eval-root .rag-drawer--review .rag-evaluation-disclosure__trigger:focus-visible {
+  outline: 2px solid rgba(117, 66, 176, .4);
+  outline-offset: 2px;
+}
+
+.rag-eval-root .rag-drawer--review .rag-evaluation-disclosure__chevron {
+  flex: none;
+  color: var(--sfp-muted);
+  transform: rotate(0deg);
+}
+
+.rag-eval-root .rag-drawer--review .rag-evaluation-disclosure[data-open="true"] .rag-evaluation-disclosure__chevron {
+  transform: rotate(180deg);
+}
+
+.rag-eval-root .rag-drawer--review .rag-evaluation-disclosure__content {
+  min-width: 0;
+  padding: 8px 0 16px;
+}
+
+.rag-eval-root .rag-drawer--review .rag-review-dimension-weight {
+  color: var(--sfp-muted);
+}
+
+.rag-eval-root .rag-drawer--review .rag-evaluation-disclosure .rag-review-field > p:first-child {
+  margin-top: 0;
+}

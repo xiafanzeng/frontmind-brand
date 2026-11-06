@@ -31,6 +31,10 @@ const enterpriseRagPreview = readFileSync(
   resolve(process.cwd(), "client/dashboard/ai-website-preview/EnterpriseRagPreview.tsx"),
   "utf8",
 );
+const ragImprovementPlan = readFileSync(
+  resolve(process.cwd(), "client/dashboard/ai-website-preview/RagImprovementPlan.tsx"),
+  "utf8",
+);
 const knowledgeFrontendSettings = readFileSync(
   resolve(process.cwd(), "client/dashboard/knowledge-frontend/KnowledgeFrontendSettings.tsx"),
   "utf8",
@@ -105,23 +109,41 @@ describe("Brand Apple theme contract", () => {
 
   it("adapts the enterprise RAG surface and preserves the accepted gauge tuning", () => {
     expect(css).toContain('.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root');
-    expect(css).toContain('.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-gauge-card');
+    expect(css).toContain('.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-overview > :is(.rag-verdict, .rag-evaluation-gauge-card)');
     expect(css).toContain('.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer');
     expect(ragGauge).toContain("export const RAG_GAUGE_SWEEP_DEGREES = 240;");
     expect(ragGauge).toContain("export const RAG_GAUGE_STROKE_WIDTH = 9;");
     expect(ragGauge).toContain("export const RAG_GAUGE_DOT_RADIUS = 4.5;");
-    expect(ragGauge).toContain("export const RAG_GAUGE_CUTOUT_RADIUS = 8;");
+    expect(ragGauge).toContain("export const RAG_GAUGE_RENDERED_WIDTH = 152;");
     expect(ragEvaluationCss).toContain("gap: 16px;");
     expect(ragEvaluationCss).toContain("transform: translateY(-1px);");
   });
 
-  it("uses stable CSS sizing for the gauge and summary without layout feedback", () => {
+  it("enlarges only the marker and keeps its hover control and tooltip outside layout flow", () => {
+    const marker = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-gauge-marker \{([^}]*)\}/)?.[1];
+    expect(marker).toContain("transform-box: fill-box;");
+    expect(marker).toContain("transform-origin: center;");
+    const activeMarker = ragEvaluationCss.match(/\.rag-evaluation-gauge-graphic\.is-marker-active \.rag-evaluation-gauge-marker \{([^}]*)\}/)?.[1];
+    expect(activeMarker).toContain("transform: scale(1.35);");
+    const control = ragEvaluationCss.match(/\.rag-evaluation-gauge-card \.rag-evaluation-gauge-graphic \.rag-gauge-marker-control \{([^}]*)\}/)?.[1];
+    expect(control).toContain("position: absolute;");
+    expect(control).toContain("min-height: 0;");
+    expect(control).toContain("background: transparent;");
+    expect(control).toContain("transform: translate(-50%, -50%);");
+    const controlHover = ragEvaluationCss.match(/\.rag-gauge-marker-control:active:not\(:disabled\) \{([^}]*)\}/)?.[1];
+    expect(controlHover).toContain("transform: translate(-50%, -50%);");
+    const tooltip = ragEvaluationCss.match(/\.rag-eval-root \.rag-gauge-marker-tooltip \{([^}]*)\}/)?.[1];
+    expect(tooltip).toContain("position: absolute;");
+    expect(tooltip).toContain("pointer-events: auto;");
+    expect(ragEvaluationCss).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.rag-eval-root \.rag-evaluation-gauge-marker \{ transition: none; \}/);
+  });
+
+  it("keeps gauge geometry and type sizes stable while the summary stacks in normal flow", () => {
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview {");
     expect(ragEvaluationCss).toContain("--rag-evaluation-card-width: 136px;");
     expect(ragEvaluationCss).toContain("grid-template-columns: var(--rag-evaluation-card-width) minmax(0, 1fr);");
     expect(ragEvaluationCss).toContain("align-items: start;");
     expect(ragEvaluationCss).toContain("min-height: var(--rag-evaluation-card-width);");
-    expect(ragEvaluationCss).toContain("gap: 16px;");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-overview > .rag-verdict {");
     expect(ragEvaluationCss).toContain("padding: 16px;");
     expect(ragEvaluationCss).toContain("grid-column: 2;");
@@ -132,9 +154,33 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain("aspect-ratio: 1 / 1;");
     expect(ragEvaluationCss).toContain("align-self: start;");
     expect(ragEvaluationCss).toContain("aspect-ratio: 3 / 2;");
-    expect(ragEvaluationCss).toContain("border-radius: 20px;");
-    expect(ragEvaluationCss).toContain("background: rgba(255, 255, 255, 0.72);");
-    expect(ragEvaluationCss).toContain("backdrop-filter: blur(20px) saturate(180%);");
+    const overviewSurface = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-overview \{([^}]*)\}/)?.[1];
+    expect(overviewSurface).toContain("--rag-evaluation-graphic-width: 152px;");
+    expect(overviewSurface).toContain("gap: 8px;");
+    expect(overviewSurface).toContain("padding-inline: 8px;");
+    expect(overviewSurface).toContain("border: 0.5px solid rgba(0, 0, 0, 0.1);");
+    expect(overviewSurface).toContain("border-radius: 20px;");
+    expect(overviewSurface).toContain("background: rgba(255, 255, 255, 0.72);");
+    expect(overviewSurface).toContain("box-shadow: 0 8px 24px rgba(29, 29, 31, 0.08);");
+    expect(overviewSurface).toContain("backdrop-filter: blur(20px) saturate(180%);");
+    const verdictLayout = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-overview > \.rag-verdict \{([^}]*)\}/)?.[1];
+    expect(verdictLayout).toContain("justify-content: center;");
+    expect(verdictLayout).toContain("gap: 16px;");
+    expect(verdictLayout).toContain("padding: 16px;");
+    expect(verdictLayout).toContain("padding-inline-start: 0;");
+    const gaugeLayout = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-gauge-card \{([^}]*)\}/)?.[1];
+    expect(gaugeLayout).toContain("place-content: center;");
+    const gaugeGraphic = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-gauge-graphic \{([^}]*)\}/)?.[1];
+    expect(gaugeGraphic).toContain("width: var(--rag-evaluation-graphic-width);");
+    expect(gaugeGraphic).not.toContain("max-width: 100%;");
+    for (const source of [ragEvaluationCss, css]) {
+      const innerSurface = source.match(/\.rag-evaluation-overview > :is\(\.rag-verdict, \.rag-evaluation-gauge-card\) \{([^}]*)\}/)?.[1];
+      expect(innerSurface).toContain("border: 0;");
+      expect(innerSurface).toContain("border-radius: 0;");
+      expect(innerSurface).toContain("background: transparent;");
+      expect(innerSurface).toContain("box-shadow: none;");
+      expect(innerSurface).toContain("backdrop-filter: none;");
+    }
     expect(ragEvaluationCss).toContain("overflow-wrap: anywhere;");
     expect(ragEvaluationCss).toContain("padding:24px 16px 16px;");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-summary-flow {");
@@ -148,8 +194,10 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-metrics {");
     expect(ragEvaluationCss).toContain("margin-top: 0;");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-supporting-meta {");
-    expect(ragEvaluationCss).toContain("grid-column: 2;");
-    expect(ragEvaluationCss).toContain("grid-row: 1;");
+    const supportingMeta = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-supporting-meta \{([^}]*)\}/)?.[1];
+    expect(supportingMeta).toContain("margin: 0;");
+    expect(supportingMeta).not.toContain("auto");
+    expect(supportingMeta).not.toMatch(/grid-(column|row)|z-index|position:\s*absolute/);
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-metric-copy {");
     expect(ragEvaluationCss).toContain("gap: 8px 16px;");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-summary-copy {");
@@ -158,15 +206,30 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).not.toContain("@container rag-evaluation-summary");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-status-orb {");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-status-orb::after {");
-    expect(ragEvaluationCss).toContain("--rag-evaluation-card-width: 120px;");
-    expect(ragEvaluationCss).toContain("height: var(--rag-evaluation-card-width);");
-    expect(ragEvaluationCss).toContain("justify-content: center;");
-    expect(ragEvaluationCss).toContain("grid-column: 1 / -1;");
-    expect(ragEvaluationCss).toContain("grid-row: 2;");
-    expect(ragEvaluationCss).toContain("font-size: 12px;");
-    expect(ragEvaluationCss).toContain("line-height: 16px;");
+    expect(ragEvaluationCss).not.toContain("--rag-evaluation-card-width: 120px;");
+    expect(ragEvaluationCss).toContain('.rag-evaluation-overview[data-layout="stacked"]');
+    const stackedOverview = ragEvaluationCss.match(/\.rag-evaluation-overview\[data-layout="stacked"\] \{([^}]*)\}/)?.[1];
+    expect(stackedOverview).toContain("row-gap: 0;");
+    expect(stackedOverview).toContain("padding-top: 8px;");
+    const stackedGauge = ragEvaluationCss.match(/\.rag-evaluation-overview\[data-layout="stacked"\] > \.rag-evaluation-gauge-card \{([^}]*)\}/)?.[1];
+    expect(stackedGauge).toContain("width: 100%;");
+    expect(stackedGauge).toContain("min-height: 128px;");
+    expect(stackedGauge).toContain("aspect-ratio: auto;");
+    const stackedVerdict = ragEvaluationCss.match(/\.rag-evaluation-overview\[data-layout="stacked"\] > \.rag-verdict:not\(\[data-rag-measurement\]\) \{([^}]*)\}/)?.[1];
+    expect(stackedVerdict).toContain("gap: 16px;");
+    expect(stackedVerdict).toContain("padding: 0 8px 16px;");
+    const summaryCopy = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-summary-copy \{([^}]*)\}/g);
+    expect(summaryCopy).toHaveLength(1);
+    expect(summaryCopy?.[0]).toContain("font-size: 14px;");
+    expect(summaryCopy?.[0]).toContain("line-height: 21px;");
+    const metrics = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-metrics \{([^}]*)\}/)?.[1];
+    expect(metrics).toContain("font-size: 12px;");
+    expect(metrics).toContain("line-height: 18px;");
+    const ragHeading = css.match(/\.fm-brand-theme\[data-brand-page="enterprise-qa"\] \.rag-eval-root \.sfp-heading h1 \{([^}]*)\}/)?.[1];
+    expect(ragHeading).toContain("font-size: 40px;");
+    expect(ragHeading).not.toContain("clamp(");
+    expect(ragEvaluationCss).toContain("@container sfp (max-width:400px) { .rag-eval-root .rag-radar-label { width:68px; } }");
     expect(enterpriseRagPreview).toContain('className="rag-evaluation-supporting-meta"');
-    expect(enterpriseRagPreview).not.toContain("new ResizeObserver");
     expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-width"');
     expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-height"');
   });
@@ -180,7 +243,7 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain(".rag-eval-root .erag-evaluation-column {");
     expect(ragEvaluationCss).toContain("flex-direction: column;");
     expect(ragEvaluationCss).toContain("gap: 16px;");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .erag-evaluation-panel { gap:16px; padding: 24px 24px 16px; }");
+    expect(ragEvaluationCss).toContain(".rag-eval-root .erag-evaluation-panel { gap:16px; padding: 24px; }");
     expect(ragEvaluationCss).toContain(".rag-eval-root .erag-evaluation-panel { padding:16px; }");
     expect(css).toContain('.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-evaluation-panel {');
     expect(css).toContain("padding-bottom: var(--fm-brand-space-2);");
@@ -197,67 +260,22 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-task-panel { padding: 16px; }");
   });
 
-  it("uses ordered Apple-sized disclosures for judgment and optimization details", () => {
-    expect(enterpriseRagPreview).toContain('label="理解本次判断"');
-    expect(enterpriseRagPreview).toContain('label="查看优化方案"');
-    expect(enterpriseRagPreview.indexOf('label="理解本次判断"')).toBeLessThan(
-      enterpriseRagPreview.indexOf('label="查看优化方案"'),
+  it("keeps the three rounded detail buttons large enough to tap", () => {
+    expect(ragEvaluationCss).toContain("grid-template-columns: repeat(3, minmax(0, 1fr));");
+    const actionStyles = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-action\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(actionStyles).toContain("height: 44px;");
+    expect(actionStyles).toContain("border-radius: 12px;");
+    expect(enterpriseRagPreview).toContain('className="sfp-button sfp-button--ghost rag-evaluation-action"');
+    expect(actionStyles).toContain("white-space: nowrap;");
+    const qualityPanel = enterpriseRagPreview.slice(
+      enterpriseRagPreview.indexOf('<aside className="sfp-panel erag-evaluation-panel'),
+      enterpriseRagPreview.indexOf('<section className="sfp-panel rag-task-panel'),
     );
-    expect(enterpriseRagPreview).not.toContain('label="判定依据与测试信息"');
-    expect(enterpriseRagPreview).toContain("查看完整方案");
-    expect(enterpriseRagPreview).not.toContain("进入网站建设的 AI 助手");
-    expect(enterpriseRagPreview).not.toContain("优先优化");
-    expect(enterpriseRagPreview).not.toContain("建议做法");
-    expect(enterpriseRagPreview).not.toContain("Lightbulb");
-    expect(enterpriseRagPreview).toContain('className="rag-judgment-copy"');
-    expect(enterpriseRagPreview).toContain('className="rag-priority-copy"');
-    expect(enterpriseRagPreview).not.toContain('className="rag-judgment-context"');
-    expect(enterpriseRagPreview).not.toContain('className="rag-priority-card"');
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-quality-disclosures {");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evaluation-disclosure__trigger {");
-    expect(ragEvaluationCss).toContain("min-height: 44px;");
-    expect(ragEvaluationCss).toContain("padding: 8px;");
-    expect(ragEvaluationCss).toContain("border-radius: 12px;");
-    expect(ragEvaluationCss).toContain("color: var(--sfp-ink);");
-    expect(ragEvaluationCss).toContain("box-shadow: 0 0 0 3px rgba(0,0,0,.18);");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-judgment-copy,");
-    expect(ragEvaluationCss).not.toContain(".rag-eval-root .rag-judgment-context,");
-    expect(ragEvaluationCss).not.toContain(".rag-eval-root .rag-priority-card {");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-detail-action {");
+    expect(qualityPanel).toContain('aria-label="回答评估详情"');
+    expect(qualityPanel).not.toContain("RagEvaluationDisclosure");
+    expect(enterpriseRagPreview).not.toContain("查看完整方案");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-priority-label.is-suggestion {");
-    expect(ragEvaluationCss).toContain("background: rgba(255, 204, 0, 0.16);");
-    expect(ragEvaluationCss).toContain("gap: 0;");
-    expect(ragEvaluationCss).toContain("grid-template-columns: minmax(0, 1fr) auto;");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-priority-copy__statement {");
-    expect(ragEvaluationCss).toContain("grid-template-columns: auto minmax(0, 1fr);");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-priority-copy__title,\n.rag-eval-root .rag-priority-copy__action { color:#545b6a; }");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-priority-copy__statement > strong { color:#1d1d1f;");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-detail-action--full:disabled {");
-    expect(ragEvaluationCss).toContain("color: #86868b;");
-    expect(ragEvaluationCss).toContain("background: #f5f5f7;");
-    expect(ragEvaluationCss).toContain("padding: 0 8px 16px;");
-    const disclosureStart = ragEvaluationCss.indexOf(".rag-eval-root .rag-evaluation-disclosure {");
-    const disclosureEnd = ragEvaluationCss.indexOf(".rag-drawer-backdrop", disclosureStart);
-    const disclosureStyles = ragEvaluationCss.slice(disclosureStart, disclosureEnd);
-    expect(disclosureStyles).not.toContain("__trigger:hover");
-    expect(disclosureStyles).not.toContain("__trigger:active");
-    expect(disclosureStyles).not.toContain("transition:");
-    expect(disclosureStyles).not.toContain("animation:");
-    expect(disclosureStyles).not.toContain("border-bottom:");
-    expect(ragEvaluationCss).not.toContain("@keyframes rag-disclosure-enter");
-    const staticOverrideStart = css.indexOf("/* Enterprise RAG static disclosure interaction */");
-    const staticOverrideEnd = css.indexOf("/* End Enterprise RAG static disclosure interaction */");
-    expect(staticOverrideStart).toBeGreaterThan(-1);
-    expect(staticOverrideEnd).toBeGreaterThan(staticOverrideStart);
-    const staticOverride = css.slice(staticOverrideStart, staticOverrideEnd);
-    expect(staticOverride).toContain("transition: none;");
-    expect(staticOverride).toContain("background: transparent;");
-    expect(staticOverride).toContain("box-shadow: none;");
-    expect(staticOverride).toContain("transform: none;");
-    expect(staticOverride).toContain('.rag-priority-copy__statement > strong');
-    expect(staticOverride).toContain("color: var(--fm-brand-ink);");
-    expect(staticOverride).toContain('.rag-detail-action--full:disabled');
-    expect(staticOverride).toContain("background: #f5f5f7;");
+    expect(ragImprovementPlan).toContain('<i className="rag-evaluation-status-orb" aria-hidden="true" />{presentation.label}');
   });
 
   it("enforces Apple card radii across every Brand page without flattening controls", () => {
@@ -333,11 +351,10 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain("border-radius:8px;");
     expect(ragEvaluationCss).toContain("white-space:nowrap;");
     expect(ragEvaluationCss).not.toContain("grid-template-columns:repeat(4,minmax(0,1fr));");
-    expect(ragEvaluationCss).toContain(".rag-priority-copy__statement > strong { color:#1d1d1f;");
   });
 
   it("uses Apple hierarchy for the evidence drawer, risk grid, and semantic tags", () => {
-    expect(enterpriseRagPreview).toContain('rag-drawer--evidence');
+    expect(enterpriseRagPreview).toContain('rag-drawer rag-drawer--${drawer}');
     expect(enterpriseRagPreview).toContain('data-testid="rag-evidence-radar"');
     expect(enterpriseRagPreview).toContain('data-testid="rag-evaluation-gate-grid"');
     expect(enterpriseRagPreview).toContain('data-testid="rag-gate-status-orb"');
@@ -354,7 +371,11 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-gate-status-orb.is-failed {");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-gate-status-orb.is-pending {");
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-evidence-tag.is-info {");
-    expect(ragEvaluationCss).toContain("@media (max-width: 560px)");
+    expect(ragEvaluationCss).toContain("container:rag-drawer / inline-size;");
+    expect(ragEvaluationCss).toContain("@container rag-drawer (max-width: 880px)");
+    expect(ragEvaluationCss).toContain("@container rag-drawer (max-width: 560px)");
+    expect(ragEvaluationCss).toContain("--rag-drawer-inline-space:16px;");
+    expect(css).toContain("padding: 24px var(--rag-drawer-inline-space);");
   });
 
   it("adapts website management and settings without replacing customer-selected preview colors", () => {

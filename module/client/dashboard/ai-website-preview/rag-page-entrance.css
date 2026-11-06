@@ -1,0 +1,23 @@
+.rag-eval-root [data-rag-entrance][data-rag-entrance-state="pending"] {
+  opacity: 0;
+  transform: translateY(30px);
+}
+
+.rag-eval-root [data-rag-entrance][data-rag-entrance-state="playing"] {
+  animation: rag-page-enter 600ms cubic-bezier(.22, 1, .36, 1) var(--rag-entrance-delay, 0ms) both;
+  will-change: opacity, transform;
+}
+
+@keyframes rag-page-enter {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rag-eval-root [data-rag-entrance][data-rag-entrance-state] {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    will-change: auto;
+  }
+}

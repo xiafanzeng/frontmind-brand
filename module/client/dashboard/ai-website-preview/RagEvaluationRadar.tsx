@@ -1,8 +1,10 @@
-import { useId, useState, type CSSProperties } from "react";
+import { useEffect, useId, useState, type CSSProperties } from "react";
 import type { EvaluationDimension } from "./evaluation-skill-contract";
 import type { EnterpriseRagChecklistJudgeOutput } from "../../../contracts/enterprise-rag-evaluation-run";
 import { scoreRagChecklist } from "../../../contracts/enterprise-rag-checklist";
 import { RAG_DIMENSIONS } from "./rag-evaluation";
+import { useDataReveal } from "./useDataReveal";
+import { useRagEntranceReady } from "./RagEntranceContext";
 
 const labels = ["需求满足", "正确与有据", "信息完整", "引用与时效", "清晰可行动", "边界与安全"];
 const RADAR_VIEWBOX_WIDTH = 400;
@@ -34,12 +36,16 @@ const scoreRadius = (d: EvaluationDimension & { score: number }) => {
   const ratio = Math.min(1, Math.max(0, d.score / d.maxScore));
   return RADAR_INNER_RADIUS + (RADAR_OUTER_RADIUS - RADAR_INNER_RADIUS) * ratio;
 };
-const valueLabel = (d: EvaluationDimension | undefined) => d?.status === "not_applicable"
+const valueLabel = (d: EvaluationDimension | undefined, emptyQuestion = false) => emptyQuestion
+  ? "暂无评分"
+  : d?.status === "not_applicable"
   ? "不适用"
   : !known(d)
     ? "待核验"
     : `${format(100 * d.score / d.maxScore)}%`;
-const markerState = (d: EvaluationDimension | undefined) => d?.status === "not_applicable"
+const markerState = (d: EvaluationDimension | undefined, emptyQuestion = false) => emptyQuestion
+  ? "is-empty"
+  : d?.status === "not_applicable"
   ? "is-not-applicable"
   : !known(d)
     ? "is-pending"
@@ -49,14 +55,19 @@ const markerState = (d: EvaluationDimension | undefined) => d?.status === "not_a
 
 const checkLabels = { met: "满足", partial: "部分满足", unmet: "不满足", undetermined: "待核验", not_applicable: "不适用" };
 
-export function RagEvaluationRadar({ dimensions, judgments }: {
+export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = false }: {
   dimensions: EvaluationDimension[];
   judgments?: EnterpriseRagChecklistJudgeOutput | null;
+  emptyQuestion?: boolean;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  useEffect(() => { if (emptyQuestion) setSelected(null); }, [emptyQuestion]);
   const id = useId();
   const maskId = `${id}-center-mask`;
   const axes = RAG_DIMENSIONS.map(d => dimensions.find(item => item.id === d.id));
+  const revealKey = axes.map(d => `${d?.id}:${d?.status}:${d?.score}:${d?.maxScore}`).join("|");
+  const entranceReady = useRagEntranceReady();
+  const { ref: revealRef, progress, finish: finishReveal } = useDataReveal<HTMLElement>(!emptyQuestion && axes.some(known), `${emptyQuestion}:${revealKey}`, undefined, undefined, entranceReady);
   let checklistDimensions: ReturnType<typeof scoreRagChecklist>["dimensions"] | null = null;
   if (judgments) {
     try {
@@ -68,10 +79,12 @@ export function RagEvaluationRadar({ dimensions, judgments }: {
     }
   }
 
-  const full = axes.every(known);
-  const values = axes.map((d, i) => known(d) ? point(i, scoreRadius(d)) : null);
+  const full = !emptyQuestion && axes.every(known);
+  const animatedRadius = (d: EvaluationDimension & { score: number }) =>
+    RADAR_INNER_RADIUS + (scoreRadius(d) - RADAR_INNER_RADIUS) * progress;
+  const values = axes.map((d, i) => !emptyQuestion && known(d) ? point(i, animatedRadius(d)) : null);
   const markerLayouts = axes.map((d, i) => {
-    const markerRadius = known(d) ? scoreRadius(d) : RADAR_INNER_RADIUS;
+    const markerRadius = !emptyQuestion && known(d) ? animatedRadius(d) : RADAR_INNER_RADIUS;
     const controlRadius = Math.max(markerRadius, RADAR_MIN_CONTROL_RADIUS);
     const markerPosition = point(i, markerRadius);
     const controlPosition = point(i, controlRadius);
@@ -88,11 +101,11 @@ export function RagEvaluationRadar({ dimensions, judgments }: {
   const checks = checklistDimensions?.find(d => d.id === selected)?.checks;
   const normalizedForExclusions = Boolean(checks?.some(check => !check.applicable));
 
-  return <section className="rag-radar" aria-label="六维加权评分">
+  return <section ref={revealRef} className="rag-radar" aria-label="六维加权评分">
     <div className="rag-radar-chart">
       <svg viewBox={`0 0 ${RADAR_VIEWBOX_WIDTH} ${RADAR_VIEWBOX_HEIGHT}`} role="img" aria-labelledby={`${id}-title ${id}-description`}>
         <title id={`${id}-title`}>六维质量雷达图</title>
-        <desc id={`${id}-description`}>五层六边形表示从0%到100%的相对范围，实际百分比标在各维度名称下方。中心保持透明，点选维度标记可查看分数与依据。{full ? "已绘制完整评分区域。" : "存在待核验或不适用项，仅绘制已知标记，不填充完整区域。"}</desc>
+        <desc id={`${id}-description`}>五层六边形表示从0%到100%的相对范围，实际百分比标在各维度名称下方。中心保持透明，点选维度标记可查看分数与依据。{emptyQuestion ? "尚未输入问题，暂无评分。" : full ? "已绘制完整评分区域。" : "存在待核验或不适用项，仅绘制已知标记，不填充完整区域。"}</desc>
         <defs>
           <mask id={maskId} data-testid="rag-radar-center-mask" maskUnits="userSpaceOnUse" x="0" y="0" width={RADAR_VIEWBOX_WIDTH} height={RADAR_VIEWBOX_HEIGHT}>
             <rect x="0" y="0" width={RADAR_VIEWBOX_WIDTH} height={RADAR_VIEWBOX_HEIGHT} fill="#fff" />
@@ -112,29 +125,33 @@ export function RagEvaluationRadar({ dimensions, judgments }: {
         const [x, y] = point(i, RADAR_LABEL_RADIUS);
         return <div key={definition.id} data-testid="rag-evaluation-dimension-label" className="rag-radar-label" aria-hidden="true"
           style={{ left: `${100 * x / RADAR_VIEWBOX_WIDTH}%`, top: `${100 * y / RADAR_VIEWBOX_HEIGHT}%` }}>
-          <span>{labels[i]}</span><strong>{valueLabel(d)}</strong>
+          <span>{labels[i]}</span><strong>{valueLabel(d, emptyQuestion)}</strong>
         </div>;
       })}
       {RAG_DIMENSIONS.map((definition, i) => {
         const d = axes[i];
         const { controlPosition: [x, y], offsetX, offsetY } = markerLayouts[i];
-        const value = valueLabel(d);
-        const state = markerState(d);
+        const value = valueLabel(d, emptyQuestion);
+        const state = markerState(d, emptyQuestion);
         const style = {
           left: `${100 * x / RADAR_VIEWBOX_WIDTH}%`,
           top: `${100 * y / RADAR_VIEWBOX_HEIGHT}%`,
           "--rag-point-offset-x": `${offsetX}px`,
           "--rag-point-offset-y": `${offsetY}px`,
+          "--rag-point-relative-x": `${100 * offsetX / RADAR_VIEWBOX_WIDTH}cqw`,
+          "--rag-point-relative-y": `${100 * offsetY / RADAR_VIEWBOX_WIDTH}cqw`,
         } as CSSProperties;
         return <button key={definition.id} type="button" data-testid="rag-evaluation-dimension" className={`rag-radar-point-control ${state}`}
           style={style}
-          aria-label={`${labels[i]} ${value}，查看详情`} aria-expanded={selected === definition.id} aria-controls={`${id}-detail`}
-          onClick={() => setSelected(selected === definition.id ? null : definition.id)}>
-          <span data-testid="rag-radar-point-marker" className={`rag-radar-point-marker ${state}`} aria-hidden="true" />
+          disabled={emptyQuestion}
+          aria-label={`${labels[i]} ${value}${emptyQuestion ? "" : "，查看详情"}`} aria-expanded={emptyQuestion ? undefined : selected === definition.id} aria-controls={emptyQuestion ? undefined : `${id}-detail`}
+          onPointerEnter={finishReveal} onFocus={finishReveal}
+          onClick={() => { finishReveal(); setSelected(selected === definition.id ? null : definition.id); }}>
+          <span data-testid="rag-radar-point-marker" className={`rag-radar-point-marker ${state}`} style={{ opacity: !emptyQuestion && known(d) ? progress : 1 }} aria-hidden="true" />
         </button>;
       })}
     </div>
-    {detail && <section id={`${id}-detail`} className="rag-radar-detail" aria-label={`${detailLabel}详情`}>
+    {!emptyQuestion && detail && <section id={`${id}-detail`} className="rag-radar-detail" aria-label={`${detailLabel}详情`}>
       <header><h3>{detailLabel}</h3><strong>{detail.score === null ? detail.status === "not_applicable" ? "不适用" : "待核验" : `${format(detail.score)} / ${detail.maxScore}`}</strong></header>
       {checks ? checks.map(check => <article key={check.id}>
         <strong>{check.label} · {checkLabels[check.status]}</strong>

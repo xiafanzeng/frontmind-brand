@@ -1,0 +1,150 @@
+/* A manual-like document, with the same inset surfaces as the task list. */
+.rag-eval-root .rag-improvement-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  color: var(--sfp-text);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.rag-eval-root .rag-improvement-plan > section {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  min-width: 0;
+}
+
+.rag-eval-root .rag-improvement-plan :is(h3, h4, p, ol, ul, li, blockquote) {
+  margin: 0;
+}
+
+.rag-eval-root .rag-improvement-plan h3 {
+  color: var(--sfp-ink);
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.rag-eval-root .rag-improvement-plan h4 {
+  color: var(--sfp-ink);
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.rag-eval-root .rag-improvement-plan__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 16px;
+  list-style: none;
+}
+
+.rag-eval-root .rag-improvement-plan__steps,
+.rag-eval-root .rag-improvement-plan__answer {
+  border: .5px solid var(--rag-list-border);
+  border-radius: var(--rag-list-radius);
+  background: var(--rag-list-surface);
+}
+
+.rag-eval-root .rag-improvement-plan__steps > li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  padding: 16px 0;
+}
+
+.rag-eval-root .rag-improvement-plan__steps > li + li {
+  border-top: .5px solid var(--rag-list-divider);
+}
+
+.rag-eval-root .rag-improvement-plan__number {
+  color: var(--sfp-muted);
+  font-size: 14px;
+  line-height: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rag-eval-root .rag-improvement-plan__step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rag-eval-root .rag-improvement-plan__step-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  min-width: 0;
+}
+
+.rag-eval-root .rag-improvement-plan__step-heading > h4 {
+  flex: 1 1 auto;
+}
+
+.rag-eval-root .rag-improvement-plan__references,
+.rag-eval-root .rag-improvement-plan__note {
+  color: var(--sfp-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.rag-eval-root .rag-improvement-plan blockquote {
+  padding-inline-start: 16px;
+  border-inline-start: 2px solid var(--sfp-line);
+  color: var(--sfp-muted);
+  white-space: pre-wrap;
+}
+
+.rag-eval-root .rag-improvement-plan__answer {
+  padding: 16px;
+  white-space: pre-wrap;
+}
+
+.rag-eval-root .rag-improvement-plan > section > button {
+  align-self: flex-start;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.rag-eval-root .rag-improvement-plan__optional {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rag-eval-root .rag-improvement-plan__steps + .rag-improvement-plan__optional {
+  margin-top: 8px;
+}
+
+.rag-eval-root .rag-improvement-plan__optional ul,
+.rag-eval-root .rag-improvement-plan__checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-inline-start: 16px;
+  list-style: disc;
+}
+
+.rag-eval-root .rag-improvement-plan__optional li,
+.rag-eval-root .rag-improvement-plan__checks > li {
+  padding-inline-start: 0;
+}
+
+.rag-eval-root .rag-improvement-plan__checks > li::marker {
+  color: var(--sfp-muted);
+}
+
+.rag-eval-root .rag-improvement-plan__checks {
+  gap: 0;
+}
+
+.rag-eval-root .rag-improvement-plan__checks > li {
+  line-height: 1.65;
+}

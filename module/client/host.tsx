@@ -8,7 +8,7 @@ export interface BrandConversationContext {
   loading:boolean;hydrated:boolean;syncError:string|null;
   createConversation(options?:{title?:string;reuseEmpty?:boolean;purpose?:"enterprise_qa"|"content_production";workbenchAgentId?:string}):string;
   setActive(id:string):void;updateStatus(id:string,status:Conversation["status"],extra?:{taskId?:string;previousResponseId?:string;clearTaskPointer?:boolean;executionKind?:"general_chat_v2"|"response_logic";completedAt?:number;startedAt?:number}):void;
-  settleGeneralChatDispatch(id:string,requestId:string):void;deleteConversation(id:string):void;
+  settleGeneralChatDispatch(id:string,requestId:string):void;deleteConversation(id:string):void|Promise<boolean>;
   flushConversation(id:string):Promise<boolean>;rollbackPendingKnowledgeBaseTurn(id:string,requestId:string):void;
   addMessage(id:string,message:LocalMessage):void;updateTitle(id:string,title:string):void;settleKnowledgeBaseStartFailure(id:string,requestId:string):void;
   registerKnowledgeBaseConversation(id:string):void;wakeKnowledgeBaseConversation(id:string):void;

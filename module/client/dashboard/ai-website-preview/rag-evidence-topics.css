@@ -1,0 +1,78 @@
+/* Flat topic bands preserve the window's shared reading baseline. */
+.rag-eval-root .rag-drawer--evidence > .rag-drawer-body,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--evidence > .rag-drawer-body {
+  gap: 0;
+  padding: 0;
+  border-radius: 0 0 20px 20px;
+}
+
+.rag-eval-root .rag-evidence-topics {
+  flex: none;
+  min-width: 0;
+}
+
+.rag-eval-root .rag-evidence-topic,
+.rag-eval-root .rag-evidence-evaluation {
+  padding: 24px var(--rag-drawer-inline-space);
+}
+
+.rag-eval-root .rag-evidence-topic {
+  --rag-topic-card-surface: #fff;
+  background: transparent;
+}
+
+.rag-eval-root .rag-evidence-topic:nth-child(even) {
+  --rag-topic-card-surface: var(--rag-list-surface);
+  background: var(--rag-list-surface);
+}
+
+.rag-eval-root .rag-evidence-records {
+  min-width: 0;
+  padding: 0 16px;
+  border: .5px solid var(--rag-list-border);
+  border-radius: var(--rag-list-radius);
+  background: var(--rag-topic-card-surface);
+}
+
+.rag-eval-root .rag-evidence-topic .rag-evidence,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--evidence .rag-evidence-topic .rag-evidence {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.rag-eval-root .rag-evidence-records > .rag-evidence,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--evidence .rag-evidence-records > .rag-evidence {
+  padding: 16px 0;
+}
+
+.rag-eval-root .rag-evidence-records > .rag-evidence + .rag-evidence,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--evidence .rag-evidence-records > .rag-evidence + .rag-evidence {
+  border-top: .5px solid var(--rag-list-divider);
+}
+
+.rag-eval-root .rag-evidence-topic .rag-gate-grid {
+  row-gap: 24px;
+}
+
+.rag-eval-root .rag-evidence-topic .rag-gate-card,
+.rag-eval-root .rag-evidence-topic .rag-provenance,
+.rag-eval-root .rag-evidence-topic .rag-radar-detail,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--evidence .rag-evidence-topic :is(.rag-gate-card, .rag-provenance, .rag-radar-detail) {
+  padding: 16px;
+  border: .5px solid var(--rag-list-border);
+  border-radius: var(--rag-list-radius);
+  background: var(--rag-topic-card-surface);
+  box-shadow: none;
+}
+
+.rag-eval-root .rag-evidence-scope-note {
+  flex: none;
+  margin: 0;
+  padding: 24px var(--rag-drawer-inline-space);
+}

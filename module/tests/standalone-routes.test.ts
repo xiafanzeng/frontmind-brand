@@ -3,6 +3,8 @@ import {
   resolveStandaloneBrandPage,
   standaloneBrandPages,
   standaloneBrandViewUrl,
+  standaloneRagReportUrl,
+  resolveStandaloneRagReport,
 } from "../../standalone/routes";
 
 describe("brand standalone business routes", () => {
@@ -36,6 +38,23 @@ describe("brand standalone business routes", () => {
 
   it("rejects unknown pages instead of mounting a preview surface", () => {
     expect(resolveStandaloneBrandPage("unknown-page")).toBeNull();
+  });
+
+  it("links to one report page with workspace-bound coordinates and separate chapters", () => {
+    const coordinate = { sourceQaTaskId: "task 1", turnId: "turn/2" };
+    const rules = new URL(standaloneRagReportUrl("rules", "workspace-a", coordinate), "https://brand.frontmind.cn");
+    expect(rules.hash).toBe("#rules");
+    expect(resolveStandaloneRagReport(rules.search, "workspace-a")).toEqual({ coordinate, error: null });
+    expect(new URL(standaloneRagReportUrl("records", "workspace-a", coordinate), rules).hash).toBe("#records");
+    expect([...rules.searchParams.keys()]).toEqual(["view", "report", "workspace", "sourceQaTaskId", "turnId"]);
+  });
+
+  it("allows rules without an answer but rejects mismatched workspaces and partial coordinates", () => {
+    expect(resolveStandaloneRagReport("?view=enterprise-qa&report=1", "workspace-a")).toEqual({ coordinate: undefined, error: null });
+    expect(resolveStandaloneRagReport("?view=enterprise-qa&report=1&workspace=b", "workspace-a")?.error).toContain("工作区不一致");
+    expect(resolveStandaloneRagReport("?view=enterprise-qa&report=1&sourceQaTaskId=task", "workspace-a")?.error).toContain("标识不完整");
+    expect(resolveStandaloneRagReport("?view=knowledge&report=1", "workspace-a")).toBeNull();
+    expect(resolveStandaloneRagReport("?view=enterprise-qa", "workspace-a")).toBeNull();
   });
 });
 

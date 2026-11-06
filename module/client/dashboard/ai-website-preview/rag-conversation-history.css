@@ -1,0 +1,98 @@
+/* Session actions and popover are scoped to the enterprise RAG conversation. */
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 0 0 auto;
+  margin-right: -8px;
+}
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-action {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #77777d;
+  box-shadow: none;
+  cursor: pointer;
+  transform: none;
+}
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-action::before {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 32px; height: 32px;
+  translate: -50% -50%;
+  border-radius: 10px;
+  background: transparent;
+  pointer-events: none;
+  z-index: -1;
+}
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-action:hover:not(:disabled),
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-action:active:not(:disabled) {
+  color: var(--fm-brand-ink, #1d1d1f);
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-action:hover:not(:disabled)::before,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-action[data-state="open"]::before { background: rgba(118, 118, 128, .09); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-action:active:not(:disabled)::before { background: rgba(118, 118, 128, .15); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-action:focus-visible { outline: 2px solid var(--fm-brand-accent, #7542b0); outline-offset: -3px; box-shadow: none; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-conversation-action:disabled { opacity: .4; cursor: default; }
+
+.rag-conversation-popover {
+  z-index: 1100;
+  box-sizing: border-box;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(460px, var(--radix-popover-content-available-height, 460px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 8px;
+  border: 1px solid rgba(60, 60, 67, .12);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(29, 29, 31, .14);
+  color: #1d1d1f;
+  font-family: var(--fm-brand-font, -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 14px;
+  line-height: 1.5;
+  outline: none;
+}
+.rag-conversation-popover *, .rag-conversation-popover *::before, .rag-conversation-popover *::after { box-sizing: border-box; }
+.rag-conversation-popover header { flex: none; padding: 8px 12px; }
+.rag-conversation-popover h3 { margin: 0; color: #1d1d1f; font-size: 16px; font-weight: 600; line-height: 24px; }
+.rag-conversation-popover__message, .rag-conversation-popover__hint { margin: 0; padding: 12px; color: #636366; font-size: 14px; line-height: 1.5; }
+.rag-conversation-popover__message[role="alert"] { color: #a1324d; }
+.rag-conversation-popover__hint { padding-block: 4px 8px; font-size: 12px; }
+.rag-conversation-popover__list { min-height: 0; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
+.rag-conversation-popover__item { display: flex; align-items: center; min-width: 0; border-radius: 10px; }
+.rag-conversation-popover__item:hover { background: rgba(118, 118, 128, .07); }
+.rag-conversation-popover button { font: inherit; }
+.rag-conversation-popover__choice { flex: 1 1 auto; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 8px 4px 8px 12px; border: 0; border-radius: 10px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.rag-conversation-popover__copy { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
+.rag-conversation-popover__title { overflow-wrap: anywhere; }
+.rag-conversation-popover__subtitle { color: #77777d; font-size: 12px; overflow-wrap: anywhere; }
+.rag-conversation-popover__check { flex: none; color: #7542b0; }
+.rag-conversation-popover__remove { display: inline-flex; flex: 0 0 44px; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: #77777d; cursor: pointer; }
+.rag-conversation-popover__remove:hover:not(:disabled) { color: #a1324d; background: rgba(118, 118, 128, .09); }
+.rag-conversation-popover__choice:disabled, .rag-conversation-popover__remove:disabled, .rag-conversation-popover__staged button:disabled { cursor: default; opacity: .45; }
+.rag-conversation-popover__staged { display:flex; align-items:center; gap:8px; min-width:0; width:100%; min-height:44px; padding-left:12px; }
+.rag-conversation-popover__staged-title { flex:1 1 auto; min-width:0; color:#77777d; overflow-wrap:anywhere; }
+.rag-conversation-popover__staged-title small { font-size:12px; white-space:nowrap; }
+.rag-conversation-popover__staged button { flex:none; min-height:44px; padding:8px 12px; border:0; border-radius:10px; background:transparent; color:#7542b0; cursor:pointer; }
+.rag-conversation-popover__staged button:hover:not(:disabled) { background:rgba(118,118,128,.09); }
+.rag-conversation-popover :is(button):focus-visible { outline: 2px solid #7542b0; outline-offset: -2px; }
+.rag-conversation-popover__recovery { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; padding:8px 12px; color:#636366; font-size:12px; }
+.rag-conversation-popover__recovery span { flex:1 1 100%; }
+.rag-conversation-popover__recovery button { min-height:36px; padding:4px 8px; border:0; border-radius:8px; background:transparent; color:#7542b0; cursor:pointer; }
+.rag-conversation-popover__recovery button:hover:not(:disabled) { background:rgba(118,118,128,.09); }
+.rag-conversation-popover__recovery button:disabled { opacity:.45; cursor:default; }
