@@ -1,4 +1,4 @@
-import {cleanup, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 const h = vi.hoisted(() => ({router: async (_url: string, _init?: RequestInit) => new Response("{}", {status: 404})}));
 vi.mock("./host.js", () => ({captureWorkspaceRestOperation: () => ({signal: new AbortController().signal, assertActive() {}, fetch: (url: string, init?: RequestInit) => h.router(url, init)})}));
@@ -34,7 +34,7 @@ beforeEach(() => {
     return response({records: [record]});
   };
 });
-afterEach(() => {cleanup(); sessionStorage.clear();});
+afterEach(() => {cleanup(); vi.useRealTimers(); sessionStorage.clear();});
 async function confirmGeneration() {
   const trigger = await screen.findByRole("button", {name: "重新生成应答逻辑"});
   await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false));
@@ -42,6 +42,39 @@ async function confirmGeneration() {
   fireEvent.click(await screen.findByRole("button", {name: "开始重新生成"}));
 }
 describe("real Brand regeneration entry, HTTP boundary only", () => {
+  it("dismisses adoption success after five seconds without changing the adopted draft", async () => {
+    existing = true; completed = true;
+    render(<BrandResponseLogicEntry {...props}/>);
+    const adopt = await screen.findByRole("button", {name: "采用新稿到草稿"});
+    vi.useFakeTimers();
+    await act(async () => {fireEvent.click(adopt);});
+    expect(screen.getByText(/新稿已采用到草稿/)).toBeTruthy();
+    await act(async () => {await vi.advanceTimersByTimeAsync(4999);});
+    expect(screen.getByText(/新稿已采用到草稿/)).toBeTruthy();
+    await act(async () => {await vi.advanceTimersByTimeAsync(1);});
+    expect(screen.queryByText(/新稿已采用到草稿/)).toBeNull();
+    expect(record.draft).toEqual({...original, ...candidate});
+    expect(posts).toHaveLength(1);
+    expect(posts[0].body.publish).toBe(false);
+  });
+  it.each(["evaluation", "optimization"])("clears adoption success on entering %s and never restores it on return", async target => {
+    existing = true; completed = true;
+    const base = h.router;
+    h.router = async (url, init) => {
+      if (url.endsWith('/evaluation/judge') && init?.method === 'POST') return response({error: {code: 'JUDGE_EVIDENCE_EXCERPT_INVALID', message: '测试评估失败'}}, 422);
+      return base(url, init);
+    };
+    render(<BrandResponseLogicEntry {...props}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "采用新稿到草稿"}));
+    await screen.findByText(/新稿已采用到草稿/);
+    fireEvent.click(screen.getByRole("button", {name: target === "evaluation" ? "查看四维评估" : "生成优化应答逻辑"}));
+    await waitFor(() => expect(screen.queryByText(/新稿已采用到草稿/)).toBeNull());
+    if (target === "optimization") fireEvent.click(screen.getByRole("button", {name: "← 返回评估详情"}));
+    fireEvent.click(screen.getByRole("button", {name: "← 返回应答逻辑详情"}));
+    expect(screen.getByDisplayValue(candidate.concern)).toBeTruthy();
+    expect(screen.queryByText(/新稿已采用到草稿/)).toBeNull();
+    expect(record.draft).toEqual({...original, ...candidate});
+  });
   it("offers regeneration beside retry on Judge failure and preserves the draft", async () => {
     const base = h.router;
     h.router = async (url, init) => {
