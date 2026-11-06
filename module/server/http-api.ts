@@ -14,8 +14,8 @@ import type {IntentQuestion} from "../contracts/intent-workbench.js";
 import type {ResponseLogicHostPorts} from "./response-logic-runtime.js";
 import {
  createEnterpriseRagEvaluationService,
- EnterpriseRagEvaluationError,
 } from "@frontmind/module-brand/server/enterprise-rag-evaluation-service";
+import { recordRagEvaluationError } from "@frontmind/module-brand/server/enterprise-rag-evaluation-errors";
 
 import type { DiagnosticCollectionPort } from "./diagnostic-monitor.js";
 
@@ -39,33 +39,31 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   sourceQaTaskId:z.string().uuid(),
   turnId:z.string().uuid(),
  }).strict();
- const sendRagEvaluationError=(res:Response,error:unknown)=>{
-  const known=error instanceof EnterpriseRagEvaluationError;
-  const invalid=error instanceof z.ZodError;
-  res.status(known?error.status:invalid?400:503).json({error:{
-   code:known?error.code:invalid?"INVALID_INPUT":"RAG_EVALUATION_UNAVAILABLE",
-   message:known?error.message:invalid?"提交内容格式不正确":"企业 RAG 自动评估暂不可用，请稍后重试",
-  }});
+ const sendRagEvaluationError=(res:Response,error:unknown,action:"start"|"history"|"observe")=>{
+  const failure=recordRagEvaluationError(error,action);
+  const {requestId}=failure;
+  res.setHeader("X-FrontMind-Request-Id",requestId);
+  res.status(failure.status).json({error:{code:failure.code,message:failure.message,requestId}});
  };
  router.post("/rag-evaluations",async(req,res)=>{
   try {
    res.setHeader("Cache-Control","no-store");
    res.status(202).json(await createEnterpriseRagEvaluationService(core,req).start(req.body));
-  } catch(error) {sendRagEvaluationError(res,error);}
+  } catch(error) {sendRagEvaluationError(res,error,"start");}
  });
  router.get("/rag-evaluations",async(req,res)=>{
   try {
    res.setHeader("Cache-Control","no-store");
    const coordinate=ragEvaluationCoordinate.parse(req.query);
    res.json(await createEnterpriseRagEvaluationService(core,req).latest(coordinate.sourceQaTaskId,coordinate.turnId));
-  } catch(error) {sendRagEvaluationError(res,error);}
+  } catch(error) {sendRagEvaluationError(res,error,"history");}
  });
  router.get("/rag-evaluations/:operationId",async(req,res)=>{
   try {
    res.setHeader("Cache-Control","no-store");
    const operationId=z.string().uuid().parse(req.params.operationId);
    res.json(await createEnterpriseRagEvaluationService(core,req).observe(operationId));
-  } catch(error) {sendRagEvaluationError(res,error);}
+  } catch(error) {sendRagEvaluationError(res,error,"observe");}
  });
  for (const [path, method] of [["/intent/command","command"],["/intent/execute","execute"],["/intent/rollback","rollback"],["/intent/control","control"]] as const) {
   router.post(path, async (req,res) => {

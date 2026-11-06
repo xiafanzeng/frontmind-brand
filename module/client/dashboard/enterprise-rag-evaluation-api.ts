@@ -151,11 +151,11 @@ function parseRun(value: unknown): EnterpriseRagEvaluationRunDto {
   return value;
 }
 
-async function request(
+async function requestOnce(
   path: string,
-  input?: unknown,
+  input: unknown,
+  operation: ReturnType<typeof captureWorkspaceRestOperation>,
 ): Promise<unknown> {
-  const operation = captureWorkspaceRestOperation();
   operation.assertActive();
   const response = await operation
     .fetch(`${ENDPOINT}${path}`, {
@@ -172,24 +172,32 @@ async function request(
         cause instanceof Error || cause instanceof DOMException
           ? `${cause.name}: ${cause.message}`
           : "网络异常";
-      throw new Error(`自动评估请求未完成（${detail}），请稍后重试。`);
+      throw Object.assign(new Error("暂时无法连接评分服务，请稍后重试。"), { retryable: true });
     });
-  const text = await response.text();
+  const text = await response.text().catch(() => { operation.assertActive(); throw Object.assign(new Error("暂时无法读取评分结果，请稍后重试。"), { retryable: true }); });
   let value: unknown;
   try {
     value = JSON.parse(text || "null");
   } catch {
-    throw new Error(
-      `自动评估接口返回非 JSON 数据（HTTP ${response.status}），请刷新后重试。`,
-    );
+    throw Object.assign(new Error("暂时无法读取评分结果，请稍后重试。"), { retryable: response.status >= 500 });
   }
   operation.assertActive();
   if (!response.ok) {
-    throw new Error(
-      `${errorMessage(value) ?? "自动评估请求失败"}（HTTP ${response.status}）`,
-    );
+    throw Object.assign(new Error(errorMessage(value) ?? "暂时无法读取评分结果，请稍后重试。"), { retryable: response.status >= 500 || response.status === 408 || response.status === 429 });
   }
   return value;
+}
+
+async function request(path: string, input?: unknown): Promise<unknown> {
+  const operation = captureWorkspaceRestOperation();
+  for (let attempt = 0; ; attempt += 1) {
+    try { operation.assertActive(); return await requestOnce(path, input, operation); }
+    catch (error) {
+      operation.assertActive();
+      if (input !== undefined || attempt >= 2 || !(error && typeof error === "object" && "retryable" in error && error.retryable)) throw error;
+      await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 400 : 1200));
+    }
+  }
 }
 
 export const liveEnterpriseRagEvaluationApi = {
@@ -209,6 +217,7 @@ export const liveEnterpriseRagEvaluationApi = {
     return {
       latest,
       history: result.history.map(parseRun),
+      ...(result.automaticExpected === true ? { automaticExpected: true } : {}),
     };
   },
 

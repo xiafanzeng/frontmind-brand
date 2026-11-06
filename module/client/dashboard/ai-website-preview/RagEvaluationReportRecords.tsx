@@ -3,7 +3,7 @@ import { liveEnterpriseRagEvaluationApi, type EnterpriseRagEvaluationCoordinate 
 import { isChecklistRagJudgment, isGradedRagJudgment, type EnterpriseRagEvaluationReport, type EnterpriseRagEvaluationRunDto } from "../../../contracts/enterprise-rag-evaluation-run";
 import { RAG_DIMENSIONS, RAG_GATES, RAG_RULE_VERSION, scoreEvaluation } from "./rag-evaluation";
 import { scoreEvaluation as scoreLegacyEvaluation } from "./rag-evaluation-legacy";
-import { enterpriseRagQualityVerdictLabels, legacyRagVerdictLabels, reportVerdict } from "./rag-report-presentation";
+import { enterpriseRagQualityVerdictLabels, legacyRagVerdictLabels, presentRagSummary, reportVerdict } from "./rag-report-presentation";
 import { enterpriseRagHistoryStorageKey, readRagReviewHistory, type RagReviewHistoryRead, type RagReviewRecord } from "./rag-review-history";
 import "./rag-report-records.css";
 
@@ -45,7 +45,7 @@ function ReportDetails({ report }: { report: EnterpriseRagEvaluationReport }) {
   const graded = isGradedRagJudgment(judged);
   const checklist = isChecklistRagJudgment(judged);
   return <>
-    <div className="rag-report-record-block"><h4>评估结论</h4><p>{report.result.summary}</p><Metadata rows={[
+    <div className="rag-report-record-block"><h4>评估结论</h4><p>{presentRagSummary(report.result.summary)}</p><Metadata rows={[
       ["诊断分", report.result.score === null ? "待核验" : `${number(report.result.score)} / 100`],
       ["评审覆盖率", `${number(report.result.coverage)}%`],
       ["知识版本", `v${report.knowledgeBase.version}`],
@@ -67,7 +67,6 @@ function ReportDetails({ report }: { report: EnterpriseRagEvaluationReport }) {
       ["问题消息", report.questionMessageId], ["回答消息", report.answerMessageId],
       ["知识资料", report.knowledgeBase.sourceFileName], ["知识快照", report.knowledgeBase.snapshotId],
       ["知识哈希", report.knowledgeBase.contentHash], ["问题哈希", report.questionHash], ["回答哈希", report.answerHash],
-      ["规则版本", report.evaluator.ruleVersion], ["评估器版本", report.evaluator.skillVersion], ["判断器版本", report.evaluator.judgeVersion],
       ["评估器哈希", report.evaluator.skillHash], ["输出哈希", report.evaluator.outputHash],
       ["关联报告", report.result.relatedReportIds.length ? report.result.relatedReportIds.join("、") : "无"],
     ]} /></div>
@@ -79,7 +78,7 @@ function AutomaticRecord({ run }: { run: EnterpriseRagEvaluationRunDto }) {
   const verdict = report ? reportVerdict(report) : null;
   const label = report && verdict ? (report.evaluator.ruleVersion === "rag-eval-1.2" ? legacyRagVerdictLabels : enterpriseRagQualityVerdictLabels)[verdict] : runStatus[run.status];
   return <details className="rag-report-record" data-testid="rag-report-automatic-record">
-    <summary><span className="rag-report-record-meta"><time dateTime={run.createdAt}>{stamp(run.createdAt)}</time><span>{label}</span><span>{report?.evaluator.ruleVersion ?? "规则版本尚未生成"}</span></span><span className="rag-report-record-line"><span>{report?.result.summary || run.error?.message || runStatus[run.status]}</span><Score value={report?.result.score} unavailable={verdict === "unusable"} /></span></summary>
+    <summary><span className="rag-report-record-meta"><time dateTime={run.createdAt}>{stamp(run.createdAt)}</time><span>{label}</span></span><span className="rag-report-record-line"><span>{report?.result.summary ? presentRagSummary(report.result.summary) : run.error?.message || runStatus[run.status]}</span><Score value={report?.result.score} unavailable={verdict === "unusable"} /></span></summary>
     <div className="rag-report-record-detail"><Metadata rows={[["操作编号", run.operationId], ["运行状态", runStatus[run.status]], ["最近更新", stamp(run.updatedAt)]]} />{run.error && <p role="status">{run.error.message}（{run.error.code}）</p>}{report ? <ReportDetails report={report} /> : <p>本次评估尚未生成报告。</p>}</div>
   </details>;
 }
@@ -88,7 +87,7 @@ function ManualRecord({ record }: { record: RagReviewRecord }) {
   const grade = record.ruleVersion === "rag-eval-1.2" ? scoreLegacyEvaluation(record) : record.ruleVersion === RAG_RULE_VERSION ? scoreEvaluation(record) : null;
   const label = grade ? (record.ruleVersion === "rag-eval-1.2" ? legacyRagVerdictLabels : enterpriseRagQualityVerdictLabels)[grade.verdict] : "历史规则暂不支持重新计算";
   return <details className="rag-report-record" data-testid="rag-report-manual-record">
-    <summary><span className="rag-report-record-meta"><time dateTime={record.time}>{stamp(record.time)}</time><span>{label}</span><span>{record.ruleVersion}</span></span><span className="rag-report-record-line"><span>{record.question || "未记录问题"}</span><Score value={grade?.score} unavailable={grade?.verdict === "unusable"} /></span></summary>
+    <summary><span className="rag-report-record-meta"><time dateTime={record.time}>{stamp(record.time)}</time><span>{label}</span></span><span className="rag-report-record-line"><span>{record.question || "未记录问题"}</span><Score value={grade?.score} unavailable={grade?.verdict === "unusable"} /></span></summary>
     <div className="rag-report-record-detail">
       <Metadata rows={[["评审人", record.reviewer], ["知识版本", record.knowledgeVersion], ["记录编号", record.id]]} />
       {!grade && <p className="rag-report-record-note">以下保留原始评审内容，不使用当前规则重新计算。</p>}

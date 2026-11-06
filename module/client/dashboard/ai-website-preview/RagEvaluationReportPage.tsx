@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { EnterpriseRagEvaluationCoordinate } from "../enterprise-rag-evaluation-api";
 import { RagEvaluationReportRules } from "./RagEvaluationReportRules";
 import { RagEvaluationReportRecords } from "./RagEvaluationReportRecords";
+import { RagEvaluationExampleRecord } from "./RagEvaluationExampleRecord";
+import { RAG_SAMPLE_CASES } from "./rag-evaluation-cases";
 import "../../brand-apple-theme.css";
 import "./rag-evaluation-report.css";
 
@@ -11,15 +13,20 @@ const contents = [
   ["uncertainty", "缺失证据"], ["limits", "使用边界与验收参数"],
 ] as const;
 
-export default function RagEvaluationReportPage({ storageScopeKey, preview, coordinate, contextError, returnUrl, brandMarkSrc }: {
+export default function RagEvaluationReportPage({ storageScopeKey, preview, coordinate, exampleId, contextError, returnUrl, brandMarkSrc }: {
   storageScopeKey: string;
   preview: boolean;
   coordinate?: EnterpriseRagEvaluationCoordinate;
+  exampleId?: string;
   contextError: string | null;
   returnUrl: string;
   brandMarkSrc: string;
 }) {
   const [activeSection, setActiveSection] = useState("rules");
+  const example = RAG_SAMPLE_CASES.find(item => item.id === exampleId);
+  const error = contextError ?? (exampleId !== undefined && coordinate
+    ? "示例报告不能混用真实回答标识。"
+    : exampleId !== undefined && !example ? "示例问答标识无效，请重新打开示例报告。" : null);
   useEffect(() => {
     const previousTitle = document.title;
     document.title = "企业 RAG 评估说明与记录 · FrontMind";
@@ -79,7 +86,8 @@ export default function RagEvaluationReportPage({ storageScopeKey, preview, coor
         </aside>
         <main id="report-content" className="rag-report-content" tabIndex={-1}>
           <RagEvaluationReportRules />
-          {contextError ? <section id="records"><h2>02 评估记录</h2><p className="rag-report-message" role="alert">{contextError}</p></section>
+          {error ? <section id="records"><h2>02 评估记录</h2><p className="rag-report-message" role="alert">{error}</p></section>
+            : example ? <RagEvaluationExampleRecord example={example} />
             : <RagEvaluationReportRecords key={`${storageScopeKey}:${coordinate?.sourceQaTaskId ?? ""}:${coordinate?.turnId ?? ""}`} storageScopeKey={storageScopeKey} preview={preview} coordinate={coordinate} />}
         </main>
       </div>

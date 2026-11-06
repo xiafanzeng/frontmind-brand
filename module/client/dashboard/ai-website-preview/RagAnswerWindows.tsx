@@ -1,5 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Columns3, Maximize2, Minimize2, X } from "lucide-react";
+import { RagEntranceReadyContext } from "./RagEntranceContext";
 import "./rag-answer-windows.css";
 
 export type AnswerPanel = "evidence" | "improve" | "review" | "answer";
@@ -30,6 +31,7 @@ const EDGES: ResizeEdge[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 const FOCUSABLE = "button:not([disabled]),a[href],input:not([disabled]),textarea:not([disabled]),select:not([disabled]),summary,[tabindex]:not([tabindex='-1'])";
 const MARGIN = 16;
 const clamp = (value: number, minimum: number, maximum: number) => Math.min(Math.max(value, minimum), maximum);
+const sameRect = (a: AnswerWindowRect, b: AnswerWindowRect) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 const readViewport = (): Viewport => typeof window === "undefined" ? { width: 1440, height: 900 } : {
   width: window.innerWidth,
   height: Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight),
@@ -89,13 +91,34 @@ function restoreFocusUnlessInterrupted(restore: () => void) {
   });
 }
 
+// Geometry updates should only move the frame, preserving its reading and form tree.
+const AnswerWindowContent = memo(function AnswerWindowContent({ panel, ready, renderBody, renderFooter }: {
+  panel: AnswerPanel;
+  ready: boolean;
+  renderBody: RagAnswerWindowsProps["renderBody"];
+  renderFooter: RagAnswerWindowsProps["renderFooter"];
+}) {
+  const footer = renderFooter(panel);
+  return <>
+    <div className="rag-drawer-body"><RagEntranceReadyContext value={ready}>{renderBody(panel)}</RagEntranceReadyContext></div>
+    {footer && <footer>{footer}</footer>}
+  </>;
+});
+
 export function RagAnswerWindows({ panels, activePanel, onActivate, onClose, titles, renderBody, renderFooter, availability, modalBlocked = false, onModalChange }: RagAnswerWindowsProps) {
   const instanceId = useId().replace(/:/g, "");
   const [viewport, setViewport] = useState(readViewport);
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
   const [windows, setWindows] = useState<Partial<Record<AnswerPanel, WindowState>>>({});
   const [order, setOrder] = useState<AnswerPanel[]>([]);
   const [sheetExpanded, setSheetExpanded] = useState<Partial<Record<AnswerPanel, boolean>>>({});
   const [dragging, setDragging] = useState<AnswerPanel | null>(null);
+  const [enteredPanels, setEnteredPanels] = useState<AnswerPanel[]>([]);
+  const [reducedMotion, setReducedMotion] = useState(() => typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches));
+  const entryTimers = useRef(new Map<AnswerPanel, number>());
+  const moveFrame = useRef<number | null>(null);
+  const pendingMove = useRef<{ panel: AnswerPanel; rect: AnswerWindowRect } | null>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const windowRefs = useRef<Partial<Record<AnswerPanel, HTMLElement | null>>>({});
   const windowGesture = useRef<WindowGesture | null>(null);
@@ -106,22 +129,63 @@ export function RagAnswerWindows({ panels, activePanel, onActivate, onClose, tit
   const visiblePanel = activePanel && panels.includes(activePanel) ? activePanel : panels.at(-1) ?? null;
   const modalOpen = mobile && panels.length > 0 && !modalBlocked;
   const canTile = panels.length > 1 && (viewport.width - 32 - (panels.length - 1) * 16) / panels.length >= 360 && viewport.height - 32 >= 320;
+  const panelKey = panels.join("|");
+  const finishEntry = (panel: AnswerPanel) => {
+    window.clearTimeout(entryTimers.current.get(panel));
+    entryTimers.current.delete(panel);
+    setEnteredPanels(old => old.includes(panel) ? old : [...old, panel]);
+  };
+
+  useEffect(() => {
+    const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!query) return;
+    const update = () => setReducedMotion(query.matches);
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+
+  useEffect(() => {
+    setEnteredPanels(old => old.every(panel => panels.includes(panel)) ? old : old.filter(panel => panels.includes(panel)));
+    for (const [panel, timer] of entryTimers.current) {
+      if (!panels.includes(panel)) { window.clearTimeout(timer); entryTimers.current.delete(panel); }
+    }
+    for (const panel of panels) {
+      if (reducedMotion) finishEntry(panel);
+      else if (!enteredPanels.includes(panel) && !entryTimers.current.has(panel)) {
+        // animationend can be absent when an element is hidden or animations are cancelled.
+        entryTimers.current.set(panel, window.setTimeout(() => finishEntry(panel), 220));
+      }
+    }
+  }, [panelKey, reducedMotion]);
+
+  useEffect(() => () => {
+    entryTimers.current.forEach(timer => window.clearTimeout(timer));
+    entryTimers.current.clear();
+    if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
+    moveFrame.current = null;
+    pendingMove.current = null;
+  }, []);
 
   // Header height can change with title wrapping, zoom, window resize and mobile tabs.
   // Keep the scrollable content's inset in sync without moving the header controls.
   useLayoutEffect(() => {
     const headers = PANEL_TYPES.map(panel => windowRefs.current[panel]?.querySelector<HTMLElement>(".rag-answer-window__header")).filter((header): header is HTMLElement => Boolean(header));
-    const measure = (header: HTMLElement) => {
-      const height = header.getBoundingClientRect().height;
-      if (height > 0) header.parentElement?.style.setProperty("--rag-window-header-height", `${height}px`);
+    const measure = (header: HTMLElement, measuredHeight?: number) => {
+      const height = measuredHeight ?? header.getBoundingClientRect().height;
+      const parent = header.parentElement;
+      const value = `${height}px`;
+      if (height > 0 && parent?.style.getPropertyValue("--rag-window-header-height") !== value) parent?.style.setProperty("--rag-window-header-height", value);
     };
-    headers.forEach(measure);
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(entries => entries.forEach(entry => measure(entry.target as HTMLElement)));
+    const measureAll = () => {
+      const heights = headers.map(header => header.getBoundingClientRect().height);
+      headers.forEach((header, index) => measure(header, heights[index]));
+    };
+    measureAll();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(entries => entries.forEach(entry => measure(entry.target as HTMLElement, entry.borderBoxSize?.[0]?.blockSize)));
     headers.forEach(header => observer?.observe(header));
-    const onResize = () => headers.forEach(measure);
-    window.addEventListener("resize", onResize);
-    return () => { observer?.disconnect(); window.removeEventListener("resize", onResize); };
-  }, [panels.join("|"), mobile, visiblePanel]);
+    window.addEventListener("resize", measureAll);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measureAll); };
+  }, [panelKey, mobile, visiblePanel]);
 
   useEffect(() => {
     const resize = () => setViewport(readViewport());
@@ -135,25 +199,32 @@ export function RagAnswerWindows({ panels, activePanel, onActivate, onClose, tit
     if (mobile) return;
     setWindows(old => {
       const next = { ...old };
+      let changed = false;
       for (const panel of PANEL_TYPES) {
         const saved = old[panel];
-        if (saved) next[panel] = { ...saved, rect: saved.maximized ? maximumRect(viewport) : constrainAnswerWindow(saved.rect, viewport) };
+        if (saved) {
+          const rect = saved.maximized ? maximumRect(viewport) : constrainAnswerWindow(saved.rect, viewport);
+          if (!sameRect(saved.rect, rect)) { next[panel] = { ...saved, rect }; changed = true; }
+        }
       }
       for (const [index, panel] of panels.entries()) {
-        if (!next[panel]) next[panel] = { rect: initialRect(panel, index, viewport), maximized: false };
+        if (!next[panel]) { next[panel] = { rect: initialRect(panel, index, viewport), maximized: false }; changed = true; }
       }
-      return next;
+      return changed ? next : old;
     });
   }, [mobile, panels, viewport]);
 
   useEffect(() => {
     if (!visiblePanel) return;
-    setOrder(old => [...old.filter(panel => panel !== visiblePanel), visiblePanel]);
+    setOrder(old => old.at(-1) === visiblePanel ? old : [...old.filter(panel => panel !== visiblePanel), visiblePanel]);
   }, [visiblePanel]);
 
   useEffect(() => {
     if (windowGesture.current && (!panels.includes(windowGesture.current.panel) || mobile || modalBlocked)) {
       windowGesture.current = null;
+      if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
+      moveFrame.current = null;
+      pendingMove.current = null;
       setDragging(null);
     }
     if (sheetGesture.current && (!panels.includes(sheetGesture.current.panel) || !mobile || modalBlocked)) sheetGesture.current = null;
@@ -218,7 +289,14 @@ export function RagAnswerWindows({ panels, activePanel, onActivate, onClose, tit
     if (!modalBlocked) onActivate(panel);
   };
 
-  const updateRect = (panel: AnswerPanel, rect: AnswerWindowRect) => setWindows(old => ({ ...old, [panel]: { rect: constrainAnswerWindow(rect, viewport), maximized: false } }));
+  const updateRect = (panel: AnswerPanel, rect: AnswerWindowRect) => setWindows(old => ({ ...old, [panel]: { rect: constrainAnswerWindow(rect, viewportRef.current), maximized: false } }));
+  const flushMove = () => {
+    if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
+    moveFrame.current = null;
+    const pending = pendingMove.current;
+    pendingMove.current = null;
+    if (pending) updateRect(pending.panel, pending.rect);
+  };
 
   const beginWindowGesture = (event: PointerEvent<HTMLElement>, panel: AnswerPanel, edge?: ResizeEdge) => {
     if (mobile || modalBlocked || event.button !== 0 || windows[panel]?.maximized) return;
@@ -235,11 +313,17 @@ export function RagAnswerWindows({ panels, activePanel, onActivate, onClose, tit
     const gesture = windowGesture.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
-    updateRect(gesture.panel, gesture.edge ? resizeAnswerWindow(gesture.origin, gesture.edge, dx, dy, viewport) : { ...gesture.origin, x: gesture.origin.x + dx, y: gesture.origin.y + dy });
+    pendingMove.current = { panel: gesture.panel, rect: gesture.edge ? resizeAnswerWindow(gesture.origin, gesture.edge, dx, dy, viewport) : { ...gesture.origin, x: gesture.origin.x + dx, y: gesture.origin.y + dy } };
+    if (moveFrame.current === null) moveFrame.current = requestAnimationFrame(flushMove);
   };
 
-  const endWindowGesture = (event: PointerEvent<HTMLElement>) => {
+  const endWindowGesture = (event: PointerEvent<HTMLElement>, cancelled = false) => {
     if (windowGesture.current?.pointerId !== event.pointerId) return;
+    if (cancelled) {
+      if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
+      moveFrame.current = null;
+      pendingMove.current = null;
+    } else flushMove();
     windowGesture.current = null;
     setDragging(null);
   };
@@ -312,11 +396,11 @@ export function RagAnswerWindows({ panels, activePanel, onActivate, onClose, tit
       const saved = windows[panel] ?? { rect: initialRect(panel, panels.indexOf(panel), viewport), maximized: false };
       const isVisible = !mobile || panel === visiblePanel;
       const expanded = mobile ? Boolean(sheetExpanded[panel]) : saved.maximized;
-      const footer = renderFooter(panel);
+      const ready = reducedMotion || enteredPanels.includes(panel);
       const sheetHeight = expanded ? Math.max(1, viewport.height - 16) : Math.max(1, Math.min(viewport.height * .9, viewport.height - 16));
       const style: CSSProperties = mobile ? { left: 8, top: (viewport.offsetTop ?? 0) + viewport.height - 8 - sheetHeight, width: Math.max(1, viewport.width - 16), height: sheetHeight, zIndex: 2 } : { left: saved.rect.x, top: saved.rect.y, width: saved.rect.width, height: saved.rect.height, zIndex: 2 + Math.max(0, order.indexOf(panel)) };
-      return <aside key={panel} ref={element => { windowRefs.current[panel] = element; }} className={`rag-drawer rag-drawer--${panel} rag-answer-window${panel === visiblePanel ? " is-active" : ""}${dragging === panel ? " is-dragging" : ""}${expanded ? " is-expanded" : ""}`} style={style} hidden={!isVisible} role="dialog" aria-modal={mobile && isVisible ? true : undefined} aria-labelledby={`${instanceId}-${panel}-title`} data-answer-panel={panel} data-testid={`rag-answer-window-${panel}`} tabIndex={-1} onPointerDownCapture={() => activate(panel)} onFocusCapture={() => activate(panel)} onKeyDown={event => panelKeyDown(event, panel)}>
-        <header className="rag-answer-window__header" role={mobile ? undefined : "group"} tabIndex={mobile ? undefined : 0} aria-label={mobile ? undefined : `移动${PANEL_LABELS[panel]}窗口`} aria-describedby={mobile ? undefined : `${instanceId}-window-help`} onKeyDown={event => headerKeyDown(event, panel)} onPointerDown={event => beginWindowGesture(event, panel)} onPointerMove={moveWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture}>
+      return <aside key={panel} ref={element => { windowRefs.current[panel] = element; }} className={`rag-drawer rag-drawer--${panel} rag-answer-window${panel === visiblePanel ? " is-active" : ""}${dragging === panel ? " is-dragging" : ""}${expanded ? " is-expanded" : ""}`} style={style} hidden={!isVisible} role="dialog" aria-modal={mobile && isVisible ? true : undefined} aria-labelledby={`${instanceId}-${panel}-title`} data-answer-panel={panel} data-entering={!ready || undefined} data-testid={`rag-answer-window-${panel}`} tabIndex={-1} onAnimationEnd={event => { if (event.target === event.currentTarget && ["rag-answer-window-enter", "rag-answer-sheet-enter"].includes(event.animationName)) finishEntry(panel); }} onPointerDownCapture={() => activate(panel)} onFocusCapture={() => activate(panel)} onKeyDown={event => panelKeyDown(event, panel)}>
+        <header className="rag-answer-window__header" role={mobile ? undefined : "group"} tabIndex={mobile ? undefined : 0} aria-label={mobile ? undefined : `移动${PANEL_LABELS[panel]}窗口`} aria-describedby={mobile ? undefined : `${instanceId}-window-help`} onKeyDown={event => headerKeyDown(event, panel)} onPointerDown={event => beginWindowGesture(event, panel)} onPointerMove={moveWindowGesture} onPointerUp={event => endWindowGesture(event)} onPointerCancel={event => endWindowGesture(event, true)}>
           {mobile && <div className="rag-answer-window__sheet-handle" aria-hidden="true" onPointerDown={event => beginSheetGesture(event, panel)} onPointerMove={moveSheetGesture} onPointerUp={endSheetGesture} onPointerCancel={() => { sheetGesture.current = null; }}><span /></div>}
           <div className="rag-answer-window__heading"><div><h2 id={`${instanceId}-${panel}-title`}>{titles[panel]}</h2></div>
             <div className="rag-answer-window__controls">
@@ -327,9 +411,8 @@ export function RagAnswerWindows({ panels, activePanel, onActivate, onClose, tit
           </div>
           {mobile && panel !== "answer" && <nav className="rag-answer-window__tabs" aria-label="回答评估详情切换">{DETAIL_PANEL_TYPES.map(type => <button type="button" key={type} aria-current={type === panel ? "page" : undefined} disabled={!availability[type]} onClick={() => activate(type)}>{PANEL_LABELS[type]}</button>)}</nav>}
         </header>
-        <div className="rag-drawer-body">{renderBody(panel)}</div>
-        {footer && <footer>{footer}</footer>}
-        {!mobile && !saved.maximized && EDGES.map(edge => <div key={edge} className={`rag-answer-window__resize is-${edge}`} data-resize-edge={edge} aria-hidden="true" onPointerDown={event => beginWindowGesture(event, panel, edge)} onPointerMove={moveWindowGesture} onPointerUp={endWindowGesture} onPointerCancel={endWindowGesture} />)}
+        <AnswerWindowContent panel={panel} ready={ready} renderBody={renderBody} renderFooter={renderFooter} />
+        {!mobile && !saved.maximized && EDGES.map(edge => <div key={edge} className={`rag-answer-window__resize is-${edge}`} data-resize-edge={edge} aria-hidden="true" onPointerDown={event => beginWindowGesture(event, panel, edge)} onPointerMove={moveWindowGesture} onPointerUp={event => endWindowGesture(event)} onPointerCancel={event => endWindowGesture(event, true)} />)}
       </aside>;
     })}
   </div>;

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RagConversationHistory } from "./RagConversationHistory";
 
@@ -15,6 +15,89 @@ async function open() {
   return await screen.findByRole("dialog", { name: "历史问答" });
 }
 describe("conversation history", () => {
+  it("allows an explicitly enabled New action while busy history rows remain locked", async () => {
+    const callbacks = props();
+    render(<RagConversationHistory {...callbacks} busy newDisabled={false} />);
+    const create = screen.getByRole("button", { name: "新建问答" });
+    expect((create as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(create);
+    expect(callbacks.onNew).toHaveBeenCalledOnce();
+    const dialog = await open();
+    expect((within(dialog).getByRole("button", { name: "部署要求" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(dialog).getByRole("button", { name: "删除部署要求" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "部署要求" }));
+    expect(callbacks.onSelect).not.toHaveBeenCalled(); expect(callbacks.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("keeps examples readable while history loads, with separate selection and no delete action", async () => {
+    const callbacks = props();
+    const onSelectExample = vi.fn();
+    const examples = [{ id: "example-capability", title: "能力介绍示例" }, { id: "example-risk", title: "风险判断示例" }];
+    render(<RagConversationHistory {...callbacks} loading examples={examples} activeExampleId="example-capability" onSelectExample={onSelectExample} />);
+    expect((screen.getByRole("button", { name: "新建问答" }) as HTMLButtonElement).disabled).toBe(false);
+    const dialog = await open();
+    expect(within(dialog).getByRole("status").textContent).toContain("正在加载历史问答");
+    const section = within(dialog).getByRole("region", { name: "示例问答" });
+    expect(within(section).getAllByText("示例 · 预设评审")).toHaveLength(2);
+    expect(within(section).queryByRole("button", { name: /^删除/ })).toBeNull();
+    const active = within(section).getByRole("button", { name: "能力介绍示例 示例 · 预设评审" });
+    expect(active.getAttribute("aria-current")).toBe("true");
+    const next = within(section).getByRole("button", { name: "风险判断示例 示例 · 预设评审" });
+    expect((next as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(next);
+    expect(onSelectExample).toHaveBeenCalledWith("example-risk");
+    expect(callbacks.onSelect).not.toHaveBeenCalled(); expect(callbacks.onDelete).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "新建问答" }));
+    expect(callbacks.onNew).toHaveBeenCalledOnce();
+  });
+
+  it("keeps examples available when real-history loading fails", async () => {
+    const callbacks = props(); const onSelectExample = vi.fn();
+    render(<RagConversationHistory {...callbacks} error="读取历史失败" examples={[{ id: "example", title: "能力示例" }]} onSelectExample={onSelectExample} />);
+    const dialog = await open();
+    expect(within(dialog).getByRole("alert").textContent).toBe("读取历史失败");
+    const example = within(dialog).getByRole("button", { name: "能力示例 示例 · 预设评审" });
+    expect((example as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(example); expect(onSelectExample).toHaveBeenCalledWith("example");
+    expect(callbacks.onDelete).not.toHaveBeenCalled();
+  });
+
+  it.each(["false", "rejection"])("keeps the popover open after an asynchronous example selection %s", async outcome => {
+    const callbacks = props();
+    let finish!: (value: boolean) => void;
+    let fail!: (error: Error) => void;
+    const pending = new Promise<boolean>((resolve, reject) => { finish = resolve; fail = reject; });
+    const onSelectExample = vi.fn(() => pending);
+    render(<RagConversationHistory {...callbacks} examples={[{ id: "example", title: "能力示例" }]} onSelectExample={onSelectExample} />);
+    const dialog = await open();
+    const choice = within(dialog).getByRole("button", { name: "能力示例 示例 · 预设评审" });
+    fireEvent.click(choice);
+    expect(onSelectExample).toHaveBeenCalledOnce();
+    expect(screen.getByRole("dialog", { name: "历史问答" })).toBe(dialog);
+    expect((choice as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { if (outcome === "false") finish(false); else fail(new Error("读取示例失败")); });
+    expect(screen.getByRole("dialog", { name: "历史问答" })).toBe(dialog);
+    expect((choice as HTMLButtonElement).disabled).toBe(false);
+    if (outcome === "rejection") expect(within(dialog).getByRole("alert").textContent).toContain("暂时无法打开示例");
+    expect(callbacks.onSelect).not.toHaveBeenCalled(); expect(callbacks.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("keeps example selection when closing commits deletion of the active real conversation", async () => {
+    const callbacks = props(); callbacks.onDelete.mockResolvedValue(true);
+    const onSelectExample = vi.fn(async () => true);
+    render(<RagConversationHistory {...callbacks} examples={[{ id: "example", title: "能力示例" }]} onSelectExample={onSelectExample} />);
+    const dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除企业能力介绍" }));
+    expect(callbacks.onDelete).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "能力示例 示例 · 预设评审" }));
+    await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledWith("one"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
+    expect(onSelectExample).toHaveBeenCalledWith("example");
+    expect(callbacks.onSelect).not.toHaveBeenCalled();
+    expect(onSelectExample.mock.invocationCallOrder[0]).toBeLessThan(callbacks.onDelete.mock.invocationCallOrder[0]);
+    expect(sessionStorage.length).toBe(0);
+  });
   it("opens history without switching or deleting, selects a session and closes", async () => {
     const callbacks = props();
     render(<RagConversationHistory {...callbacks} />);

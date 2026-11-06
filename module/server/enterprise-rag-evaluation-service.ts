@@ -38,8 +38,9 @@ import { RAG_RULE_VERSION } from "../client/dashboard/ai-website-preview/rag-eva
 import { enterpriseQaDocumentCatalog } from "./enterprise-qa-answer.js";
 import type { ModuleHttpCore } from "./http-api.js";
 import { intentHash, intentSkillPorts } from "./intent-skill-runtime.js";
+import { automaticRagEvaluationOperationId, automaticRagEvaluationEnabled, isAutomaticRagEvaluationEligible } from "./enterprise-rag-automatic-evaluation.js";
 
-import { createRagChecklist, RAG_CHECKLIST_RULE_VERSION, RAG_CHECKLIST_VERSION } from "../contracts/enterprise-rag-checklist.js";
+import { createRagChecklist, ragChecklistSchema, RAG_CHECKLIST_RULE_VERSION, RAG_CHECKLIST_VERSION } from "../contracts/enterprise-rag-checklist.js";
 import { checklistEnterpriseRagEvaluationSkill } from "../client/dashboard/ai-website-preview/enterprise-rag-checklist-skill.js";
 
 async function scoreJudgments(input: EnterpriseRagEvaluationFrozenInput, judgments: EnterpriseRagJudgeOutput) {
@@ -59,6 +60,20 @@ const RESULT_EVENT_TYPE = "enterprise_rag_evaluation_report";
 const MAX_EXECUTION_MS = 30 * 60_000;
 const LEASE_MS = 120_000;
 const RESULT_SYNC_GRACE_MS = 120_000;
+// Shared across short-lived runtime adapters. Every attempted active row moves
+// the cursor, including invalid old rows; a full page cannot starve later work.
+const sweepCursors = new Map<string, string>();
+
+const frozenRuntimeInputShape = z.object({
+  schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  operationToken: z.string(), inputHash: z.string(),
+  sourceQaTaskId: z.string(), sourceTurnId: z.string(), conversationId: z.string(),
+  questionMessageId: z.string(), answerMessageId: z.string(), question: z.string(), answer: z.string(),
+  sources: z.array(z.object({ id: z.string(), title: z.string(), kind: z.enum(["published_knowledge", "user_attachment"]), content: z.string().nullable() }).passthrough()),
+  allowedEvidenceIds: z.array(z.string()),
+  knowledgeBase: z.object({ snapshotId: z.string(), version: z.number().int(), sourceFileName: z.string(), documentCount: z.number().int(), contentHash: z.string() }).passthrough(),
+  evaluator: z.object({ skillId: z.literal("enterprise-rag-evaluation"), skillVersion: z.string(), ruleVersion: z.string(), judgeVersion: z.string() }).passthrough(),
+}).passthrough();
 
 const startSchema = z.object({
   clientRequestId: z.string().uuid(),
@@ -86,6 +101,7 @@ type RuntimeState = {
   upstreamEffort: string | null;
   phase: RunPhase;
   createdAt: string;
+  automatic?: true;
   lease?: { owner: string; expiresAt: number };
   createClaimedAt?: number;
   terminalObservedAt?: number;
@@ -107,8 +123,9 @@ export class EnterpriseRagEvaluationError extends Error {
     readonly code: string,
     message: string,
     readonly status = 409,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "EnterpriseRagEvaluationError";
   }
 }
@@ -162,7 +179,11 @@ function runtimeFromTask(task: any): RuntimeState {
       "评估任务上下文不完整，请重新发起评估。",
     );
   }
-  const input = value.input as EnterpriseRagEvaluationFrozenInput | undefined;
+  // Inspect structure before any nested dereference or input hash/schema work.
+  // Older malformed JSON must become a typed unavailable record, not TypeError.
+  const input = frozenRuntimeInputShape.safeParse(value.input).success
+    ? value.input as EnterpriseRagEvaluationFrozenInput
+    : undefined;
   const phase = value.phase;
   if (
     ![1, 2, 3].includes(Number(value.schemaVersion)) ||
@@ -171,7 +192,7 @@ function runtimeFromTask(task: any): RuntimeState {
     !input ||
     input.schemaVersion !== value.schemaVersion ||
     (input.schemaVersion === 2 && (input.taskScope !== "single_turn" || input.evaluator.ruleVersion !== RAG_RULE_VERSION || input.evaluator.judgeVersion !== "2.0.0" || input.evaluator.skillVersion !== ENTERPRISE_RAG_EVALUATION_SKILL_VERSION)) ||
-    (input.schemaVersion === 3 && (input.taskScope !== "single_turn" || input.evaluator.ruleVersion !== RAG_CHECKLIST_RULE_VERSION || input.evaluator.judgeVersion !== RAG_CHECKLIST_VERSION || input.evaluator.skillVersion !== RAG_CHECKLIST_VERSION || !input.checklist)) ||
+    (input.schemaVersion === 3 && (input.taskScope !== "single_turn" || input.evaluator.ruleVersion !== RAG_CHECKLIST_RULE_VERSION || input.evaluator.judgeVersion !== RAG_CHECKLIST_VERSION || input.evaluator.skillVersion !== RAG_CHECKLIST_VERSION || !ragChecklistSchema.safeParse(input.checklist).success)) ||
     input.sourceQaTaskId !== value.sourceQaTaskId ||
     input.sourceTurnId !== value.sourceTurnId ||
     typeof input.operationToken !== "string" ||
@@ -247,7 +268,7 @@ export function createEnterpriseRagEvaluationService(
     frontmindUser?: { id: number; role: string };
   }).frontmindUser;
 
-  function assertActor() {
+  const assertActor = () => {
     if (!actor || actor.id !== context.actorUserId) {
       throw new EnterpriseRagEvaluationError(
         "ACTOR_INVALID",
@@ -256,7 +277,31 @@ export function createEnterpriseRagEvaluationService(
       );
     }
     model.assertActorAllowed(actor);
-  }
+  };
+  return createEnterpriseRagEvaluationRuntime(core, context, {
+    assertAccess: assertActor,
+    lockBusinessWrite: (tx) => model.lockCustomerProjectBusinessWrite(tx, context.accountUserId, actor),
+  });
+}
+
+/** Trusted server/worker scope; HTTP callers must use the authenticated adapter above. */
+export type EnterpriseRagEvaluationRuntimeScope = {
+  accountUserId: number;
+  enterpriseProjectId: string | null;
+};
+
+export function createEnterpriseRagEvaluationRuntime(
+  core: Pick<ModuleHttpCore, "database" | "environment">,
+  context: EnterpriseRagEvaluationRuntimeScope,
+  access: {
+    assertAccess(): void;
+    lockBusinessWrite(tx: any): Promise<void>;
+    /** Trusted worker admission; the authenticated HTTP adapter retains its existing capability check. */
+    assertEvaluationExecutionAllowed?(): Promise<void>;
+  },
+) {
+  const model = intentSkillPorts();
+  const assertActor = () => access.assertAccess();
 
   async function database() {
     return core.database();
@@ -414,6 +459,7 @@ export function createEnterpriseRagEvaluationService(
     sourceQaTaskId: string,
     sourceTurnId: string,
     operationToken: string,
+    automatic = false,
   ): Promise<EnterpriseRagEvaluationFrozenInput> {
     const db = await database();
     const source = (await db
@@ -431,13 +477,11 @@ export function createEnterpriseRagEvaluationService(
         eq(model.agentOperations.operationType, SOURCE_QA_CONTRACT),
         eq(model.agentOperations.contractName, SOURCE_QA_CONTRACT),
         eq(model.agentOperations.contractRevision, SOURCE_QA_CONTRACT_REVISION),
-        eq(model.agentOperations.status, "succeeded"),
       ))
       .limit(1))[0] as OwnedOperation | undefined;
-    // The core normalizes successful general chat in agent_operations while
-    // preserving the provider's raw terminal spelling (for example stopped).
-    // The exact completed turn and server-owned final answer are validated
-    // below, so never reject a valid source by coupling to that raw spelling.
+    // A shared QA task may already be running its next question. Authority is
+    // the exact completed turn and its server-owned final answer below, rather
+    // than the task's mutable overall status or raw provider terminal spelling.
     if (!source) {
       throw new EnterpriseRagEvaluationError(
         "SOURCE_QA_NOT_FOUND",
@@ -497,7 +541,7 @@ export function createEnterpriseRagEvaluationService(
     }
 
     const turnRows = resultRows(await db.execute(sql`
-      SELECT id, conversationId, upstreamTaskId, operationType, status
+      SELECT id, conversationId, upstreamTaskId, operationType, status, metadata
       FROM conversation_turns
       WHERE id = ${sourceTurnId}
         AND upstreamTaskId = ${sourceQaTaskId}
@@ -515,6 +559,12 @@ export function createEnterpriseRagEvaluationService(
       );
     }
     const turn = turnRows[0];
+    if (automatic && !isAutomaticRagEvaluationEligible(jsonRecord(turn.metadata)?.autoEvaluation)) {
+      throw new EnterpriseRagEvaluationError(
+        "SOURCE_AUTO_EVALUATION_NOT_ELIGIBLE",
+        "该回答没有自动评估资格。",
+      );
+    }
     const messageRows = resultRows(await db.execute(sql`
       SELECT id, conversationId, turnId, role, content, sequence, metadata
       FROM messages
@@ -714,7 +764,8 @@ export function createEnterpriseRagEvaluationService(
   }
 
   async function prepare() {
-    await model.assertServiceCapability(context.accountUserId, "globalKeywords");
+    if (access.assertEvaluationExecutionAllowed) await access.assertEvaluationExecutionAllowed();
+    else await model.assertServiceCapability(context.accountUserId, "globalKeywords");
     const [status, credential] = await Promise.all([
       model.getApiCredentialStatus(context.accountUserId),
       model.getDecryptedCredentialForUser(context.accountUserId),
@@ -1365,9 +1416,15 @@ export function createEnterpriseRagEvaluationService(
     }
   }
 
-  async function start(value: unknown) {
+  async function start(value: unknown, options?: {
+    automatic?: boolean;
+    frozen?: EnterpriseRagEvaluationFrozenInput;
+  }) {
     assertActor();
     const input = startSchema.parse(value);
+    if (!automaticRagEvaluationEnabled(core.environment)) {
+      throw new EnterpriseRagEvaluationError("AUTOMATIC_EVALUATION_DISABLED", "当前环境使用模拟评估，不会创建真实评估任务。", 409);
+    }
     const existing = await findOwnedOperation(input.clientRequestId);
     if (existing) {
       const runtime = runtimeFromTask(existing.task);
@@ -1380,7 +1437,7 @@ export function createEnterpriseRagEvaluationService(
           "本次评估请求标识已用于其他问答。",
         );
       }
-      await advance(existing);
+      if (!options?.automatic) await advance(existing);
       return dto((await findOwnedOperation(input.clientRequestId))!);
     }
 
@@ -1391,7 +1448,7 @@ export function createEnterpriseRagEvaluationService(
       input.turnId,
     );
     if (activeCoordinate) {
-      await advance(activeCoordinate);
+      if (!options?.automatic) await advance(activeCoordinate);
       return dto((await findOwnedOperation(activeCoordinate.operation.id))!);
     }
 
@@ -1400,14 +1457,20 @@ export function createEnterpriseRagEvaluationService(
       prepared = await prepare();
     } catch (error) {
       if (error instanceof EnterpriseRagEvaluationError) throw error;
+      const denied = Number((error as { statusCode?: unknown; status?: unknown } | null)?.statusCode ??
+        (error as { status?: unknown } | null)?.status);
+      if (denied === 401 || denied === 403) {
+        throw new EnterpriseRagEvaluationError("RAG_ACCESS_DENIED", "当前账号无权执行此评估。", denied, { cause: error });
+      }
       throw new EnterpriseRagEvaluationError(
         "MODEL_UNAVAILABLE",
         "当前评估模型服务不可用，请检查服务权限与 API 配置。",
         503,
+        { cause: error },
       );
     }
     const operationToken = `brand-rag-evaluation:${input.clientRequestId}`;
-    const frozen = await resolveFrozenInput(
+    const frozen = options?.frozen ?? await resolveFrozenInput(
       input.sourceQaTaskId,
       input.turnId,
       operationToken,
@@ -1430,13 +1493,14 @@ export function createEnterpriseRagEvaluationService(
       upstreamEffort: prepared.credential.upstreamEffort,
       phase: "queued",
       createdAt: new Date().toISOString(),
+      ...(options?.automatic ? { automatic: true as const } : {}),
     };
     const taskId = randomUUID();
     const db = await database();
     let concurrent: OwnedOperation | undefined;
     await db.transaction(async (tx: any) => {
       await model.lockAccountRecord(tx, context.accountUserId);
-      await model.lockCustomerProjectBusinessWrite(tx, context.accountUserId, actor);
+      await access.lockBusinessWrite(tx);
       concurrent = await findActiveCoordinate(
         input.sourceQaTaskId,
         input.turnId,
@@ -1511,7 +1575,7 @@ export function createEnterpriseRagEvaluationService(
       });
     });
     if (concurrent) {
-      await advance(concurrent);
+      if (!options?.automatic) await advance(concurrent);
       return dto((await findOwnedOperation(concurrent.operation.id))!);
     }
     const reserved = await findOwnedOperation(input.clientRequestId);
@@ -1522,7 +1586,7 @@ export function createEnterpriseRagEvaluationService(
         503,
       );
     }
-    await advance(reserved);
+    if (!options?.automatic) await advance(reserved);
     return dto((await findOwnedOperation(input.clientRequestId))!);
   }
 
@@ -1537,8 +1601,7 @@ export function createEnterpriseRagEvaluationService(
         404,
       );
     }
-    await advance(owned);
-    return dto((await findOwnedOperation(parsed))!);
+    return dto(owned);
   }
 
   async function findActiveCoordinate(
@@ -1601,14 +1664,124 @@ export function createEnterpriseRagEvaluationService(
   async function latest(sourceQaTaskId: string, turnId: string) {
     assertActor();
     const input = latestSchema.parse({ sourceQaTaskId, turnId });
-    const active = await findActiveCoordinate(input.sourceQaTaskId, input.turnId);
-    if (active) {
-      await advance(active);
-    }
     const history = await ownedHistory(input.sourceQaTaskId, input.turnId);
-    const projected = await Promise.all(history.map(dto));
-    return { latest: projected[0] ?? null, history: projected };
+    const projected = await Promise.all(history.map(async owned => {
+      try { return await dto(owned); }
+      catch (error) {
+        // One incompatible historical snapshot must not hide other valid reports.
+        // Project an unavailable record without modifying or inventing a report.
+        if (!(error instanceof EnterpriseRagEvaluationError)) throw error;
+        return {
+          operationId: String(owned.operation.id),
+          ...input,
+          status: "failed" as const,
+          createdAt: iso(owned.operation.createdAt),
+          updatedAt: iso(owned.operation.updatedAt),
+          report: null,
+          error: { code: error.code, message: "该历史评估暂时无法读取，原始记录已保留。" },
+        };
+      }
+    }));
+    let automaticExpected = false;
+    if (projected.length === 0 && automaticRagEvaluationEnabled(core.environment)) {
+      const db = await database();
+      const rows = resultRows(await db.execute(sql`
+        SELECT metadata FROM conversation_turns
+        WHERE id = ${input.turnId}
+          AND upstreamTaskId = ${input.sourceQaTaskId}
+          AND userId = ${context.accountUserId}
+          AND enterpriseProjectId <=> ${context.enterpriseProjectId}
+          AND operationType = 'general_chat_v2'
+          AND status = 'completed'
+        LIMIT 1
+      `));
+      automaticExpected = rows.length === 1 &&
+        isAutomaticRagEvaluationEligible(jsonRecord(rows[0].metadata)?.autoEvaluation);
+    }
+    return { latest: projected[0] ?? null, history: projected, automaticExpected };
   }
 
-  return { start, observe, latest };
+  async function ensureAutomatic(value: unknown) {
+    assertActor();
+    if (!automaticRagEvaluationEnabled(core.environment)) return null;
+    const coordinate = latestSchema.parse(value);
+    const frozen = await resolveFrozenInput(coordinate.sourceQaTaskId, coordinate.turnId, "automatic-pending", true);
+    const operationId = automaticRagEvaluationOperationId({
+      ...context,
+      ...coordinate,
+      answerMessageId: frozen.answerMessageId,
+      answerHash: sha256(frozen.answer),
+    });
+    // The ID is independent of browser lifecycle and evaluator revisions. A
+    // terminal failure or unknown create is a permanent fence for this answer.
+    const existing = await findOwnedOperation(operationId);
+    if (existing) return dto(existing);
+    // An explicitly requested evaluation may already own this exact answer.
+    const previous = (await ownedHistory(coordinate.sourceQaTaskId, coordinate.turnId)).find(owned => {
+      const runtime = runtimeFromTask(owned.task);
+      return runtime.input.answerMessageId === frozen.answerMessageId && sha256(runtime.input.answer) === sha256(frozen.answer);
+    });
+    if (previous) return dto(previous);
+    return start({ ...coordinate, clientRequestId: operationId }, {
+      automatic: true,
+      frozen: { ...frozen, operationToken: `brand-rag-evaluation:${operationId}` },
+    });
+  }
+
+  async function advanceOperation(operationId: string) {
+    assertActor();
+    if (!automaticRagEvaluationEnabled(core.environment)) return null;
+    const parsed = z.string().uuid().parse(operationId);
+    const owned = await findOwnedOperation(parsed);
+    if (!owned) throw new EnterpriseRagEvaluationError("EVALUATION_NOT_FOUND", "评估任务不存在。", 404);
+    const db = await database();
+    await db.transaction(async tx => {
+      await model.lockAccountRecord(tx, context.accountUserId);
+      await access.lockBusinessWrite(tx);
+    });
+    await advance(owned);
+    return dto((await findOwnedOperation(parsed))!);
+  }
+
+  async function sweep(options?: { max?: number }) {
+    assertActor();
+    if (!automaticRagEvaluationEnabled(core.environment)) return { advanced: 0, deferred: 0 };
+    const db = await database();
+    const scopeKey = JSON.stringify([context.accountUserId, context.enterpriseProjectId]);
+    const cursor = sweepCursors.get(scopeKey);
+    const limit = Math.max(1, Math.min(options?.max ?? 10, 20));
+    const page = (after?: string) => db.select({ operation: model.agentOperations, task: model.agentTasks })
+      .from(model.agentOperations).innerJoin(model.agentTasks, eq(model.agentTasks.operationId, model.agentOperations.id))
+      .where(and(
+        eq(model.agentOperations.scope, "managed_user"),
+        eq(model.agentOperations.accountUserId, context.accountUserId),
+        projectCondition(model.agentOperations.enterpriseProjectId),
+        eq(model.agentOperations.operationType, ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE),
+        eq(model.agentOperations.contractName, ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE),
+        inArray(model.agentOperations.contractRevision, [1, 2, ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION]),
+        inArray(model.agentOperations.status, ["queued", "running", "result_pending"]),
+        ...(after ? [sql`${model.agentOperations.id} > ${after}`] : []),
+      )).orderBy(model.agentOperations.id).limit(limit);
+    let candidates = await page(cursor) as OwnedOperation[];
+    if (candidates.length === 0 && cursor) {
+      sweepCursors.delete(scopeKey);
+      candidates = await page() as OwnedOperation[];
+    }
+    let advanced = 0, deferred = 0;
+    for (const candidate of candidates) {
+      try {
+        await db.transaction(async tx => {
+          await model.lockAccountRecord(tx, context.accountUserId);
+          await access.lockBusinessWrite(tx);
+        });
+        await advance(candidate);
+        advanced += 1;
+      }
+      catch { deferred += 1; }
+      finally { sweepCursors.set(scopeKey, String(candidate.operation.id)); }
+    }
+    return { advanced, deferred };
+  }
+
+  return { start: (value: unknown) => start(value), observe, latest, ensureAutomatic, advance: advanceOperation, sweep };
 }

@@ -22,7 +22,7 @@ function EvidenceReferences({ ids }: { ids: readonly string[] }) {
 }
 
 /** A reading document with inset surfaces only for actions and the example. */
-export function RagImprovementPlan({ plan, onAdopt }: { plan: RagImprovementPlanData; onAdopt: (answer: string) => void }) {
+export function RagImprovementPlan({ plan, onAdopt, readOnly = false }: { plan: RagImprovementPlanData; onAdopt: (answer: string) => void; readOnly?: boolean }) {
   const id = useId();
   const hasAdjustments = plan.steps.length > 0 || plan.optionalSuggestions.length > 0;
 
@@ -59,7 +59,7 @@ export function RagImprovementPlan({ plan, onAdopt }: { plan: RagImprovementPlan
     {plan.rewrite && <section aria-labelledby={`${id}-rewrite`}>
       <h3 id={`${id}-rewrite`}>改写示例</h3>
       <p className="rag-improvement-plan__answer">{plan.rewrite}</p>
-      <button type="button" className="sfp-button sfp-button--primary" onClick={() => onAdopt(plan.rewrite!)}>采用改写并重新评审</button>
+      {!readOnly && <button type="button" className="sfp-button sfp-button--primary" onClick={() => onAdopt(plan.rewrite!)}>采用改写并重新评审</button>}
     </section>}
 
     {plan.checks.length > 0 && <section aria-labelledby={`${id}-checks`}>

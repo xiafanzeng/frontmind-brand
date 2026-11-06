@@ -21,6 +21,7 @@ import {
 import { enterpriseQaDocumentCatalog } from "../server/enterprise-qa-answer";
 import {
   createEnterpriseRagEvaluationService,
+  createEnterpriseRagEvaluationRuntime,
   EnterpriseRagEvaluationError,
 } from "../server/enterprise-rag-evaluation-service";
 import type { BrandKeywordPorts } from "../server/brand-keyword-ports";
@@ -145,12 +146,13 @@ function harness(documentCount = 2) {
     updatedAt: new Date("2026-10-26T00:01:00.000Z"),
   }];
   const persistedEvents: any[] = [];
-  const turnRows = [{
+  const turnRows: any[] = [{
     id: TURN_ID,
     conversationId: CONVERSATION_ID,
     upstreamTaskId: SOURCE_TASK_ID,
     operationType: "general_chat_v2",
     status: "completed",
+    metadata: { autoEvaluation: { intent: "enterprise_rag_once", eligible: true } },
   }];
   const messageRows = [{
     id: USER_MESSAGE_ID,
@@ -207,15 +209,17 @@ function harness(documentCount = 2) {
     private joined = false;
     private predicate: any;
     private maximum = Number.POSITIVE_INFINITY;
+    private ascendingIds = false;
     constructor(private readonly fields?: any) {}
     from(table: any) { this.fromTable = table; return this; }
     innerJoin() { this.joined = true; return this; }
     where(predicate: any) { this.predicate = predicate; return this; }
-    orderBy() { return this; }
+    orderBy(...columns: any[]) { this.ascendingIds = columns[0] === operations.id; return this; }
     limit(value: number) { this.maximum = value; return this; }
     for() { return this; }
     private run() {
       const values = params(this.predicate);
+      const hasCursor = this.predicate && dialect.sqlToQuery(this.predicate).sql.includes(" > ?");
       if (this.fromTable === tasks && !this.joined) {
         const rows = taskRows.filter((row) => values.length === 0 || values.includes(row.id));
         return rows.slice(0, this.maximum).map((row) => project(this.fields, row));
@@ -232,14 +236,20 @@ function harness(documentCount = 2) {
         const task = taskRows.find((candidate) => candidate.operationId === operation.id);
         return task ? [{ operation, task }] : [];
       });
+      if (values.includes("managed_user")) {
+        joined = joined.filter(({ operation }) => values.includes(operation.accountUserId) && values.includes(operation.enterpriseProjectId));
+      }
       if (values.includes("dashboard.general-chat")) {
         joined = joined.filter(({ operation }) => operation.operationType === "dashboard.general-chat");
       }
       if (values.includes("brand_rag_answer_evaluation")) {
         joined = joined.filter(({ operation }) => operation.operationType === "brand_rag_answer_evaluation");
       }
+      const statusValues = values.filter(value => ["queued", "running", "result_pending", "succeeded", "failed", "cancelled", "attention_required"].includes(String(value)));
+      if (statusValues.length) joined = joined.filter(({ operation }) => statusValues.includes(operation.status));
       const explicitOperation = operationRows.find((operation) => values.includes(operation.id));
-      if (explicitOperation && this.fromTable === operations) {
+      if (hasCursor) joined = joined.filter(({ operation }) => String(operation.id) > String(values.at(-1)));
+      if (explicitOperation && this.fromTable === operations && !hasCursor) {
         joined = joined.filter(({ operation }) => operation.id === explicitOperation.id);
       } else if (this.fromTable === operations && values.length === 1) {
         joined = [];
@@ -254,7 +264,7 @@ function harness(documentCount = 2) {
           return runtime?.sourceQaTaskId === SOURCE_TASK_ID && runtime?.sourceTurnId === TURN_ID;
         });
       }
-      joined.sort((a, b) => Number(b.operation.createdAt) - Number(a.operation.createdAt));
+      joined.sort((a, b) => this.ascendingIds ? String(a.operation.id).localeCompare(String(b.operation.id)) : Number(b.operation.createdAt) - Number(a.operation.createdAt));
       return joined.slice(0, this.maximum).map((row) => project(this.fields, row));
     }
     then<TResult1 = any[], TResult2 = never>(
@@ -265,19 +275,28 @@ function harness(documentCount = 2) {
     }
   }
 
+  let transactionTail = Promise.resolve();
   const db: any = {
     select(fields?: any) { return new Query(fields); },
     async execute(query: any) {
       const statement = dialect.sqlToQuery(query);
       if (statement.sql.includes("FROM conversation_turns")) {
-        return [statement.params.includes(TURN_ID) && statement.params.includes(SOURCE_TASK_ID) ? turnRows : []];
+        return [statement.params.includes(TURN_ID) && statement.params.includes(SOURCE_TASK_ID) && statement.params.includes(42) && statement.params.includes("project") ? turnRows.filter(row => row.status === "completed") : []];
       }
       if (statement.sql.includes("FROM messages")) {
         return [statement.params.includes(TURN_ID) ? messageRows : []];
       }
       return [[]];
     },
-    async transaction(work: (tx: any) => Promise<any>) { return work(db); },
+    async transaction(work: (tx: any) => Promise<any>) {
+      // Simulate the account row lock used by independent worker transactions.
+      const previous = transactionTail;
+      let release!: () => void;
+      transactionTail = new Promise<void>(resolve => { release = resolve; });
+      await previous;
+      try { return await work(db); }
+      finally { release(); }
+    },
     insert(table: any) {
       return { values: async (value: any) => {
         const row = {
@@ -323,6 +342,7 @@ function harness(documentCount = 2) {
     sendMessage: vi.fn(async () => ({ taskId: "provider-evaluation" })),
     listAllMessages: vi.fn(async () => providerEvents),
   };
+  const capability = vi.fn(async () => ({}));
   registerIntentSkillPorts({
     agentOperations: operations,
     agentTasks: tasks,
@@ -330,7 +350,7 @@ function harness(documentCount = 2) {
     assertActorAllowed: () => {},
     lockAccountRecord: async () => {},
     lockCustomerProjectBusinessWrite: async () => {},
-    assertServiceCapability: async () => ({}),
+    assertServiceCapability: capability,
     getApiCredentialStatus: async () => credential,
     getDecryptedCredentialForUser: async () => credential,
     getDecryptedCredentialForAccountById: async () => credential,
@@ -351,7 +371,7 @@ function harness(documentCount = 2) {
       businessActorId: "42",
     }),
     database: async () => db,
-    environment: {},
+    environment: { FRONTMIND_RAG_AUTO_EVALUATION_MODE: "live" },
   };
   const service = createEnterpriseRagEvaluationService(core, {
     frontmindUser: { id: 42, role: "user" },
@@ -362,7 +382,7 @@ function harness(documentCount = 2) {
     turnId: TURN_ID,
   };
   function acceptedOutput(canonicalIds = false): any {
-    const evaluatorTask = taskRows.find((task) => task.operationId === REQUEST_ID);
+    const evaluatorTask = taskRows.find((task) => task.operationId === REQUEST_ID) ?? taskRows.find(task => task.providerRuntime?.enterpriseRagEvaluation);
     const runtime = evaluatorTask.providerRuntime.enterpriseRagEvaluation;
     const input = runtime.input;
     const alias = (canonicalId: string) => canonicalIds
@@ -468,7 +488,12 @@ function harness(documentCount = 2) {
   }
   return {
     service,
+    core,
+    db,
+    turnRows,
+    messageRows,
     client,
+    capability,
     startInput,
     acceptedOutput,
     pushProviderAssistant,
@@ -483,6 +508,217 @@ function harness(documentCount = 2) {
 }
 
 describe("企业 RAG 自动评估持久化服务", () => {
+  it("GET 历史及单条观察只读取；后台 sweep 在没有浏览器轮询时推进任务", async () => {
+    const h = harness();
+    const expected = await h.service.latest(SOURCE_TASK_ID, TURN_ID);
+    expect(expected).toEqual({ latest: null, history: [], automaticExpected: true });
+    await h.service.ensureAutomatic({ sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID });
+    expect(h.client.createTask).not.toHaveBeenCalled();
+    const updates = vi.spyOn(h.db, "update");
+    const inserts = vi.spyOn(h.db, "insert");
+    const queued = await h.service.latest(SOURCE_TASK_ID, TURN_ID);
+    const id = queued.latest!.operationId;
+    expect((await h.service.observe(id)).status).toBe("queued");
+    expect(h.client.createTask).not.toHaveBeenCalled();
+    expect(h.client.uploadFile).not.toHaveBeenCalled();
+    expect(h.client.listAllMessages).not.toHaveBeenCalled();
+    expect(updates).not.toHaveBeenCalled();
+    expect(inserts).not.toHaveBeenCalled();
+    await h.service.sweep({ max: 1 });
+    expect((await h.service.observe(id)).status).toBe("running");
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    updates.mockClear();
+    inserts.mockClear();
+    const reads = h.client.listAllMessages.mock.calls.length;
+    await h.service.latest(SOURCE_TASK_ID, TURN_ID);
+    await h.service.observe(id);
+    expect(h.client.listAllMessages).toHaveBeenCalledTimes(reads);
+    expect((await h.service.latest(SOURCE_TASK_ID, TURN_ID)).automaticExpected).toBe(false);
+    expect(updates).not.toHaveBeenCalled();
+    expect(inserts).not.toHaveBeenCalled();
+  });
+
+  it("相同新回答只预留一次，失败或创建结果未知后也不会重新付费创建", async () => {
+    const h = harness();
+    const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
+    const first = await h.service.ensureAutomatic(coordinate);
+    const again = await h.service.ensureAutomatic(coordinate);
+    expect(again?.operationId).toBe(first?.operationId);
+    expect(h.operationRows.filter(row => row.operationType === "brand_rag_answer_evaluation")).toHaveLength(1);
+    h.client.createTask.mockRejectedValueOnce(Object.assign(new Error("response lost"), { outcomeUnknown: true }));
+    await h.service.sweep({ max: 1 });
+    expect((await h.service.ensureAutomatic(coordinate))?.operationId).toBe(first?.operationId);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    const task = h.taskRows.find(row => row.operationId === first!.operationId);
+    task.providerRuntime.enterpriseRagEvaluation.phase = "failed";
+    h.operationRows.find(row => row.id === first!.operationId).status = "failed";
+    expect((await h.service.ensureAutomatic(coordinate))?.status).toBe("failed");
+    await h.service.sweep();
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("完成报告后的重开和重复确保继续返回原不可变报告", async () => {
+    const h = harness();
+    const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
+    const queued = await h.service.ensureAutomatic(coordinate);
+    await h.service.sweep({ max: 1 });
+    h.completeProvider();
+    const completed = await h.service.advance(queued!.operationId);
+    expect(completed?.status).toBe("completed");
+    const reopened = await h.service.ensureAutomatic(coordinate);
+    expect(reopened?.report).toEqual(completed?.report);
+    await h.service.latest(SOURCE_TASK_ID, TURN_ID);
+    await h.service.observe(queued!.operationId);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.client.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("两个后台竞争同一新回答只预留一个评估操作", async () => {
+    const h = harness();
+    const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
+    const [first, second] = await Promise.all([
+      h.service.ensureAutomatic(coordinate), h.service.ensureAutomatic(coordinate),
+    ]);
+    expect(first?.operationId).toBe(second?.operationId);
+    expect(h.operationRows.filter(row => row.operationType === "brand_rag_answer_evaluation")).toHaveLength(1);
+    await Promise.all([h.service.sweep({ max: 1 }), h.service.sweep({ max: 1 })]);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("历史轮次、官网来源和开发环境均不触发真实自动评估", async () => {
+    const h = harness();
+    const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
+    h.turnRows[0].metadata = {};
+    expect((await h.service.latest(SOURCE_TASK_ID, TURN_ID)).automaticExpected).toBe(false);
+    await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "SOURCE_AUTO_EVALUATION_NOT_ELIGIBLE" });
+    h.turnRows[0].metadata = { autoEvaluation: { intent: "website_assistant", eligible: true } };
+    await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "SOURCE_AUTO_EVALUATION_NOT_ELIGIBLE" });
+    h.core.environment = {};
+    expect(await h.service.ensureAutomatic(coordinate)).toBeNull();
+    expect(await h.service.sweep()).toEqual({ advanced: 0, deferred: 0 });
+    expect(h.client.createTask).not.toHaveBeenCalled();
+    expect(h.client.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("下一问已运行时仍评估上一条已完成回答，但不评估未完成轮次", async () => {
+    const h = harness();
+    h.operationRows.find(row => row.id === SOURCE_OPERATION_ID).status = "running";
+    const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
+    expect((await h.service.ensureAutomatic(coordinate))?.status).toBe("queued");
+    h.turnRows[0].status = "running";
+    await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "SOURCE_TURN_NOT_FOUND" });
+    expect(h.client.createTask).not.toHaveBeenCalled();
+  });
+
+  it("后台使用可信工作区上下文，不需要伪造 HTTP 请求", async () => {
+    const h = harness();
+    const assertAccess = vi.fn();
+    const lockBusinessWrite = vi.fn(async () => {});
+    const worker = createEnterpriseRagEvaluationRuntime(h.core, {
+      accountUserId: 42, enterpriseProjectId: "project",
+    }, { assertAccess, lockBusinessWrite });
+    const run = await worker.ensureAutomatic({ sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID });
+    expect(run?.status).toBe("queued");
+    expect(assertAccess).toHaveBeenCalled();
+    expect(lockBusinessWrite).toHaveBeenCalledTimes(1);
+    expect(h.client.createTask).not.toHaveBeenCalled();
+  });
+
+  it("仅可信评估后台使用独立准入，HTTP及默认后台保留原能力检查", async () => {
+    const h = harness();
+    h.capability.mockRejectedValue(Object.assign(new Error("capability denied outside HTTP module context"), { statusCode: 403 }));
+    const scope = { accountUserId: 42, enterpriseProjectId: "project" };
+    const access = { assertAccess() {}, async lockBusinessWrite() {} };
+    const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
+    const ordinary = createEnterpriseRagEvaluationRuntime(h.core, scope, access);
+    await expect(ordinary.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "RAG_ACCESS_DENIED", status: 403 });
+    await expect(h.service.start(h.startInput)).rejects.toMatchObject({ code: "RAG_ACCESS_DENIED", status: 403 });
+    expect(h.capability).toHaveBeenCalledWith(42, "globalKeywords");
+    expect(h.operationRows).toHaveLength(1);
+    const admission = vi.fn(async () => {});
+    const trusted = createEnterpriseRagEvaluationRuntime(h.core, scope, {
+      ...access, assertEvaluationExecutionAllowed: admission,
+    });
+    expect((await trusted.ensureAutomatic(coordinate))?.status).toBe("queued");
+    expect(admission).toHaveBeenCalledTimes(1);
+    expect(h.capability).toHaveBeenCalledTimes(2);
+    expect(h.client.createTask).not.toHaveBeenCalled();
+    expect(h.client.uploadFile).not.toHaveBeenCalled();
+    h.turnRows[0].metadata = {};
+    await expect(trusted.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "SOURCE_AUTO_EVALUATION_NOT_ELIGIBLE" });
+    h.core.environment = {};
+    expect(await trusted.ensureAutomatic(coordinate)).toBeNull();
+    expect(admission).toHaveBeenCalledTimes(1);
+    expect(h.client.createTask).not.toHaveBeenCalled();
+  });
+
+  it("可信后台查询仍拒绝其他账户或企业项目的源回答", async () => {
+    const h = harness();
+    for (const scope of [{ accountUserId: 43, enterpriseProjectId: "project" }, { accountUserId: 42, enterpriseProjectId: "other-project" }]) {
+      const worker = createEnterpriseRagEvaluationRuntime(h.core, scope, {
+        assertAccess() {}, async lockBusinessWrite() {},
+      });
+      await expect(worker.ensureAutomatic({ sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID })).rejects.toMatchObject({ code: "SOURCE_QA_NOT_FOUND" });
+    }
+    expect(h.client.createTask).not.toHaveBeenCalled();
+  });
+
+  it("损坏历史记录不会让同一回答的其他报告读取整体失败", async () => {
+    const h = harness();
+    await h.service.start(h.startInput);
+    const task = h.taskRows.find(row => row.operationId === REQUEST_ID);
+    task.providerRuntime.enterpriseRagEvaluation.skillHash = "corrupted";
+    const result = await h.service.latest(SOURCE_TASK_ID, TURN_ID);
+    expect(result.history).toHaveLength(1);
+    expect(result.latest).toMatchObject({ status: "failed", report: null, error: { code: "EVALUATION_CONTEXT_INVALID" } });
+  });
+
+  it("缺少嵌套字段的旧记录不会触发 TypeError 或遮住有效不可变报告", async () => {
+    const h = harness();
+    await h.service.start(h.startInput); h.completeProvider();
+    const completed = await h.service.advance(REQUEST_ID);
+    const original = structuredClone(completed!.report);
+    const operation = h.operationRows.find(row => row.id === REQUEST_ID);
+    const task = h.taskRows.find(row => row.operationId === REQUEST_ID);
+    for (const schemaVersion of [2, 3]) {
+      const id = `00000000-0000-4000-8000-00000000009${schemaVersion}`;
+      h.operationRows.push({ ...structuredClone(operation), id, status: "queued" });
+      const badTask = structuredClone(task);
+      badTask.id = `task-bad-${schemaVersion}`; badTask.operationId = id;
+      badTask.providerRuntime.enterpriseRagEvaluation.schemaVersion = schemaVersion;
+      badTask.providerRuntime.enterpriseRagEvaluation.input = { schemaVersion, taskScope: "single_turn" };
+      h.taskRows.push(badTask);
+      await expect(h.service.observe(id)).rejects.toMatchObject({ code: "EVALUATION_CONTEXT_INVALID" });
+    }
+    const rawBefore = structuredClone(h.taskRows);
+    const result = await h.service.latest(SOURCE_TASK_ID, TURN_ID);
+    expect(result.history).toHaveLength(3);
+    expect(result.history.find(run => run.operationId === REQUEST_ID)?.report).toEqual(original);
+    expect(result.history.filter(run => run.error?.code === "EVALUATION_CONTEXT_INVALID")).toHaveLength(2);
+    expect(h.taskRows).toEqual(rawBefore);
+  });
+
+  it("无效旧任务占满一页时后台继续轮转到同一工作区的后续有效任务", async () => {
+    const h = harness();
+    const queued = await h.service.ensureAutomatic({ sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID });
+    const validOperation = h.operationRows.find(row => row.id === queued!.operationId);
+    const validTask = h.taskRows.find(row => row.operationId === queued!.operationId);
+    for (let index = 0; index < 20; index += 1) {
+      const id = `00000000-0000-4000-8000-${String(1000 + index).padStart(12, "0")}`;
+      h.operationRows.push({ ...structuredClone(validOperation), id });
+      const task = structuredClone(validTask); task.id = `malformed-${index}`; task.operationId = id;
+      delete task.providerRuntime.enterpriseRagEvaluation.input.evaluator;
+      h.taskRows.push(task);
+    }
+    const before = structuredClone(h.taskRows.filter(row => row.id.startsWith("malformed-")));
+    // A cursor left by another test may begin past the old rows. At most two
+    // bounded passes must reach the valid task regardless of the starting point.
+    await h.service.sweep({ max: 20 });
+    await h.service.sweep({ max: 20 });
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.taskRows.filter(row => row.id.startsWith("malformed-"))).toEqual(before);
+  });
+
   it("绑定指定完成 turn，幂等创建一次，并由现有评分 Skill 生成不可变报告", async () => {
     const h = harness();
     const running = await h.service.start(h.startInput);
@@ -560,7 +796,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
       row.operationType === "brand_rag_answer_evaluation")).toHaveLength(1);
 
     h.completeProvider();
-    const completed = await h.service.observe(REQUEST_ID);
+    const completed = await h.service.advance(REQUEST_ID);
     expect(completed.status).toBe("completed");
     expect(completed.report?.result).toMatchObject({
       skillId: "enterprise-rag-evaluation",
@@ -598,7 +834,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     }
     h.pushProviderOutput(invalid, "provider-invalid-result");
 
-    const pending = await h.service.observe(REQUEST_ID);
+    const pending = await h.service.advance(REQUEST_ID);
     expect(pending.status).toBe("result_pending");
     expect(pending.report).toBeNull();
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
@@ -610,7 +846,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     );
 
     h.pushProviderOutput(h.acceptedOutput(), "provider-repaired-result");
-    const completed = await h.service.observe(REQUEST_ID);
+    const completed = await h.service.advance(REQUEST_ID);
     expect(completed.status).toBe("completed");
     expect(completed.report?.result.score).toBe(100);
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
@@ -624,7 +860,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     invalid.claims[0].status = "unsupported";
     h.pushProviderOutput(invalid, "provider-unsupported-with-source");
 
-    const pending = await h.service.observe(REQUEST_ID);
+    const pending = await h.service.advance(REQUEST_ID);
     expect(pending.status).toBe("result_pending");
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
     const prompt = h.client.sendMessage.mock.calls[0]![0].prompt;
@@ -633,7 +869,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(prompt).toContain("不得无关重抄");
 
     h.pushProviderOutput(h.acceptedOutput(), "provider-semantic-repaired");
-    const completed = await h.service.observe(REQUEST_ID);
+    const completed = await h.service.advance(REQUEST_ID);
     expect(completed.status).toBe("completed");
     expect(completed.report?.result.score).toBe(100);
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
@@ -648,7 +884,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     invalid.claims[0].sourceIds = [rewrittenSourceId];
     h.pushProviderAssistant(invalid, "provider-invalid-source-assistant");
 
-    const pending = await h.service.observe(REQUEST_ID);
+    const pending = await h.service.advance(REQUEST_ID);
     expect(pending.status).toBe("result_pending");
     expect(pending.report).toBeNull();
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
@@ -669,7 +905,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(h.persistedEvents).toHaveLength(0);
 
     h.pushProviderAssistant(h.acceptedOutput(), "provider-repaired-source-assistant");
-    const completed = await h.service.observe(REQUEST_ID);
+    const completed = await h.service.advance(REQUEST_ID);
     expect(completed.status).toBe("completed");
     expect(completed.report?.result.score).toBe(100);
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
@@ -683,7 +919,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const rewrittenSourceId = `${invalid.claims[0].sourceIds[0]!}6`;
     invalid.claims[0].sourceIds = [rewrittenSourceId];
     h.pushProviderAssistant(invalid, "provider-invalid-source-assistant");
-    await h.service.observe(REQUEST_ID);
+    await h.service.advance(REQUEST_ID);
 
     const invalidRepair = h.acceptedOutput();
     invalidRepair.claims[0].sourceIds = [rewrittenSourceId];
@@ -693,14 +929,14 @@ describe("企业 RAG 自动评估持久化服务", () => {
       .evidenceIds.push(rewrittenSourceId);
     h.pushProviderAssistant(invalidRepair, "provider-invalid-source-repair-assistant");
 
-    const secondPending = await h.service.observe(REQUEST_ID);
+    const secondPending = await h.service.advance(REQUEST_ID);
     expect(secondPending.status).toBe("result_pending");
     expect(secondPending.report).toBeNull();
     expect(h.client.sendMessage).toHaveBeenCalledTimes(2);
 
     h.pushProviderAssistant(invalidRepair, "provider-invalid-source-final-assistant");
 
-    const failed = await h.service.observe(REQUEST_ID);
+    const failed = await h.service.advance(REQUEST_ID);
     expect(failed.status).toBe("failed");
     expect(failed.error?.code).toBe("EVALUATION_REPAIR_FAILED");
     expect(failed.error?.message).toContain("未授权证据别名");
@@ -725,7 +961,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     initial.claims[0].sourceIds = [uncitedSourceAlias];
     h.pushProviderOutput(initial, "provider-semantic-invalid-result");
 
-    const firstPending = await h.service.observe(REQUEST_ID);
+    const firstPending = await h.service.advance(REQUEST_ID);
     expect(firstPending.status).toBe("result_pending");
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
     expect(h.client.sendMessage.mock.calls[0]![0].prompt).toContain(
@@ -747,7 +983,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     repairedWithTypo.gates.find(({id}) => id === "citations")!.status = "failed";
     h.pushProviderAssistant(repairedWithTypo, "provider-repair-new-typo");
 
-    const secondPending = await h.service.observe(REQUEST_ID);
+    const secondPending = await h.service.advance(REQUEST_ID);
     expect(secondPending.status).toBe("result_pending");
     expect(h.client.sendMessage).toHaveBeenCalledTimes(2);
     const finalRepair = h.client.sendMessage.mock.calls[1]![0];
@@ -766,7 +1002,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     );
 
     h.pushProviderOutput(h.acceptedOutput(), "provider-final-repaired-result");
-    const completed = await h.service.observe(REQUEST_ID);
+    const completed = await h.service.advance(REQUEST_ID);
     expect(completed.status).toBe("completed");
     expect(completed.report?.result.score).toBe(100);
     expect(h.client.sendMessage).toHaveBeenCalledTimes(2);
@@ -779,10 +1015,10 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const invalid = h.acceptedOutput();
     invalid.gates[0].evidenceIds = ["claim-30"];
     h.pushProviderOutput(invalid, "provider-invalid-result");
-    await h.service.observe(REQUEST_ID);
+    await h.service.advance(REQUEST_ID);
 
     h.pushProviderOutput(invalid, "provider-invalid-repair");
-    const failed = await h.service.observe(REQUEST_ID);
+    const failed = await h.service.advance(REQUEST_ID);
     expect(failed.status).toBe("failed");
     expect(failed.error?.code).toBe("EVALUATION_REPAIR_FAILED");
     expect(failed.report).toBeNull();
@@ -800,7 +1036,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     }
     h.pushProviderAssistant(invalid, "provider-invalid-assistant");
 
-    const pending = await h.service.observe(REQUEST_ID);
+    const pending = await h.service.advance(REQUEST_ID);
     expect(pending.status).toBe("result_pending");
     expect(pending.report).toBeNull();
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
@@ -812,12 +1048,12 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const resumed = await h.service.start({ ...h.startInput, clientRequestId: "00000000-0000-4000-8000-000000000099" });
     expect(resumed.operationId).toBe(REQUEST_ID); expect(h.client.createTask).toHaveBeenCalledTimes(1);
     h.completeProvider();
-    const completed = await h.service.observe(REQUEST_ID);
+    const completed = await h.service.advance(REQUEST_ID);
     expect(completed.report?.evaluator.ruleVersion).toBe("rag-eval-1.2");
     expect(completed.report?.result.version).toBe("1.0.0");
     expect(completed.report?.result.answerVerdict).toBeUndefined();
     const original = structuredClone(completed.report);
-    expect((await h.service.observe(REQUEST_ID)).report).toEqual(original);
+    expect((await h.service.advance(REQUEST_ID)).report).toEqual(original);
   });
 
   it("已执行的模型评估可以保存待核验质量结论，不触发无意义修复重试", async () => {
@@ -830,11 +1066,11 @@ describe("企业 RAG 自动评估持久化服务", () => {
     output.checks[0].status = "undetermined";
     output.gates.find(gate => gate.id === "availability")!.status = "pending";
     h.pushProviderOutput(output);
-    const completed = await h.service.observe(REQUEST_ID);
+    const completed = await h.service.advance(REQUEST_ID);
     expect(completed.status).toBe("completed");
     expect(completed.report?.result).toMatchObject({ status: "pending", answerVerdict: "pending", score: null });
     expect(h.client.sendMessage).not.toHaveBeenCalled();
-    expect((await h.service.observe(REQUEST_ID)).report).toEqual(completed.report);
+    expect((await h.service.advance(REQUEST_ID)).report).toEqual(completed.report);
   });
 
   it("继续接受使用 legacy schemaHash 启动的在途评估", async () => {
@@ -848,7 +1084,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const invalid = h.acceptedOutput(true);
     invalid.gates[0].evidenceIds = ["legacy-invented-evidence"];
     h.pushProviderOutput(invalid, "legacy-invalid-result");
-    const pending = await h.service.observe(REQUEST_ID);
+    const pending = await h.service.advance(REQUEST_ID);
     expect(pending.status).toBe("result_pending");
     expect(
       h.client.sendMessage.mock.calls[0]![0].structuredOutputSchema,
@@ -866,7 +1102,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
       item.evidenceIds = [frozenSourceId];
     }
     h.pushProviderOutput(legacyValid, "legacy-repaired-result");
-    const completed = await h.service.observe(REQUEST_ID);
+    const completed = await h.service.advance(REQUEST_ID);
     expect(completed.status).toBe("completed");
     expect(completed.report?.result.score).toBe(100);
   });
@@ -882,7 +1118,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     operation.schemaHash = intentHash(enterpriseRagJudgeWireSchema(frozenInput));
 
     h.pushProviderOutput(h.acceptedOutput(true), "old-bound-valid-result");
-    const completed = await h.service.observe(REQUEST_ID);
+    const completed = await h.service.advance(REQUEST_ID);
     expect(completed.status).toBe("completed");
     expect(completed.report?.result.score).toBe(100);
     expect(completed.report?.judgments.claims[0].sourceIds).toEqual([
@@ -898,7 +1134,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     contractTask.providerRuntime.enterpriseRagEvaluation
       .wireContract.bindings[2].canonicalId = "doc-tampered";
     const contractCalls = contractTamper.client.listAllMessages.mock.calls.length;
-    await expect(contractTamper.service.observe(REQUEST_ID)).rejects.toMatchObject({
+    await expect(contractTamper.service.advance(REQUEST_ID)).rejects.toMatchObject({
       code: "EVALUATION_CONTEXT_INVALID",
     });
     expect(contractTamper.client.listAllMessages).toHaveBeenCalledTimes(contractCalls);
@@ -908,7 +1144,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     hashTamper.operationRows.find((row) => row.id === REQUEST_ID).schemaHash =
       "0".repeat(64);
     const hashCalls = hashTamper.client.listAllMessages.mock.calls.length;
-    const failed = await hashTamper.service.observe(REQUEST_ID);
+    const failed = await hashTamper.service.advance(REQUEST_ID);
     expect(failed.status).toBe("failed");
     expect(failed.error?.code).toBe("EVALUATION_CONTEXT_INVALID");
     expect(hashTamper.client.listAllMessages).toHaveBeenCalledTimes(hashCalls);
@@ -951,18 +1187,18 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const h = harness();
     await h.service.start(h.startInput);
     h.completeProvider();
-    await h.service.observe(REQUEST_ID);
+    await h.service.advance(REQUEST_ID);
     const persistedReport = h.persistedEvents[0].normalizedPayload.report;
     const originalRationale = persistedReport.judgments.dimensions[0].rationale;
     persistedReport.judgments.dimensions[0].rationale = "tampered projection";
-    await expect(h.service.observe(REQUEST_ID)).rejects.toEqual(
+    await expect(h.service.advance(REQUEST_ID)).rejects.toEqual(
       expect.objectContaining<Partial<EnterpriseRagEvaluationError>>({
         code: "EVALUATION_REPORT_MISSING",
       }),
     );
     persistedReport.judgments.dimensions[0].rationale = originalRationale;
     h.persistedEvents[0].normalizedPayload.report.result.score = 0;
-    await expect(h.service.observe(REQUEST_ID)).rejects.toEqual(
+    await expect(h.service.advance(REQUEST_ID)).rejects.toEqual(
       expect.objectContaining<Partial<EnterpriseRagEvaluationError>>({
         code: "EVALUATION_REPORT_MISSING",
       }),
@@ -972,9 +1208,9 @@ describe("企业 RAG 自动评估持久化服务", () => {
 
 it("v2在途任务仍使用冻结分级合同，刷新不重新评分", async () => {
   const h = harness(); await h.service.start(h.startInput); h.freezeGraded(); h.completeProvider();
-  const completed = await h.service.observe(REQUEST_ID);
+  const completed = await h.service.advance(REQUEST_ID);
   expect(completed.report?.evaluator.ruleVersion).toBe("rag-eval-1.3");
   expect(completed.report?.result.version).toBe("2.0.0");
   expect(completed.report?.result.score).toBe(100);
-  expect((await h.service.observe(REQUEST_ID)).report).toEqual(completed.report);
+  expect((await h.service.advance(REQUEST_ID)).report).toEqual(completed.report);
 });
