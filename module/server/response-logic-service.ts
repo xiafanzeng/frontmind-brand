@@ -487,6 +487,9 @@ async function requireResponseLogicProviderReadiness(input: {
   expectedQuestionScope: ResponseLogicQuestionWriteScope;
   taskId?: string;
   expectedOperationRevision: number;
+  /** Internal candidate dispatch only: may read a confirmed draft, never bind
+   * lastTaskId or adopt automatically. All ownership/revision gates remain. */
+  candidateOnly?: boolean;
 }): Promise<ResponseLogicProviderReadiness> {
   const db = await requireDb();
   const question = ports.loadQuestionForReadiness
@@ -526,7 +529,7 @@ async function requireResponseLogicProviderReadiness(input: {
     )
     .limit(1);
   const record = recordRows[0] ?? null;
-  assertResponseLogicRecordEditable(record);
+  if (!input.candidateOnly) assertResponseLogicRecordEditable(record);
 
   // Initial dispatch is not allowed to recreate a row from browser state. The
   // browser must first bind a fresh conversation through the versioned draft

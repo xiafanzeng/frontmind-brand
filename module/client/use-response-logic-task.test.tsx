@@ -23,6 +23,19 @@ const error = (status: number, code: string) =>
   Object.assign(new Error("测试错误"), { status, code });
 
 describe("task recovery and stale response isolation", () => {
+  it("only explicitly restarts a completed regeneration candidate and passes its round to polling", async () => {
+    const start = vi.fn().mockResolvedValue({taskId: "new-candidate", attempt: 2});
+    const poll = vi.fn().mockResolvedValue({status: "completed", result: "four-fields"});
+    const hook = renderHook(() => useResponseLogicTask({flow: "regeneration", contextKey: "regenerate", allowRestartCompleted: true,
+      recover: async () => ({status: "found" as const, taskId: "old-candidate", attempt: 1}), start, poll}));
+    await act(async () => {});
+    expect(poll).toHaveBeenCalledWith("old-candidate", expect.any(AbortSignal), 1);
+    await act(async () => {await hook.result.current.start();});
+    expect(start).not.toHaveBeenCalled();
+    await act(async () => {await Promise.all([hook.result.current.start({retry: true}), hook.result.current.start({retry: true})]);});
+    expect(start).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledWith({taskId: "old-candidate", attempt: 1}, expect.any(AbortSignal));
+  });
   it("recovers from the server with empty browser storage without creating a task", async () => {
     const start = vi.fn(),
       poll = vi

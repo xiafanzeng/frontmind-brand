@@ -1,6 +1,7 @@
 import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
+import { isJudgeResultFailure } from "../../contracts/response-logic-judge-failure.js";
 import { readResponseLogicExecution } from "../../contracts/response-logic-progress.js";
-export type TaskFlow = "generation" | "judge" | "optimizer";
+export type TaskFlow = "generation" | "judge" | "optimizer" | "regeneration";
 export type StageState = "completed" | "running" | "pending" | "failed";
 export type TaskStageInput = {
   flow: TaskFlow;
@@ -9,8 +10,10 @@ export type TaskStageInput = {
   execution?: GeneralExecutionDto;
   adopting?: boolean;
   degraded?: boolean;
+  errorCode?: string;
 };
 const labels: Record<TaskFlow, string[]> = {
+  regeneration: ["准备问题与企业知识材料", "提交重新生成任务", "分析资料并生成四段新稿", "校验新稿并返回候选"],
   generation: [
     "准备问题与企业知识材料",
     "提交模型生成任务",
@@ -46,7 +49,7 @@ export function taskStagePresentation(input: TaskStageInput) {
   const complete = input.phase === "completed";
   const uncertain = input.phase === "uncertain" || input.degraded;
   const current =
-    complete || input.adopting || ended ? 3 : active ? 2 : input.taskId ? 1 : 0;
+    complete || input.adopting || ended || (input.flow === "judge" && isJudgeResultFailure(input.errorCode)) || input.errorCode === "REGENERATION_OUTPUT_INVALID" ? 3 : active ? 2 : input.taskId ? 1 : 0;
   const hasExecution = entries.length > 0;
   const stages = labels[input.flow].map((label, index) => ({
     label,

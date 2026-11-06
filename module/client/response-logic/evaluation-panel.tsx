@@ -1,3 +1,4 @@
+import {RegenerateButton} from "./regeneration-review.js";
 import {TaskStageCard} from "./task-stage-card.js";
 import type {GeneralExecutionDto} from "@frontmind/module-contracts/execution";
 import {useMemo,type ReactNode} from "react";
@@ -107,7 +108,7 @@ function DimensionCard({title,score,rules,children}:{title:string;score:number|n
  * scoring source: every score, finding, excerpt and suggestion shown here comes
  * from the judge output; the rule engine is internal-only and never rendered.
  */
-export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeResult,judgeError,judgeErrorCode,judgeExecution,judgeTaskId,dataSourceLabel,onBack,onOptimize,onRetry,onResume}:{question:string;intent:string;judgePhase:JudgePhase;judgeResult:JudgeOutput|null;judgeError?:string;judgeErrorCode?:string;judgeExecution?:GeneralExecutionDto;judgeTaskId?:string|null;onResume?:()=>void;dataSourceLabel?:string;onBack:()=>void;onOptimize:()=>void;onRetry?:()=>void}){
+export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeResult,judgeError,judgeErrorCode,judgeExecution,judgeTaskId,dataSourceLabel,onBack,onOptimize,onRetry,onResume,onRegenerate,regenerateDisabled}:{question:string;intent:string;judgePhase:JudgePhase;judgeResult:JudgeOutput|null;judgeError?:string;judgeErrorCode?:string;judgeExecution?:GeneralExecutionDto;judgeTaskId?:string|null;onResume?:()=>void;dataSourceLabel?:string;onBack:()=>void;onOptimize:()=>void;onRetry?:()=>void;onRegenerate?:()=>void;regenerateDisabled?:boolean}){
   const hasResult = judgePhase==="completed" && judgeResult;
   const diagnoses=useMemo(()=>hasResult?collectJudgeDiagnoses(judgeResult):[],[hasResult,judgeResult]);
   const status=diagnoses.some(item=>item.severity==="risk")
@@ -118,7 +119,7 @@ export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeRe
     <div className="rl-eval-back"><button type="button" className="rl-eval-back-button" onClick={onBack}>← 返回应答逻辑详情</button></div>
     <header className="rl-eval-heading"><div><h2>应答逻辑评估 · {question}</h2></div></header>
     <WorkbenchSteps step={1}/>
-    {judgePhase!=="idle"&&judgePhase!=="completed"&&<TaskStageCard flow="judge" phase={judgePhase} taskId={judgeTaskId} execution={judgeExecution} error={judgeError} errorCode={judgeErrorCode} onRetry={onRetry} retryLabel="重新发起评估" onResume={onResume}/>}
+    {judgePhase!=="idle"&&judgePhase!=="completed"&&<TaskStageCard flow="judge" phase={judgePhase} taskId={judgeTaskId} execution={judgeExecution} error={judgeError} errorCode={judgeErrorCode} onRetry={onRetry} retryLabel="重新发起评估" onResume={onResume} failureActions={onRegenerate ? <div className="rl-regenerate-actions">{onRetry && <button type="button" onClick={onRetry}>重新发起评估</button>}<RegenerateButton onClick={onRegenerate} disabled={regenerateDisabled}/></div> : undefined}/>}
     {judgePhase==="idle"&&<div className="rl-eval-main"><div className="rl-eval-grid"><WorkbenchCard title="尚未评估"><p className="rl-eval-score-description">当前应答逻辑尚未发起 LLM 语义评估。</p></WorkbenchCard></div></div>}
     {hasResult && (()=>{const d=judgeResult.dimensions;return <>
     <div className="rl-eval-layout">

@@ -27,6 +27,7 @@ import { createResponseLogicEvaluationRouter } from "./response-logic-evaluation
 import { createResponseLogicEvaluationStore } from "./response-logic-evaluation-store.js";
 import { createResponseLogicJudgeRouter } from "./response-logic-judge-api.js";
 import { createResponseLogicOptimizationRouter } from "./response-logic-optimization-api.js";
+import { createResponseLogicRegenerationRouter, type RegenerationDispatch } from "./response-logic-regeneration-api.js";
 /** Business routes, evidence assembly, task binding, adoption and recovery live in the module.
  * The host only supplies identity, transactional repositories and generic execution/file services. */
 export function createResponseLogicApi(core: ResponseLogicApiPorts) {
@@ -55,6 +56,10 @@ router.use("/evaluation/judge", createResponseLogicJudgeRouter(core));
 // endpoint re-fetches and re-validates the referenced judge task server-side,
 // so client-supplied evaluation content is never trusted.
 router.use("/optimization", createResponseLogicOptimizationRouter(core));
+router.use("/regeneration", createResponseLogicRegenerationRouter(core, {
+  dispatch: handleResponseLogicStart,
+  readResult: responseLogicTaskResultFromCurrentV2Round,
+}));
 
 const RESPONSE_LOGIC_STRUCTURED_OUTPUT_SCHEMA = {
   type: "object",
@@ -1734,10 +1739,15 @@ router.post("/materials", async (request, res) => {
   }
 });
 
-router.post(["/start", "/turn"], async (request, res) => {
+router.post(["/start", "/turn"], (request, res) => handleResponseLogicStart(request, res));
+async function handleResponseLogicStart(request: Request, res: import("express").Response, regeneration?: RegenerationDispatch) {
   const req = request as unknown as CoreRequest;
   const requestCredential = core.credentialForRequest(request);
-  const parsed = responseLogicStartSchema.safeParse(req.body || {});
+  const parsed = responseLogicStartSchema.safeParse(regeneration ? {
+    ...regeneration.record, operationRevision: regeneration.record.revision,
+    userMessage: `请基于最新企业知识库，为“${regeneration.record.question}”生成可核验的应答逻辑。`,
+    attachments: regeneration.record.draft.attachments.map(a => ({file_id: a.fileId, filename: a.filename, mime_type: a.mimeType})),
+  } : req.body || {});
   if (!parsed.success) {
     res.status(400).json({
       error: {
@@ -1820,7 +1830,7 @@ router.post(["/start", "/turn"], async (request, res) => {
       ...parsed.data,
       ...configuredQuestion,
     };
-    if (!isContinuation) {
+    if (!isContinuation && !regeneration) {
       const existingRecord = await getResponseLogicEntry(
         workspaceUserId,
         value.questionId,
@@ -1870,7 +1880,7 @@ router.post(["/start", "/turn"], async (request, res) => {
       userId: workspaceUserId,
       questionId: value.questionId,
       conversationId: value.conversationId,
-      ...(value.taskId ? { taskId: value.taskId } : {}),
+      ...(regeneration ? {candidateOnly: true, ...(regeneration.record.lastTaskId ? {taskId: regeneration.record.lastTaskId} : {})} : value.taskId ? { taskId: value.taskId } : {}),
       expectedOperationRevision: value.operationRevision!,
       expectedQuestionScope: configuredQuestion.writeScope,
     });
@@ -1989,7 +1999,7 @@ router.post(["/start", "/turn"], async (request, res) => {
         evidenceAttachmentFilename,
       },
     });
-    const taskIdempotencyKey = createResponseLogicTaskIdempotencyKey({
+    const taskIdempotencyKey = regeneration?.key ?? createResponseLogicTaskIdempotencyKey({
       userId: workspaceUserId,
       conversationId: value.conversationId,
       questionId: value.questionId,
@@ -2009,15 +2019,12 @@ router.post(["/start", "/turn"], async (request, res) => {
       attachment: { file_id: string; filename: string };
       fileId: string;
     }> = [];
-    console.log("[RL-Start] stage=client-create credentialProvider=%s", (taskCredential as {provider?:unknown})?.provider);
     const responseLogicClient = createCredentialAgentClient(taskCredential, {
       baseUrl: getUpstreamBaseUrl(req),
       accountUserId: workspaceUserId,
       intentId: taskIdempotencyKey,
     });
-    console.log("[RL-Start] stage=upload-loop packages=%d", generatedAttachmentPackages.length);
-    for (const [packageIndex, attachmentPackage] of generatedAttachmentPackages.entries()) {
-      console.log("[RL-Start] stage=upload file=%s index=%d", attachmentPackage.filename, packageIndex);
+    for (const attachmentPackage of generatedAttachmentPackages) {
       const uploaded = await responseLogicClient.uploadFile({
         filename: attachmentPackage.filename,
         bytes: attachmentPackage.bytes,
@@ -2025,7 +2032,6 @@ router.post(["/start", "/turn"], async (request, res) => {
         fileCreateRetryPolicy: "response_logic_pre_dispatch_only",
         observer: {
           onCandidateCreated: async ({ fileId }: {fileId:string}) => {
-            console.log("[RL-Start] stage=record-upstream-resource file=%s", fileId);
             await recordUpstreamResource({
               userId: workspaceUserId,
               apiCredentialId: taskCredential.id,
@@ -2035,7 +2041,6 @@ router.post(["/start", "/turn"], async (request, res) => {
           },
         },
       });
-      console.log("[RL-Start] stage=upload-done file=%s fileId=%s", attachmentPackage.filename, uploaded.fileId);
       generatedAttachments.push({
         attachment: {
           file_id: uploaded.fileId,
@@ -2102,7 +2107,6 @@ router.post(["/start", "/turn"], async (request, res) => {
       const providerExpiresAt = providerExpiresAtToDate(
         (uploaded as { detail?: { expiresAt?: unknown } }).detail?.expiresAt,
       );
-      console.log("[RL-Start] stage=provider-file-lease file=%s expiresAt=%s", asset.attachment.filename, providerExpiresAt?.toISOString() ?? "null");
       await responseLogicDb.insert(providerFileLeases).values({
         id: randomUUID(),
         localAssetId: asset.row.id,
@@ -2119,6 +2123,12 @@ router.post(["/start", "/turn"], async (request, res) => {
         filename: asset.attachment.filename,
       });
     }
+    if (regeneration) {
+      const latest = await getResponseLogicEntry(workspaceUserId, value.questionId);
+      if (!latest || latest.id !== regeneration.record.id || latest.revision !== regeneration.record.revision) {
+        res.status(409).json({error: {code: "RESPONSE_LOGIC_REVISION_CONFLICT", message: "草稿已变化，请刷新后重新生成"}}); return;
+      }
+    }
     const created = await createResponseLogicTask({
       baseUrl: getUpstreamBaseUrl(req),
       credentialRef: taskApiKey,
@@ -2134,7 +2144,6 @@ router.post(["/start", "/turn"], async (request, res) => {
       agentProfile: toUpstreamAgentProfile(taskCredential.agentProfile),
       rateLimitScope: `managed-user:${workspaceUserId}`,
     });
-    console.log("[RL-Start] stage=create-task ok=%s taskId=%s", created.ok, created.ok ? created.task.id : "n/a");
     if (!created.ok) {
       throw created.upstreamError;
     }
@@ -2144,13 +2153,16 @@ router.post(["/start", "/turn"], async (request, res) => {
       // Persist task ownership before the versioned response-logic binding.
       // If the final CAS loses a race, the task remains attributable but can
       // never write into a reset/replaced record.
-      console.log("[RL-Start] stage=record-upstream-task");
       await recordUpstreamResource({
         userId: workspaceUserId,
         apiCredentialId: taskCredential.id,
         kind: "task",
         upstreamId: String(created.task.id),
       });
+      if (regeneration) {
+        res.json({taskId: String(created.task.id), attempt: regeneration.attempt, recordRevision: regeneration.record.revision});
+        return;
+      }
       startedRecord = await recordResponseLogicTaskStart({
         userId: workspaceUserId,
         apiCredentialId: taskCredential.id,
@@ -2173,9 +2185,7 @@ router.post(["/start", "/turn"], async (request, res) => {
         preserveExistingSkillBinding: isContinuation,
         verifiedAttachments,
       });
-      console.log("[RL-Start] stage=record-task-start done rev=%s", startedRecord.revision);
     } catch (persistenceError) {
-      console.log("[RL-Start] stage=persist-error name=%s message=%s", (persistenceError as Error).name, (persistenceError as Error).message);
       // The Provider side effect is already an irreversible usage fact. Never
       // report this as a safe retry: a second /start could create another paid
       // task. The approved reset path deliberately starts a wholly new run.
@@ -2269,9 +2279,7 @@ router.post(["/start", "/turn"], async (request, res) => {
       },
     });
   }
-});
-
-
+}
 
 const result = { responseLogicPublicExecution, RESPONSE_LOGIC_STRUCTURED_OUTPUT_SCHEMA, responseLogicStructuredDraftFromV2Events, validatedPublicResponseLogicStructuredDraft, currentResponseLogicRoundEvents, responseLogicTaskResultFromCurrentV2Round, responseLogicTaskStatusEnvelopeRoundTrip, RESPONSE_LOGIC_UPSTREAM_ATTACHMENT_LIMIT, RESPONSE_LOGIC_CUSTOMER_ATTACHMENT_LIMIT, ResponseLogicTaskBindingError, responseLogicPostDispatchBindingFailure, responseLogicStartFailureFromManusError, responseLogicRecordMatchesConfiguredQuestion, assertResponseLogicTaskBinding, normalizeResponseLogicTaskStatus, buildVerifiedResponseLogicAttachments, RESPONSE_LOGIC_SKILL_ATTACHMENT_FILENAME, RESPONSE_LOGIC_EVIDENCE_ATTACHMENT_FILENAME, RESPONSE_LOGIC_TURN_INPUT_ATTACHMENT_FILENAME, responseLogicEvidenceAttachmentFilename, responseLogicTurnInputAttachmentFilename, createResponseLogicTaskIdempotencyKey, createResponseLogicFileIdempotencyKey, assertResponseLogicAttachmentCapacity, buildResponseLogicSkillArchive, getResponseLogicSkillDescriptor, buildResponseLogicEvidenceArchive, buildResponseLogicTurnInputArchive, buildResponseLogicPrompt, createResponseLogicTask, publicResponseLogicTask, RESPONSE_LOGIC_TASK_STATUS_CACHE_CONTROL, setResponseLogicTaskStatusNoStore };
 return Object.assign(result, { router: router as import("express").Router });

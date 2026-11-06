@@ -656,7 +656,7 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
           res.json({status: "unavailable", reason: "binding_pending"}); return;
         }
         found = {taskId: task.id, attempt};
-        if (task.status !== "error") break;
+        if (task.status !== "error" && task.status !== "stopped") break;
       }
       res.json(found ? {status: "found", ...found, recordRevision: ctx.record.revision, sourceFingerprint: ctx.fingerprint} : {status: "none"});
     } catch (error) { judgeFailure(res, error); }
@@ -797,7 +797,12 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
           return;
         }
         const previousEvents = await clientFor(retry.attempt, previousCredential).listAllMessages({taskId: retry.taskId, order: "desc"});
-        if (core.latestManusV2TaskState(previousEvents) !== "error") {
+        const previousStatus = core.latestManusV2TaskState(previousEvents);
+        const previousResult = previousStatus === "stopped" ? parseJudgePayload(core, previousEvents) : null;
+        const invalidResult = previousResult && (!previousResult.ok || !validateJudgeConsistency(
+          previousResult.judge, logic, knowledgeSnapshot ? compactKnowledgeForVerification(knowledgeSnapshot) : null,
+        ).ok);
+        if (previousStatus !== "error" && !invalidResult) {
           judgeError(res, 409, "RESPONSE_LOGIC_JUDGE_RETRY_NOT_FAILED", "原评估尚未明确失败，请继续读取原任务");
           return;
         }
@@ -809,7 +814,7 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
       // child attempt, including one whose initial response was lost.
       let existing = await findAttempt(attempt);
       if (existing) {
-        while (attempt < 100 && existing.status === "error") {
+        while (attempt < 100 && (existing.status === "error" || existing.status === "stopped")) {
           const next = await findAttempt(attempt + 1);
           if (!next) break;
           existing = next;

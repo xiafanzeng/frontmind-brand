@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Check, Clock3, AlertCircle, Loader2 } from "lucide-react";
 import {
   taskStagePresentation,
@@ -13,6 +13,7 @@ export function TaskStageCard(
     onRetry?: () => void;
     onResume?: () => void;
     retryLabel?: string;
+    failureActions?: ReactNode;
   },
 ) {
   const model = taskStagePresentation(props);
@@ -35,6 +36,7 @@ export function TaskStageCard(
     props.phase === "failed"
       ? {
           generation: "生成未完成",
+          regeneration: "重新生成未完成",
           judge: "LLM 语义评估未完成",
           optimizer: "优化未完成",
         }[props.flow]
@@ -46,6 +48,7 @@ export function TaskStageCard(
             ? "正在保存生成结果…"
             : {
                 generation: "正在生成应答逻辑…",
+                regeneration: "正在重新生成应答逻辑…",
                 judge: "LLM 语义评估进行中",
                 optimizer: "正在生成优化版本…",
               }[props.flow];
@@ -56,7 +59,7 @@ export function TaskStageCard(
           <span className="rl-task-eyebrow">
             {props.flow === "generation"
               ? "应答逻辑生成"
-              : props.flow === "judge"
+              : props.flow === "regeneration" ? "重新生成应答逻辑 · 当前草稿已保留" : props.flow === "judge"
                 ? "LLM 语义评估"
                 : "优化候选生成"}
           </span>
@@ -147,7 +150,7 @@ export function TaskStageCard(
               {props.taskId && <p>任务标识：{props.taskId}</p>}
             </details>
           )}
-          {unavailable
+          {props.phase === "failed" && props.failureActions ? props.failureActions : unavailable
             ? props.onResume &&
               (props.taskId || props.flow !== "generation") && (
                 <button type="button" onClick={props.onResume}>
