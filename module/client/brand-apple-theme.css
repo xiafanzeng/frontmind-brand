@@ -1187,9 +1187,20 @@
 
 .fm-brand-theme[data-brand-page="keywords"] .brand-keyword-workspace .keyword-stats-bar strong,
 .fm-brand-theme[data-brand-page="intent"] .brand-keyword-workspace .keyword-stats-bar strong,
-.fm-brand-theme[data-brand-page="keywords"] .brand-keyword-workspace .keyword-action-button,
-.fm-brand-theme[data-brand-page="intent"] .brand-keyword-workspace .keyword-action-button {
+.fm-brand-theme[data-brand-page="keywords"] .brand-keyword-workspace .keyword-action-button:not(.operator-primary-button),
+.fm-brand-theme[data-brand-page="intent"] .brand-keyword-workspace .keyword-action-button:not(.operator-primary-button) {
   color: var(--fm-brand-accent-strong);
+}
+
+/* Filled actions keep white labels and currentColor icons in every recommendation step. */
+.fm-brand-theme[data-brand-page="keywords"] .brand-keyword-workspace .operator-primary-button,
+.fm-brand-theme[data-brand-page="intent"] .brand-keyword-workspace .operator-primary-button {
+  color: #ffffff;
+}
+
+.fm-brand-theme[data-brand-page="keywords"] .brand-keyword-workspace .operator-primary-button:disabled,
+.fm-brand-theme[data-brand-page="intent"] .brand-keyword-workspace .operator-primary-button:disabled {
+  color: #98a2b3;
 }
 
 .fm-brand-theme[data-brand-page="keywords"] .brand-keyword-workspace .keyword-row-selected,

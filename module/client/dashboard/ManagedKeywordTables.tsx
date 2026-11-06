@@ -3,7 +3,7 @@ import {
   keywordPickerRows,
   type KeywordSelection,
 } from "./workflow/KeywordPicker";
-import { Database, Search, X } from "lucide-react";
+import { ChevronRight, Database, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   useBusinessWorkspace,
@@ -177,16 +177,16 @@ function KeywordPanel({
   children,
   actions,
 }: {
-  title: string;
+  title?: string;
   children: ReactNode;
-  actions: ReactNode;
+  actions?: ReactNode;
 }) {
   return (
     <section className="panel global-keyword-panel">
-      <div className="panel-head">
-        <h3>{safeText(title)}</h3>
+      {(title || actions) && <div className="panel-head">
+        {title && <h3>{safeText(title)}</h3>}
         <div className="panel-actions">{actions}</div>
-      </div>
+      </div>}
       {children}
     </section>
   );
@@ -209,12 +209,7 @@ export default function ManagedKeywordTables({
   const { isWorkbench } = useBusinessWorkspace();
   const utils = trpc.useUtils();
   const [sourceView,setSourceView]=useState<"recommended"|"saved">(generationEnabled?"recommended":"saved");
-  const [sourceFilter,setSourceFilter]=useState<"all"|"recommended"|"history">("all");
-  const recommendedTables = useMemo(() => tables.filter(table => table.id === "question-template-api:v1"), [tables]);
-  const historyTables = useMemo(() => tables.filter(table => table.id !== "question-template-api:v1"), [tables]);
-  const sourceTables = generationEnabled ? sourceFilter === "history" ? historyTables : sourceFilter === "recommended" ? recommendedTables : tables : tables;
-  const recommendedCount = recommendedTables.reduce((total, table) => total + table.rows.length, 0);
-  const historyCount = historyTables.reduce((total, table) => total + table.rows.length, 0);
+  const sourceTables = tables;
   // The confirmation modal is pure ephemeral UI state: it must stay closed on
   // first entry, refresh, navigation and project switches, and open only from
   // an explicit 选择词条 click. Filters below remain persisted flow state.
@@ -342,10 +337,6 @@ export default function ManagedKeywordTables({
     () => tables.reduce((total, table) => total + table.rows.length, 0),
     [tables],
   );
-  const visibleRows = useMemo(
-    () => visibleTables.reduce((total, table) => total + table.rows.length, 0),
-    [visibleTables],
-  );
 
   useBusinessWorkspaceSummary({
     title: "项目词库",
@@ -379,16 +370,6 @@ export default function ManagedKeywordTables({
       {generationEnabled && (
         <div hidden={sourceView!=="recommended"}><QuestionTemplateApiFlow onSaved={() => utils.workspace.dashboard.invalidate()} onOptimize={onUseQuestions ?? (onUseQuestion ? items => {if(items[0])onUseQuestion(items[0]);} : undefined)} /></div>
       )}
-      {generationEnabled && sourceView === "saved" && <label className="keyword-source-filter">词条来源
-        <select aria-label="词条来源" value={sourceFilter} onChange={event => {
-          setSourceFilter(event.target.value as typeof sourceFilter);
-          setTableFilter("all"); setCategoryFilter("all"); setSubdivisionFilter("all"); setSearchTerm(""); setPages({});
-        }}>
-          <option value="all">全部来源（{totalRows}）</option>
-          <option value="recommended">已保存推荐（{recommendedCount}）</option>
-          <option value="history">历史词库（{historyCount}）</option>
-        </select>
-      </label>}
       {(!generationEnabled || sourceView!=="recommended") && (sourceTables.length === 0 ? (
         loading ? (
           <KeywordEmptyPanel
@@ -405,7 +386,7 @@ export default function ManagedKeywordTables({
             title="品牌全域词库正在准备中"
             description="内容发布后会自动显示在这里。"
           />
-        ) : <KeywordEmptyPanel title={sourceFilter === "history" ? "暂无历史词库" : "尚未保存词条"} description="先生成推荐问题并勾选保存，即可在这里查看。"/>
+        ) : <KeywordEmptyPanel title="尚未保存词条" description="先生成推荐问题并勾选保存，即可在这里查看。"/>
       ) : (
         <>
           {generationEnabled && <p className="keyword-source-note">按来源查看已保存词条；历史词库保留原有记录，已评估的问题可点击评分查看。</p>}
@@ -500,14 +481,6 @@ export default function ManagedKeywordTables({
               </div>
             )}
           </div>
-          <div className="keyword-stats-bar">
-            <span>
-              当前来源共 <strong>{formatNumber(sourceTables.reduce((total, table) => total + table.rows.length, 0))}</strong> 条词库记录
-            </span>
-            <span>
-              当前显示 <strong>{formatNumber(visibleRows)}</strong> 条
-            </span>
-          </div>
           <div className="saas-content-area">
             {visibleTables.map((table) => {
               const tableQuestionColumnIndex = questionColumnIndex(
@@ -524,13 +497,8 @@ export default function ManagedKeywordTables({
                 : table.rows;
               return (
                 <KeywordPanel
-                  title={generationEnabled && table.id !== "question-template-api:v1" ? `历史词库 · ${table.title}` : table.title}
+                  title={generationEnabled ? undefined : table.title}
                   key={table.id}
-                  actions={
-                    <span className="entity-count">
-                      {formatNumber(table.rows.length)} 条
-                    </span>
-                  }
                 >
                   <div className="keyword-table-wrap">
                     <table className="keyword-table">
@@ -582,7 +550,12 @@ export default function ManagedKeywordTables({
                                       return next;
                                     });
                                   }}/>{batchSelection[`${table.id}:${rowIndex}`] ? "已选择" : "选择词条"}</label>
-                                {evaluation && linked && onViewEvaluation ? <button type="button" className="iw-score-link" aria-label={`查看评估：${question}`} onClick={() => onViewEvaluation(linked.id)}>价值 {evaluation.value} · 支撑 {evaluation.support}</button> :
+                                {evaluation && linked && onViewEvaluation ? <button type="button" className="keyword-evaluation-button" aria-label={`查看评估：${question}`} title="查看完整评估" onClick={() => onViewEvaluation(linked.id)}>
+                                  <span className="keyword-evaluation-metric"><span>价值</span><strong>{evaluation.value}</strong></span>
+                                  <span className="keyword-evaluation-divider" aria-hidden="true"/>
+                                  <span className="keyword-evaluation-metric"><span>支撑</span><strong>{evaluation.support}</strong></span>
+                                  <ChevronRight size={14} aria-hidden="true"/>
+                                </button> :
                                   <small>{!optimizationState ? "优化状态尚未读取" : linked ? "已在优化清单 · 待评估" : "尚未加入优化"}</small>}
                               </td>}
                               {table.displayColumns.map(
