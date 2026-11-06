@@ -17,6 +17,7 @@ import IntentTaskProgress from "./IntentTaskProgress";
 import {IntentListEvaluationStatus, IntentListInitialLoading, IntentListRefreshStatus} from "./IntentListFeedback";
 import {findCatalogQuestion} from "./intent-catalog-link";
 import {KEYWORD_CATEGORY_OPTIONS} from "@frontmind/module-ui/keyword-categories";
+import type {IntentCatalogViewState} from "./intent-catalog-view";
 import type {IntentQuestion} from "../../contracts/intent-workbench";
 
 type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge" | "progress" | "history" | "history-detail";
@@ -63,10 +64,12 @@ export function PlanEditor({plan: savedPlan, onChange}: {plan: IntentPlan; onCha
     </section>
   </div>;
 }
-export default function IntentWorkbench({keywordProps, initialView = "universe", api = liveIntentWorkbenchApi, onSectionChange, catalogIntegration}: {
+export default function IntentWorkbench({keywordProps, initialView = "universe", api = liveIntentWorkbenchApi, onSectionChange, catalogIntegration, initialCatalogState, onCatalogExit}: {
   keywordProps: ManagedKeywordTablesProps; initialView?: "universe" | "list"; api?: IntentWorkbenchApi;
   onSectionChange?: (section: "universe" | "list") => void;
   catalogIntegration?: IntentCatalogIntegration;
+  initialCatalogState?: IntentCatalogViewState;
+  onCatalogExit?: (state: IntentCatalogViewState) => void;
 }) {
   const [workspace, setWorkspace] = useState<IntentWorkspace | null>(null);
   const [view, setView] = useState<View>(initialView);
@@ -78,14 +81,16 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [error, setError] = useState("");
   const [intake, setIntake] = useState<Selection[] | null>(null);
   const [received, setReceived] = useState<string[]>([]);
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[]>(initialCatalogState?.selected ?? []);
   const [scope, setScope] = useState<string[]>([]);
   const [index, setIndex] = useState(0);
   const [singleQueue, setSingleQueue] = useState<string[]>([]);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
-  const [category, setCategory] = useState("all");
-  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState(initialCatalogState?.search ?? "");
+  const [status, setStatus] = useState(initialCatalogState?.status ?? "all");
+  const [category, setCategory] = useState(initialCatalogState?.category ?? "all");
+  const [page, setPage] = useState(initialCatalogState?.page ?? 0);
+  const [expandedGaps, setExpandedGaps] = useState<string[]>(initialCatalogState?.expandedGaps ?? []);
+  const restoreCatalogFocus = useRef(initialCatalogState?.questionId);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<IntentPlan[]>([]);
   const [draftDirty, setDraftDirty] = useState(false);
@@ -111,7 +116,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   useEffect(() => {
     mounted.current = true; generation.current++; running.current = false;
     setView(initialView); setProgressJobId(undefined);
-    setWorkspace(null); setDrafts([]); setDraftDirty(false); setReceived([]); setSelected([]); setHistoryId(undefined); setHistoryQuestionId(undefined);
+    setWorkspace(null); setDrafts([]); setDraftDirty(false); setReceived([]); setSelected(initialCatalogState?.selected ?? []); setHistoryId(undefined); setHistoryQuestionId(undefined);
     setQuestionAction(null); setQuestionError("");
     void run(() => api.observe(), undefined, true, undefined, true);
     return () => {mounted.current = false; generation.current++; watchController.current?.abort();};
@@ -128,6 +133,18 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     }
     element.scrollIntoView({block: "start"});
   }, [view]);
+  useEffect(() => {
+    if (view !== "list" || !workspace || !restoreCatalogFocus.current) return;
+    const row = Array.from(container.current?.querySelectorAll<HTMLElement>("[data-question-id]") ?? [])
+      .find(item => item.dataset.questionId === restoreCatalogFocus.current);
+    if (!row) return;
+    const frame = requestAnimationFrame(() => {
+      restoreCatalogFocus.current = undefined;
+      row.scrollIntoView({block: "center"});
+      row.querySelector<HTMLButtonElement>(".iw-answer-entry")?.focus({preventScroll:true});
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [workspace, view]);
   async function saveDrafts() {
     if (!workspace || pending) return false;
     const result = await run(async () => {
@@ -442,6 +459,10 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     {view === "list" && workspace && <>
       <IntentQuestionCatalog questions={questions} visible={visible} evaluations={evaluations} activeJob={activeJob} received={received} integration={{
         ...catalogIntegration,
+        onOpenAnswer: catalogIntegration?.onOpenAnswer ? question => {
+          onCatalogExit?.({search, category, status, page: currentPage, selected, expandedGaps, questionId: question.id});
+          catalogIntegration.onOpenAnswer?.(question);
+        } : undefined,
         onEditQuestion: catalogIntegration?.onEditQuestion ?? (question => openQuestionAction("edit", question)),
         onDeleteQuestion: catalogIntegration?.onDeleteQuestion ?? (question => openQuestionAction("delete", question)),
       }}
@@ -453,6 +474,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         }}/> : undefined}
         savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan} onGeneratePlan={id => void plan(false, [id])}
         historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setHistoryQuestionId(undefined); setView("history");}}
+        expandedGaps={expandedGaps} onGapToggle={(id, open) => setExpandedGaps(ids => open ? ids.includes(id) ? ids : [...ids,id] : ids.filter(item => item !== id))}
         search={search} category={category} status={status} selected={selected} pending={pending}
         mutationBlockedIds={activeJob ? activeJob.questionsScope === "selected" ? activeJob.questionIds : questions.map(question => question.id) : []}
         page={currentPage} pageCount={pageCount} total={filtered.length}

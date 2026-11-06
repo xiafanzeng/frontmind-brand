@@ -1,6 +1,6 @@
-import type {ReactNode} from "react";
+import {type ReactNode} from "react";
 import {Search} from "lucide-react";
-import {keywordCategoryLabel} from "@frontmind/module-ui/keyword-categories";
+import {keywordCategoryLabel, keywordCategoryKey} from "@frontmind/module-ui/keyword-categories";
 import type {IntentQuestion, IntentEvaluation, IntentSkillJob} from "../../contracts/intent-workbench";
 
 /** Supplied by the intent owner's host; this module only owns the evaluation entry. */
@@ -13,8 +13,13 @@ export type IntentCatalogIntegration = {
   onDeleteQuestion?: (question: IntentQuestion) => void;
 };
 export const answerStatusLabel = (status?: string) => status === "published" ? "已有正式应答" : status === "pending" ? "待制作应答" : "暂未同步";
+function categoryTone(category: string) {
+  if (category.trim().toLowerCase() === 'brand_monitoring' || category === '品牌监测') return 'slate';
+  const key = keywordCategoryKey(category);
+  return key ? ({industry:'clay',competitor_comparison:'ochre',reputation:'mauve',product_scenario:'sage'} as const)[key] : 'neutral';
+}
 export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, category, status, selected, pending, page, pageCount, total, savedPlanIds,
-  onSearch, onCategory, onStatus, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = []}: {
+  onSearch, onCategory, onStatus, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
   evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; received: string[];
   search: string; category: string; status: string; selected: string[]; pending: boolean;
@@ -26,16 +31,16 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
   onHistory: () => void; historyCount: number;
   headerStatus?: ReactNode; taskFeedback?: ReactNode;
   mutationBlockedIds?: string[];
+  expandedGaps?: string[]; onGapToggle?: (id: string, open: boolean) => void;
 }) {
   const categories = [...new Set(questions.map(question => question.category))];
   return <>
     <header className="iw-header iw-catalog-header">
-      <div>{headerStatus ? <div className="iw-catalog-title-row"><h1>优化问题</h1>{headerStatus}</div> : <h1>优化问题</h1>}<p>查看已保存评估，或评估新加入的推荐问题与历史词条。</p></div>
+      <div>{headerStatus ? <div className="iw-catalog-title-row"><h1>优化问题</h1>{headerStatus}</div> : <h1>优化问题</h1>}</div>
       <div className="iw-header-tools">
-        <button onClick={onHistory}>历史记录（{historyCount}）</button>
         <label className="iw-search"><Search size={17}/><input aria-label="搜索优化问题" placeholder="搜索问题" value={search} onChange={event => onSearch(event.target.value)}/></label>
-        <select aria-label="问题状态" value={status} onChange={event => onStatus(event.target.value)}><option value="all">全部状态</option><option value="unevaluated">待评估</option><option value="supported">充分支撑</option><option value="partial">部分支撑</option><option value="missing">未支撑</option><option value="published">已有正式应答</option><option value="pending">待制作应答</option><option value="unknown">暂未同步</option></select>
         <select aria-label="问题分类" value={category} onChange={event => onCategory(event.target.value)}><option value="all">全部类别</option>{categories.map(value => <option key={value} value={value}>{keywordCategoryLabel(value) || value}</option>)}</select>
+        <select aria-label="问题状态" value={status} onChange={event => onStatus(event.target.value)}><option value="all">全部状态</option><option value="unevaluated">待评估</option><option value="supported">充分支撑</option><option value="partial">部分支撑</option><option value="missing">未支撑</option><option value="published">已有正式应答</option><option value="pending">待制作应答</option><option value="unknown">暂未同步</option></select>
         {integration?.onAddQuestion && <button className="iw-primary" onClick={integration.onAddQuestion}>新增问题</button>}
       </div>
     </header>
@@ -48,17 +53,17 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
         const evaluating = activeJob?.kind === "evaluate" && activeJob.questionIds.includes(question.id);
         const gaps = evaluation?.points.filter(point => point.status !== "supported");
         const support = !evaluation ? undefined : evaluation.support >= 80 ? "supported" : evaluation.support >= 50 ? "partial" : "missing";
-        return <tr key={question.id} className={`${selected.includes(question.id) ? "selected" : ""} ${received.includes(question.id) ? "iw-new-row" : ""}`}>
+        return <tr key={question.id} data-question-id={question.id} className={`${selected.includes(question.id) ? "selected" : ""} ${received.includes(question.id) ? "iw-new-row" : ""}`}>
         <td><input type="checkbox" aria-label={`选择${question.question}`} checked={selected.includes(question.id)} onChange={() => onToggle(question.id)}/></td>
-        <td><b>{question.question}</b> {received.includes(question.id) && <span className="iw-tag">新加入</span>}<p className="iw-evidence"><span className="iw-catalog-category" data-category={question.category}>{keywordCategoryLabel(question.category) || question.category}</span>{integration?.answerStatuses?.[question.id] && <> · {answerStatusLabel(integration.answerStatuses[question.id])}</>}</p></td>
+        <td><b>{question.question}</b> {received.includes(question.id) && <span className="iw-tag">新加入</span>}<p className="iw-evidence"><span className="iw-catalog-category" data-category={question.category} data-tone={categoryTone(question.category)}>{keywordCategoryLabel(question.category) || question.category}</span></p></td>
         <td>{evaluating ? "评估中…" : evaluation ? <button className="iw-score-link" disabled={pending} aria-label={`查看评估：${question.question}`} onClick={() => onEvaluate([question.id])}><strong className={evaluation.value >= 80 ? "good" : "warn"}>{evaluation.value} / 100</strong></button> : "待评估"}</td>
         <td>{evaluating ? "评估中…" : evaluation ? <><button className="iw-score-link" disabled={pending} aria-label={`查看知识支撑：${question.question}`} onClick={() => onEvaluate([question.id])}><strong>{evaluation.support} / 100</strong></button><p><span className={`iw-tag ${support}`}>{support === "supported" ? "较充分" : support === "partial" ? "部分支撑" : "支撑不足"}</span></p></> : "待评估"}</td>
-        <td>{evaluating ? "正在检查知识依据" : !gaps ? "评估后显示" : gaps.length ? gaps.map(point => <span key={point.title} className={`iw-tag ${point.status}`}>{point.title}</span>) : "暂无关键缺口"}</td>
+        <td>{evaluating ? "正在检查知识依据" : !gaps ? "评估后显示" : gaps.length ? <><span className={`iw-tag ${gaps[0].status}`}>{gaps[0].title}</span>{gaps.length > 1 && <details className="iw-catalog-gaps" open={onGapToggle ? expandedGaps.includes(question.id) : undefined} onToggle={event => onGapToggle?.(question.id, event.currentTarget.open)}><summary><span className="iw-gap-expand">展开其余 {gaps.length - 1} 项</span><span className="iw-gap-collapse">收起</span></summary><ul>{gaps.slice(1).map((point,index) => <li key={`${index}-${point.title}`}>{point.title}</li>)}</ul></details>}</> : "暂无关键缺口"}</td>
         <td><div className="iw-catalog-actions">
+          <button className="iw-primary iw-answer-entry" disabled={pending || !integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
           {savedPlanIds.includes(question.id)
-            ? <button className="iw-primary" disabled={pending} onClick={() => onViewPlan(question.id)}>查看优化方案</button>
-            : <button className="iw-primary" title={activeJob ? "请先完成当前评估任务" : undefined} disabled={pending || Boolean(activeJob)} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
-          <button disabled={pending || !integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
+            ? <button className="iw-plan-entry" disabled={pending} onClick={() => onViewPlan(question.id)}>查看优化方案</button>
+            : <button className="iw-plan-entry" title={activeJob ? "请先完成当前评估任务" : undefined} disabled={pending || Boolean(activeJob)} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
           <button title={mutationBlockedIds.includes(question.id) ? "该问题正在评估，完成后可修改" : undefined} disabled={pending || mutationBlockedIds.includes(question.id) || !integration?.onEditQuestion} onClick={() => integration?.onEditQuestion?.(question)}>修改问题</button>
           <button title={mutationBlockedIds.includes(question.id) ? "该问题正在评估，完成后可删除" : undefined} disabled={pending || mutationBlockedIds.includes(question.id) || !integration?.onDeleteQuestion} onClick={() => integration?.onDeleteQuestion?.(question)}>删除问题</button>
         </div></td>

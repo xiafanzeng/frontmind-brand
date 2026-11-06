@@ -13,11 +13,13 @@ import type { IntentQuestion } from "../contracts/intent-workbench";
  * real localStorage-backed preview api instead of network mocks.
  */
 vi.mock("./ResponseLogicWorkspace", () => ({
-  default: ({ initialQuestionId, questionGroups }: {
+  default: ({ initialQuestionId, questionGroups, onReturnToCatalog }: {
     initialQuestionId?: string | null;
+    onReturnToCatalog?: () => void;
     questionGroups?: Array<{ questions: Array<{ id: string; question: string }> }>;
   }) => (
     <section aria-label={`rl-workspace:${initialQuestionId ?? "none"}`}>
+      <button onClick={onReturnToCatalog}>返回候选问题</button>
       工作台问题：{questionGroups?.[0]?.questions?.[0]?.question ?? "无"}
     </section>
   ),
@@ -71,10 +73,14 @@ beforeEach(async () => {
 afterEach(cleanup);
 
 describe("standalone response-logic navigation (integration)", () => {
-  it("enters the workbench from the question list and returns via the sidebar", async () => {
+  it("returns from the workbench to the same filtered catalog selection", async () => {
     window.history.replaceState({}, "", "/?view=intent");
     render(<App preview />);
 
+    const search = await screen.findByRole("textbox", {name:"搜索优化问题"});
+    fireEvent.change(search,{target:{value:"隆鼻"}});
+    fireEvent.change(screen.getByRole("combobox", {name:"问题分类"}),{target:{value:"产品场景词"}});
+    fireEvent.click(screen.getByRole("checkbox",{name:`选择${seedQuestion.question}`}));
     const enter = await screen.findByRole("button", { name: "进入应答逻辑" });
     expect((enter as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(enter);
@@ -83,11 +89,12 @@ describe("standalone response-logic navigation (integration)", () => {
     const workspace = screen.getByLabelText("rl-workspace:t:9");
     expect(workspace.textContent).toContain("隆鼻材料应该怎么选");
 
-    // The workbench itself has no back button (Brand shell pages navigate via
-    // the sidebar); returning re-opens the question list.
-    fireEvent.click(screen.getByRole("button", { name: "优化问题" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回候选问题" }));
     await waitFor(() => expect(window.location.search).toBe("?view=intent"));
     expect(await screen.findByRole("button", { name: `查看评估：${seedQuestion.question}` })).toBeTruthy();
+    expect(screen.getByRole("textbox", {name:"搜索优化问题"})).toHaveProperty("value","隆鼻");
+    expect(screen.getByRole("combobox", {name:"问题分类"})).toHaveProperty("value","产品场景词");
+    expect(screen.getByRole("checkbox", {name:`选择${seedQuestion.question}`})).toHaveProperty("checked",true);
   });
 
   it("guards a direct /?view=response-logic visit without question context", () => {
