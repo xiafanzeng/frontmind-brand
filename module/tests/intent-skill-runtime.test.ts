@@ -28,9 +28,10 @@ describe("真实优化 Skill 输出校验", () => {
     const result = validateIntentSkillResult(value, input, job);
     expect(result.evaluations[0].method).toBe("skill_v1");
     expect(result.evaluations[0].provenance?.operationId).toBe(job.id);
-    expect(result.plans[0].actions[0].before).toBe(input.selectedQuestions[0].question);
-    expect(result.plans[0].actions[1].selected).toBe(false);
-    expect(result.plans[0].actions[1].before).toBe(input.nodes[0].content);
+    expect(result.plans[0].actions).toHaveLength(1);
+    expect(result.plans[0].actions[0].kind).toBe("node");
+    expect(result.plans[0].actions[0].selected).toBe(false);
+    expect(result.plans[0].actions[0].before).toBe(input.nodes[0].content);
   });
   it.each(["operationToken", "inputHash"] as const)("拒绝其他任务的 %s", field => {
     const {input, job, value} = fixture(); value[field] = "b".repeat(64);

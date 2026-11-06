@@ -49,7 +49,15 @@ const resultSchema = z.object({
     }).strict()).min(1).max(3),
   }).strict()).max(160),
 }).strict();
-export const INTENT_WIRE_SCHEMA = z.toJSONSchema(resultSchema, {target: "draft-7"});
+// Accept already running legacy tasks, but request only knowledge actions for new tasks.
+const knowledgeResultSchema = resultSchema.extend({
+  plans: z.array(resultSchema.shape.plans.element.extend({
+    actions: z.array(resultSchema.shape.plans.element.shape.actions.element.extend({
+      kind: z.enum(["node", "todo"]),
+    })).min(1).max(2),
+  })).max(160),
+});
+export const INTENT_WIRE_SCHEMA = z.toJSONSchema(knowledgeResultSchema, {target: "draft-7"});
 const dimensionLabels = ["意图明确度", "品牌关联度", "决策相关度", "问题清晰度", "内容独特度", "知识支撑初评"];
 export function validateIntentSkillResult(value: unknown, input: IntentSkillInput, job: IntentSkillJob) {
   if (Buffer.byteLength(JSON.stringify(value) ?? "", "utf8") > 4 * 1024 * 1024) throw new IntentSkillRuntimeError("模型结果超过大小限制");
@@ -77,14 +85,14 @@ export function validateIntentSkillResult(value: unknown, input: IntentSkillInpu
       provenance: {operationId: job.id, inputHash: job.inputHash, skillHash: job.skillHash, model: job.model}};
   });
   const plans: IntentPlan[] = parsed.plans.map(plan => {
+    const actions = plan.actions.filter(action => action.kind !== "question");
     if (new Set(plan.actions.map(a => a.kind)).size !== plan.actions.length) throw new IntentSkillRuntimeError("方案包含重复动作");
     const question = input.selectedQuestions.find(q => q.id === plan.questionId)!;
-    return {questionId: plan.questionId, inputHash: job.inputHash, actions: plan.actions.map(action => {
+    return {questionId: plan.questionId, inputHash: job.inputHash, actions: actions.map(action => {
       const node = input.nodes.find(node => node.id === action.nodeId);
       if (action.kind === "node" ? !node?.editable : action.nodeId !== null) throw new IntentSkillRuntimeError("方案目标节点不可编辑");
-      if (action.kind === "question" && action.after.length > 500) throw new IntentSkillRuntimeError("优化问题超过长度限制");
       return {...action, id: `${job.id}:${question.id}:${action.kind}`, selected: action.kind !== "node",
-        before: action.kind === "node" ? node!.content : action.kind === "question" ? question.question : "",
+        before: action.kind === "node" ? node!.content : "",
         after: action.kind === "node" ? projectKnowledgeBaseCustomerMarkdown({leafTitle: node!.title, markdown: action.after}) : action.after};
     })};
   });
