@@ -20,9 +20,12 @@ function writePending(key: string, ids: string[]): boolean {
   } catch { return false; }
 }
 
-export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSelect, onDelete, onOpen, loading = false, error, busy = false, deletingId, historyDisabled = false }: {
+export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSelect, onDelete, onOpen, loading = false, error, busy = false, deletingId, historyDisabled = false, newDisabled, examples = [], activeExampleId, onSelectExample }: {
   scopeKey: string;
   items: RagConversationHistoryItem[];
+  examples?: RagConversationHistoryItem[];
+  activeExampleId?: string;
+  onSelectExample?: (id: string) => ActionResult;
   activeId?: string | null;
   onNew: () => void;
   onSelect: (id: string) => ActionResult;
@@ -33,6 +36,7 @@ export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSel
   busy?: boolean;
   deletingId?: string | null;
   historyDisabled?: boolean;
+  newDisabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const pendingKey = pendingStorageKey(scopeKey);
@@ -129,6 +133,13 @@ export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSel
     } catch { if (mountedRef.current) setActionError("暂时无法切换对话，请重试。"); }
     finally { if (mountedRef.current) setSelecting(false); }
   };
+  const selectExample = async (id: string) => {
+    if (actionsDisabled) return;
+    setSelecting(true); setActionError("");
+    try { if (await onSelectExample?.(id) !== false && mountedRef.current) changeOpen(false, `example:${id}`); }
+    catch { if (mountedRef.current) setActionError("暂时无法打开示例，请重试。"); }
+    finally { if (mountedRef.current) setSelecting(false); }
+  };
   const stage = (id: string) => {
     const next = new Set(stagedRef.current); next.add(id); stagedRef.current = next; setStaged(next); setActionError("");
     requestAnimationFrame(() => undoRefs.current.get(id)?.focus());
@@ -139,7 +150,7 @@ export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSel
   };
 
   return <div className="rag-conversation-actions" aria-label="问答会话操作">
-    <button type="button" className="rag-conversation-action" aria-label="新建问答" title="新建问答" disabled={busy || committing} onClick={onNew}><SquarePen size={18} strokeWidth={1.7} aria-hidden="true" /></button>
+    <button type="button" className="rag-conversation-action" aria-label="新建问答" title="新建问答" disabled={(newDisabled ?? busy) || committing} onClick={onNew}><SquarePen size={18} strokeWidth={1.7} aria-hidden="true" /></button>
     <Popover.Root open={open} onOpenChange={changeOpen}>
       <Popover.Trigger asChild><button type="button" className="rag-conversation-action" aria-label="历史问答" title="历史问答" disabled={historyDisabled}><History size={18} strokeWidth={1.7} aria-hidden="true" /></button></Popover.Trigger>
       <Popover.Portal>
@@ -170,6 +181,11 @@ export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSel
               </>}
             </li>)}
           </ul>}
+          {examples.length > 0 && <section className="rag-conversation-popover__examples" aria-label="示例问答">
+            <h4>示例问答</h4><ul className="rag-conversation-popover__list">
+              {examples.map(item => <li key={item.id} className="rag-conversation-popover__item"><button type="button" className="rag-conversation-popover__choice" aria-current={activeExampleId === item.id ? "true" : undefined} disabled={actionsDisabled} onClick={() => void selectExample(item.id)}><span className="rag-conversation-popover__copy"><span className="rag-conversation-popover__title">{item.title}</span><span className="rag-conversation-popover__subtitle">示例 · 预设评审</span></span>{activeExampleId === item.id && <Check size={16} aria-hidden="true" />}</button></li>)}
+            </ul>
+          </section>}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>

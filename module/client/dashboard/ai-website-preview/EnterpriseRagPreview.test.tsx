@@ -212,11 +212,12 @@ function openQualityDetails() {
   return within(screen.getByRole("dialog", { name: "优化方案" }));
 }
 
-function automaticEvaluateButton() {
-  if (!screen.queryByRole("dialog", { name: "回答依据与陈述核验" })) {
-    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
-  }
-  return screen.getByTestId("rag-auto-evaluate");
+function retryAutomaticEvaluationButton() {
+  return evaluation().getByRole("button", { name: "重试" });
+}
+
+function failedAutomaticRun(taskId = "task-1", turnId = "turn-1"): EnterpriseRagEvaluationRunDto {
+  return { ...completedAutomaticRun(), sourceQaTaskId: taskId, turnId, status: "failed", report: null, error: { code: "EVALUATION_FAILED", message: "本次评估尚未完成，请重试。" } };
 }
 
 function escapeFocusedDialog() {
@@ -290,6 +291,95 @@ afterEach(() => {
 });
 
 describe("enterprise RAG evidence-based review UI", () => {
+  it("keeps live examples read-only and opens their own report without evaluating or saving them", async () => {
+    const latest = vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start");
+    const buildReportUrl = vi.fn((section: string, _coordinate?: unknown, exampleId?: string) => `/?report=1&example=${exampleId ?? ""}#${section}`);
+    const runtime = liveRuntime({
+      conversationId: "conversation-real", question: "真实问题", questionId: "real-question", answer: "真实回答", answerId: "real-answer",
+      conversationHistory: { items: [{ id: "conversation-real", title: "真实对话" }], activeId: "conversation-real", onSelect: vi.fn(), onDelete: vi.fn(), loading: true },
+    });
+    render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} buildReportUrl={buildReportUrl} live={runtime} />);
+    fireEvent.click(screen.getByRole("button", { name: "历史问答" }));
+    const history = within(screen.getByRole("dialog", { name: "历史问答" }));
+    const example = RAG_SAMPLE_CASES.find(item => item.id === "syn-permission-leak")!;
+    fireEvent.click(history.getByRole("button", { name: `${example.title} 示例 · 预设评审` }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
+    expect(screen.getByText(example.question)).toBeTruthy();
+    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("示例仅供查看，新建问答后可提问。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "新建问答" }).hasAttribute("disabled")).toBe(false);
+    expect(buildReportUrl).toHaveBeenCalledWith("records", undefined, example.id);
+    expect(start).not.toHaveBeenCalled(); expect(latest).not.toHaveBeenCalled();
+    expect(localStorage.getItem(historyKey)).toBeNull(); expect(listEvaluationReports()).toEqual([]);
+    fireEvent.click(evaluation().getByRole("button", { name: "人工评审" }));
+    expect(within(screen.getByRole("dialog", { name: "人工评审与计算" })).queryByRole("button", { name: "保存评审并计算" })).toBeNull();
+  });
+
+  it("preserves a read-only example and its grading when real history, answers and knowledge change in the background", async () => {
+    const latest = vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start");
+    const example = RAG_SAMPLE_CASES.find(item => item.id === "syn-capability-overview")!;
+    const buildReportUrl = vi.fn((section: string) => `/#${section}`);
+    const runtime = liveRuntime({
+      conversationId: "real-conversation", taskId: "real-task", turnId: "real-turn", questionId: "real-question", answerId: "real-answer", question: "真实问题", answer: "真实回答",
+      conversationHistory: { items: [{ id: "real-conversation", title: "真实会话" }], activeId: "real-conversation", onSelect: vi.fn(), onDelete: vi.fn() },
+    });
+    const props = { storageScopeKey: "live:example-stability", onOpenWebsite: vi.fn(), onOpenWebsiteAssistant: vi.fn(), buildReportUrl };
+    const page = render(<EnterpriseRagPreview {...props} live={runtime} />);
+    fireEvent.click(screen.getByRole("button", { name: "历史问答" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "历史问答" })).getByRole("button", { name: `${example.title} 示例 · 预设评审` }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
+    const answerText = screen.getByTestId("rag-answer").textContent;
+    const scoreText = screen.getByTestId("rag-gauge-value").textContent;
+    const summaryText = screen.getByTestId("rag-evaluation-summary-copy").textContent;
+    const readsBefore = latest.mock.calls.length;
+    fireEvent.click(evaluation().getByRole("button", { name: "人工评审" }));
+    const reviewPanel = screen.getByRole("dialog", { name: "人工评审与计算" });
+    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
+    const evidencePanel = screen.getByRole("dialog", { name: "回答依据与陈述核验" });
+    const changed = liveRuntime({ ...runtime, taskId: "refreshed-task", turnId: "refreshed-turn", questionId: "refreshed-question", answerId: "refreshed-answer", question: "后台更新的问题", answer: "后台更新的回答",
+      knowledgeBase: { snapshotId: "refreshed-knowledge", version: 19, sourceFileName: "后台新增知识.zip", documentCount: 19 },
+      sources: [{ id: "refreshed-source", title: "后台真实资料", kind: "published_knowledge" }],
+    });
+    for (const background of [changed, liveRuntime({ ...changed, conversationId: "after-deletion", taskId: undefined, turnId: undefined, questionId: undefined, answerId: undefined, question: "", answer: "", sources: [], knowledgeBase: null,
+      conversationHistory: { ...runtime.conversationHistory!, items: [], activeId: null },
+    })]) {
+      page.rerender(<EnterpriseRagPreview {...props} live={background} />);
+      expect(within(screen.getByLabelText("企业助手问答")).getByText(example.question)).toBeTruthy();
+      expect(screen.getByTestId("rag-answer").textContent).toBe(answerText);
+      expect(screen.getByTestId("rag-gauge-value").textContent).toBe(scoreText);
+      expect(screen.getByTestId("rag-evaluation-summary-copy").textContent).toBe(summaryText);
+      expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
+      expect(screen.getByRole("dialog", { name: "人工评审与计算" })).toBe(reviewPanel);
+      expect(screen.getByRole("dialog", { name: "回答依据与陈述核验" })).toBe(evidencePanel);
+      expect(within(reviewPanel).queryByRole("button", { name: "保存评审并计算" })).toBeNull();
+      expect(within(evidencePanel).getByText(example.sources[0].title)).toBeTruthy();
+      expect(within(evidencePanel).queryByText("后台真实资料")).toBeNull();
+      expect(buildReportUrl).toHaveBeenLastCalledWith("records", undefined, example.id);
+    }
+    expect(latest).toHaveBeenCalledTimes(readsBefore); expect(start).not.toHaveBeenCalled();
+    expect(listEvaluationReports(scopedEvaluationStorage(props.storageScopeKey))).toEqual([]);
+  });
+
+  it("binds evaluation and report links to the selected historical answer while keeping the latest chat visible", async () => {
+    const latest = vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] });
+    const onSelectAnswer = vi.fn();
+    const buildReportUrl = vi.fn((section: string) => `/#${section}`);
+    const current = liveRuntime({ conversationId: "conversation", taskId: "task-new", turnId: "turn-new", questionId: "question-new", answerId: "answer-new", question: "新问题", answer: "最新回答", selectedAnswerKey: "new",
+      onSelectAnswer, chat: { question: "新问题", answer: "最新回答", answerKey: "new", sources: [] },
+      previousTurns: [{ id: "question-old", answerKey: "old", question: "旧问题", answer: "历史回答" }],
+    });
+    const page = render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} buildReportUrl={buildReportUrl} live={current} />);
+    await waitFor(() => expect(latest).toHaveBeenCalledWith({ sourceQaTaskId: "task-new", turnId: "turn-new" }));
+    fireEvent.keyDown(screen.getByRole("article", { name: "历史回答" }), { key: "Enter" });
+    expect(onSelectAnswer).toHaveBeenCalledWith("old");
+    page.rerender(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} buildReportUrl={buildReportUrl} live={{ ...current, taskId: "task-old", turnId: "turn-old", questionId: "question-old", answerId: "answer-old", question: "旧问题", answer: "历史回答", selectedAnswerKey: "old" }} />);
+    await waitFor(() => expect(latest).toHaveBeenCalledWith({ sourceQaTaskId: "task-old", turnId: "turn-old" }));
+    expect(within(screen.getByRole("article", { name: "企业助手回复" })).getByText("最新回答")).toBeTruthy();
+    expect(screen.getByRole("article", { name: "历史回答" }).getAttribute("data-selected")).toBe("true");
+    expect(buildReportUrl).toHaveBeenCalledWith("records", { sourceQaTaskId: "task-old", turnId: "turn-old" }, undefined);
+  });
   it("opens report chapters as new-tab links without changing the answer or opening a drawer", () => {
     const buildReportUrl = vi.fn((section: string) => `/?view=enterprise-qa&report=1#${section}`);
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} buildReportUrl={buildReportUrl} />);
@@ -583,7 +673,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(review.queryByText(/已核验来源/)).toBeNull();
   });
 
-  it("keeps legacy locators and freezes claim descriptions while the same answer is evaluated again", async () => {
+  it("keeps legacy locators and freezes claim descriptions while a failed server evaluation is retried", async () => {
     const original = completedAutomaticRun();
     const originalClaim = "支持私有化部署";
     const legacyLocator = "旧手填定位，保留标点及完整原文";
@@ -592,7 +682,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     refreshed.operationId = "evaluation-operation-2";
     refreshed.report!.reportId = "evaluation-report-2";
     refreshed.report!.judgments.claims[0].statement = "新报告里同编号的另一条陈述";
-    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: original, history: [original] });
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: failedAutomaticRun(), history: [original] });
     const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue(refreshed);
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
       taskId: "task-1", turnId: "turn-1", question: "你们支持哪些部署方式？", questionId: "question-1",
@@ -603,13 +693,13 @@ describe("enterprise RAG evidence-based review UI", () => {
     let review = openIntentReview();
     expect(reviewEvidenceValues(review)).toEqual(["claim-1", legacyLocator]);
     expect(within(review.getByRole("list", { name: "需求满足证据：已选证据" })).getByText(originalClaim, { exact: true })).toBeTruthy();
-    const reevaluate = automaticEvaluateButton();
+    const reevaluate = retryAutomaticEvaluationButton();
     await act(async () => {
       fireEvent.click(reevaluate);
       await Promise.resolve();
     });
     expect(start).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId("rag-auto-evaluation-status")).toBeNull();
+    expect(evaluation().queryByText(/正在评估本次回答/)).toBeNull();
     fireEvent.click(review.getByRole("button", { name: "需求满足证据" }));
     expect(within(review.getByRole("group", { name: "陈述" })).getByRole("option", { name: new RegExp(originalClaim) })).toBeTruthy();
     expect(review.queryByText("新报告里同编号的另一条陈述", { exact: true })).toBeNull();
@@ -991,64 +1081,29 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it("only starts a paid automatic evaluation after the explicit button click", async () => {
+  it("reads a completed server report and never starts another paid evaluation when details open", async () => {
     const run = completedAutomaticRun();
-    const latest = vi
-      .spyOn(liveEnterpriseRagEvaluationApi, "latest")
-      .mockResolvedValue({ latest: null, history: [] });
-    const start = vi
-      .spyOn(liveEnterpriseRagEvaluationApi, "start")
-      .mockResolvedValue(run);
-    render(
-      <EnterpriseRagPreview
-        onOpenWebsite={vi.fn()}
-        onOpenWebsiteAssistant={vi.fn()}
-        live={liveRuntime({
-          taskId: "task-1",
-          turnId: "turn-1",
-          question: "你们支持哪些部署方式？",
-          questionId: "question-1",
-          answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
-          answerId: "answer-1",
-          sources: [{ id: "source-1", title: "部署说明", kind: "published_knowledge" }],
-        })}
-      />,
-    );
-
-    await waitFor(() => expect(latest).toHaveBeenCalledWith({
-      sourceQaTaskId: "task-1",
-      turnId: "turn-1",
-    }));
-    expect(start).not.toHaveBeenCalled();
+    const latest = vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: run, history: [run] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start");
+    render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
+      taskId: "task-1", turnId: "turn-1", question: "你们支持哪些部署方式？", questionId: "question-1",
+      answer: "支持私有化部署，具体环境要求请联系项目团队确认。", answerId: "answer-1",
+      sources: [{ id: "source-1", title: "部署说明", kind: "published_knowledge" }],
+    })} />);
+    await waitFor(() => expect(latest).toHaveBeenCalledWith({ sourceQaTaskId: "task-1", turnId: "turn-1" }));
+    await waitFor(() => expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93"));
     for (const action of ["回答依据", "优化方案", "人工评审"]) {
       fireEvent.click(evaluation().getByRole("button", { name: action }));
       expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(screen.queryByTestId("rag-auto-evaluate")).toBeNull();
       expect(start).not.toHaveBeenCalled();
       escapeFocusedDialog();
     }
-    expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false);
-    expect(start).not.toHaveBeenCalled();
-
-    fireEvent.click(automaticEvaluateButton());
-    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({
-      sourceQaTaskId: "task-1",
-      turnId: "turn-1",
-      clientRequestId: expect.any(String),
-    }));
-    await waitFor(() =>
-      expect(screen.queryByTestId("rag-auto-evaluation-status")).toBeNull(),
-    );
-    expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93");
-    escapeFocusedDialog();
-    expect(screen.getAllByTestId("rag-evaluation-dimension")).toHaveLength(6);
-
-    fireEvent.click(screen.getByRole("button", { name: "回答依据" }));
+    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
     expect(screen.getAllByTestId("rag-evaluation-gate")).toHaveLength(7);
-    expect(screen.getByTestId("rag-auto-evaluation-report").textContent).toContain(
-      "evaluation-report-1",
-    );
+    expect(screen.getByTestId("rag-auto-evaluation-report").textContent).toContain("evaluation-report-1");
     expect(screen.queryByText(/gpt-6\.1-sol|XTY Codex/)).toBeNull();
+    expect(start).not.toHaveBeenCalled();
   });
 
   it.each(["success", "failure"] as const)("ignores an old answer's late POST %s while a new answer is submitting", async (outcome) => {
@@ -1057,28 +1112,29 @@ describe("enterprise RAG evidence-based review UI", () => {
     let resolveSecond!: (run: EnterpriseRagEvaluationRunDto) => void;
     const firstRequest = new Promise<EnterpriseRagEvaluationRunDto>((resolve, reject) => { resolveFirst = resolve; rejectFirst = reject; });
     const secondRequest = new Promise<EnterpriseRagEvaluationRunDto>(resolve => { resolveSecond = resolve; });
-    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] });
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockImplementation(async coordinate => ({ latest: failedAutomaticRun(coordinate.sourceQaTaskId, coordinate.turnId), history: [] }));
     const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockImplementation(input => input.sourceQaTaskId === "task-1" ? firstRequest : secondRequest);
     const first = liveRuntime({ conversationId: "conversation-1", taskId: "task-1", turnId: "turn-1", question: "第一个问题", questionId: "question-1", answer: "第一个回答", answerId: "answer-1" });
     const second = liveRuntime({ conversationId: "conversation-2", taskId: "task-2", turnId: "turn-2", question: "第二个问题", questionId: "question-2", answer: "第二个回答", answerId: "answer-2" });
     const props = { onOpenWebsite: vi.fn(), onOpenWebsiteAssistant: vi.fn(), storageScopeKey: "late-post-workspace" };
     const page = render(<EnterpriseRagPreview {...props} live={first} />);
-    await waitFor(() => expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false));
-    fireEvent.click(automaticEvaluateButton());
+    await waitFor(() => expect(retryAutomaticEvaluationButton().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(retryAutomaticEvaluationButton());
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     page.rerender(<EnterpriseRagPreview {...props} live={second} />);
     expect(screen.queryAllByRole("dialog")).toHaveLength(0);
-    await waitFor(() => expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false));
-    fireEvent.click(automaticEvaluateButton());
+    await waitFor(() => expect(retryAutomaticEvaluationButton().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(retryAutomaticEvaluationButton());
     await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    fireEvent.click(evaluation().getByRole("button", { name: "回答依据" }));
     const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
     await act(async () => {
       if (outcome === "success") resolveFirst(completedAutomaticRun());
       else rejectFirst(new Error("旧回答提交迟到的错误"));
       await Promise.resolve();
     });
-    expect(evidence.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(true);
-    expect(evidence.getByTestId("rag-evidence-evaluation-status").textContent).toContain("正在提交评估");
+    expect(evaluation().getByText("正在评估本次回答…")).toBeTruthy();
+    expect(evaluation().queryByRole("button", { name: "重试" })).toBeNull();
     expect(screen.queryByText("旧回答提交迟到的错误")).toBeNull();
     expect(screen.queryByTestId("rag-auto-evaluation-report")).toBeNull();
     expect(listEvaluationReports(scopedEvaluationStorage(props.storageScopeKey))).toHaveLength(0);
@@ -1091,7 +1147,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     secondRun.report!.result.score = 81;
     await act(async () => { resolveSecond(secondRun); await Promise.resolve(); });
     await waitFor(() => expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("81"));
-    expect(evidence.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(false);
+    expect(evaluation().queryByRole("button", { name: "重试" })).toBeNull();
     expect(evidence.getByTestId("rag-auto-evaluation-report").textContent).toContain("evaluation-report-2");
     expect(evidence.getByTestId("rag-auto-evaluation-report").textContent).not.toContain("evaluation-report-1");
   });
@@ -1250,7 +1306,7 @@ describe("enterprise RAG evidence-based review UI", () => {
         await Promise.resolve();
       });
       expect(observe).toHaveBeenCalledTimes(1);
-      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain("自动评估中");
+      expect(evaluation().getByText("正在评估本次回答…").classList.contains("rag-inline-feedback")).toBe(true);
 
       await act(async () => {
         vi.advanceTimersByTime(2_500);
@@ -1258,157 +1314,75 @@ describe("enterprise RAG evidence-based review UI", () => {
         await Promise.resolve();
       });
       expect(observe).toHaveBeenCalledTimes(2);
-      expect(screen.queryByTestId("rag-auto-evaluation-status")).toBeNull();
+      expect(evaluation().queryByText("正在评估本次回答…")).toBeNull();
       expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("reuses the same client request id after an unknown POST outcome", async () => {
-    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({
-      latest: null,
-      history: [],
-    });
-    const start = vi
-      .spyOn(liveEnterpriseRagEvaluationApi, "start")
+  it("reuses the same retry request id after an unknown POST outcome", async () => {
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: failedAutomaticRun(), history: [] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start")
       .mockRejectedValueOnce(new Error("网络结果未知，请重试确认。"))
       .mockResolvedValueOnce(completedAutomaticRun());
-    render(
-      <EnterpriseRagPreview
-        onOpenWebsite={vi.fn()}
-        onOpenWebsiteAssistant={vi.fn()}
-        live={liveRuntime({
-          taskId: "task-1",
-          turnId: "turn-1",
-          question: "你们支持哪些部署方式？",
-          questionId: "question-1",
-          answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
-          answerId: "answer-1",
-        })}
-      />,
-    );
-
-    await waitFor(() =>
-      expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false),
-    );
-    fireEvent.click(automaticEvaluateButton());
+    render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
+      taskId: "task-1", turnId: "turn-1", question: "你们支持哪些部署方式？", questionId: "question-1",
+      answer: "支持私有化部署，具体环境要求请联系项目团队确认。", answerId: "answer-1",
+    })} />);
+    await waitFor(() => expect(retryAutomaticEvaluationButton().hasAttribute("disabled")).toBe(false));
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.click(retryAutomaticEvaluationButton());
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
-    const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
-    await waitFor(() => expect(evidence.getByRole("alert").textContent).toContain("网络结果未知"));
+    await waitFor(() => expect(retryAutomaticEvaluationButton()).toBeTruthy());
+    expect(evaluation().getByText(/暂时无法读取本次评分/).classList.contains("rag-inline-feedback")).toBe(true);
     const firstId = start.mock.calls[0][0].clientRequestId;
-
-    fireEvent.click(automaticEvaluateButton());
+    fireEvent.click(retryAutomaticEvaluationButton());
     await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
     expect(start.mock.calls[1][0].clientRequestId).toBe(firstId);
-    await waitFor(() =>
-      expect(screen.queryByTestId("rag-auto-evaluation-status")).toBeNull(),
-    );
+    await waitFor(() => expect(screen.getByTestId("rag-evaluation-score").textContent).toContain("93"));
+    expect(evaluation().queryByRole("button", { name: "重试" })).toBeNull();
   });
 
-  it("shows the durable server failure instead of a generic submitted notice", async () => {
-    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({
-      latest: null,
-      history: [],
-    });
-    const completed = completedAutomaticRun();
-    vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue({
-      ...completed,
-      status: "failed",
-      report: null,
-      error: {
-        code: "EVALUATION_ATTENTION_REQUIRED",
-        message: "上游任务创建结果不确定，需要管理员确认后再继续。",
-      },
-    });
-    render(
-      <EnterpriseRagPreview
-        onOpenWebsite={vi.fn()}
-        onOpenWebsiteAssistant={vi.fn()}
-        live={liveRuntime({
-          taskId: "task-1",
-          turnId: "turn-1",
-          question: "你们支持哪些部署方式？",
-          questionId: "question-1",
-          answer: "支持私有化部署。",
-          answerId: "answer-1",
-        })}
-      />,
-    );
-
-    await waitFor(() =>
-      expect(automaticEvaluateButton().hasAttribute("disabled")).toBe(false),
-    );
-    fireEvent.click(automaticEvaluateButton());
-    await waitFor(() =>
-      expect(screen.getByTestId("rag-auto-evaluation-status").textContent).toContain(
-        "上游任务创建结果不确定",
-      ),
-    );
-    const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
-    expect(evidence.getByRole("alert").textContent).toContain("需要管理员确认");
-    expect(evidence.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(false);
+  it("offers a local retry for a durable server failure without starting a task on page open", async () => {
+    const failed = failedAutomaticRun();
+    failed.error = { code: "EVALUATION_ATTENTION_REQUIRED", message: "上游任务创建结果不确定，需要管理员确认后再继续。" };
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: failed, history: [] });
+    const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start");
+    render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
+      taskId: "task-1", turnId: "turn-1", question: "你们支持哪些部署方式？", questionId: "question-1", answer: "支持私有化部署。", answerId: "answer-1",
+    })} />);
+    await waitFor(() => expect(retryAutomaticEvaluationButton().hasAttribute("disabled")).toBe(false));
+    expect(evaluation().getByText(/暂时无法读取本次评分/).classList.contains("rag-inline-feedback")).toBe(true);
+    expect(screen.queryByTestId("rag-auto-evaluate")).toBeNull();
     expect(screen.queryByText(/自动评估已提交/)).toBeNull();
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
+    expect(within(screen.getByRole("dialog", { name: "评估记录" })).getByText(/需要管理员确认/)).toBeTruthy();
+    expect(start).not.toHaveBeenCalled();
   });
 
-  it("replaces the submitted notice when polling observes a server failure", async () => {
+  it("changes server-owned running feedback to a local retry after a polled failure", async () => {
     vi.useFakeTimers();
     try {
-      vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({
-        latest: null,
-        history: [],
-      });
-      const completed = completedAutomaticRun();
-      const running: EnterpriseRagEvaluationRunDto = {
-        ...completed,
-        status: "running",
-        report: null,
-      };
-      const failed: EnterpriseRagEvaluationRunDto = {
-        ...running,
-        status: "failed",
-        error: {
-          code: "EVALUATION_ATTENTION_REQUIRED",
-          message: "上游任务创建结果不确定，需要管理员确认后再继续。",
-        },
-      };
-      vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockResolvedValue(running);
-      vi.spyOn(liveEnterpriseRagEvaluationApi, "observe").mockResolvedValue(failed);
-      render(
-        <EnterpriseRagPreview
-          onOpenWebsite={vi.fn()}
-          onOpenWebsiteAssistant={vi.fn()}
-          live={liveRuntime({
-            taskId: "task-1",
-            turnId: "turn-1",
-            question: "你们支持哪些部署方式？",
-            questionId: "question-1",
-            answer: "支持私有化部署。",
-            answerId: "answer-1",
-          })}
-        />,
-      );
-
+      const running: EnterpriseRagEvaluationRunDto = { ...completedAutomaticRun(), status: "running", report: null };
+      const failed = failedAutomaticRun();
+      vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: running, history: [] });
+      const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start");
+      const observe = vi.spyOn(liveEnterpriseRagEvaluationApi, "observe").mockResolvedValue(failed);
+      render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
+        taskId: "task-1", turnId: "turn-1", question: "你们支持哪些部署方式？", questionId: "question-1", answer: "支持私有化部署。", answerId: "answer-1",
+      })} />);
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-      fireEvent.click(automaticEvaluateButton());
-      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-      expect(screen.getByText(/自动评估已提交/).classList.contains("rag-muted")).toBe(true);
-      expect(screen.getByText(/自动评估已提交/).classList.contains("sfp-notice")).toBe(false);
-      const evidence = within(screen.getByRole("dialog", { name: "回答依据与陈述核验" }));
-      expect(evidence.getByTestId("rag-evidence-evaluation-status").textContent).toContain("自动评估中");
-      expect(evidence.getByTestId("rag-auto-evaluate").hasAttribute("disabled")).toBe(true);
-
-      await act(async () => {
-        vi.advanceTimersByTime(2_500);
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(evidence.getByRole("alert").textContent).toContain("需要管理员确认");
-      expect(evidence.getByTestId("rag-evidence-evaluation-status").textContent).toContain("自动评估失败");
+      expect(evaluation().getByText("正在评估本次回答…").classList.contains("rag-inline-feedback")).toBe(true);
+      expect(evaluation().queryByRole("button", { name: "重试" })).toBeNull();
+      await act(async () => { vi.advanceTimersByTime(2_500); await Promise.resolve(); await Promise.resolve(); });
+      expect(observe).toHaveBeenCalledTimes(1);
+      expect(evaluation().getByText(/暂时无法读取本次评分/)).toBeTruthy();
+      expect(retryAutomaticEvaluationButton().hasAttribute("disabled")).toBe(false);
       expect(screen.queryByText(/自动评估已提交/)).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+      expect(start).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it("clears the previous answer notice when a new empty conversation becomes active", async () => {
@@ -1469,10 +1443,8 @@ describe("enterprise RAG evidence-based review UI", () => {
 
     expect(screen.queryByText("本任务冻结知识快照")).toBeNull();
     expect(screen.queryByText(/知识版本 v3/)).toBeNull();
-    expect(screen.getByText(/项目已发布 v9；本会话仍使用冻结的 v3/)).toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "使用 v9 新建问答" }),
-    );
+    expect(screen.queryByText(/项目已发布 v9/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "新建问答" }));
     expect(startNewConversation).toHaveBeenCalledTimes(1);
     expect(screen.getByText("历史资料.zip")).toBeTruthy();
     expect(screen.queryByText("当前资料.zip")).toBeNull();
@@ -1501,7 +1473,8 @@ describe("enterprise RAG evidence-based review UI", () => {
     );
 
     expect(screen.getAllByText(/历史任务知识版本未知/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/未使用当前发布版本替代/)).toBeTruthy();
+    expect(screen.queryByText(/未使用当前发布版本替代/)).toBeNull();
+    expect(screen.getByTestId("rag-submit").hasAttribute("disabled")).toBe(true);
     expect(screen.queryByText(/知识版本 v9/)).toBeNull();
     expect(screen.queryByRole("button", { name: "前往智能知识库" })).toBeNull();
   });
@@ -1518,9 +1491,8 @@ describe("enterprise RAG evidence-based review UI", () => {
       />,
     );
 
-    expect(screen.getByText(/尚未确认的问题/)).toBeTruthy();
-    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "重试上次问题" }));
+    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(runtime.onRetryPending).toHaveBeenCalledTimes(1));
   });
 
@@ -1588,10 +1560,10 @@ describe("enterprise RAG evidence-based review UI", () => {
     );
 
     expect(screen.getByTestId("enterprise-rag-live-root")).toBeTruthy();
-    expect(screen.getByText(/请先完成并发布企业知识库/)).toBeTruthy();
-    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "前往智能知识库" }));
-    expect(openKnowledge).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/请先完成并发布企业知识库/)).toBeNull();
+    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(false);
+    expect(screen.getByTestId("rag-submit").hasAttribute("disabled")).toBe(true);
+    expect(openKnowledge).not.toHaveBeenCalled();
   });
 
   it("fails closed while the model configuration status is unknown", () => {
@@ -1604,8 +1576,9 @@ describe("enterprise RAG evidence-based review UI", () => {
       />,
     );
 
-    expect(screen.getByText(/模型状态尚未确认/)).toBeTruthy();
-    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText(/模型状态尚未确认/)).toBeNull();
+    expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(false);
+    expect(screen.getByTestId("rag-submit").hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByTestId("rag-submit"));
     expect(runtime.onAsk).not.toHaveBeenCalled();
   });
@@ -1622,7 +1595,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(within(screen.getByRole("article", { name: "历史回答" })).getByText(previewRagAnswer)).toBeTruthy();
     expect(within(screen.getByRole("article", { name: "企业助手回复" })).queryByText(previewRagAnswer)).toBeNull();
     await waitFor(() => expect(screen.getByText(/尚无待评估回答/)).toBeTruthy());
-    expect(screen.getByText(/此问题不在示例库/).textContent).toContain("未连接真实问答服务");
+    const previewNotice = screen.getByText(/此问题不在示例库/);
+    expect(previewNotice.textContent).toContain("未连接真实问答服务");
+    expect(previewNotice.classList.contains("rag-inline-feedback")).toBe(true);
     expectEmptyGauge();
     expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
     expect(evaluation().queryByText(/可能分数/)).toBeNull();
@@ -1726,7 +1701,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
-    expect(records.getByLabelText("重大问题，数值分不适用").textContent).toBe("!");
+    expect(records.getByLabelText("重大问题，数值分不适用").textContent).toBe("N/A");
     expect(JSON.parse(window.localStorage.getItem(historyKey) || "[]")[0].dimensions).toHaveLength(6);
   });
 
@@ -1877,7 +1852,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
-    expect(records.getByText(/rag-eval-1\.1/)).toBeTruthy();
+    expect(records.queryByText(/rag-eval-1\.1/)).toBeNull();
+    expect(records.getByText(/历史规则暂不支持重新计算/)).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem(historyKey)!)[0].ruleVersion).toBe("rag-eval-1.1");
     expect(records.getByText(previewRagAnswer)).toBeTruthy();
   });
 
@@ -2026,7 +2003,7 @@ describe("rag-eval-1.3 server conclusions", () => {
     expect(dialog.getAllByText(/事实有依据，不改变核心任务/)).toHaveLength(1);
     fireEvent.click(dialog.getByRole("button",{name:"关闭评估面板"}));
     fireEvent.click(screen.getByRole("button",{name:"评分规则"}));
-    expect(within(screen.getByRole("dialog",{name:"评分规则"})).getByText("rag-eval-1.3")).toBeTruthy();
+    expect(within(screen.getByRole("dialog",{name:"评分规则"})).queryByText(/rag-eval-\d/)).toBeNull();
   });
   it("renders a completed evaluation with an unknown quality conclusion as pending", async () => {
     const run = gradedAutomaticRun(true);
@@ -2043,26 +2020,31 @@ describe("rag-eval-1.3 server conclusions", () => {
     await waitFor(() => expect(evaluation().getByText("优秀")).toBeTruthy());
     fireEvent.click(screen.getByRole("button",{name:"评分规则"}));
     const dialog = within(screen.getByRole("dialog",{name:"评分规则"}));
-    expect(dialog.getByText("rag-eval-1.2")).toBeTruthy();
+    expect(dialog.queryByText(/rag-eval-\d/)).toBeNull();
+    expect(run.report!.evaluator.ruleVersion).toBe("rag-eval-1.2");
     expect(dialog.getByText(/历史结论仍按原冻结规则解释/)).toBeTruthy();
   });
-  it("keeps the legacy warning without a current-rule banner or a paid task", async () => {
+  it("preserves the frozen historical result without banners or a paid task", async () => {
     const run = completedAutomaticRun(), report = run.report!;
     report.result.score = 83; report.result.recommendation = "not_recommended";
     report.result.summary = "旧规则引用门禁未通过。";
     report.judgments.gates.find(gate => gate.id === "citations")!.status = "failed";
+    const frozenReport = JSON.stringify(report);
     vi.spyOn(liveEnterpriseRagEvaluationApi,"latest").mockResolvedValue({latest:run,history:[run]});
     const start = vi.spyOn(liveEnterpriseRagEvaluationApi,"start").mockRejectedValue(new Error("Must not start a paid evaluation"));
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={runtime()} />);
-    await waitFor(() => expect(screen.getByTestId("rag-legacy-rule-notice").textContent).toContain("rag-eval-1.2"));
+    await waitFor(() => expect(evaluation().getByText("不可用，优先修复")).toBeTruthy());
+    expect(screen.queryByTestId("rag-legacy-rule-notice")).toBeNull();
     expect(screen.queryByTestId("rag-current-rule")).toBeNull();
     expectUnavailableGauge();
     expect(evaluation().getByText("不可用，优先修复")).toBeTruthy();
     if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评估记录 (1)" }));
     const records = within(screen.getByRole("dialog", { name: "评估记录" }));
-    expect(records.getByLabelText("重大问题，数值分不适用").textContent).toBe("!");
+    expect(records.getByLabelText("重大问题，数值分不适用").textContent).toBe("N/A");
     expect(run.report?.result.score).toBe(83);
+    expect(run.report?.evaluator.ruleVersion).toBe("rag-eval-1.2");
+    expect(JSON.stringify(report)).toBe(frozenReport);
     expect(start).not.toHaveBeenCalled();
   });
 
@@ -2089,7 +2071,7 @@ describe("rag-eval-1.4 checklist and radar presentation", () => {
     if (screen.queryAllByRole("dialog").length) escapeFocusedDialog();
     fireEvent.click(screen.getByRole("button", { name: "评分规则" }));
     const rules = within(screen.getByRole("dialog", { name: "评分规则" }));
-    expect(rules.getByText("rag-eval-1.4")).toBeTruthy();
+    expect(rules.queryByText(/rag-eval-\d/)).toBeNull();
     expect(rules.getByText(/满足100%／部分满足50%／不满足0%/)).toBeTruthy();
   });
   it("keeps optional suggestions separate when a loaded report has no required adjustments", async () => {

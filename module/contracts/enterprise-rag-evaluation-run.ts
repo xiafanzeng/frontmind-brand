@@ -1007,4 +1007,6 @@ export type EnterpriseRagEvaluationStartInput = {
 export type EnterpriseRagEvaluationHistoryDto = {
   latest: EnterpriseRagEvaluationRunDto | null;
   history: EnterpriseRagEvaluationRunDto[];
+  /** Trusted completed turn is awaiting its automatic operation reservation. */
+  automaticExpected?: boolean;
 };

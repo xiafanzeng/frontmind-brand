@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type CSSProperties } from "react";
+import { useEffect, useId, useMemo, useState, type CSSProperties } from "react";
 import type { EvaluationDimension } from "./evaluation-skill-contract";
 import type { EnterpriseRagChecklistJudgeOutput } from "../../../contracts/enterprise-rag-evaluation-run";
 import { scoreRagChecklist } from "../../../contracts/enterprise-rag-checklist";
@@ -68,16 +68,16 @@ export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = fals
   const revealKey = axes.map(d => `${d?.id}:${d?.status}:${d?.score}:${d?.maxScore}`).join("|");
   const entranceReady = useRagEntranceReady();
   const { ref: revealRef, progress, finish: finishReveal } = useDataReveal<HTMLElement>(!emptyQuestion && axes.some(known), `${emptyQuestion}:${revealKey}`, undefined, undefined, entranceReady);
-  let checklistDimensions: ReturnType<typeof scoreRagChecklist>["dimensions"] | null = null;
-  if (judgments) {
+  const checklistDimensions = useMemo(() => {
+    if (!judgments) return null;
     try {
-      checklistDimensions = scoreRagChecklist(judgments.checklist, judgments.checks).dimensions;
+      return scoreRagChecklist(judgments.checklist, judgments.checks).dimensions;
     } catch {
       // Persisted reports are validated at the API boundary. This fallback
       // keeps the page readable if local/corrupt data reaches this component.
-      checklistDimensions = null;
+      return null;
     }
-  }
+  }, [judgments]);
 
   const full = !emptyQuestion && axes.every(known);
   const animatedRadius = (d: EvaluationDimension & { score: number }) =>

@@ -64,8 +64,11 @@ export function useEnterpriseQaKnowledgeSource(
     let requestVersion = 0;
     let controller: AbortController | undefined;
     let timeoutId: number | undefined;
+    let retryTimer: number | undefined;
+    let transientFailures = 0;
     const refresh = async () => {
       const version = ++requestVersion;
+      window.clearTimeout(retryTimer);
       controller?.abort();
       window.clearTimeout(timeoutId);
       const requestController = new AbortController();
@@ -147,6 +150,7 @@ export function useEnterpriseQaKnowledgeSource(
           throw new Error("知识库来源无效");
         }
         if (!disposed && version === requestVersion) {
+          transientFailures = 0;
           setSource({
             requestKey,
             knowledgeBase,
@@ -160,6 +164,10 @@ export function useEnterpriseQaKnowledgeSource(
         // Fetch can reject while reading a successful response body as well as before headers.
         if (error instanceof TypeError) temporaryFailure = true;
         if (!disposed && version === requestVersion) {
+          if (temporaryFailure && transientFailures < 2) {
+            const delay = transientFailures++ === 0 ? 400 : 1200;
+            retryTimer = window.setTimeout(() => void refresh(), delay);
+          }
           setSource((current) =>
             temporaryFailure &&
             current.requestKey === requestKey &&
@@ -186,12 +194,14 @@ export function useEnterpriseQaKnowledgeSource(
       }
     };
     void refresh();
-    window.addEventListener("focus", refresh);
+    const onFocus = () => { transientFailures = 0; void refresh(); };
+    window.addEventListener("focus", onFocus);
     return () => {
       disposed = true;
       controller?.abort();
       window.clearTimeout(timeoutId);
-      window.removeEventListener("focus", refresh);
+      window.clearTimeout(retryTimer);
+      window.removeEventListener("focus", onFocus);
     };
     // The key freezes all project/owner transport headers and the selected task for this request.
   }, [requestKey, attempt, enabled]);

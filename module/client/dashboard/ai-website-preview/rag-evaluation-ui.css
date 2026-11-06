@@ -733,3 +733,18 @@
 @media (prefers-reduced-motion: reduce) {
   .rag-eval-root .rag-evaluation-gauge-marker { transition: none; }
 }
+
+/* The right report column determines desktop height; history is contained. */
+.rag-eval-root .erag-layout { align-items:stretch; }
+.rag-eval-root .erag-left-column { min-height:0; }
+.rag-eval-root .erag-test-card { min-height:0; overflow:hidden; }
+.rag-eval-root .erag-test-card > .erag-card-heading,
+.rag-eval-root .erag-test-card > .erag-composer { flex-shrink:0; }
+.rag-eval-root .erag-test-thread.rag-chat { min-height:0; contain:size; justify-content:flex-start; overflow-y:auto; scrollbar-gutter:stable; overscroll-behavior:contain; }
+.rag-eval-root .rag-inline-feedback { margin:8px 0 0; font-size:12px; line-height:1.6; color:#86868b; overflow-wrap:anywhere; }
+.rag-eval-root .rag-inline-feedback button { min-height:0; margin-left:8px; padding:0; border:0; background:none; box-shadow:none; color:var(--sfp-accent); font-size:inherit; transform:none; }
+@container sfp (max-width:960px) {
+ .rag-eval-root .erag-test-card { height:clamp(360px,70dvh,640px); max-height:calc(var(--rag-visible-height,100dvh) - 16px); }
+}
+
+.rag-eval-root .rag-history-score.is-unavailable { color:#aeaeb2; }

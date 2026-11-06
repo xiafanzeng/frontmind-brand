@@ -60,10 +60,11 @@ function conversationStatus(value: string): Conversation["status"] {
 /** Shared enterprise-QA transport used by both the classic chat and the
  * designed RAG workbench. It keeps the durable conversation/task protocol in
  * one place so a visual shell cannot accidentally create a second QA path. */
-export function useEnterpriseQaController({ preview = false } = {}) {
+export function useEnterpriseQaController({ preview = false, evaluationIntent, activeConversationId }: { preview?: boolean; evaluationIntent?: "enterprise_rag_once"; activeConversationId?: string | null } = {}) {
   const context = useConversation();
   const contextRef = useRef(context);
-  contextRef.current = context;
+  const selectedActive = activeConversationId === undefined ? context.activeConversation : context.state.conversations.find(item => item.id === activeConversationId) ?? null;
+  contextRef.current = { ...context, activeConversation: selectedActive };
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
   const [responseKnowledge, setResponseKnowledge] = useState<{
@@ -75,7 +76,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
   const steerLock = useRef<string | null>(null);
   const steerRequests = useRef(new Map<string, string>());
   const [steeringState, setSteering] = useState<SteeringSnapshot | null>(null);
-  const active = context.activeConversation;
+  const active = selectedActive;
   const activeUserId = active?.messages.findLast(message => message.role === "user")?.id;
 
   useEffect(() => {
@@ -141,8 +142,8 @@ export function useEnterpriseQaController({ preview = false } = {}) {
   }, [preview, active?.id, active?.taskId, active?.status, activeUserId, request]);
 
   const send = useCallback(
-    async (text: string, attachments: File[] = []) => {
-      const conversation = contextRef.current.activeConversation;
+    async (text: string, attachments: File[] = [], newConversation?: Conversation) => {
+      const conversation = newConversation ?? contextRef.current.activeConversation;
       if (lock.current || !conversation || !text.trim()) return false;
       if (preview) {
         setNotice(
@@ -195,9 +196,10 @@ export function useEnterpriseQaController({ preview = false } = {}) {
             );
           }
           const clientRequestId = crypto.randomUUID();
-          const dispatch: GeneralChatDispatchMetadata = {
+          const dispatch: GeneralChatDispatchMetadata & { evaluationIntent?: "enterprise_rag_once" } = {
             schemaVersion: 1,
             kind: "pending_user",
+            ...(evaluationIntent ? { evaluationIntent } : {}),
             clientRequestId,
             providerPrompt: text.trim(),
             localAssetIds: [
@@ -226,7 +228,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
         if (!(await contextRef.current.flushConversation(conversation.id))) {
           throw new Error("输入尚未保存，已保留本次消息，请重试。");
         }
-        const dispatch = pending.generalChatDispatch!;
+        const dispatch = pending.generalChatDispatch! as GeneralChatDispatchMetadata & { evaluationIntent?: "enterprise_rag_once" };
         const result = await request<QaTask>(
           `/api/frontmind/v2/tasks${
             dispatch.localTaskId
@@ -241,6 +243,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
               clientRequestId: dispatch.clientRequestId,
               prompt: dispatch.providerPrompt,
               localAssetIds: dispatch.localAssetIds,
+              ...(dispatch.evaluationIntent ? { evaluationIntent: dispatch.evaluationIntent } : {}),
               ...(!dispatch.localTaskId
                 ? {
                     modelProfile: dispatch.modelProfile,
@@ -288,7 +291,7 @@ export function useEnterpriseQaController({ preview = false } = {}) {
         setSending(false);
       }
     },
-    [preview, request],
+    [preview, request, evaluationIntent],
   );
 
   const stop = useCallback(async () => {

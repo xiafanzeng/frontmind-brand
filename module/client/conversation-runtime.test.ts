@@ -6,6 +6,53 @@ afterEach(cleanup);
 function client(records:Conversation[]=[]):BrandConversationClient{return {list:vi.fn(async()=>records),sync:vi.fn(async()=>{}),observe:vi.fn(async()=>{throw new Error('No provider call expected');})};}
 function conversation(id:string):Conversation{return {id,title:'企业问答',purpose:'enterprise_qa',workbenchAgentId:'enterprise-qa',messages:[],status:'idle',createdAt:1,updatedAt:1};}
 describe('fixed brand business history',()=>{
+ it('keeps a newly created and already saved conversation when an older history response arrives',async()=>{
+  const transport=client();let releaseHistory!:(records:Conversation[])=>void;
+  vi.mocked(transport.list).mockImplementationOnce(()=>new Promise(resolve=>{releaseHistory=resolve;}));
+  const runtime=createBrandConversationRuntime(transport,'enterprise_qa','test-workspace');
+  const {result}=renderHook(()=>runtime.useConversation());
+  await waitFor(()=>expect(result.current.loading).toBe(true));
+  let created='';act(()=>{created=result.current.createConversation({reuseEmpty:false,title:'新会话'});});
+  await waitFor(()=>expect(transport.sync).toHaveBeenCalledTimes(1));
+  await act(async()=>{await Promise.resolve();});
+  // The save has succeeded and cleared dirty before the stale list resolves.
+  await act(async()=>{releaseHistory([conversation('server-old')]);});
+  expect(result.current.hydrated).toBe(true);
+  expect(result.current.activeConversation?.id).toBe(created);
+  expect(result.current.state.conversations.map(item=>item.id)).toEqual(expect.arrayContaining([created,'server-old']));
+  // A lagging list started after that save must not drop an unobserved create.
+  vi.mocked(transport.list).mockResolvedValueOnce([conversation('server-old')]);
+  await act(()=>result.current.refreshConversations());
+  expect(result.current.activeConversation?.id).toBe(created);
+  expect(result.current.state.conversations.some(item=>item.id===created)).toBe(true);
+  runtime.dispose();
+ });
+ it('keeps edits whose save finished while an older list request was in flight',async()=>{
+  const base=conversation('qa-a');const transport=client([base]);
+  const runtime=createBrandConversationRuntime(transport,'enterprise_qa','test-workspace');
+  const {result}=renderHook(()=>runtime.useConversation());await waitFor(()=>expect(result.current.hydrated).toBe(true));
+  let releaseHistory!:(records:Conversation[])=>void;
+  vi.mocked(transport.list).mockImplementationOnce(()=>new Promise(resolve=>{releaseHistory=resolve;}));
+  let refresh!:Promise<void>;act(()=>{refresh=result.current.refreshConversations();});
+  act(()=>result.current.updateTitle('qa-a','已成功保存的新标题'));
+  await act(async()=>{expect(await result.current.flushConversation('qa-a')).toBe(true);});
+  await act(async()=>{releaseHistory([{...base,title:'旧标题'}]);await refresh;});
+  expect(result.current.activeConversation?.title).toBe('已成功保存的新标题');
+  runtime.dispose();
+ });
+ it('preserves a user selection made after a refresh started even when the URL still names another conversation',async()=>{
+  const transport=client([conversation('qa-a'),conversation('qa-b')]);
+  const runtime=createBrandConversationRuntime(transport,'enterprise_qa','test-workspace');
+  const {result}=renderHook(()=>runtime.useConversation());await waitFor(()=>expect(result.current.hydrated).toBe(true));
+  const originalUrl=location.href;history.replaceState(null,'','/?workbenchTask=qa-a');
+  try {
+   let releaseHistory!:(records:Conversation[])=>void;
+   vi.mocked(transport.list).mockImplementationOnce(()=>new Promise(resolve=>{releaseHistory=resolve;}));
+   let refresh!:Promise<void>;act(()=>{refresh=result.current.refreshConversations();result.current.setActive('qa-b');});
+   await act(async()=>{releaseHistory([conversation('qa-a'),conversation('qa-b')]);await refresh;});
+   expect(result.current.activeConversation?.id).toBe('qa-b');
+  } finally {history.replaceState(null,'',originalUrl);runtime.dispose();}
+ });
  it('creates knowledge histories with an explicit server-verifiable purpose marker',async()=>{
   const transport=client();const runtime=createBrandConversationRuntime(transport,'knowledge','test-workspace');const {result}=renderHook(()=>runtime.useConversation());await waitFor(()=>expect(result.current.hydrated).toBe(true));let id='';act(()=>{id=result.current.createConversation({title:'自定义标题'});});await waitFor(()=>expect(transport.sync).toHaveBeenCalled());expect(result.current.activeConversation).toMatchObject({id,title:'自定义标题',workbenchAgentId:'knowledge'});expect(transport.sync).toHaveBeenCalledWith('knowledge',expect.arrayContaining([expect.objectContaining({id,workbenchAgentId:'knowledge'})]));runtime.dispose();
  });

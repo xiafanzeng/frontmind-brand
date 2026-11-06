@@ -29,6 +29,9 @@ const mocks = vi.hoisted(() => {
       provider: "xty_codex" as string | null,
       knowledgeBase: knowledgeBase("frozen", 4) as ReturnType<typeof knowledgeBase> | null,
     },
+    taskSources: {} as Record<string, any>,
+    hydrated: true,
+    loading: false,
     responseKnowledgeBase: null as ReturnType<typeof knowledgeBase> | null,
     steering: null as null | { supported: boolean; turnId: string; revision: number; effectiveQuestion: string; supplements: Array<{clientRequestId: string; text: string; revision: number}> },
     sourceCalls: [] as Array<[string | null | undefined, boolean | undefined]>,
@@ -101,8 +104,8 @@ vi.mock("../host", () => ({
   projectWorkspaceUrl: (path: string) => path,
   setWorkbenchTaskQuery: mocks.setWorkbenchTaskQuery,
   useConversation: () => ({
-    hydrated: true,
-    loading: false,
+    hydrated: mocks.hydrated,
+    loading: mocks.loading,
     state: { conversations: mocks.conversations },
     activeConversation: mocks.active,
     createConversation: mocks.createConversation,
@@ -116,8 +119,8 @@ vi.mock("../host", () => ({
 }));
 
 vi.mock("../use-enterprise-qa-controller", () => ({
-  useEnterpriseQaController: () => ({
-    active: mocks.active,
+  useEnterpriseQaController: (options?: { activeConversationId?: string | null }) => ({
+    active: options?.activeConversationId === undefined ? mocks.active : mocks.conversations.find(item => item.id === options.activeConversationId) ?? null,
     busy: mocks.busy,
     running: false,
     notice: "",
@@ -140,7 +143,7 @@ vi.mock("./EnterpriseQaWorkspace", () => ({
   ) => {
     mocks.sourceCalls.push([taskId, enabled]);
     return taskId
-      ? { source: mocks.taskSource, retry: mocks.retryTask }
+      ? { source: mocks.taskSources[taskId] ?? mocks.taskSource, retry: mocks.retryTask }
       : { source: mocks.currentSource, retry: mocks.retryCurrent };
   },
 }));
@@ -166,6 +169,9 @@ beforeEach(() => {
   mocks.conversations = [mocks.active];
   mocks.syncError = "";
   mocks.busy = false;
+  mocks.hydrated = true;
+  mocks.loading = false;
+  mocks.taskSources = {};
   mocks.pendingDispatch = null;
   mocks.currentSource = {
     loaded: true,
@@ -323,7 +329,7 @@ describe("connected redesigned enterprise RAG workspace", () => {
     ] };
     mocks.conversations = [mocks.active];
     render(<EnterpriseRagWorkspace />);
-    expect((mocks.received?.live as {previousTurns:unknown[]}).previousTurns).toEqual([{id:"q0", question:"先前问题", answer:"先前回答"}, {id:"q1", question:"未完成问题", answer:""}]);
+    expect((mocks.received?.live as {previousTurns:unknown[]}).previousTurns).toMatchObject([{id:"q0", question:"先前问题", answer:"先前回答", answerId:"a0", coordinate:{sourceQaTaskId:"task-frozen",turnId:"turn-1"}}, {id:"q1", question:"未完成问题", answer:"", coordinate:undefined}]);
   });
 
   it("keeps the newer persisted complete question when another device added a supplement", () => {
@@ -342,7 +348,7 @@ describe("connected redesigned enterprise RAG workspace", () => {
     mocks.steering = { supported: true, turnId: "turn-1", revision: 1, effectiveQuestion: acknowledged,
       supplements: [{ clientRequestId: "supplement-1", text: "请简短", revision: 1 }] };
     render(<EnterpriseRagWorkspace />);
-    expect(mocks.received?.live).toMatchObject({ question: acknowledged, questionId: "question-1", answer: "真实回答", turnId: "turn-1" });
+    expect(mocks.received?.live).toMatchObject({ question: "真实问题", questionId: "question-1", answer: "真实回答", turnId: "turn-1", chat:{question:acknowledged} });
   });
 
   it("attributes a historical answer to its frozen task snapshot, never the current publication", () => {
@@ -361,16 +367,16 @@ describe("connected redesigned enterprise RAG workspace", () => {
       question: "真实问题",
       answer: "真实回答",
       answerCompletedAt: 1793893500000,
-      questionStartedAt: 1793893498000,
-      answerDurationMs: 2000,
       knowledgeBase: { snapshotId: "frozen-snapshot", version: 4 },
       currentKnowledgeBase: { snapshotId: "current-snapshot", version: 9 },
       sources: [{ id: "source-1", title: "任务实际引用资料" }],
       onRetryPending: mocks.retryPending,
     });
+    expect(mocks.received?.live).not.toHaveProperty("questionStartedAt");
+    expect(mocks.received?.live).not.toHaveProperty("answerDurationMs");
   });
 
-  it("lets a historical task start a fresh conversation on the current publication", () => {
+  it("opens a local new draft and persists a new conversation only when its first question is submitted", async () => {
     render(<EnterpriseRagWorkspace />);
 
     act(() => {
@@ -381,6 +387,9 @@ describe("connected redesigned enterprise RAG workspace", () => {
       ).onStartNewConversation();
     });
 
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    expect(mocks.received?.live).toMatchObject({ conversationReady: true, answer: "", knowledgeBinding: "current_publication" });
+    await act(async () => { expect(await (mocks.received?.live as {onAsk:(question:string)=>Promise<boolean>}).onAsk("新会话首问")).toBe(true); });
     expect(mocks.createConversation).toHaveBeenCalledWith({
       title: "企业问答",
       reuseEmpty: false,
@@ -467,7 +476,7 @@ describe("connected redesigned enterprise RAG workspace", () => {
     expect(mocks.received?.storageScopeKey).toBe("21:workspace-1");
   });
 
-  it("waits for knowledge and model readiness before creating a conversation", () => {
+  it("keeps sending available while publication metadata loads without eagerly creating a conversation", () => {
     mocks.active = null;
     mocks.conversations = [];
     mocks.currentSource = {
@@ -477,6 +486,7 @@ describe("connected redesigned enterprise RAG workspace", () => {
     };
     const page = render(<EnterpriseRagWorkspace />);
     expect(mocks.createConversation).not.toHaveBeenCalled();
+    expect(mocks.received?.live).toMatchObject({conversationReady:true,canSend:true});
 
     mocks.currentSource = {
       loaded: true,
@@ -494,12 +504,71 @@ describe("connected redesigned enterprise RAG workspace", () => {
     };
     page.rerender(<EnterpriseRagWorkspace />);
 
-    expect(mocks.createConversation).toHaveBeenCalledWith({
-      title: "企业问答",
-      reuseEmpty: false,
-      purpose: "enterprise_qa",
-      workbenchAgentId: "enterprise-qa",
-    });
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    expect(mocks.received?.live).toMatchObject({ conversationReady: true, canSend: true, knowledgeBinding: "current_publication" });
+  });
+
+  it("submits the first draft question while both history and publication metadata remain unresolved", async () => {
+    mocks.hydrated=false;mocks.loading=true;mocks.active=null;mocks.conversations=[];
+    mocks.currentSource={...mocks.currentSource,loaded:false,failed:false,configured:null,provider:null,knowledgeBase:null};
+    render(<EnterpriseRagWorkspace/>);
+    type Live={canSend:boolean;conversationReady:boolean;onAsk:(question:string)=>Promise<boolean>;conversationHistory:{loading:boolean}};
+    const live=mocks.received?.live as Live;
+    expect(live).toMatchObject({canSend:true,conversationReady:true,conversationHistory:{loading:true}});
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    await act(async()=>expect(await live.onAsk("发送时由服务端核验资料与凭据")).toBe(true));
+    expect(mocks.createConversation).toHaveBeenCalledWith({title:"企业问答",reuseEmpty:false,purpose:"enterprise_qa",workbenchAgentId:"enterprise-qa"});
+    expect(mocks.send).toHaveBeenCalledWith("发送时由服务端核验资料与凭据",[],expect.objectContaining({id:"new-conversation",purpose:"enterprise_qa",messages:[]}));
+    expect(mocks.setWorkbenchTaskQuery).toHaveBeenCalledWith("new-conversation");
+  });
+
+  it("keeps the new draft editable and selected while historical conversations are still loading", async () => {
+    mocks.hydrated = false; mocks.loading = true; mocks.active = null; mocks.conversations = [];
+    const view = render(<EnterpriseRagWorkspace />);
+    const initial = mocks.received?.live as {conversationId:string;conversationReady:boolean;canSend:boolean;onDraftInput:()=>void;onAsk:(question:string)=>Promise<boolean>;conversationHistory:{loading:boolean}};
+    expect(initial).toMatchObject({conversationReady:true,canSend:true,conversationHistory:{loading:true}});
+    const draftId = initial.conversationId;
+    act(()=>initial.onDraftInput());
+    mocks.active = activeConversation(); mocks.conversations = [mocks.active]; mocks.hydrated = true; mocks.loading = false;
+    view.rerender(<EnterpriseRagWorkspace />);
+    expect(mocks.received?.live).toMatchObject({conversationId:draftId,answer:"",canSend:true});
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    await act(async()=>expect(await (mocks.received?.live as typeof initial).onAsk("加载期间的新问题")).toBe(true));
+    expect(mocks.send).toHaveBeenCalledWith("加载期间的新问题",[],expect.objectContaining({id:"new-conversation",purpose:"enterprise_qa",messages:[]}));
+  });
+
+  it("selects each answer's own task, turn, sources and frozen knowledge while preserving the latest chat",()=>{
+    const conversation=activeConversation(); const olderAnswer=conversation.messages[1];
+    mocks.active={...conversation,messages:[
+      {id:"question-old",role:"user",content:"旧问题",timestamp:1},
+      {...olderAnswer,id:"answer-old",content:"旧回答",generalChat:{...olderAnswer.generalChat!,agentTaskId:"task-older",turnId:"turn-older",userMessageId:"question-old"},enterpriseQaAnswer:{sources:[{id:"source-old",title:"旧任务来源",kind:"published_knowledge"}]}},
+      ...conversation.messages,
+    ]};mocks.conversations=[mocks.active];
+    mocks.taskSources["task-older"]={...mocks.taskSource,knowledgeBase:{snapshotId:"older-snapshot",version:2,sourceFileName:"older.zip",documentCount:2}};
+    const view=render(<EnterpriseRagWorkspace/>);
+    type Live={previousTurns:Array<{answerKey:string}>;onSelectAnswer:(key:string)=>void};
+    const prior=(mocks.received?.live as Live).previousTurns[0];
+    act(()=>(mocks.received?.live as Live).onSelectAnswer(prior.answerKey));
+    expect(mocks.received?.live).toMatchObject({taskId:"task-older",turnId:"turn-older",question:"旧问题",answer:"旧回答",answerId:"answer-old",knowledgeBinding:"frozen_task",knowledgeBase:{snapshotId:"older-snapshot",version:2},sources:[{id:"source-old",title:"旧任务来源"}],chat:{question:"真实问题",answer:"真实回答"}});
+    expect(mocks.sourceCalls).toContainEqual(["task-older",true]);
+    mocks.active={...mocks.active,status:"running"};view.rerender(<EnterpriseRagWorkspace/>);
+    expect(mocks.received?.live).toMatchObject({taskId:"task-older",turnId:"turn-older",answerId:"answer-old"});
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("never borrows the latest task or knowledge binding for an older answer without server coordinates",()=>{
+    const conversation=activeConversation();
+    mocks.active={...conversation,messages:[
+      {id:"legacy-question",role:"user",content:"无服务端坐标的旧问题",timestamp:1},
+      {id:"legacy-answer",role:"assistant",content:"无服务端坐标的旧回答",timestamp:2,generalChat:{isFinalAnswer:true}},
+      ...conversation.messages,
+    ]};mocks.conversations=[mocks.active];
+    render(<EnterpriseRagWorkspace/>);
+    type Live={previousTurns:Array<{answerKey:string}>;onSelectAnswer:(key:string)=>void};
+    const prior=(mocks.received?.live as Live).previousTurns[0];
+    act(()=>(mocks.received?.live as Live).onSelectAnswer(prior.answerKey));
+    expect(mocks.received?.live).toMatchObject({taskId:undefined,turnId:undefined,answerId:"legacy-answer",knowledgeBase:null,knowledgeBinding:"historical_unknown"});
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it("does not create a conversation when the model status or provider is unknown", () => {

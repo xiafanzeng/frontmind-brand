@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { copyToClipboard } from "@frontmind/module-ui/lib/utils";
 import { RagChat } from "./RagChat";
@@ -120,13 +120,57 @@ describe("RAG chat presentation", () => {
     view.rerender(<RagChat {...props} completedAt={new Date(2026,10,6,12,7).getTime()} />); expect(view.container.querySelector("time")?.textContent).toBe("12:07 PM");
   });
 
-  it("shows measured elapsed time in the header and never invents it for restored fixtures", () => {
+  it("keeps headers free of elapsed timers while retaining persisted completion times", () => {
     const props={...base(),busy:true,running:true,startedAt:Date.now()}; const view=render(<RagChat {...props} />);
-    act(() => vi.advanceTimersByTime(1500)); expect(screen.getByLabelText("本轮回答耗时 1.5 秒")).toBeTruthy();
+    act(() => vi.advanceTimersByTime(1500)); expect(screen.queryByLabelText(/本轮回答耗时/)).toBeNull();
     view.rerender(<RagChat {...props} busy={false} running={false} answer="回答" answerKey="a1" durationMs={1900} />);
-    expect(screen.getByLabelText("本轮回答耗时 1.9 秒")).toBeTruthy();
-    view.rerender(<RagChat {...props} scopeKey="restored" busy={false} running={false} answer="预置回答" answerKey="b1" />);
     expect(document.querySelector(".rag-chat-elapsed")).toBeNull();
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(2); // Only the answer entrance has timers.
+  });
+
+  it("selects current and historical answers by click or keyboard without hijacking links, tools or copied text", () => {
+    const onSelectAnswer=vi.fn(),onEvidence=vi.fn();
+    const props={...base(),answer:"当前回答 [资料](https://example.com)",answerKey:"current",selectedAnswerKey:"old-answer",onSelectAnswer,onEvidence,
+      previousTurns:[{id:"old-question",answerId:"old-answer",question:"先前问题",answer:"先前回答",sources:[{id:"s1",title:"历史资料"}],completedAt:new Date(2026,10,6,12,7).getTime()}]};
+    const view=render(<RagChat {...props} />);
+    const history=screen.getByRole("article",{name:"历史回答"});
+    const current=screen.getByRole("article",{name:"企业助手回复"});
+    expect(history.getAttribute("data-selected")).toBe("true");
+    expect(history.getAttribute("tabindex")).toBe("0");
+    fireEvent.click(within(history).getByText("先前回答"));
+    fireEvent.keyDown(current,{key:"Enter"});
+    fireEvent.keyDown(history,{key:" "});
+    expect(onSelectAnswer.mock.calls).toEqual([["old-answer"],["current"],["old-answer"]]);
+    onSelectAnswer.mockClear();
+    fireEvent.click(within(current).getByRole("link",{name:"资料"}));
+    fireEvent.click(screen.getByRole("button",{name:"评价回答"}));
+    fireEvent.keyDown(screen.getByRole("button",{name:"评价回答"}),{key:"Enter"});
+    const range=document.createRange(); range.selectNodeContents(within(history).getByText("先前回答"));
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    expect(window.getSelection()!.toString()).toBe("先前回答");
+    fireEvent.click(history);
+    expect(onSelectAnswer).not.toHaveBeenCalled();
+    window.getSelection()!.removeAllRanges();
+    fireEvent.click(screen.getByRole("button",{name:"[1] 历史资料"}));
+    expect(onEvidence).toHaveBeenCalledWith("old-answer");
+    expect(onSelectAnswer).not.toHaveBeenCalled();
+    expect(within(history).getByText("12:07")).toBeTruthy();
+    view.rerender(<RagChat {...props} selectedAnswerKey="current" />);
+    expect(current.getAttribute("data-selected")).toBe("true");
+    expect(history.hasAttribute("data-selected")).toBe(false);
+  });
+
+  it("keeps example conversations readable and disables all composer submission paths", async () => {
+    const props={...base(),live:false,answer:"示例回答",answerKey:"sample",readOnly:true};
+    render(<RagChat {...props} />);
+    const input=screen.getByRole("textbox");
+    expect(input.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button",{name:"试用问题"}).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("示例仅供查看，新建问答后可提问。")).toBeTruthy();
+    await act(async () => { fireEvent.submit(input.closest("form")!); fireEvent.keyDown(input,{key:"Enter"}); });
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText("示例回答")).toBeTruthy();
   });
 
   it("submits a supplement once while keeping stop available, and clears only the accepted draft", async () => {
