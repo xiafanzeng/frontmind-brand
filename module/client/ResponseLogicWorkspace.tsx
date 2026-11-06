@@ -1299,9 +1299,20 @@ function ResponseLogicQuestionEditor({
   const [regenerationStart, setRegenerationStart] = useState<number | null>(null);
   const [candidateDismissed, setCandidateDismissed] = useState(false);
   const [adoptingRegeneration, setAdoptingRegeneration] = useState(false);
+  const [adoptionNotice, setAdoptionNotice] = useState<{scope: string; questionId: string} | null>(null);
   const [regenerationError, setRegenerationError] = useState("");
   const regenerationLock = useRef(false);
   const [demoView, setDemoView] = useState<"detail"|"evaluation"|"optimize">("detail");
+
+  useEffect(() => {
+    if (!adoptionNotice) return;
+    if (demoView !== "detail" || adoptionNotice.scope !== scope || adoptionNotice.questionId !== questionId) {
+      setAdoptionNotice(null);
+      return;
+    }
+    const timer = setTimeout(() => setAdoptionNotice(null), 5000);
+    return () => clearTimeout(timer);
+  }, [adoptionNotice, demoView, scope, questionId]);
 
   const persistedRecord = persistence.records?.find(
     (record) => record.questionId === questionId,
@@ -2081,7 +2092,7 @@ function ResponseLogicQuestionEditor({
       applyAuthoritativeRecord(record);
       judge.reset(); optimization.reset(); regeneration.reset();
       setCandidateDismissed(true); setDemoView("detail");
-      setPublishNotice("新稿已采用到草稿，请重新评估；点击“更新应答逻辑”后才正式生效。");
+      setAdoptionNotice({scope, questionId});
     };
     try {
       if (!(await questionFreshness.checkNow())) return;
@@ -2224,6 +2235,12 @@ function ResponseLogicQuestionEditor({
         current={currentLogic} candidate={regeneration.state.result.structuredDraft} adopting={adoptingRegeneration} error={regenerationError}
         onAdopt={() => void adoptRegeneration()} onKeep={() => {setCandidateDismissed(true); setRegenerationError("");}}/>}
       {regenerationError && (regeneration.state.phase !== "completed" || candidateDismissed) && <p role="alert" className="rl-regenerate-error">{regenerationError}</p>}
+      {demoView === "detail" && adoptionNotice?.scope === scope && adoptionNotice.questionId === questionId && (
+        <div className="rl-regeneration-success-notice" role="status">
+          <Check size={16} aria-hidden="true"/><span>新稿已采用到草稿，请重新评估。</span>
+          <button type="button" aria-label="关闭采用成功提示" onClick={() => setAdoptionNotice(null)}><X size={16} aria-hidden="true"/></button>
+        </div>
+      )}
       {demoView === "detail" && <LogicEditorCard
         draft={draft}
         frozen={generating || publishing || regenerationFrozen || regenerationStart !== null}

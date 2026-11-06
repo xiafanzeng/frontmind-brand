@@ -31,6 +31,10 @@
 .rl-regeneration-review footer { border-top:1px solid #eee8f2; margin-top:24px; padding-top:16px; }
 .rl-regeneration-review footer > div { display:flex; justify-content:flex-end; gap:12px; margin-top:16px; }
 .rl-regenerate-error { color:#b13e50; font-size:13px; }
+.rl-single-page .rl-regeneration-success-notice { display:flex; align-items:center; gap:10px; margin:0 0 16px; padding:8px 12px; border:1px solid #e4d8ef; border-radius:12px; background:#f7f2fb; color:var(--fm-brand-accent-strong, #572582); font-size:13px; }
+.rl-single-page .rl-regeneration-success-notice > svg { flex-shrink:0; }
+.rl-single-page .rl-regeneration-success-notice > span { flex:1; min-width:0; }
+.rl-single-page .rl-regeneration-success-notice > button { display:grid; place-items:center; flex:0 0 44px; width:44px; min-height:44px; padding:0; border:0; border-radius:8px; background:transparent; color:inherit; box-shadow:none; }
 .rl-task-stages footer:has(.rl-regenerate-actions) { flex-wrap:wrap; }
 .rl-task-stages footer .rl-regenerate-actions { display:flex; justify-content:flex-end; gap:12px; flex:1 1 auto; }
 @media(max-width:700px) {

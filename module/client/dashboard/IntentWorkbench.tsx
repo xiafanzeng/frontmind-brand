@@ -13,6 +13,7 @@ import {useWorkspaceDraftGuard, projectWorkspaceUrl, requestWorkspaceNavigation}
 import {navigate} from "wouter/use-browser-location";
 import IntentQuestionCatalog, {type IntentCatalogIntegration} from "./IntentQuestionCatalog";
 import IntentTaskProgress from "./IntentTaskProgress";
+import {IntentListEvaluationStatus, IntentListRefreshStatus} from "./IntentListFeedback";
 import {findCatalogQuestion} from "./intent-catalog-link";
 import {KEYWORD_CATEGORY_OPTIONS} from "@frontmind/module-ui/keyword-categories";
 import type {IntentQuestion} from "../../contracts/intent-workbench";
@@ -67,6 +68,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [workspace, setWorkspace] = useState<IntentWorkspace | null>(null);
   const [view, setView] = useState<View>(initialView);
   const [pending, setPending] = useState(false);
+  const [pendingRead, setPendingRead] = useState(false);
   const [progressKind, setProgressKind] = useState<"evaluate" | "plan">("evaluate");
   const [progressJobId, setProgressJobId] = useState<string>();
   const [error, setError] = useState("");
@@ -102,7 +104,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     setView(initialView); setProgressJobId(undefined);
     setWorkspace(null); setDrafts([]); setDraftDirty(false); setReceived([]); setSelected([]); setHistoryId(undefined); setHistoryQuestionId(undefined);
     setQuestionAction(null); setQuestionError("");
-    void run(() => api.observe(), undefined, true);
+    void run(() => api.observe(), undefined, true, undefined, true);
     return () => {mounted.current = false; generation.current++;};
   }, [api]);
   useEffect(() => {
@@ -129,9 +131,9 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     return Boolean(result);
   }
   useWorkspaceDraftGuard({dirty: draftDirty, label: "优化方案修改", save: saveDrafts, discard: async () => {setDraftDirty(false); return true;}});
-  async function run(work: () => Promise<IntentWorkspace>, next?: View, restoreJob = false, modelKind?: "evaluate" | "plan") {
+  async function run(work: () => Promise<IntentWorkspace>, next?: View, restoreJob = false, modelKind?: "evaluate" | "plan", readOnly = false) {
     if (running.current) return;
-    running.current = true; setPending(true); setError("");
+    running.current = true; setPending(true); setPendingRead(readOnly); setError("");
     if (modelKind) {setProgressKind(modelKind); setProgressJobId(undefined); setView("progress");}
     const destination = next ?? (view === "progress" ? "evaluation" : view);
     const version = generation.current;
@@ -193,6 +195,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const questions = workspace?.state.questions ?? [];
   const evaluations = workspace?.state.evaluations ?? [];
   const activeJob = workspace?.state.jobs?.find(item => !["succeeded", "failed"].includes(item.status));
+  const listEvaluation = view === "list" && activeJob?.kind === "evaluate" ? activeJob : undefined;
+  const refreshingList = view === "list" && Boolean(workspace) && pending && pendingRead && !activeJob;
   const receipt = workspace?.state.receipts.find(item => item.id === receiptId) ?? workspace?.state.receipts.at(-1);
   const filtered = questions.filter(question => question.question.toLowerCase().includes(search.toLowerCase()) &&
     (category === "all" || question.category === category) &&
@@ -369,12 +373,12 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       </section>}
       {!archived && <section className="iw-panel" role="status">未找到该任务的已保存结果，请返回已完成任务重新选择。</section>}
     </>}
-    {error && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true)}>重新读取</button></div>}
+    {error && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true, undefined, true)}>重新读取</button></div>}
     {view === "progress" && <IntentTaskProgress job={workspace?.state.jobs?.find(item => item.id === progressJobId)}
       kind={progressKind} count={scope.length} error={error} pending={pending} onBack={() => setView("list")}
-      onViewResult={() => void run(() => api.observe(), undefined, true)}
-      onReload={() => void run(() => api.observe(), undefined, true)}/>}
-    {pending && view !== "result" && view !== "progress" && <div className="iw-panel" role="status">
+      onViewResult={() => void run(() => api.observe(), undefined, true, undefined, true)}
+      onReload={() => void run(() => api.observe(), undefined, true, undefined, true)}/>}
+    {pending && view !== "result" && view !== "progress" && !listEvaluation && !refreshingList && <div className="iw-panel" role="status">
       {activeJob?.repair ? "正在自动修复模型结果并重新校验，请稍候…" : activeJob ? `正在${activeJob.kind === "plan" ? "生成优化方案" : "评估问题"} · ${activeJob.questionIds.length} 条问题，AI 生成可能需要几分钟…` : "正在读取优化工作台…"}
       {activeJob && <><p>已有任务正在处理，完成前暂不能重复评估。</p><button onClick={() => {
         setScope(activeJob.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]); setProgressJobId(activeJob.id); setProgressKind(activeJob.kind); setView("progress");
@@ -390,6 +394,10 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         onEditQuestion: catalogIntegration?.onEditQuestion ?? (question => openQuestionAction("edit", question)),
         onDeleteQuestion: catalogIntegration?.onDeleteQuestion ?? (question => openQuestionAction("delete", question)),
       }}
+        headerStatus={refreshingList ? <IntentListRefreshStatus/> : undefined}
+        taskFeedback={listEvaluation ? <IntentListEvaluationStatus job={listEvaluation} uncertain={Boolean(error)} onViewTask={() => {
+          setScope(listEvaluation.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]); setProgressJobId(listEvaluation.id); setProgressKind(listEvaluation.kind); setView("progress");
+        }}/> : undefined}
         savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan} onGeneratePlan={id => void plan(false, [id])}
         historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setHistoryQuestionId(undefined); setView("history");}}
         search={search} category={category} status={status} selected={selected} pending={pending}

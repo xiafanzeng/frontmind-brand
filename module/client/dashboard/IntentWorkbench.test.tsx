@@ -74,6 +74,94 @@ describe("优化工作台任务入口", () => {
     expect(api.command).not.toHaveBeenCalled();
     expect(api.execute).not.toHaveBeenCalled();
   });
+  it("列表内展示真实评估阶段，位于标题之后并保留原任务入口", async () => {
+    const initial = workspace("running");
+    initial.state.jobs![0].progress = {stage: "analyzing", updatedAt: new Date().toISOString(), events: []};
+    const {api, finish} = pendingApi(initial);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "返回问题列表"}));
+    const feedback = screen.getByRole("region", {name: "问题评估任务"});
+    expect(within(feedback).getByText("正在分析知识与评分")).toBeTruthy();
+    expect(within(feedback).queryByText(/已耗时/)).toBeNull();
+    expect(screen.getByRole("heading", {name: "优化问题"}).compareDocumentPosition(feedback) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("正在读取优化工作台…")).toBeNull();
+    fireEvent.click(within(feedback).getByRole("button", {name: "查看当前任务"}));
+    expect(screen.getByRole("progressbar", {name: "评估阶段进度"})).toBeTruthy();
+    await act(async () => finish(workspace("succeeded")));
+    expect(screen.queryByRole("region", {name: "问题评估任务"})).toBeNull();
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it("已有列表重新读取时仅显示轻提示，保留列表和筛选，结束后收起", async () => {
+    const initial = workspace("failed");
+    initial.state.jobs![0].error = "测试读取恢复";
+    let finish!: (value: IntentWorkspace) => void;
+    const api: IntentWorkbenchApi = {observe: vi.fn().mockResolvedValueOnce(initial).mockImplementationOnce(() => new Promise<IntentWorkspace>(resolve => {finish = resolve;})), command: vi.fn(), execute: vi.fn(), rollback: vi.fn()};
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.change(await screen.findByRole("textbox", {name: "搜索优化问题"}), {target: {value: "企业"}});
+    fireEvent.click(screen.getByRole("button", {name: "重新读取"}));
+    expect(screen.getByRole("status", {name: "列表更新状态"}).textContent).toContain("正在更新");
+    expect(screen.getByText(question.question)).toBeTruthy();
+    expect(screen.queryByText("正在读取优化工作台…")).toBeNull();
+    await act(async () => finish(workspace()));
+    expect(screen.queryByRole("status", {name: "列表更新状态"})).toBeNull();
+    expect(screen.getByRole("textbox", {name: "搜索优化问题"})).toHaveProperty("value", "企业");
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["running", undefined, "任务执行中，详细阶段暂不可用"],
+    ["queued", undefined, "评估任务已排队，等待执行"],
+    ["create_unknown", "analyzing", "任务状态暂不可确认，请查看当前任务恢复查询。"],
+    ["running", "validating", "正在校验并保存评估结果"],
+    ["running", "repairing", "正在修复评估结果并重新校验"],
+  ] as const)("列表提示按 %s / %s 显示真实状态，不推算阶段", async (status, stage, label) => {
+    const initial = workspace(status);
+    initial.state.jobs![0].createdAt = new Date(Date.now() - 84_000).toISOString();
+    if (stage) initial.state.jobs![0].progress = {stage, updatedAt: new Date().toISOString(), events: []};
+    const {api} = pendingApi(initial);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "返回问题列表"}));
+    const feedback = screen.getByRole("region", {name: "问题评估任务"});
+    expect(within(feedback).getByText(label)).toBeTruthy();
+    expect(within(feedback).getByText(/已耗时 1分/)).toBeTruthy();
+    expect(within(feedback).queryByRole("progressbar")).toBeNull();
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it("首次读取保持线上原提示，返回数据后切换为原列表", async () => {
+    const {api} = pendingApi(workspace());
+    let finish!: (value: IntentWorkspace) => void;
+    api.observe = vi.fn(() => new Promise<IntentWorkspace>(resolve => {finish = resolve;}));
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    expect(screen.queryByRole("heading", {name: "优化问题"})).toBeNull();
+    expect(screen.queryByRole("status", {name: "问题列表加载状态"})).toBeNull();
+    expect(screen.getAllByText("正在读取优化工作台…")).toHaveLength(2);
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByRole("button", {name: "评估问题"})).toBeNull();
+    expect(screen.queryByRole("status", {name: "列表更新状态"})).toBeNull();
+    expect(screen.queryByRole("region", {name: "问题评估任务"})).toBeNull();
+    await act(async () => finish(workspace()));
+    expect(screen.queryByRole("status", {name: "问题列表加载状态"})).toBeNull();
+    expect(screen.getByText(question.question)).toBeTruthy();
+    expect(screen.getByRole("table")).toBeTruthy();
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it("首次读取失败保留原重试入口且不创建评估任务", async () => {
+    const {api} = pendingApi(workspace());
+    api.observe = vi.fn().mockRejectedValueOnce(new Error("读取暂时失败")).mockResolvedValueOnce(workspace());
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("status", {name: "问题列表加载状态"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "重新读取"}));
+    await screen.findByText(question.question);
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it("词条页的首次读取保持原样，不显示问题列表骨架", () => {
+    const {api} = pendingApi(workspace());
+    api.observe = vi.fn(() => new Promise<IntentWorkspace>(() => {}));
+    render(<IntentWorkbench keywordProps={{} as any} initialView="universe" api={api}/>);
+    expect(screen.getByRole("heading", {name: "词条生成"})).toBeTruthy();
+    expect(screen.getByText("正在读取优化工作台…")).toBeTruthy();
+    expect(screen.queryByRole("status", {name: "问题列表加载状态"})).toBeNull();
+  });
   it.each(["evaluate", "plan", "receipt"])("中断后重新读取已完成的%s任务，直接打开对应结果", async kind => {
     const initial = workspace("running", kind === "plan" ? "plan" : "evaluate");
     const completed = workspace("succeeded", kind === "plan" ? "plan" : "evaluate");
