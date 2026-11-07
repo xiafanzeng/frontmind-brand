@@ -351,22 +351,12 @@
   padding: 28px 28px 0;
   gap: 16px;
 }
-.fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-flow-eyebrow {
-  display: block;
-  margin-bottom: 8px;
-  color: #8860a7;
-  font-size: 12px;
-  font-weight: 500;
-}
-.fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-intro h3 {font-size: 22px;line-height: 1.45;letter-spacing: -.4px}
-.fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-intro p {margin-top: 8px;color: #8a8493;font-size: 13px}
+.fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-title {margin: 0 0 16px;font-size: 22px;line-height: 1.45;letter-spacing: -.4px;color: #34283f;font-weight: 600}
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-flow-body {padding: 24px 28px 28px}
-.fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-field {padding: 0;font-size: 13px;line-height: 20px;color: #5c5366;font-weight: 500}
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-row {width: 100%;max-width: 800px;margin-top: 8px;gap: 12px}
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-input {height: 48px;min-height: 48px;padding: 12px 16px;border: 1px solid #ddd6e7;border-radius: 10px;font-size: 14px;box-shadow: none}
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-input:focus {border-color: #976bbb;outline: 3px solid #f1eaf8}
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-row .qt-action-button {height: 48px;min-height: 48px;border-radius: 10px;padding: 0 20px;font-size: 14px;box-shadow: none}
-.fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-hint {margin: 9px 0 0;color: #918b99;font-size: 12px;line-height: 20px}
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-directions {margin-top: 28px;padding-top: 20px;border-top: 1px solid #f0edf4}
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-directions-caption {margin: 0 0 14px;color: #918b99;font-size: 12px}
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-direction-grid {display: grid;grid-template-columns: repeat(3,minmax(0,1fr));gap: 12px}
@@ -380,7 +370,7 @@
   .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-journey li::after {display: none}
   .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-journey-number {width: 23px;height: 23px}
   .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .panel-head.qt-flow-header {padding: 22px 18px 0}
-  .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-intro h3 {font-size: 19px}
+  .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-title {font-size: 19px}
   .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-flow-body {padding: 20px 18px}
   .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-row {flex-direction: column;align-items: stretch}
   .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-direction-grid {grid-template-columns: 1fr}
