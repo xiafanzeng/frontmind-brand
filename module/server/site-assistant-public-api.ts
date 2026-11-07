@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { createHash, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
+import type { GeneralChatDispatchMetadata } from "@frontmind/module-contracts/chat-dispatch";
 import { enterpriseQaProgress } from "../contracts/enterprise-qa-progress.js";
 import {
   siteAssistantBindingKnowledgeKey,
@@ -547,15 +548,7 @@ export function createSiteAssistantPublicApi(
         localTaskId: session.taskId,
         modelProfile: session.taskId ? null : "frontmind-base",
         ...(session.taskId ? {} : {purpose: "enterprise_qa" as const}),
-        ...(verifiedBinding
-          ? {
-              knowledgeBase: {
-                snapshotId: verifiedBinding.knowledgeSnapshotId,
-                contentHash: verifiedBinding.knowledgeArchiveHash,
-              },
-            }
-          : {}),
-      };
+      } satisfies GeneralChatDispatchMetadata;
       const userMessage = {
         id: clientRequestId,
         role: "user" as const,
@@ -611,6 +604,8 @@ export function createSiteAssistantPublicApi(
             modelProfile: "frontmind-base",
             purpose: "enterprise_qa",
             localAssetIds: [],
+            // The signed pin belongs to task creation; conversation metadata
+            // follows the shared dispatch schema.
             ...(verifiedBinding
               ? {
                   knowledgeBase: {
