@@ -290,7 +290,9 @@ describe("formal four-dimension report rendering", () => {
   it("does not depend on any rule-evaluation input: the panel accepts none", () => {
     // Compiling this call with only judge props is the contract; rendering must succeed.
     const html = renderPanel({ judgePhase: "completed", judgeResult: buildJudge() });
-    expect(html).toContain(QUESTION);
+    expect(html).toContain("<h2>应答逻辑评估</h2>");
+    expect(html).not.toContain(QUESTION); // Question stays in the enclosing page header.
+    expect(html).not.toContain("rl-eval-diagnosis-method");
     expect(html).not.toContain("Intent：");
     expect(html).not.toContain("四项独立评分，不设综合分");
   });

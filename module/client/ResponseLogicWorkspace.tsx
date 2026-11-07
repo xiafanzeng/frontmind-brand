@@ -2144,14 +2144,14 @@ function ResponseLogicQuestionEditor({
 
   return (
     <section className="rl-single-page">
-      {onReturnToCatalog && demoView === "detail" && <div className="rl-catalog-return">
-        <button type="button" disabled={returningToCatalog || publishing || stashQueue.status.state === "saving"} onClick={() => void returnToCatalog()}>{returningToCatalog || stashQueue.status.state === "saving" ? "正在保存草稿…" : "← 返回候选问题"}</button>
-        {returnError && <p role="alert">{returnError}</p>}
-      </div>}
       <ResponseLogicPageHeader
         group={group}
         question={question}
       />
+      {onReturnToCatalog && demoView === "detail" && <div className="rl-catalog-return">
+        <button type="button" disabled={returningToCatalog || publishing || stashQueue.status.state === "saving"} onClick={() => void returnToCatalog()}>{returningToCatalog || stashQueue.status.state === "saving" ? "正在保存草稿…" : "← 返回候选问题"}</button>
+        {returnError && <p role="alert">{returnError}</p>}
+      </div>}
 
       {showGenerationEntry && (
         <section className="rl-generation-card" aria-label="生成应答">

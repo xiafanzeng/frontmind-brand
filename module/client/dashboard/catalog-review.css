@@ -76,3 +76,37 @@
   .fm-brand-theme .iw-view-list .iw-catalog-table tr {padding:16px;gap:14px 10px}
   .fm-brand-theme .iw-view-list .iw-catalog-actions button {font-size:12px;min-height:44px}
 }
+
+/* Approved local catalog refinements. */
+.fm-brand-theme .iw-view-list .iw-catalog-table tbody tr:hover,
+.fm-brand-theme .iw-view-list .iw-catalog-table tbody tr:hover>td,
+.fm-brand-theme .iw-view-list .iw-catalog-table tbody tr.selected>td {background:#f7f3fb!important}
+.fm-brand-theme .iw-view-list .iw-catalog-table th:last-child,
+.fm-brand-theme .iw-view-list .iw-catalog-table td:last-child {width:27%}
+.fm-brand-theme .iw-view-list .iw-catalog-table th:last-child {background:rgba(0,0,0,.04)}
+.fm-brand-theme .iw-view-list .iw-catalog-table td:last-child {background:inherit}
+.fm-brand-theme .iw-view-list .iw-catalog-table th:nth-child(3),
+.fm-brand-theme .iw-view-list .iw-catalog-table th:nth-child(4) {width:8%}
+.fm-brand-theme .iw-view-list .iw-catalog-table th:nth-child(5) {width:12%}
+.fm-brand-theme .iw-view-list .iw-catalog-table {container-type:inline-size}
+/* The previous score column was 10% wide: reserve another 1.5 columns between text and scores. */
+@media(min-width:901px) {
+ .fm-brand-theme .iw-view-list .iw-catalog-table th:nth-child(2),
+ .fm-brand-theme .iw-view-list .iw-catalog-table td:nth-child(2) {padding-right:calc(18px + 15cqw)}
+}
+.fm-brand-theme .iw-view-list .iw-catalog-actions {grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.fm-brand-theme .iw-view-list .iw-catalog-actions .iw-answer-entry,
+.fm-brand-theme .iw-view-list .iw-catalog-actions .iw-plan-entry {grid-column:auto}
+.fm-brand-theme .iw-view-list .iw-catalog-actions button {min-height:40px;line-height:1.5;white-space:nowrap;padding:8px 10px}
+.fm-brand-theme .rl-single-page .rl-catalog-return {margin:0 0 28px}
+.fm-brand-theme .rl-single-page .rl-catalog-return button {font:inherit;font-size:13px;padding:0;min-height:32px}
+@media(min-width:901px) and (max-width:1200px) {
+ .fm-brand-theme .iw-view-list .iw-catalog-table th,.fm-brand-theme .iw-view-list .iw-catalog-table td {padding:18px 10px}
+ .fm-brand-theme .iw-view-list .iw-catalog-table th:nth-child(2),.fm-brand-theme .iw-view-list .iw-catalog-table td:nth-child(2) {padding-right:calc(12px + 15cqw)}
+ .fm-brand-theme .iw-view-list .iw-catalog-actions button {font-size:12px;padding:8px 6px}
+}
+@media(max-width:900px) {
+ .fm-brand-theme .iw-view-list .iw-catalog-table td:last-child {background:transparent}
+ .fm-brand-theme .iw-view-list .iw-catalog-table tbody tr:hover>td {background:transparent!important}
+}
+@media(max-width:600px) {.fm-brand-theme .iw-view-list .iw-catalog-actions button {min-height:44px}}

@@ -52,6 +52,11 @@ const envelope = (optimization: unknown) => jsonResponse(200, {
 });
 
 describe("optimization client", () => {
+  it("negotiates optional review without breaking an older strict server",async()=>{
+    const {calls}=installFetch([()=>jsonResponse(400,{error:{code:"INVALID_RESPONSE_LOGIC_OPTIMIZATION_INPUT"}}),()=>envelope(validOptimization())]);
+    const result=await pollOptimizationTask({questionId:"q1",expectedRevision:5,judgeTaskId:"judge-1",taskId:"opt-task-001"});
+    expect(result.status).toBe("completed");expect(calls[0].url).toContain("review=1");expect(calls[1].url).not.toContain("review=");expect(calls[1].url).not.toContain("progress=");
+  });
   it("starts an optimization task passing only identifiers (questionId/revision/judgeTaskId)", async () => {
     const { calls } = installFetch([startResponse]);
     const result = await startOptimizationGeneration({ questionId: "q1", expectedRevision: 5, judgeTaskId: "judge-1" });
@@ -208,8 +213,10 @@ describe("optimization workflow rendering", () => {
     expect(html).not.toContain("优化摘要");
     expect(html).toContain("回答边界与禁止表达");
     expect(html).toContain("采用选中项到草稿");
-    // candidate provenance is stated; no auto-publish claims
-    expect(html).toContain("尚未采用");
+    // Explicit adoption remains; the redundant toolbar label is removed.
+    expect(html).not.toContain("尚未采用");
+    expect(html).not.toContain("恢复模型建议");
+    expect(html).toContain("查看修改意见");
     expect(html).toContain("仍需更新应答逻辑");
     // no demo/heuristic artifacts
     expect(html).not.toContain("决策场景：");
@@ -220,7 +227,7 @@ describe("optimization workflow rendering", () => {
     const result = validOptimization();
     result.changes = [{field: "concern", summary: "补来源标记", evidence: []}];
     const html = optimizationFlow({ ...initialOptimizationLifecycleState, phase: "completed", result, taskId: "t" });
-    expect(html).toContain("补来源标记");
+    expect(html).not.toContain("补来源标记"); // Reasons now belong to the review mode.
     expect(html).not.toContain("rl-judge-evidence");
   });
 });
