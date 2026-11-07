@@ -711,7 +711,7 @@
 }
 
 .sfp-workspace-grid--management {
-  grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr);
 }
 
 .sfp-builder-tools-panel {
