@@ -56,12 +56,13 @@ export type ManagedKeywordTablesProps = {
   tables: ManagedKeywordTable[];
   loading?: boolean;
   error?: unknown;
-  onUseQuestion?: (question: ManagedKeywordQuestionSelection) => void;
+  onUseQuestion?: (question: ManagedKeywordQuestionSelection) => void | Promise<void>;
   /** Optional batch intake; existing host-owned single selection stays compatible. */
   onUseQuestions?: (questions: Array<{
     question: string; category: KeywordCategoryKey; tableId: string;
     rowIndex: number; dashboardRevision?: number;
-  }>) => void;
+  }>) => void | Promise<void>;
+  onOptimizationSavingChange?: (saving: boolean) => void;
   quotaAvailability?: ManagedKeywordQuotaAvailability;
   generationEnabled?: boolean;
   dashboardRevision?: number | null;
@@ -73,6 +74,7 @@ export type ManagedKeywordTablesProps = {
   onViewEvaluationTask?: (jobId: string) => void;
   onEvaluateQuestion?: (question: ManagedKeywordQuestionSelection) => void;
   evaluationPending?: boolean;
+  evaluationPendingKeyword?: Pick<ManagedKeywordQuestionSelection, "tableId" | "rowIndex"> | null;
 };
 
 const KEYWORD_SOURCE_DESCRIPTION =
@@ -203,6 +205,7 @@ export default function ManagedKeywordTables({
   error,
   onUseQuestion,
   onUseQuestions,
+  onOptimizationSavingChange,
   quotaAvailability,
   generationEnabled = false,
   dashboardRevision,
@@ -213,6 +216,7 @@ export default function ManagedKeywordTables({
   onViewEvaluationTask,
   onEvaluateQuestion,
   evaluationPending = false,
+  evaluationPendingKeyword,
 }: ManagedKeywordTablesProps) {
   const { isWorkbench } = useBusinessWorkspace();
   const utils = trpc.useUtils();
@@ -376,7 +380,7 @@ export default function ManagedKeywordTables({
         </nav>
       )}
       {generationEnabled && (
-        <div hidden={sourceView!=="recommended"}><QuestionTemplateApiFlow onSaved={() => utils.workspace.dashboard.invalidate()} onOptimize={onUseQuestions ?? (onUseQuestion ? items => {if(items[0])onUseQuestion(items[0]);} : undefined)} /></div>
+        <div hidden={sourceView!=="recommended"}><QuestionTemplateApiFlow onSaved={() => utils.workspace.dashboard.invalidate()} onOptimizationSavingChange={onOptimizationSavingChange} onOptimize={onUseQuestions ?? (onUseQuestion ? items => {if(items[0])return onUseQuestion(items[0]);} : undefined)} /></div>
       )}
       {(!generationEnabled || sourceView!=="recommended") && (sourceTables.length === 0 ? (
         loading ? (
@@ -397,10 +401,8 @@ export default function ManagedKeywordTables({
         ) : <KeywordEmptyPanel title="尚未保存词条" description="先生成推荐问题并勾选保存，即可在这里查看。"/>
       ) : (
         <>
-          {generationEnabled && <p className="keyword-source-note">按来源查看已保存词条；历史词库保留原有记录，已评估的问题可点击评分查看。</p>}
           {onUseQuestions && batchItems.length > 0 && (
             <div className="keyword-batch-actions" role="status">
-              <span>已选择 <strong>{batchItems.length}</strong> 条问题</span>
               <div><button type="button" onClick={() => setBatchSelection({})}>清空选择</button>
               <button type="button" className="iw-primary" onClick={() => onUseQuestions(batchItems)}>批量加入优化清单（{batchItems.length}）</button></div>
             </div>
@@ -540,6 +542,8 @@ export default function ManagedKeywordTables({
                           const evaluation = linked ? optimizationState?.evaluations.find(item => item.questionId === linked.id) : undefined;
                           const evaluationJob = optimizationState?.jobs?.find(job => !["succeeded", "failed"].includes(job.status));
                           const evaluating = linked && evaluationJob?.kind === "evaluate" && evaluationJob.questionIds.includes(linked.id);
+                          const submittingEvaluation = evaluationPending && evaluationPendingKeyword?.tableId === table.id &&
+                            evaluationPendingKeyword.rowIndex === rowIndex;
                           const selectionKey = `${table.id}:${rowIndex}`;
                           const isSelected = Boolean(batchSelection[selectionKey]);
                           const selectionDisabled = (isWorkbench && dashboardRevision == null) || !question || !category || quotaAccess?.available === false;
@@ -585,13 +589,13 @@ export default function ManagedKeywordTables({
                                   <ChevronRight size={14} aria-hidden="true"/>
                                 </button> : optimizationState && onEvaluateQuestion ? <button type="button" className="keyword-evaluation-button keyword-evaluation-start"
                                   aria-label={`评估问题：${question}`}
-                                  title={evaluationJob ? "请先完成当前评估任务" : "评估当前词条"}
+                                  title={evaluationJob ? "请先完成当前评估任务" : submittingEvaluation ? "正在提交当前词条的评估" : evaluationPending ? "请等待当前操作完成后再评估" : "评估当前词条"}
                                   disabled={selectionDisabled || evaluationPending || Boolean(evaluationJob)}
                                   onClick={() => {
                                     if (!category) return;
                                     onEvaluateQuestion({question, category, tableId: table.id, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})});
                                   }}>
-                                  <span>{evaluating ? evaluationJob?.status === "paused" ? "评估已暂停" : "评估中…" : evaluationPending ? "正在处理…" : "评估问题"}</span>
+                                  <span>{evaluating ? evaluationJob?.status === "paused" ? "评估已暂停" : "评估中…" : submittingEvaluation ? "正在处理…" : "评估问题"}</span>
                                   <ChevronRight size={14} aria-hidden="true"/>
                                 </button> :
                                   <small>{!optimizationState ? "优化状态尚未读取" : linked ? "已在优化清单 · 待评估" : "尚未加入优化"}</small>}

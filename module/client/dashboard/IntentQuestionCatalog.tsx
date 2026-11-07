@@ -16,7 +16,7 @@ export const answerStatusLabel = (status?: string) => status === "published" ? "
 function CatalogCell({children, secondary}: {children: ReactNode; secondary?: ReactNode}) {
   return <div className="iw-catalog-cell"><div className="iw-catalog-primary">{children}</div><div className={`iw-catalog-secondary${secondary ? "" : " iw-catalog-secondary-empty"}`}>{secondary}</div></div>;
 }
-export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, sort = "newest", onSort, selected, pending, page, pageCount, total, savedPlanIds,
+export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, sort = "newest", onSort, selected, pending, page, pageCount, savedPlanIds,
   onSearch, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
   evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; received: string[];
@@ -48,7 +48,6 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
       </div>
     </header>
     {taskFeedback}
-    {received.length > 0 && <div className="iw-handoff-banner" role="status"><div><strong>已接收所选 {received.length} 条问题</strong><p>{activeJob?.kind === "evaluate" && received.some(id => activeJob.questionIds.includes(id)) ? "问题价值正在评估；完成后可查看知识支撑并批量生成方案。" : received.every(id => evaluations.some(item => item.questionId === id)) ? "问题评估已完成，可复用已有结果并生成优化方案。" : "问题已加入清单，可继续评估问题价值与知识支撑。"}</p></div></div>}
     <section className="iw-panel iw-table-wrap iw-catalog-table"><table>
       <colgroup><col className="iw-catalog-col-select"/><col className="iw-catalog-col-question"/><col className="iw-catalog-col-value"/><col className="iw-catalog-col-support"/><col className="iw-catalog-col-gaps"/><col className="iw-catalog-col-actions"/></colgroup>
       <thead><tr><th><input type="checkbox" aria-label="选择当前页问题" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => onSelectPage(event.target.checked)}/></th><th>候选问题</th>{scoreHeader("value", "问题价值")}{scoreHeader("support", "知识支撑")}<th>主要缺口</th><th>操作</th></tr></thead>
@@ -85,7 +84,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
         </div></td>
       </tr>;})}</tbody>
     </table>{!visible.length && <div className="iw-empty">{questions.length ? "没有匹配问题，请调整筛选条件。" : "从推荐问题或已保存词库中选择词条，加入优化清单。"}</div>}</section>
-    <div className="iw-pagination"><span>共 {total} 项</span>{pageCount > 1 && <><button disabled={page === 0} onClick={() => onPage(page - 1)}>上一页</button><span>{page + 1} / {pageCount}</span><button disabled={page + 1 >= pageCount} onClick={() => onPage(page + 1)}>下一页</button></>}</div>
+    {pageCount > 1 && <div className="iw-pagination"><button disabled={page === 0} onClick={() => onPage(page - 1)}>上一页</button><span>{page + 1} / {pageCount}</span><button disabled={page + 1 >= pageCount} onClick={() => onPage(page + 1)}>下一页</button></div>}
     {selected.length > 0 && <div className="iw-selection-bar"><span>已选择 <strong>{selected.length}</strong> 条问题</span><div><button onClick={onClear}>清空选择</button><button className="iw-primary" disabled={pending || Boolean(activeJob)} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div></div>}
   </>;
 }

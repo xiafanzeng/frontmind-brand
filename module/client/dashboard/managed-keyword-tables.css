@@ -611,7 +611,7 @@
 }
 
 :where(.brand-keyword-workspace) .keyword-source-note {color:var(--dashboard-muted,#716a80);font-size:13px;line-height:1.7;margin:0 0 16px}
-:where(.brand-keyword-workspace) .keyword-batch-actions {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:14px;margin:0 0 16px;border:1px solid var(--line,#e8e1ee);border-radius:12px;background:#fff}
+:where(.brand-keyword-workspace) .keyword-batch-actions {display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:12px;padding:14px;margin:0 0 16px;border:1px solid var(--line,#e8e1ee);border-radius:12px;background:#fff}
 :where(.brand-keyword-workspace) .keyword-batch-actions>div {display:flex;flex-wrap:wrap;gap:8px}
 :where(.brand-keyword-workspace) .keyword-selection-cell {position:sticky;left:0;min-width:140px;background:#fff;z-index:1}
 :where(.brand-keyword-workspace) th.keyword-selection-cell {z-index:2;background:#f3edf8}
@@ -669,3 +669,29 @@
 .fm-brand-theme .brand-keyword-workspace .qt-category-picker:has(select:focus-visible) .qt-main-category-pill {outline:2px solid #7545a0;outline-offset:3px}
 .fm-brand-theme .brand-keyword-workspace .qt-category-picker:has(select:disabled) {opacity:.5}
 .fm-brand-theme .brand-keyword-workspace .qt-category-picker select:disabled {cursor:not-allowed}
+
+/* The recommendation actions and table share the existing outer result panel. */
+.brand-keyword-workspace .qt-api-flow .qt-selection-toolbar.qt-question-selection-toolbar {
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Every column uses the same alignment for its heading and contents. */
+.fm-brand-theme .brand-keyword-workspace .keyword-table :is(th, td) {
+  text-align: center;
+  vertical-align: middle;
+}
+.fm-brand-theme .brand-keyword-workspace .keyword-table input[type="checkbox"] {
+  display: inline-block;
+  margin: 0;
+  vertical-align: middle;
+}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-table .keyword-selection-cell :is(.keyword-selection-label, .keyword-evaluation-button) {
+  margin-left: auto;
+  margin-right: auto;
+  justify-content: center;
+}
