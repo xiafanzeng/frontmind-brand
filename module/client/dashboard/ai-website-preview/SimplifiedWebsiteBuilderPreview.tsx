@@ -3014,6 +3014,17 @@ export function SimplifiedWebsiteBuilderPreview({
               查看建设评估
             </button>
           )}
+          {siteOps && activeStep === "design" && latestBuild && liveRevisionEditable && designDraftSynced && (
+            <button
+              type="button"
+              className="sfp-button sfp-button--ghost"
+              data-testid="website-rebuild-submit"
+              disabled={liveInteractionPending}
+              onClick={() => { void submitLiveRevision(); }}
+            >
+              <RefreshCw size={16} /> 重新生成网站
+            </button>
+          )}
           <button
             type="button"
             className="sfp-button sfp-button--primary"
