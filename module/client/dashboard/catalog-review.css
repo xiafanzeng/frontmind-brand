@@ -138,3 +138,7 @@
 /* Preserve the latest formal response-page return control. */
 .fm-brand-theme .rl-single-page .rl-catalog-return {margin:0 0 28px}
 .fm-brand-theme .rl-single-page .rl-catalog-return button {font:inherit;font-size:13px;padding:0;min-height:32px}
+
+/* Question editing stays on an opaque white surface inside the portal. */
+.fm-brand-portal-theme.iw-question-modal {background:#fff!important}
+.fm-brand-portal-theme.iw-question-modal .iw-question-fields textarea {background:#fff!important}
