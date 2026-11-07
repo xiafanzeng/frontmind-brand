@@ -11,6 +11,9 @@ export function Footer() {
           </p>
         </div>
         <nav className="hc-footer__nav" aria-label="分类导航">
+          <a className="hc-footer__link" href="#top">帮助中心</a>
+          <a className="hc-footer__link" href="#categories">分类浏览</a>
+          <a className="hc-footer__link" href="#faq">常见问题</a>
           {categories.slice(0, 4).map((category) => (
             <a
               key={category.id}
@@ -18,6 +21,11 @@ export function Footer() {
               href="#categories"
             >
               {category.title}
+            </a>
+          ))}
+          {siteMeta.quickLinks.map((label) => (
+            <a key={label} className="hc-footer__link" href="#articles">
+              {label}
             </a>
           ))}
         </nav>
