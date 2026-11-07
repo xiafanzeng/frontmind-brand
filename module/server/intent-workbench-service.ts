@@ -171,7 +171,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       throw new IntentWorkbenchError("KNOWLEDGE_LIMIT", "当前知识库过大，请缩小知识范围后评估");
     let reserved!: IntentSkillJob;
     await locked(expectedRevision, async (tx, ledger) => {
-      if (ledger.state.jobs?.some(activeJob) || ledger.state.receipts.some(r => r.status === "running" || (r.lease?.expiresAt ?? 0) > Date.now()))
+      if (ledger.state.jobs?.some(job => activeJob(job) &&
+          (kind === "evaluate" || (job.kind === "plan" && job.questionIds.some(id => questionIds.includes(id))))) ||
+          ledger.state.receipts.some(r => r.status === "running" || (r.lease?.expiresAt ?? 0) > Date.now()))
         throw new IntentWorkbenchError("OPERATION_ACTIVE", "请先等待当前优化任务完成");
       const selectedQuestions = [...new Set(questionIds)].map(id => {
         const question = ledger.state.questions.find(q => q.id === id);
@@ -311,13 +313,25 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
           if (phase === "failed" && ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
             .some(later => later.questionIds.some(id => current.questionIds.includes(id))))
             throw new IntentSkillRuntimeError("已有更新的评估任务，旧任务结果不再发布");
-          if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash || questionsHash(job!, ledger.state) !== job!.questionsHash)
-            throw new IntentSkillRuntimeError("任务期间知识或问题已更新，请重新评估");
-          ledger.state.evaluations = [...ledger.state.evaluations.filter(e => !job!.questionIds.includes(e.questionId)), ...result.evaluations];
-          if (job!.kind === "plan") ledger.state.plans = [...ledger.state.plans.filter(p => !job!.questionIds.includes(p.questionId)), ...result.plans];
+          if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash)
+            throw new IntentSkillRuntimeError("任务期间知识已更新，请重新评估");
+          // Validate against the immutable submitted input, then publish only to
+          // unchanged live questions. Editing/deleting never mutates the task's
+          // original question or resurrects an obsolete score/plan.
+          const publishIds = new Set(input.selectedQuestions.filter(original => {
+            const live = ledger.state.questions.find(question => question.id === original.id);
+            const superseded = ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
+              .some(later => later.questionIds.includes(original.id));
+            return live && !superseded && intentHash(questionContent(live)) === intentHash(questionContent(original));
+          }).map(question => question.id));
+          ledger.state.evaluations = [...ledger.state.evaluations.filter(e => !publishIds.has(e.questionId)),
+            ...result.evaluations.filter(e => publishIds.has(e.questionId))];
+          const planPublishIds = new Set([...publishIds].filter(id => !current.draftEditedQuestionIds?.includes(id)));
+          if (job!.kind === "plan") ledger.state.plans = [...ledger.state.plans.filter(p => !planPublishIds.has(p.questionId)),
+            ...result.plans.filter(p => planPublishIds.has(p.questionId))];
           if (job!.receiptId) {
             const receipt = ledger.state.receipts.find(r => r.id === job!.receiptId);
-            if (receipt && receipt.status !== "reverted") receipt.after = result.evaluations;
+            if (receipt && receipt.status !== "reverted") receipt.after = result.evaluations.filter(e => publishIds.has(e.questionId));
           }
           current.status = "succeeded"; delete current.error;
           current.result = structuredClone({completedAt: new Date().toISOString(),
@@ -363,8 +377,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
             if (ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
               .some(later => later.questionIds.some(id => current.questionIds.includes(id))))
               throw new IntentSkillRuntimeError("已有更新的评估任务，旧任务结果不再发布");
-            if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash || questionsHash(job!, ledger.state) !== job!.questionsHash)
-              throw new IntentSkillRuntimeError("任务期间知识或问题已更新，请重新评估");
+            if (intentHash(currentKnowledge.nodes) !== job!.knowledgeHash)
+              throw new IntentSkillRuntimeError("任务期间知识已更新，请重新评估");
             current.repair = {intentId, claimedAt: Date.now(), baselineEventIds: allEvents.map(event => event.id), reason: invalidResult!};
             current.status = "running"; delete current.error; delete current.terminalObservedAt;
             await tx.update(model.agentOperations).set({status: "result_pending", errorCode: null, updatedAt: new Date()}).where(eq(model.agentOperations.id, job!.id));
@@ -546,10 +560,10 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   }
   async function poll() {
     const workspace = await observe();
-    const job = workspace.state.jobs?.find(activeJob) ??
-      workspace.state.jobs?.find((candidate, index, jobs) => recoverableJob(candidate) &&
-        !jobs.slice(index + 1).some(later => later.questionIds.some(id => candidate.questionIds.includes(id))));
-    if (job) await advance(job);
+    const active = workspace.state.jobs?.filter(job => activeJob(job) && job.status !== "paused") ?? [];
+    const recoverable = workspace.state.jobs?.find((candidate, index, jobs) => recoverableJob(candidate) &&
+      !jobs.slice(index + 1).some(later => later.questionIds.some(id => candidate.questionIds.includes(id))));
+    for (const job of active.length ? active : recoverable ? [recoverable] : []) await advance(job);
     return observe();
   }
   async function command(value: unknown) {
@@ -560,10 +574,6 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     await locked(input.expectedRevision, async (_tx, ledger) => {
       if (ledger.state.receipts.some(receipt => receipt.status === "running" || (receipt.lease?.expiresAt ?? 0) > Date.now()))
         throw new IntentWorkbenchError("EXECUTION_ACTIVE", "请先继续完成当前执行");
-      const currentJob = ledger.state.jobs?.find(activeJob);
-      if (currentJob && (currentJob.questionsScope !== "selected" ||
-          ("questionId" in input && currentJob.questionIds.includes(input.questionId))))
-        throw new IntentWorkbenchError("OPERATION_ACTIVE", "此问题正在评估，请完成当前任务后修改；其他问题仍可操作");
       const state = ledger.state;
       if (input.kind === "intake") {
         for (const question of input.questions) {
@@ -599,6 +609,10 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
             if (!node) throw new IntentWorkbenchError("NODE_MISSING", "知识节点已不存在");
             action.after = projectKnowledgeBaseCustomerMarkdown({leafTitle: node.title, markdown: edit.after});
           } else action.after = edit.after;
+        }
+        for (const job of state.jobs ?? []) {
+          if (activeJob(job) && job.kind === "plan" && job.questionIds.includes(input.questionId))
+            job.draftEditedQuestionIds = [...new Set([...(job.draftEditedQuestionIds ?? []), input.questionId])];
         }
       } else {
         const todo = state.todos.find(item => item.id === input.todoId);

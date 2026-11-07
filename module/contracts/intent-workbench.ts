@@ -51,6 +51,7 @@ export type IntentSkillJob = {
   status: "queued" | "uploading" | "create_unknown" | "running" | "pausing" | "paused" | "resuming" | "succeeded" | "failed";
   createdAt: string; inputHash: string; knowledgeHash: string; questionsHash: string;
   questionsScope?: "selected";
+  draftEditedQuestionIds?: string[];
   credentialId: string; credentialVersion: number; skillHash: string; model: string;
   receiptId?: string; error?: string; lease?: {owner: string; expiresAt: number};
   createClaimedAt?: number;
@@ -122,11 +123,15 @@ export function knowledgeOnlyIntentPlan(plan: IntentPlan): IntentPlan {
 
 /** Resolve a current draft or the latest accepted snapshot without changing either. */
 export function findSavedIntentPlan(state: IntentState, questionId: string): IntentPlan | undefined {
-  if (!state.questions.some(question => question.id === questionId)) return;
+  const question = state.questions.find(question => question.id === questionId);
+  if (!question) return;
   const current = state.plans.find(plan => plan.questionId === questionId);
   if (current) return knowledgeOnlyIntentPlan(current);
   for (const job of [...(state.jobs ?? [])].reverse()) {
     if (job.kind !== "plan" || job.status !== "succeeded" || !job.questionIds.includes(questionId)) continue;
+    const original = job.result?.questions.find(item => item.id === questionId);
+    if (!original || original.question !== question.question || original.category !== question.category ||
+        original.subdivision !== question.subdivision) continue;
     const saved = job.result?.plans.find(plan => plan.questionId === questionId);
     if (saved) return knowledgeOnlyIntentPlan({...saved, inputHash: saved.inputHash ?? job.inputHash});
   }

@@ -422,6 +422,10 @@
   padding-left: 16px;
   background: #fff !important;
 }
+.fm-brand-theme .brand-keyword-workspace .qt-api-flow .qt-company-row .qt-action-button {
+  font-size: 13px;
+  line-height: 20px;
+}
 .brand-keyword-workspace .qt-api-flow .qt-core-selection-heading {
   display: flex;
   align-items: center;

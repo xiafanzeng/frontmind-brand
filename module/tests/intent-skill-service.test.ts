@@ -3,7 +3,7 @@ import {describe, expect, it, vi} from "vitest";
 import {mysqlTable, varchar, json, MySqlDialect} from "drizzle-orm/mysql-core";
 import {createIntentWorkbenchService} from "../server/intent-workbench-service";
 import {registerIntentSkillPorts} from "../server/intent-skill-runtime";
-import {emptyIntentState} from "../contracts/intent-workbench";
+import {emptyIntentState, findSavedIntentPlan} from "../contracts/intent-workbench";
 import type {BrandKeywordPorts} from "../server/brand-keyword-ports";
 import type {ModuleHttpCore} from "../server/http-api";
 import type {Request} from "express";
@@ -147,17 +147,20 @@ describe("优化模型持久化任务", () => {
     h.client.taskDetail.mockResolvedValue({status: "running"});
     expect((await h.service.poll()).state.jobs![0].status).toBe("running");
   });
-  it("保护当前问题，允许修改其他问题且不让原评估失效", async () => {
+  it("删除当前评估题和其他题均生效，原题结果只留历史，不恢复删除问题", async () => {
     const h = harness(); await h.intake();
     const withOther = await h.service.command({kind: "intake", expectedRevision: 1, questions: [{
       id: "q2", question: "其他问题如何处理？", category: "产品", subdivision: "", tableId: "t", rowIndex: 1, sourceRevision: 1,
     }]});
     const started = await h.service.command({...h.request, expectedRevision: withOther.revision});
-    await expect(h.service.command({kind: "delete-question", questionId: "q", expectedRevision: started.revision}))
-      .rejects.toMatchObject({code: "OPERATION_ACTIVE"});
-    await h.service.command({kind: "delete-question", questionId: "q2", expectedRevision: started.revision});
+    const removed = await h.service.command({kind: "delete-question", questionId: "q", expectedRevision: started.revision});
+    await h.service.command({kind: "delete-question", questionId: "q2", expectedRevision: removed.revision});
     h.send();
-    expect((await h.service.poll()).state.jobs![0].status).toBe("succeeded");
+    const completed = await h.service.poll();
+    expect(completed.state.jobs![0].status).toBe("succeeded");
+    expect(completed.state.questions).toEqual([]);
+    expect(completed.state.evaluations).toEqual([]);
+    expect(completed.state.jobs![0].result!.questions[0].question).toBe("材料如何选择？");
   });
   it("正式问题仅来源版本和位置变化时保留评估，实际题干变化时拒绝评分", async () => {
     for (const semanticChange of [false, true]) {
@@ -171,7 +174,7 @@ describe("优化模型持久化任务", () => {
         question: semanticChange ? "材料如何保养？" : question.question}));
       h.send();
       const completed = await h.service.poll();
-      expect(completed.state.jobs![0].status).toBe(semanticChange ? "failed" : "succeeded");
+      expect(completed.state.jobs![0].status).toBe("succeeded");
       expect(completed.state.evaluations).toHaveLength(semanticChange ? 0 : 1);
     }
   });
@@ -268,7 +271,7 @@ describe("优化模型持久化任务", () => {
     expect((await reopened.observe()).state.questions).toEqual([]);
     expect(h.client.createTask).toHaveBeenCalledTimes(1);
   });
-  it("重复问题、非法输入和评估中的修改均拒绝且不改动数据库", async () => {
+  it("重复问题和非法输入拒绝，评估中的删除独立生效", async () => {
     const h = harness(); const initial = await h.intake();
     const second = await h.service.command({kind: "intake", expectedRevision: initial.revision,
       questions: [{...initial.state.questions[0], id: "q2", question: "另一个材料问题？", rowIndex: 1}]});
@@ -278,8 +281,64 @@ describe("优化模型持久化任务", () => {
       questionId: "q", question: " ", category: "industry", subdivision: ""})).rejects.toThrow();
     expect((await h.service.observe()).state.questions).toEqual(second.state.questions);
     const running = await h.service.command({...h.request, expectedRevision: second.revision});
-    await expect(h.service.command({kind: "delete-question", expectedRevision: running.revision, questionId: "q"})).rejects.toMatchObject({code: "OPERATION_ACTIVE"});
-    expect((await h.service.observe()).state.questions).toHaveLength(2);
+    await h.service.command({kind: "delete-question", expectedRevision: running.revision, questionId: "q"});
+    expect((await h.service.observe()).state.questions).toHaveLength(1);
+  });
+  it.each(["running", "paused"])("%s时改当前题不改任务输入，新题不承接旧评分方案", async status => {
+    const h = harness(); await h.intake();
+    let current = await h.service.command({...h.request, kind: "plan"});
+    if (status === "paused") {
+      h.client.taskDetail.mockResolvedValue({status: "cancelled"});
+      current = await h.service.control({jobId: h.request.clientRequestId, action: "pause"});
+    }
+    const changed = await h.service.command({kind: "update-question", expectedRevision: current.revision,
+      questionId: "q", question: "材料如何维护？", category: "产品", subdivision: ""});
+    expect(changed.state.questions[0].question).toBe("材料如何维护？");
+    expect(h.storedTasks[0].providerRuntime.input.selectedQuestions[0].question).toBe("材料如何选择？");
+    if (status === "paused") {
+      await h.service.control({jobId: h.request.clientRequestId, action: "resume"});
+      h.client.taskDetail.mockResolvedValue({status: "running"});
+    }
+    h.send();
+    const completed = await h.service.poll();
+    expect(completed.state.jobs![0].status).toBe("succeeded");
+    expect(completed.state.jobs![0].result!.questions[0].question).toBe("材料如何选择？");
+    expect(completed.state.evaluations).toEqual([]);
+    expect(completed.state.plans).toEqual([]);
+    expect(findSavedIntentPlan(completed.state, "q")).toBeUndefined();
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
+  it.each(["running", "paused"])("%s评估不拦截独立方案，重复评估仍拒绝且后台推进方案", async status => {
+    const h = harness(); await h.intake();
+    let current = await h.service.command(h.request);
+    const oldOutput = h.output();
+    if (status === "paused") {
+      h.client.taskDetail.mockResolvedValue({status: "cancelled"});
+      current = await h.service.control({jobId: h.request.clientRequestId, action: "pause"});
+      h.client.taskDetail.mockResolvedValue({status: "running"});
+    }
+    const planRequest = {...h.request, kind: "plan", expectedRevision: current.revision,
+      clientRequestId: "00000000-0000-4000-8000-000000000002"};
+    const parallel = await h.service.command(planRequest);
+    expect(parallel.state.jobs!.map(job => job.kind)).toEqual(["evaluate", "plan"]);
+    expect(parallel.state.jobs![0].status).toBe(status);
+    await expect(h.service.command({...h.request, expectedRevision: parallel.revision,
+      clientRequestId: "00000000-0000-4000-8000-000000000003"})).rejects.toMatchObject({code: "OPERATION_ACTIVE"});
+    await h.service.command({...planRequest, expectedRevision: parallel.revision});
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
+    const planOutput = h.output();
+    // Separate upstream events by immutable operation input.
+    h.client.listAllMessages.mockImplementation(async () => []);
+    h.send(planOutput);
+    if (status === "running") {
+      h.client.listAllMessages.mockResolvedValueOnce([{id: "evaluation", timestamp: Date.now(),
+        type: "structured_output_result", structured_output_result: {success: true, value: oldOutput}}]);
+    }
+    const completed = await h.service.poll();
+    expect(completed.state.jobs![1].status).toBe("succeeded");
+    expect(completed.state.jobs![0].status).toBe(status === "paused" ? "paused" : "succeeded");
+    expect(completed.state.plans).toHaveLength(1);
+    expect(completed.state.evaluations[0].provenance?.operationId).toBe(planRequest.clientRequestId);
   });
   it("完成结果固化，修改方案和失败重评均不覆盖历史，刷新无需调用模型", async () => {
     const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
@@ -302,6 +361,23 @@ describe("优化模型持久化任务", () => {
     const reopened = createIntentWorkbenchService(h.core, {frontmindUser: {id: 42, role: "user"}} as unknown as Request);
     expect((await reopened.observe()).state.jobs![0].result).toEqual(snapshot);
     expect(h.client.listAllMessages).not.toHaveBeenCalled();
+  });
+  it("生成方案期间仍可保存当前题草稿，迟到的新方案留历史且不覆盖人工保存", async () => {
+    const h = harness(); await h.intake();
+    await h.service.command({...h.request, kind: "plan"}); h.send();
+    const initial = await h.service.poll();
+    h.client.listAllMessages.mockResolvedValue([]);
+    const request = {...h.request, kind: "plan", expectedRevision: initial.revision,
+      clientRequestId: "00000000-0000-4000-8000-000000000009"};
+    const running = await h.service.command(request);
+    const action = running.state.plans[0].actions[0];
+    await h.service.command({kind: "edit", expectedRevision: running.revision, questionId: "q",
+      actions: [{id: action.id, selected: true, after: "人工保存的资料收集要求"}]});
+    h.send();
+    const completed = await h.service.poll();
+    expect(completed.state.jobs!.at(-1)!.status).toBe("succeeded");
+    expect(completed.state.plans[0].actions[0].after).toBe("人工保存的资料收集要求");
+    expect(completed.state.jobs!.at(-1)!.result!.plans[0].actions[0].after).not.toBe("人工保存的资料收集要求");
   });
   it("历史成功任务从已验收的本地事件恢复，凭据失效也不派发模型", async () => {
     const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
@@ -431,7 +507,7 @@ describe("优化模型持久化任务", () => {
     h.ledger().state.jobs![0].status = "failed";
     h.ledger().state.jobs![0].error = "模型任务超时，请查看账户任务记录后重新评估";
     h.send(); h.nodes[0].content += "知识变更";
-    expect((await h.service.poll()).state.jobs?.[0].error).toContain("知识或问题已更新");
+    expect((await h.service.poll()).state.jobs?.[0].error).toContain("知识已更新");
     expect(h.ledger().state.evaluations).toEqual([]);
     h.ledger().state.jobs![0].error = "模型任务超时，请查看账户任务记录后重新评估";
     h.ledger().state.jobs!.push({...h.ledger().state.jobs![0], id: "newer", status: "succeeded"});
@@ -498,7 +574,7 @@ describe("优化模型持久化任务", () => {
     const changed = await h.service.poll();
     expect(changed.state.jobs?.[0].status).toBe("failed");
     expect(changed.state.evaluations).toEqual([]);
-    expect(changed.state.jobs?.[0].error).toContain("知识或问题已更新");
+    expect(changed.state.jobs?.[0].error).toContain("知识已更新");
   });
   it("模型证据错误触发一次修复，修复再次失败仍不写入评分", async () => {
     const h = harness(); await h.intake(); await h.service.command(h.request);
