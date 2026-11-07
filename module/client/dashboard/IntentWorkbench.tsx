@@ -148,6 +148,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [view, setView] = useState<View>(initialView);
   const [evaluationReturnView, setEvaluationReturnView] = useState<"universe" | "list">("list");
   const [pending, setPending] = useState(false);
+  const [dismissedCompletionIds, setDismissedCompletionIds] = useState<string[]>([]);
   const [submittingIds, setSubmittingIds] = useState<string[]>([]);
   const [savingQuestionId, setSavingQuestionId] = useState<string>();
   const [savingDrafts, setSavingDrafts] = useState(false);
@@ -204,6 +205,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const container = useRef<HTMLDivElement>(null);
   useEffect(() => {
     mounted.current = true; generation.current++; running.current = false;
+    setDismissedCompletionIds([]);
     workspaceRef.current = null; questionSaving.current = false; draftSaving.current = false;
     setSubmittingIds([]); setSavingQuestionId(undefined); setSavingDrafts(false); setBlockedModelAction(null);
     setView(initialView); setProgressJobId(undefined); setEvaluationReturnView("list");
@@ -395,7 +397,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const evaluations = workspace?.state.evaluations ?? [];
   const activeJob = workspace?.state.jobs?.find(item => !["succeeded", "failed"].includes(item.status));
   const initialListLoading = view === "list" && !workspace && !error;
-  const listEvaluation = view === "list" ? activeJob ?? workspace?.state.jobs?.find(item => item.id === progressJobId) : undefined;
+  const listTask = activeJob ?? workspace?.state.jobs?.find(item => item.id === progressJobId);
+  const listEvaluation = view === "list" && listTask && !dismissedCompletionIds.includes(listTask.id) ? listTask : undefined;
   const refreshingList = view === "list" && Boolean(workspace) && pending && pendingRead && !activeJob;
   const receipt = receiptId ? workspace?.state.receipts.find(item => item.id === receiptId) : workspace?.state.receipts.at(-1);
   // The ledger appends newly added questions; reverse that order for newest first.
@@ -784,6 +787,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       }}
         headerStatus={refreshingList ? <IntentListRefreshStatus/> : undefined}
         taskFeedback={listEvaluation ? <IntentListEvaluationStatus job={listEvaluation} uncertain={Boolean(error)} pending={pending}
+          autoDismiss={listEvaluation.questionIds.every(id => evaluations.some(item => item.questionId === id && (!item.provenance?.operationId || item.provenance.operationId === listEvaluation.id)))}
+          onDismiss={() => setDismissedCompletionIds(ids => [...ids, listEvaluation.id])}
           onViewResult={() => void openCompletedEvaluation(listEvaluation.id)}
           onPause={api.control ? () => void controlJob("pause", listEvaluation.id) : undefined} onResume={api.control ? () => void controlJob("resume", listEvaluation.id) : undefined}
           onViewTask={() => {

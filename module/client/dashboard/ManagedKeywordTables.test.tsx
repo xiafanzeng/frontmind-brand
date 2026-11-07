@@ -129,3 +129,19 @@ describe("推荐保存与历史词库", () => {
     expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"}).textContent).toBe("评估问题");
   });
 });
+
+ it("选择与评估处于独立列，查看评分不会切换选择", () => {
+  const state = emptyIntentState(), onViewEvaluation = vi.fn();
+  state.questions.push({id:"saved-1",question:"新推荐问题",tableId:"question-template-api:v1",rowIndex:0,category:"industry",subdivision:"",sourceRevision:6});
+  state.evaluations.push({questionId:"saved-1",value:70,support:64,method:"skill_v1",dimensions:[],points:[],findings:[],evaluatedAt:"2026-10-28T00:00:00Z"});
+  render(<ManagedKeywordTables tables={tables} generationEnabled onUseQuestions={vi.fn()} optimizationState={state} onViewEvaluation={onViewEvaluation}/>);
+  fireEvent.click(screen.getByRole("button", {name:/已保存词条 162/}));
+  expect(screen.getAllByRole("columnheader", {name:"选择"}).length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("columnheader", {name:"评估"}).length).toBeGreaterThan(0);
+  const checkbox = screen.getByRole("checkbox", {name:"选择新推荐问题"});
+  const evaluation = screen.getByRole("button", {name:"查看评估：新推荐问题"});
+  expect(checkbox.closest("td")).not.toBe(evaluation.closest("td"));
+  fireEvent.click(evaluation);
+  expect(checkbox).toHaveProperty("checked", false);
+  expect(onViewEvaluation).toHaveBeenCalledWith("saved-1");
+ });

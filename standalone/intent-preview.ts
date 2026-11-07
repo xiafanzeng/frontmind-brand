@@ -8,14 +8,33 @@ const demoNodes: IntentNode[] = [
   {id: "repair", title: "双眼皮修复项目", branch: "眼部项目", verified: false, editable: true, content: "# 双眼皮修复项目\n\n双眼皮修复需评估医生经验、瘢痕和组织条件。适用人群与选择标准应以面诊为准。修复风险与案例限制资料待核验。"},
 ];
 export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
-  const key = `frontmind:intent-preview:v1:${scope}`;
+  const reviewMode = new URLSearchParams(window.location.search).get("review") === "question-ui";
+  const key = `frontmind:intent-preview:v1:${scope}${reviewMode ? ":question-ui" : ""}`;
   let memory: IntentWorkspace = {revision: 0, state: emptyIntentState(), nodes: structuredClone(demoNodes), preview: true};
   try {const stored = localStorage.getItem(key); if (stored) {const data = JSON.parse(stored); if (data.state?.version === 1 && data.preview === true) memory = data;}} catch {}
+  if (reviewMode && !memory.state.questions.length) {
+    const questions = ["隆鼻材料应该怎么选", "东莞整形美容医院哪家好", "东莞双眼皮修复医院哪家专业", "隆鼻术后应该如何护理", "整形医院的资质怎么核验", "不同隆鼻材料的费用有什么区别"];
+    memory.state.questions = questions.map((question, rowIndex) => ({id:`local-brand:${rowIndex}`, question,
+      category: [1, 2].includes(rowIndex) ? "industry" : rowIndex === 4 ? "reputation" : "product_scenario",
+      subdivision:"", tableId:"local-brand", rowIndex, sourceRevision:1}));
+    memory.state.evaluations = memory.state.questions.map(question => evaluateIntent(question, memory.nodes, memory.state.questions));
+    memory.state.jobs = [{id:"question-ui-review",taskId:"question-ui-review",kind:"evaluate",questionIds:memory.state.questions.map(question=>question.id),
+      status:"running",createdAt:new Date().toISOString(),inputHash:"preview",knowledgeHash:"preview",questionsHash:"preview",
+      credentialId:"preview",credentialVersion:0,skillHash:"preview",model:"local-preview"}];
+  }
   const snapshot = () => structuredClone(memory);
   const persist = () => {memory.revision++; localStorage.setItem(key, JSON.stringify(memory)); return snapshot();};
   const check = (revision: number) => {if (revision !== memory.revision) throw new Error("清单已更新，请重新读取");};
   return {
     async observe() {return snapshot();},
+    waitForJob: reviewMode ? async (jobId, onUpdate, signal) => {
+      await new Promise(resolve => window.setTimeout(resolve, 1600));
+      if (signal?.aborted) throw new DOMException("Preview cancelled", "AbortError");
+      const job = memory.state.jobs?.find(item => item.id === jobId);
+      if (job) {job.status = "succeeded"; job.result = {completedAt:new Date().toISOString(), questions:structuredClone(memory.state.questions),
+        evaluations:structuredClone(memory.state.evaluations), plans:[]};}
+      const current = persist(); onUpdate(current); return current;
+    } : undefined,
     async command(value) {
       const input = value as any; check(input.expectedRevision);
       if (input.kind === "update-question" || input.kind === "delete-question") {

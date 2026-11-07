@@ -514,7 +514,7 @@ export default function ManagedKeywordTables({
                     <table className="keyword-table">
                       <thead>
                         <tr>
-                          {onUseQuestions && <th className="keyword-selection-cell">选择 / 评估</th>}
+                          {onUseQuestions && <th className="keyword-selection-cell">选择</th>}
                           {table.displayColumns.map(
                             ({ column, columnIndex }) => (
                               <th key={`${column}-${columnIndex}`}>
@@ -524,6 +524,7 @@ export default function ManagedKeywordTables({
                               </th>
                             ),
                           )}
+                          {onUseQuestions && <th className="keyword-evaluation-cell">评估</th>}
                           {onUseQuestion && !onUseQuestions && <th>问题优化</th>}
                         </tr>
                       </thead>
@@ -576,29 +577,8 @@ export default function ManagedKeywordTables({
                                 <label className="keyword-selection-label"><input type="checkbox" aria-label={`选择${question}`}
                                   checked={isSelected}
                                   disabled={selectionDisabled}
-                                  onChange={toggleSelection}/><span>{isSelected ? "已选择" : "选择词条"}</span></label>
-                                {evaluating && evaluationJob && onViewEvaluationTask ? <button type="button" className="keyword-evaluation-button"
-                                  aria-label={`查看评估详情：${question}`} title="查看当前评估任务的进度"
-                                  onClick={() => onViewEvaluationTask(evaluationJob.id)}>
-                                  <span>{evaluationJob.status === "paused" ? "评估已暂停" : evaluationJob.status === "pausing" ? "正在暂停" : evaluationJob.status === "resuming" ? "正在继续" : "评估中"} · 查看详情</span>
-                                  <ChevronRight size={14} aria-hidden="true"/>
-                                </button> : evaluation && linked && onViewEvaluation ? <button type="button" className="keyword-evaluation-button" aria-label={`查看评估：${question}`} title="查看完整评估" onClick={() => onViewEvaluation(linked.id)}>
-                                  <span className="keyword-evaluation-metric"><span>价值</span><strong>{evaluation.value}</strong></span>
-                                  <span className="keyword-evaluation-divider" aria-hidden="true"/>
-                                  <span className="keyword-evaluation-metric"><span>支撑</span><strong>{evaluation.support}</strong></span>
-                                  <ChevronRight size={14} aria-hidden="true"/>
-                                </button> : optimizationState && onEvaluateQuestion ? <button type="button" className="keyword-evaluation-button keyword-evaluation-start"
-                                  aria-label={`评估问题：${question}`}
-                                  title={evaluationJob ? "请先完成当前评估任务" : submittingEvaluation ? "正在提交当前词条的评估" : evaluationPending ? "请等待当前操作完成后再评估" : "评估当前词条"}
-                                  disabled={selectionDisabled || evaluationPending || Boolean(evaluationJob)}
-                                  onClick={() => {
-                                    if (!category) return;
-                                    onEvaluateQuestion({question, category, tableId: table.id, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})});
-                                  }}>
-                                  <span>{evaluating ? evaluationJob?.status === "paused" ? "评估已暂停" : "评估中…" : submittingEvaluation ? "正在处理…" : "评估问题"}</span>
-                                  <ChevronRight size={14} aria-hidden="true"/>
-                                </button> :
-                                  <small>{!optimizationState ? "优化状态尚未读取" : linked ? "已在优化清单 · 待评估" : "尚未加入优化"}</small>}
+                                  onChange={toggleSelection}/></label>
+
                               </td>}
                               {table.displayColumns.map(
                                 ({ column, columnIndex }) => {
@@ -649,6 +629,30 @@ export default function ManagedKeywordTables({
                                   );
                                 },
                               )}
+                              {onUseQuestions && <td className="keyword-evaluation-cell">
+                                {evaluating && evaluationJob && onViewEvaluationTask ? <button type="button" className="keyword-evaluation-button"
+                                  aria-label={`查看评估详情：${question}`} title="查看当前评估任务的进度"
+                                  onClick={() => onViewEvaluationTask(evaluationJob.id)}>
+                                  <span>{evaluationJob.status === "paused" ? "评估已暂停" : evaluationJob.status === "pausing" ? "正在暂停" : evaluationJob.status === "resuming" ? "正在继续" : "评估中"} · 查看详情</span>
+                                  <ChevronRight size={14} aria-hidden="true"/>
+                                </button> : evaluation && linked && onViewEvaluation ? <button type="button" className="keyword-evaluation-button" aria-label={`查看评估：${question}`} title="查看完整评估" onClick={() => onViewEvaluation(linked.id)}>
+                                  <span className="keyword-evaluation-metric"><span>价值</span><strong>{evaluation.value}</strong></span>
+                                  <span className="keyword-evaluation-divider" aria-hidden="true"/>
+                                  <span className="keyword-evaluation-metric"><span>支撑</span><strong>{evaluation.support}</strong></span>
+                                  <ChevronRight size={14} aria-hidden="true"/>
+                                </button> : optimizationState && onEvaluateQuestion ? <button type="button" className="keyword-evaluation-button keyword-evaluation-start"
+                                  aria-label={`评估问题：${question}`}
+                                  title={evaluationJob ? "请先完成当前评估任务" : submittingEvaluation ? "正在提交当前词条的评估" : evaluationPending ? "请等待当前操作完成后再评估" : "评估当前词条"}
+                                  disabled={selectionDisabled || evaluationPending || Boolean(evaluationJob)}
+                                  onClick={() => {
+                                    if (!category) return;
+                                    onEvaluateQuestion({question, category, tableId: table.id, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})});
+                                  }}>
+                                  <span>{evaluating ? evaluationJob?.status === "paused" ? "评估已暂停" : "评估中…" : submittingEvaluation ? "正在处理…" : "评估问题"}</span>
+                                  <ChevronRight size={14} aria-hidden="true"/>
+                                </button> :
+                                  <small>{!optimizationState ? "优化状态尚未读取" : linked ? "已在优化清单 · 待评估" : "尚未加入优化"}</small>}
+                              </td>}
                               {onUseQuestion && !onUseQuestions && (
                                 <td>
                                   <button

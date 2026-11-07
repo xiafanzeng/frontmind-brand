@@ -1,5 +1,5 @@
-import {useEffect, useState} from "react";
-import {Clock3, LoaderCircle, RefreshCw} from "lucide-react";
+import {useEffect, useRef, useState} from "react";
+import {Clock3, LoaderCircle, RefreshCw, X} from "lucide-react";
 import type {IntentSkillJob} from "../../contracts/intent-workbench";
 import "./intent-list-feedback.css";
 import IntentTaskControls from "./IntentTaskControls";
@@ -34,10 +34,11 @@ export function IntentListRefreshStatus() {
   return <span className="iw-list-refresh" role="status" aria-label="列表更新状态"><RefreshCw size={14} aria-hidden="true"/>正在更新</span>;
 }
 
-export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewResult, pending = false, onPause, onResume}: {
+export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewResult, pending = false, onPause, onResume, onDismiss, autoDismiss = true}: {
   job: IntentSkillJob; uncertain: boolean; onViewTask: () => void;
   onViewResult?: () => void;
   pending?: boolean; onPause?: () => void; onResume?: () => void;
+  onDismiss?: () => void; autoDismiss?: boolean;
 }) {
   const [now, setNow] = useState(Date.now());
   const created = Date.parse(job.createdAt ?? "");
@@ -55,6 +56,13 @@ export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewRe
   const unconfirmed = uncertain || job.status === "create_unknown";
   const paused = job.status === "paused";
   const completed = job.status === "succeeded";
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+  useEffect(() => {
+    if (!completed || !autoDismiss) return;
+    const timer = window.setTimeout(() => dismissRef.current?.(), 8000);
+    return () => window.clearTimeout(timer);
+  }, [job.id, completed, autoDismiss]);
   return <section className={`iw-list-task${completed ? " iw-list-task--completed" : ""}`} aria-label="问题评估任务">
     <div className="iw-list-task-main">
       <div className="iw-list-task-copy" role="status"><h3>{completed ? "评估已完成" : paused ? `评估已暂停 · ${job.questionIds.length} 条问题` : unconfirmed ? `评估任务待确认 · ${job.questionIds.length} 条问题` : job.kind === "plan" ? `正在生成优化方案 · ${job.questionIds.length} 条问题` : `正在评估 ${job.questionIds.length} 条问题`}</h3></div>
@@ -62,6 +70,7 @@ export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewRe
         {Number.isFinite(created) && <span className="iw-list-task-time"><Clock3 size={14} aria-hidden="true"/>已耗时 {Math.floor(seconds / 60)}分{seconds % 60}秒</span>}
         <button type="button" onClick={completed ? onViewResult ?? onViewTask : onViewTask}>{completed ? "查看评估结果" : "查看当前任务"}</button>
         <IntentTaskControls job={job} pending={pending} onPause={onPause} onResume={onResume}/>
+        {completed && onDismiss && <button type="button" className="iw-list-task-dismiss" aria-label="关闭评估完成提示" onClick={onDismiss}><X size={16}/></button>}
       </div>
     </div>
     {!completed && job.control?.error && <p className="iw-list-task-note" role="alert">{job.control.error}</p>}

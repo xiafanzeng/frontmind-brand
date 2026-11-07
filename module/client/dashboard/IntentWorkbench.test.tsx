@@ -35,6 +35,7 @@ vi.mock("./ManagedKeywordTables", () => ({default: ({onUseQuestions, onEvaluateQ
 vi.mock("./KnowledgeChangeComparison", () => ({default: () => null}));
 import IntentWorkbench from "./IntentWorkbench";
 import IntentTaskProgress from "./IntentTaskProgress";
+import {IntentListEvaluationStatus} from "./IntentListFeedback";
 
 const question = {id: "q1", question: "企业软件如何部署", category: "industry", subdivision: "",
   tableId: "table", rowIndex: 0, sourceRevision: 1};
@@ -1187,3 +1188,30 @@ describe("优化工作台任务入口", () => {
     expect(api.execute).not.toHaveBeenCalled();
   });
 });
+
+ it("关闭完成提示后重新进入列表也不再占据顶部，已有评分仍可查看", async () => {
+  const {api, finish} = pendingApi(workspace("running"));
+  render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+  await screen.findByRole("region", {name:"问题评估任务"});
+  await act(async () => finish(workspace("succeeded")));
+  fireEvent.click(screen.getByRole("button", {name:"关闭评估完成提示"}));
+  expect(screen.queryByRole("region", {name:"问题评估任务"})).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name:`查看评估：${question.question}`}));
+  fireEvent.click(screen.getByRole("button", {name:"返回问题列表"}));
+  expect(screen.queryByRole("region", {name:"问题评估任务"})).toBeNull();
+  expect(api.command).not.toHaveBeenCalled();
+ });
+
+ it("完成提示八秒自动收起，父组件更新不会重置倒计时", () => {
+  vi.useFakeTimers();
+  try {
+    const first=vi.fn(), latest=vi.fn();
+    const job=workspace("succeeded").state.jobs![0];
+    const result=render(<IntentListEvaluationStatus job={job} uncertain={false} onViewTask={vi.fn()} onDismiss={first}/>);
+    act(()=>{vi.advanceTimersByTime(4000);});
+    result.rerender(<IntentListEvaluationStatus job={{...job}} uncertain={false} onViewTask={vi.fn()} onDismiss={latest}/>);
+    act(()=>{vi.advanceTimersByTime(4000);});
+    expect(latest).toHaveBeenCalledTimes(1);
+    expect(first).not.toHaveBeenCalled();
+  } finally {vi.useRealTimers();}
+ });
