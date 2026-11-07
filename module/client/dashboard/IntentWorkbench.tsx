@@ -760,7 +760,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       }}>查看当前任务</button></>}
     </div>}
     {!pending && !error && view !== "progress" && workspace?.state.jobs?.at(-1)?.status === "failed" && <div className="iw-error" role="alert">{workspace.state.jobs.at(-1)?.error}</div>}
-    {retainKeywordPage && <div className="iw-enter" hidden={view !== "universe"}><header className="iw-header iw-universe-header"><div><h1>词条生成</h1><p>推荐核心词 → 生成问题 → 勾选加入优化清单</p></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => addToCatalog([selection])} onUseQuestions={items => addToCatalog(items)}
+    {retainKeywordPage && <div className="iw-enter" hidden={view !== "universe"}><header className="iw-header iw-universe-header"><div><h1>词条生成</h1><p>生成、筛选并整理值得优化的问题。</p></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => addToCatalog([selection])} onUseQuestions={items => addToCatalog(items)}
       onOptimizationSavingChange={saving => setIntakeFeedback(state => saving ? "saving" : state === "saving" ? null : state)}
       optimizationState={workspace?.state} onViewEvaluation={id => void evaluate([id])}
       onViewEvaluationTask={id => openTaskDetails(id, "universe")}

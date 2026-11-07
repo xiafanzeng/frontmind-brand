@@ -706,3 +706,49 @@
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell {min-width:190px;white-space:nowrap}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell .keyword-evaluation-button {margin-top:0}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell small {color:#716a80;font-size:12px}
+
+/* Flat navigation and toolbar keep saved questions as the main surface. */
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs {
+  display: flex;
+  justify-content: flex-start;
+  gap: 24px;
+  margin: 0 0 24px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid #e9e5ef;
+  border-radius: 0;
+  background: transparent;
+}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button {
+  position: relative;
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 46px;
+  padding: 10px 2px 13px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #89818f;
+  font-size: 14px;
+  font-weight: 500;
+}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button[aria-pressed="true"] {background: transparent;color: #7545a0;box-shadow: none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button[aria-pressed="true"]::after {content: "";position: absolute;bottom: -1px;left: 0;right: 0;height: 3px;border-radius: 3px 3px 0 0;background: #8452aa}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button b {display: inline-block;margin-left: 6px;padding: 1px 7px;border-radius: 6px;background: #f0ebf6;color: #815a9f;font-size: 11px;line-height: 18px;font-weight: 600}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions {justify-content: space-between;gap: 12px;margin: 0 0 12px;padding: 0;border: 0;border-radius: 0;background: transparent;box-shadow: none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-summary {font-size: 13px;color: #8a8093}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-summary strong {color: #7545a0}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions button {min-height: 36px;padding: 7px 14px;border-radius: 9px;font-size: 13px;box-shadow: none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .saas-toolbar.keyword-toolbar-saas {gap: 16px;margin: 0 0 18px;padding: 0;border: 0;border-radius: 0;background: transparent;box-shadow: none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .saas-search {border: 1px solid #ebe7f0;border-radius: 10px;background: #faf9fc;min-height: 42px}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .filter-item select {min-height: 40px;padding: 8px 28px 8px 12px;border: 1px solid #ebe7f0;border-radius: 9px;background-color: #fff;font-size: 13px}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .filter-item label {font-size: 12px;color: #918899}
+.fm-brand-theme .iw-workbench.iw-view-universe > .iw-header h1 {font-size: 28px;line-height: 1.4;letter-spacing: -.5px}
+.fm-brand-theme .iw-workbench.iw-view-universe > .iw-header p {font-size: 13px;color: #8d8596}
+@media(max-width:640px) {
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs {gap: 22px}
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .filter-group {gap: 10px}
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions {align-items: flex-start}
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions>div {flex: 1;justify-content: flex-end}
+}

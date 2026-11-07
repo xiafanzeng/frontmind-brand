@@ -403,6 +403,7 @@ export default function ManagedKeywordTables({
         <>
           {onUseQuestions && batchItems.length > 0 && (
             <div className="keyword-batch-actions" role="status">
+              <span className="keyword-batch-summary">已选择 <strong>{batchItems.length}</strong> 条词条</span>
               <div><button type="button" onClick={() => setBatchSelection({})}>清空选择</button>
               <button type="button" className="iw-primary" onClick={() => onUseQuestions(batchItems)}>批量加入优化清单（{batchItems.length}）</button></div>
             </div>
