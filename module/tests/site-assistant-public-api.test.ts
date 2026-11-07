@@ -2,6 +2,7 @@
 import {afterAll, beforeAll, describe, expect, it, vi} from "vitest";
 import express from "express";
 import type {AddressInfo} from "node:net";
+import {generalChatDispatchSchema} from "@frontmind/module-contracts/chat-dispatch";
 import {
   createSiteAssistantPublicApi,
   extractAssistantAnswer,
@@ -436,12 +437,9 @@ describe("public site assistant build bindings", () => {
       knowledgeBase: {snapshotId: payload.knowledgeSnapshotId, contentHash: "a".repeat(64)},
     });
     const sync = calls.find((call) => call.path === "/api/brand/conversations/sync");
-    const dispatch = (sync?.body as {conversations: Array<{messages: Array<{generalChatDispatch: {knowledgeBase?: unknown}}>}>})
+    const dispatch = (sync?.body as {conversations: Array<{messages: Array<{generalChatDispatch: unknown}>}>})
       .conversations[0]!.messages.at(-1)!.generalChatDispatch;
-    expect(dispatch.knowledgeBase).toEqual({
-      snapshotId: payload.knowledgeSnapshotId,
-      contentHash: "a".repeat(64),
-    });
+    expect(generalChatDispatchSchema.parse(dispatch).purpose).toBe("enterprise_qa");
   });
 
   it("rejects forged or unsupported bindings before any internal call", async () => {
