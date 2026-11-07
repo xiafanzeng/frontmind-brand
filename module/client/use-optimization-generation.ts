@@ -5,7 +5,7 @@ import {
   optimizationContextKey,
   recoverOptimizationGeneration,
 } from "./response-logic-optimization-client.js";
-import type { OptimizationOutput } from "../contracts/response-logic-optimization.js";
+import type { ReviewedOptimization } from "../contracts/response-logic-change-review.js";
 import {
   initialTaskLifecycleState,
   type TaskLifecycleState,
@@ -13,11 +13,11 @@ import {
 } from "./task-lifecycle.js";
 export type OptimizationPhase = TaskPhase;
 export type OptimizationState = Omit<
-  TaskLifecycleState<OptimizationOutput>,
+  TaskLifecycleState<ReviewedOptimization>,
   "activeContext"
 >;
 export const initialOptimizationLifecycleState =
-  initialTaskLifecycleState<OptimizationOutput>();
+  initialTaskLifecycleState<ReviewedOptimization>();
 export function useOptimizationGeneration(input: {
   questionId: string;
   recordIdentity?: string;
@@ -34,7 +34,7 @@ export function useOptimizationGeneration(input: {
       input.judgeTaskId,
       input.questionBasis,
     ) + (input.recordIdentity ? `:record:${input.recordIdentity}` : "");
-  return useResponseLogicTask<OptimizationOutput>({
+  return useResponseLogicTask<ReviewedOptimization>({
     flow: "optimizer",
     contextKey,
     enabled: !!input.judgeTaskId && input.recordRevision > 0,
@@ -61,7 +61,7 @@ export function useOptimizationGeneration(input: {
         signal,
       });
       return result.status === "completed"
-        ? { ...result, result: result.result.optimization }
+        ? { ...result, result: {...result.result.optimization,...(result.result.review?{review:result.result.review}:{})} }
         : result;
     },
   });

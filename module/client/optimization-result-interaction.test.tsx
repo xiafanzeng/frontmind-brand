@@ -52,9 +52,14 @@ describe("candidate review uses the existing adoption callback", () => {
     expect(screen.getByRole("tab",{name:"核心结论与执行口径"})).toHaveProperty("tabIndex",0);
     fireEvent.keyDown(screen.getByRole("tab",{name:"核心结论与执行口径"}),{key:"ArrowRight"});
     expect(screen.getByRole("tabpanel",{name:"企业材料与官方依据"})).toBeTruthy();
+    expect(screen.queryByText("查看修改依据")).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"查看修改意见"}));
     expect(screen.getByText("仅补充可核验的来源")).toBeTruthy();
     expect(screen.getByText("仅补充可核验的来源").closest("details")).toHaveProperty("open",false);
     expect(screen.queryByText("服务端给出的修改原因")).toBeNull();
+    expect(screen.getByText("选择一处标记，查看完整修改说明。").closest(".rl-change-review")?.nextElementSibling).toBe(screen.getByText("查看修改依据").closest("details"));
+    fireEvent.click(screen.getByRole("button",{name:"返回编辑"}));
+    expect(screen.queryByText("查看修改依据")).toBeNull();
     for (const tab of screen.getAllByRole("tab")) {
       fireEvent.click(tab);
       fireEvent.click(screen.getByRole("button", {name:"保持原文"}));

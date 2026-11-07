@@ -1,3 +1,4 @@
+import {optimizationReviewSchema,type OptimizationReview} from "../contracts/response-logic-change-review.js";
 import {readResponseLogicExecution,responseLogicRecoverySchema,type ResponseLogicRecovery} from "../contracts/response-logic-progress.js";
 import type {GeneralExecutionDto} from "@frontmind/module-contracts/execution";
 import { captureWorkspaceRestOperation } from "./response-logic-runtime-host.js";
@@ -104,11 +105,12 @@ export async function pollOptimizationTask(input: {
   signal?: AbortSignal;
 }): Promise<
   | { status: "running"; execution?: GeneralExecutionDto }
-  | { status: "completed"; result: OptimizationEnvelope; execution?: GeneralExecutionDto }
+  | { status: "completed"; result: OptimizationEnvelope & {review?:OptimizationReview}; execution?: GeneralExecutionDto }
 > {
   const query = new URLSearchParams({
     questionId: input.questionId,
     progress: "1",
+    review: "1",
     expectedRevision: String(input.expectedRevision),
     judgeTaskId: input.judgeTaskId,
   });
@@ -119,20 +121,22 @@ export async function pollOptimizationTask(input: {
   );
   if (response.status === 400) {
     query.delete("progress");
+    query.delete("review");
     response = await optimizationFetch(`${RESPONSE_LOGIC_API_BASE}/optimization/tasks/${encodeURIComponent(input.taskId)}/status?${query}`, {method:"GET",headers:{Accept:"application/json"}},input.signal);
   }
   const payload = await readJson(response);
   if (!response.ok) throw optimizationHttpError(response.status, payload);
   const body = (payload ?? {}) as Record<string, unknown>;
   const execution = readResponseLogicExecution(body.execution, input.taskId);
-  const {execution: _execution, ...businessResult} = body;
+  const {execution: _execution, review: rawReview, ...businessResult} = body;
   if (body.status === "running") return { status: "running", ...(execution ? {execution} : {}) };
   if (body.status === "completed") {
     const parsed = optimizationEnvelopeSchema.safeParse(businessResult);
     if (!parsed.success) {
       throw new OptimizationRequestError("OPTIMIZATION_RESPONSE_INVALID", "优化结果未通过传输协议校验", response.status);
     }
-    return { status: "completed", result: parsed.data, ...(execution ? {execution} : {}) };
+    const review = optimizationReviewSchema.safeParse(rawReview);
+    return { status: "completed", result: {...parsed.data,...(review.success?{review:review.data}:{})}, ...(execution ? {execution} : {}) };
   }
   throw new OptimizationRequestError("OPTIMIZATION_RESPONSE_INVALID", `优化任务返回未知状态: ${String(body.status)}`, response.status);
 }

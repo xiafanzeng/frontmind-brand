@@ -24,6 +24,8 @@ vi.mock("./host.js", () => ({
 }));
 import { judgeOutputSchema } from "../contracts/response-logic-judge";
 import { fingerprintLogic } from "../contracts/response-logic-evaluation";
+import {buildOptimizationReview} from "../contracts/response-logic-change-review";
+import type {OptimizationOutput} from "../contracts/response-logic-optimization";
 import BrandResponseLogicEntry from "./BrandResponseLogicEntry";
 import { ResponseLogicConfirmationPanel } from "./ResponseLogicWorkspace";
 import { __resetBrandRecordsStoreForTests } from "./response-logic-brand-adapter";
@@ -324,11 +326,11 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
   it("restores the optimizer through the real Brand entry without adopting the candidate", async () => {
     const qid = "q-optimizer";
     let complete = false;
-    const candidate = {
+    const candidate: OptimizationOutput = {
       kind: "judge-optimization",
       summary: "真实契约样例摘要",
       optimizedDraft: {
-        concern: draft.concern,
+        concern: draft.concern+"；补充可核验的条件。",
         conclusion: draft.conclusion,
         facts: draft.facts,
         boundaries: draft.boundaries,
@@ -372,6 +374,7 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
               knowledgeFingerprint: "none",
               evaluatedAt: "2026-11-05T00:00:00.000Z",
               optimization: candidate,
+              review: buildOptimizationReview(draft,candidate),
             })
           : response(
               {
@@ -397,6 +400,8 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
       />
     );
     let view = render(entry());
+    const back=await screen.findByRole("button",{name:"← 返回候选问题"});
+    expect(screen.getByText(question,{exact:true}).compareDocumentPosition(back)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(
       await screen.findByRole("button", { name: "查看四维评估" }),
     );
@@ -434,6 +439,13 @@ describe("real Brand entry progress (only HTTP mocked)", () => {
       await screen.findByRole("button", { name: "生成优化方案 →" }),
     );
     await screen.findByRole("region", {name: "原文与优化候选对照"});
+    expect(screen.queryByText("查看修改依据")).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"查看修改意见"}));
+    const mark=screen.getByRole("button",{name:/调整表达：关注权限与维护；补充可核验的条件。/});
+    fireEvent.click(mark);
+    expect(screen.getByText("本段修改意见（未逐处定位）")).toBeTruthy();
+    expect(screen.getByText("查看修改依据")).toBeTruthy();
+    expect(h.calls.some(call=>call.includes("/optimization/tasks/")&&call.includes("review=1"))).toBe(true);
     expect(screen.queryByText("真实契约样例摘要")).toBeNull();
     expect(screen.getAllByRole("tab")).toHaveLength(4);
     expect(h.calls.filter((c) => c.startsWith("POST")).length).toBe(posts);
