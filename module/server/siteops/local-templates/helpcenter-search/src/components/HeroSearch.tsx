@@ -12,37 +12,29 @@ export function HeroSearch() {
           role="search"
           onSubmit={(event) => event.preventDefault()}
         >
-          <svg
-            className="hc-search__icon"
-            viewBox="0 0 24 24"
-            width="18"
-            height="18"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            aria-hidden="true"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
           <input
             className="hc-search__input"
             type="search"
-            placeholder="搜索问题、文章或关键词"
+            placeholder="请输入"
             aria-label="搜索帮助文档"
           />
           <button className="hc-search__button" type="submit">
-            搜索
+            <span className="hc-sr-only">搜索</span>
+            <svg
+              viewBox="0 0 24 24"
+              width="24"
+              height="24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <circle cx="10.8" cy="10.8" r="6.8" />
+              <path d="m20 20-4.25-4.25" />
+            </svg>
           </button>
         </form>
-        <div className="hc-hero__quick">
-          {siteMeta.quickLinks.map((label) => (
-            <a key={label} className="hc-chip" href="#categories">
-              {label}
-            </a>
-          ))}
-        </div>
       </div>
     </section>
   );

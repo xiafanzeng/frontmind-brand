@@ -20,7 +20,8 @@ import { staticTemplateRuntimeMedia } from "../server/siteops/static-template-ad
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const v4Version = "frontmind-curated-20261025-v4";
 const v5Version = "frontmind-curated-20261025-v5";
-const v6Version = PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION;
+const v6Version = "frontmind-curated-20261025-v6";
+const v7Version = PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION;
 
 function selectionBundleForCatalog(
   catalog: Awaited<
@@ -115,12 +116,16 @@ function selectionBundleForCatalog(
   });
 }
 
-it("serves exact v6 during rollout, upgrades from historical caches to the single v7 admission, and rejects receipt tampering", { timeout: 180000 }, async () => {
+it("serves exact v7 during rollout, upgrades to the refreshed v8 source, and rejects receipt tampering", { timeout: 180000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "frontmind-catalog-upgrade-"));
   const payloads = new Map<string, Buffer>();
   const definitions = manifest.HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG;
   const groups = new Map<string, typeof definitions[number][]>();
-  for (const definition of definitions) {
+  const payloadDefinitions = [
+    ...definitions,
+    ...manifest.FROZEN_STATIC_TEMPLATE_CATALOG,
+  ];
+  for (const definition of payloadDefinitions) {
     const url = `https://codeload.github.com/${definition.sourceOwner}/${definition.sourceRepo}/zip/${definition.sourceCommitSha}`;
     groups.set(url, [...(groups.get(url) ?? []), definition]);
     payloads.set(definition.previewUrl, await sharp({ create: { width: 16, height: 16, channels: 3, background: { r: definition.order, g: 50, b: 100 } } }).png().toBuffer());
@@ -145,6 +150,14 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
     "static-template-15-hirael-nexacore",
     "static-template-21-hirael-mindloop",
   ];
+  const v6AdmissionIds = [
+    "static-template-33-helpcenter-search",
+    "static-template-34-helpcenter-docs",
+    "static-template-35-helpcenter-minimal",
+    "static-template-15-hirael-nexacore",
+    "static-template-21-hirael-mindloop",
+    "static-template-22-hirael-agency-landing",
+  ];
   // This fixture replaces the compiler transport only; the separate admission
   // suite runs the three repository-local templates through real Vite and Chromium.
   const builder = vi.fn(async (input: any) => {
@@ -155,8 +168,10 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
         : input.catalogVersion === v5Version
           ? definitions.map((entry) => entry.candidateId)
           : input.catalogVersion === v6Version
-            ? manifest.ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS
-            : manifest.STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS;
+            ? v6AdmissionIds
+            : input.catalogVersion === v7Version
+              ? manifest.ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS
+              : manifest.STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS;
     if (!admittedIds.includes(input.definition.candidateId)) return { status: "unavailable" as const, code: "TEST_NOT_ADMITTED", reason: "Transport fixture" };
     const normalized = input.cachedNormalizedSource ? await readFile(input.cachedNormalizedSource.path)
       : await new JSZip().file("source/binding.txt", input.rawSourceSha256).generateAsync({ type: "nodebuffer", platform: "UNIX" });
@@ -167,11 +182,13 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
     const bindsProvenance =
       input.catalogVersion === manifest.STATIC_TEMPLATE_CATALOG_VERSION ||
       input.catalogVersion === v5Version ||
-      input.catalogVersion === v6Version;
+      input.catalogVersion === v6Version ||
+      input.catalogVersion === v7Version;
     const admissionMode = input.cachedNormalizedSource
       ? "verified_normalized_cache"
       : previewFallbackIds.includes(input.definition.candidateId) ||
-          input.definition.order === 1
+          (input.catalogVersion !== manifest.STATIC_TEMPLATE_CATALOG_VERSION &&
+            input.definition.order === 1)
         ? "preview_reference_fallback"
         : "provider_source";
     const provenance = bindsProvenance ? {
@@ -259,7 +276,7 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
     // Seed the v6 rolling catalog from the v5 historical cache: four verified
     // normalized caches plus two preview-reference fallbacks, no downloads.
     const definitionsById = new Map(definitions.map((definition) => [definition.candidateId, definition]));
-    const v6Selection = manifest.ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.map(
+    const v6Selection = v6AdmissionIds.map(
       (candidateId, index) => ({ ...definitionsById.get(candidateId)!, order: index + 1 }),
     );
     vi.doMock("../server/siteops/static-template-catalog-manifest.js", () => ({ ...manifest,
@@ -267,7 +284,7 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
       STATIC_TEMPLATE_CATALOG_PAGE_COUNT: 1,
       STATIC_TEMPLATE_CATALOG_ENTRY_COUNT: 6,
       FROZEN_STATIC_TEMPLATE_CATALOG: v6Selection,
-      STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: manifest.ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS,
+      STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: v6AdmissionIds,
     }));
     vi.resetModules();
     const v6Runtime = await import("../server/siteops/static-template-catalog.js");
@@ -282,17 +299,43 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
     expect(v6.catalog.entries.filter(entry => entry.executionAdmission.status === "admitted")).toHaveLength(6);
     expect(v6OfflineFetch).not.toHaveBeenCalled();
     const v6Manifest = await readFile(manifestPath(v6.catalog.catalogVersion));
-    const v6Active = await readFile(path.join(root, "siteops/static-template-catalog/active.json"));
+
+    // V7 retained the old help-center source and can therefore reuse its
+    // verified V6 normalized cache without another network read.
+    const v7Selection = manifest.ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS.map(
+      (candidateId, index) => ({ ...definitionsById.get(candidateId)!, order: index + 1 }),
+    );
+    vi.doMock("../server/siteops/static-template-catalog-manifest.js", () => ({ ...manifest,
+      STATIC_TEMPLATE_CATALOG_VERSION: v7Version,
+      STATIC_TEMPLATE_CATALOG_PAGE_COUNT: 1,
+      STATIC_TEMPLATE_CATALOG_ENTRY_COUNT: 1,
+      FROZEN_STATIC_TEMPLATE_CATALOG: v7Selection,
+      STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: manifest.ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS,
+    }));
+    vi.resetModules();
+    const v7Runtime = await import("../server/siteops/static-template-catalog.js");
+    const v7OfflineFetch = vi.fn(async () => { throw new Error("Verified v6 cache must need no downloads"); });
+    const v7 = await v7Runtime.seedStaticTemplateCatalog({
+      rootDir: root,
+      concurrency: 1,
+      fetchImpl: v7OfflineFetch as typeof fetch,
+      executionAdmissionBuilder: builder,
+    });
+    expect(v7.catalog.entries).toHaveLength(1);
+    expect(v7.catalog.entries[0]?.executionAdmission.status).toBe("admitted");
+    expect(v7OfflineFetch).not.toHaveBeenCalled();
+    const v7Manifest = await readFile(manifestPath(v7.catalog.catalogVersion));
+    const v7Active = await readFile(path.join(root, "siteops/static-template-catalog/active.json"));
 
     vi.doUnmock("../server/siteops/static-template-catalog-manifest.js");
     vi.resetModules();
     const current = await import("../server/siteops/static-template-catalog.js");
     expect(await current.getStaticTemplateCatalogReadiness({ rootDir: root })).toMatchObject({
       ready: true,
-      activeCatalogVersion: v6Version,
+      activeCatalogVersion: v7Version,
       upgradePending: true,
-      entryCount: 6,
-      admittedCount: 6,
+      entryCount: 1,
+      admittedCount: 1,
       unavailableCount: 0,
       requiredAdmissionReady: true,
     });
@@ -300,7 +343,7 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
     await expect(current.loadActiveStaticTemplateCatalog({ rootDir: root })).rejects.toMatchObject({
       code: "STATIC_TEMPLATE_CATALOG_VERSION_MISMATCH",
     });
-    await writeFile(path.join(root, "siteops/static-template-catalog/active.json"), v6Active);
+    await writeFile(path.join(root, "siteops/static-template-catalog/active.json"), v7Active);
     const v5ManifestPath = manifestPath(v5.catalog.catalogVersion);
     const unavailableV5 = JSON.parse(v5Manifest.toString());
     const unavailableEntry = unavailableV5.entries[32];
@@ -351,14 +394,14 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
     expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({
       ok: true,
       reused: false,
-      activeCatalogVersion: v6Version,
+      activeCatalogVersion: v7Version,
       upgradePending: true,
-      admittedCount: 6,
+      admittedCount: 1,
       unavailableCount: 0,
     });
     builder.mockClear();
-    const offlineFetch = vi.fn(async () => { throw new Error("Verified historical caches must need no downloads"); });
-    vi.stubGlobal("fetch", offlineFetch);
+    const currentFetch = vi.fn(fetchFixture);
+    vi.stubGlobal("fetch", currentFetch);
     vi.doMock("../server/siteops/static-template-execution-admission.js", () => ({
       buildStaticTemplateExecutionAdmission: builder,
     }));
@@ -369,29 +412,25 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
     expect(upgraded.catalog.entries.map((entry) => entry.candidateId)).toEqual([
       "static-template-33-helpcenter-search",
     ]);
-    expect(builder.mock.calls.filter(([input]) => input.cachedNormalizedSource)).toHaveLength(1);
-    expect(offlineFetch).not.toHaveBeenCalled();
+    expect(builder.mock.calls.filter(([input]) => input.cachedNormalizedSource)).toHaveLength(0);
+    expect(currentFetch).toHaveBeenCalledTimes(2);
     expect((await current.loadStaticTemplateCatalogVersion(previous.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(32);
     expect((await current.loadStaticTemplateCatalogVersion(v4.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(35);
     expect((await current.loadStaticTemplateCatalogVersion(v5.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(35);
     expect((await current.loadStaticTemplateCatalogVersion(v6.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(6);
+    expect((await current.loadStaticTemplateCatalogVersion(v7.catalog.catalogVersion, { rootDir: root, verifyAssetHashes: true }))?.entryCount).toBe(1);
     expect(await readFile(manifestPath(previous.catalog.catalogVersion))).toEqual(v2Manifest);
     expect(await readFile(manifestPath(v4.catalog.catalogVersion))).toEqual(v4Manifest);
     expect(await readFile(manifestPath(v5.catalog.catalogVersion))).toEqual(v5Manifest);
     expect(await readFile(manifestPath(v6.catalog.catalogVersion))).toEqual(v6Manifest);
+    expect(await readFile(manifestPath(v7.catalog.catalogVersion))).toEqual(v7Manifest);
     for (const entry of upgraded.catalog.entries) {
       expect(entry.executionAdmission.status).toBe("admitted");
       if (entry.executionAdmission.status !== "admitted") throw new Error("Missing required admission");
       const receipt = JSON.parse(await readFile(path.join(root, entry.executionAdmission.browserReceiptPath), "utf8"));
-      const expectedMode = previewFallbackIds.includes(entry.candidateId)
-        ? "preview_reference_fallback"
-        : "verified_normalized_cache";
-      const expectedReference = expectedMode === "preview_reference_fallback"
-        ? entry.previewSha256
-        : null;
-      const expectedReason = expectedMode === "preview_reference_fallback"
-        ? "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED"
-        : null;
+      const expectedMode = "provider_source";
+      const expectedReference = null;
+      const expectedReason = null;
       expect(entry.executionAdmission).toMatchObject({
         admissionMode: expectedMode,
         referencePreviewSha256: expectedReference,
@@ -532,61 +571,61 @@ it("serves exact v6 during rollout, upgrades from historical caches to the singl
       }
     }
 
-    // The strict v6 predecessor remains an immutable cache source. Even when an
+    // The strict v7 predecessor remains an immutable cache source. Even when an
     // attacker rewrites all outer hashes, the browser receipt must still bind
     // the exact provenance frozen in the admission manifest.
-    const tamperedV6ManifestPath = manifestPath(v6.catalog.catalogVersion);
-    const tamperedV6Manifest = JSON.parse(v6Manifest.toString());
-    const tamperedV6Entry = tamperedV6Manifest.entries[0];
-    const tamperedV6Admission = tamperedV6Entry.executionAdmission;
-    const tamperedV6ReceiptPath = path.join(
+    const tamperedV7ManifestPath = manifestPath(v7.catalog.catalogVersion);
+    const tamperedV7Manifest = JSON.parse(v7Manifest.toString());
+    const tamperedV7Entry = tamperedV7Manifest.entries[0];
+    const tamperedV7Admission = tamperedV7Entry.executionAdmission;
+    const tamperedV7ReceiptPath = path.join(
       root,
-      tamperedV6Admission.browserReceiptPath,
+      tamperedV7Admission.browserReceiptPath,
     );
-    const tamperedV6Receipt = JSON.parse(
-      await readFile(tamperedV6ReceiptPath, "utf8"),
+    const tamperedV7Receipt = JSON.parse(
+      await readFile(tamperedV7ReceiptPath, "utf8"),
     );
-    tamperedV6Receipt.binding.fallbackReasonCode =
-      tamperedV6Admission.fallbackReasonCode ===
+    tamperedV7Receipt.binding.fallbackReasonCode =
+      tamperedV7Admission.fallbackReasonCode ===
         "NATIVE_TEMPLATE_SOURCE_UNSAFE"
         ? "NATIVE_TEMPLATE_DEPENDENCY_UNSUPPORTED"
         : "NATIVE_TEMPLATE_SOURCE_UNSAFE";
-    const tamperedV6ReceiptBytes = Buffer.from(
-      `${JSON.stringify(tamperedV6Receipt)}\n`,
+    const tamperedV7ReceiptBytes = Buffer.from(
+      `${JSON.stringify(tamperedV7Receipt)}\n`,
     );
-    await writeFile(tamperedV6ReceiptPath, tamperedV6ReceiptBytes);
-    tamperedV6Admission.browserReceiptSha256 = digest(
-      tamperedV6ReceiptBytes,
+    await writeFile(tamperedV7ReceiptPath, tamperedV7ReceiptBytes);
+    tamperedV7Admission.browserReceiptSha256 = digest(
+      tamperedV7ReceiptBytes,
     );
-    tamperedV6Admission.browserReceiptBytes = tamperedV6ReceiptBytes.length;
-    tamperedV6Admission.admissionEvidenceSha256 =
+    tamperedV7Admission.browserReceiptBytes = tamperedV7ReceiptBytes.length;
+    tamperedV7Admission.admissionEvidenceSha256 =
       current.staticTemplateAdmissionEvidenceSha256({
-        ...tamperedV6Admission,
-        ...tamperedV6Admission.binding,
+        ...tamperedV7Admission,
+        ...tamperedV7Admission.binding,
       });
-    const tamperedV6ManifestBytes = Buffer.from(
-      `${JSON.stringify(tamperedV6Manifest)}\n`,
+    const tamperedV7ManifestBytes = Buffer.from(
+      `${JSON.stringify(tamperedV7Manifest)}\n`,
     );
-    await writeFile(tamperedV6ManifestPath, tamperedV6ManifestBytes);
-    const tamperedV6IntegrityPath = path.join(
-      path.dirname(tamperedV6ManifestPath),
+    await writeFile(tamperedV7ManifestPath, tamperedV7ManifestBytes);
+    const tamperedV7IntegrityPath = path.join(
+      path.dirname(tamperedV7ManifestPath),
       "integrity.json",
     );
-    const tamperedV6Integrity = JSON.parse(
-      await readFile(tamperedV6IntegrityPath, "utf8"),
+    const tamperedV7Integrity = JSON.parse(
+      await readFile(tamperedV7IntegrityPath, "utf8"),
     );
-    tamperedV6Integrity.manifestSha256 = digest(tamperedV6ManifestBytes);
-    const tamperedV6ReceiptStat = await stat(tamperedV6ReceiptPath, { bigint: true });
-    Object.assign(tamperedV6Integrity.assets.find((asset: any) => asset.path === tamperedV6Admission.browserReceiptPath), {
-      sha256: digest(tamperedV6ReceiptBytes), bytes: tamperedV6ReceiptBytes.length, inode: tamperedV6ReceiptStat.ino.toString(),
-      modifiedNs: tamperedV6ReceiptStat.mtimeNs.toString(), changedNs: tamperedV6ReceiptStat.ctimeNs.toString(),
+    tamperedV7Integrity.manifestSha256 = digest(tamperedV7ManifestBytes);
+    const tamperedV7ReceiptStat = await stat(tamperedV7ReceiptPath, { bigint: true });
+    Object.assign(tamperedV7Integrity.assets.find((asset: any) => asset.path === tamperedV7Admission.browserReceiptPath), {
+      sha256: digest(tamperedV7ReceiptBytes), bytes: tamperedV7ReceiptBytes.length, inode: tamperedV7ReceiptStat.ino.toString(),
+      modifiedNs: tamperedV7ReceiptStat.mtimeNs.toString(), changedNs: tamperedV7ReceiptStat.ctimeNs.toString(),
     });
     await writeFile(
-      tamperedV6IntegrityPath,
-      `${JSON.stringify(tamperedV6Integrity)}\n`,
+      tamperedV7IntegrityPath,
+      `${JSON.stringify(tamperedV7Integrity)}\n`,
     );
     await expect(
-      current.loadStaticTemplateCatalogVersion(v6.catalog.catalogVersion, {
+      current.loadStaticTemplateCatalogVersion(v7.catalog.catalogVersion, {
         rootDir: root,
       }),
     ).rejects.toMatchObject({
