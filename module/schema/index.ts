@@ -492,8 +492,7 @@ const ragStarterQuestionSets = mysqlTable(
       .notNull()
       .references(() => core.users.id, { onDelete: "cascade" }),
     knowledgeSnapshotId: varchar("knowledgeSnapshotId", { length: 36 })
-      .notNull()
-      .references(() => knowledgeBaseSnapshots.id, { onDelete: "cascade" }),
+      .notNull(),
     knowledgeSnapshotVersion: int("knowledgeSnapshotVersion", { unsigned: true }).notNull(),
     knowledgeArchiveHash: varchar("knowledgeArchiveHash", { length: 64 }),
     knowledgeContentHash: varchar("knowledgeContentHash", { length: 64 }).notNull(),
@@ -540,6 +539,11 @@ const ragStarterQuestionSets = mysqlTable(
       table.knowledgeSnapshotId,
       table.status,
     ),
+    foreignKey({
+      name: "rag_starter_question_sets_snapshot_fk",
+      columns: [table.knowledgeSnapshotId],
+      foreignColumns: [knowledgeBaseSnapshots.id],
+    }).onDelete("cascade"),
   ],
 );
 
