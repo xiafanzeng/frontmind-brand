@@ -10,6 +10,41 @@ const task = (patch: Partial<IntentSkillJob> = {}): IntentSkillJob => ({
   credentialId: "", credentialVersion: 1, skillHash: "", model: "", ...patch,
 });
 describe("评估任务完成状态", () => {
+  it("只有可关闭的完成提示才启动一次自动收起计时器", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    const props = {job: task({status: "succeeded"}), uncertain: false, onViewTask: vi.fn()};
+    const view = render(<IntentListEvaluationStatus {...props} onDismiss={onDismiss}/>);
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => {vi.advanceTimersByTime(7999);});
+    expect(onDismiss).not.toHaveBeenCalled();
+    view.rerender(<IntentListEvaluationStatus {...props} onDismiss={onDismiss}/>);
+    act(() => {vi.advanceTimersByTime(1);});
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("撤销关闭能力或卸载提示时清理自动收起计时器", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    const props = {job: task({status: "succeeded"}), uncertain: false, onViewTask: vi.fn()};
+    const view = render(<IntentListEvaluationStatus {...props} onDismiss={onDismiss}/>);
+    view.rerender(<IntentListEvaluationStatus {...props}/>);
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => {vi.advanceTimersByTime(8000);});
+    expect(onDismiss).not.toHaveBeenCalled();
+    view.rerender(<IntentListEvaluationStatus {...props} onDismiss={onDismiss}/>);
+    expect(vi.getTimerCount()).toBe(1);
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("关闭自动收起时仍可手动关闭完成提示", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    render(<IntentListEvaluationStatus job={task({status: "succeeded"})} uncertain={false} onViewTask={vi.fn()} onDismiss={onDismiss} autoDismiss={false}/>);
+    expect(vi.getTimerCount()).toBe(0);
+    fireEvent.click(screen.getByRole("button", {name: "关闭评估完成提示"}));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
   it("运行中更新耗时，完成后固定为保存结果的完成时间并停止计时器", () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date("2026-11-07T12:00:10Z"));
     const props = {uncertain: false, onViewTask: vi.fn(), onViewResult: vi.fn()};

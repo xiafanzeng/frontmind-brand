@@ -58,11 +58,12 @@ export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewRe
   const completed = job.status === "succeeded";
   const dismissRef = useRef(onDismiss);
   dismissRef.current = onDismiss;
+  const canDismiss = Boolean(onDismiss);
   useEffect(() => {
-    if (!completed || !autoDismiss) return;
+    if (!completed || !autoDismiss || !canDismiss) return;
     const timer = window.setTimeout(() => dismissRef.current?.(), 8000);
     return () => window.clearTimeout(timer);
-  }, [job.id, completed, autoDismiss]);
+  }, [job.id, completed, autoDismiss, canDismiss]);
   return <section className={`iw-list-task${completed ? " iw-list-task--completed" : ""}`} aria-label="问题评估任务">
     <div className="iw-list-task-main">
       <div className="iw-list-task-copy" role="status"><h3>{completed ? "评估已完成" : paused ? `评估已暂停 · ${job.questionIds.length} 条问题` : unconfirmed ? `评估任务待确认 · ${job.questionIds.length} 条问题` : job.kind === "plan" ? `正在生成优化方案 · ${job.questionIds.length} 条问题` : `正在评估 ${job.questionIds.length} 条问题`}</h3></div>
