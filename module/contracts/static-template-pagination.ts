@@ -1,11 +1,12 @@
-/** Frozen V7 pagination. Older catalog artifacts retain their original shape. */
-export const CURATED_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261025-v7";
+/** Frozen V8 pagination. Older catalog artifacts retain their original shape. */
+export const CURATED_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261108-v8";
 /** Chronological predecessor used for immutable reads and cache reuse. */
-export const PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261025-v6";
-/** The only older catalog accepted as active during the rolling v7 deployment. */
-export const ROLLING_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261025-v6";
+export const PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261025-v7";
+/** The only older catalog accepted as active during the rolling v8 deployment. */
+export const ROLLING_STATIC_TEMPLATE_CATALOG_VERSION = "frontmind-curated-20261025-v7";
 export const PRIOR_CURATED_STATIC_TEMPLATE_CATALOG_VERSIONS = Object.freeze([
   PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION,
+  "frontmind-curated-20261025-v6",
   "frontmind-curated-20261025-v5",
   "frontmind-curated-20261025-v4",
   "frontmind-curated-20261024-v3",
@@ -39,6 +40,9 @@ export function staticTemplatePagination(catalogVersion: string | null | undefin
     catalogVersion === PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION ||
     catalogVersion === ROLLING_STATIC_TEMPLATE_CATALOG_VERSION
   ) {
+    return CURATED_STATIC_TEMPLATE_PAGINATION;
+  }
+  if (catalogVersion === "frontmind-curated-20261025-v6") {
     return SIX_ENTRY_STATIC_TEMPLATE_PAGINATION;
   }
   return PRIOR_CURATED_STATIC_TEMPLATE_CATALOG_VERSIONS.some(
@@ -48,7 +52,7 @@ export function staticTemplatePagination(catalogVersion: string | null | undefin
     : LEGACY_STATIC_TEMPLATE_PAGINATION;
 }
 
-/** Query ceilings must cover immutable historical v3-v6 projects after v7 shrinks to one template. */
+/** Query ceilings cover immutable v3-v7 projects after v8 refreshes the single template. */
 export const MAX_STATIC_TEMPLATE_CATALOG_PAGE_COUNT = Math.max(
   CURATED_STATIC_TEMPLATE_PAGINATION.pageCount,
   SIX_ENTRY_STATIC_TEMPLATE_PAGINATION.pageCount,

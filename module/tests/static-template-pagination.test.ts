@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { visualSelectionBundleV7Schema, SITEOPS_VISUAL_CANDIDATE_MAX_PAGES } from "../contracts/siteops.js";
 import { siteOpsObservationV1Schema } from "../contracts/siteops-contract.js";
-import { CURATED_STATIC_TEMPLATE_CATALOG_VERSION, MAX_STATIC_TEMPLATE_CATALOG_PAGE_COUNT, PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION, ROLLING_STATIC_TEMPLATE_CATALOG_VERSION, staticTemplatePageLength, staticTemplatePagination } from "../contracts/static-template-pagination.js";
+import { CURATED_STATIC_TEMPLATE_CATALOG_VERSION, MAX_STATIC_TEMPLATE_CATALOG_PAGE_COUNT, ROLLING_STATIC_TEMPLATE_CATALOG_VERSION, staticTemplatePageLength, staticTemplatePagination } from "../contracts/static-template-pagination.js";
 import { completePublishedVisualPageCount, projectSiteOpsVisualGeneration, projectStaticTemplateCatalogVisualReadiness, resolveVisualCatalogObservationCoordinates, siteOpsVisibleStyleBatchQueryLimit, siteOpsVisualCycleCatalogVersion } from "../server/siteops/service.js";
 import { FROZEN_STATIC_TEMPLATE_CATALOG, HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG, ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS, STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS } from "../server/siteops/static-template-catalog-manifest.js";
 
@@ -11,6 +11,7 @@ const oldVersion = "21st-included-recommended-20260828-v2";
 const v3Version = "frontmind-curated-20261024-v3";
 const v4Version = "frontmind-curated-20261025-v4";
 const v5Version = "frontmind-curated-20261025-v5";
+const v6Version = "frontmind-curated-20261025-v6";
 function bundle(version: string, page: number) {
   const pagination = staticTemplatePagination(version);
   const candidates = Array.from({ length: staticTemplatePageLength(version, page) }, (_, index) => {
@@ -76,16 +77,30 @@ describe("frozen catalog pagination", () => {
     expect(coordinates.pageCount).toBe(4);
     expect(coordinates.catalogVersion).toBe(oldVersion);
   });
-  it("publishes the single curated help center on one page", () => {
+  it("publishes the refreshed single curated help center on one page", () => {
     const page = visualSelectionBundleV7Schema.parse(bundle(CURATED_STATIC_TEMPLATE_CATALOG_VERSION, 1));
     expect(page.candidates).toHaveLength(1);
     expect(page.pageCount).toBe(1);
     expect(FROZEN_STATIC_TEMPLATE_CATALOG.map((entry) => entry.candidateId)).toEqual([
       "static-template-33-helpcenter-search",
     ]);
+    expect(FROZEN_STATIC_TEMPLATE_CATALOG[0]).toMatchObject({
+      sourceCommitSha: "e3a761f48786186534699c4f1dcac4c3e02a2e28",
+      previewUrl:
+        "https://raw.githubusercontent.com/xiafanzeng/frontmind-brand/e3a761f48786186534699c4f1dcac4c3e02a2e28/module/server/siteops/local-templates/previews/helpcenter-search-azure.png",
+    });
+    expect(
+      HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG.find(
+        (entry) => entry.candidateId === "static-template-33-helpcenter-search",
+      ),
+    ).toMatchObject({
+      sourceCommitSha: "64b6a8d96210b531752a4aa6c0d1233de5e0c422",
+      previewUrl:
+        "https://raw.githubusercontent.com/xiafanzeng/frontmind-brand/64b6a8d96210b531752a4aa6c0d1233de5e0c422/module/server/siteops/local-templates/previews/helpcenter-search-azure.png",
+    });
   });
   it("keeps frozen v6 bundles and public observations at six entries on one page", () => {
-    const version = PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION;
+    const version = v6Version;
     expect(visualSelectionBundleV7Schema.parse(bundle(version, 1)).candidates).toHaveLength(6);
     const v6 = siteOpsObservationV1Schema.parse(observation(version));
     expect(v6.visualGeneration).toMatchObject({ maxPages: 1, generatedPages: 1 });
@@ -117,8 +132,8 @@ describe("frozen catalog pagination", () => {
     expect(visualSelectionBundleV7Schema.safeParse({ ...page, candidates: page.candidates.slice(0, 3), displayTarget: 3 }).success).toBe(false);
   });
   it.each([
-    ["v7", CURATED_STATIC_TEMPLATE_CATALOG_VERSION, 1],
-    ["rolling v6", ROLLING_STATIC_TEMPLATE_CATALOG_VERSION, 1],
+    ["v8", CURATED_STATIC_TEMPLATE_CATALOG_VERSION, 1],
+    ["rolling v7", ROLLING_STATIC_TEMPLATE_CATALOG_VERSION, 1],
     ["historical v4", v4Version, 5],
   ])("uses the actual active %s coordinates for a pristine 2.9 cycle", (_label, activeCatalogVersion, pageCount) => {
     const coordinates = resolveVisualCatalogObservationCoordinates({
@@ -157,8 +172,8 @@ describe("frozen catalog pagination", () => {
     const candidates = batches.flatMap((batch, index) => Array.from({ length: staticTemplatePageLength(CURATED_STATIC_TEMPLATE_CATALOG_VERSION, index + 1) }, () => ({ batchId: batch.id })));
     expect(completePublishedVisualPageCount({ batches, candidates, pageSize: 8, catalogVersion: CURATED_STATIC_TEMPLATE_CATALOG_VERSION })).toBe(1);
     const v6Batches = [{ id: "v6", status: "published" }];
-    const v6Candidates = Array.from({ length: staticTemplatePageLength(PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION, 1) }, () => ({ batchId: "v6" }));
-    expect(completePublishedVisualPageCount({ batches: v6Batches, candidates: v6Candidates, pageSize: 8, catalogVersion: PREVIOUS_CURATED_STATIC_TEMPLATE_CATALOG_VERSION })).toBe(1);
+    const v6Candidates = Array.from({ length: staticTemplatePageLength(v6Version, 1) }, () => ({ batchId: "v6" }));
+    expect(completePublishedVisualPageCount({ batches: v6Batches, candidates: v6Candidates, pageSize: 8, catalogVersion: v6Version })).toBe(1);
     const historicalBatches = Array.from({ length: 5 }, (_, index) => ({ id: `h-${index}`, status: "published" }));
     const historicalCandidates = historicalBatches.flatMap((batch, index) => Array.from({ length: staticTemplatePageLength(v4Version, index + 1) }, () => ({ batchId: batch.id })));
     expect(completePublishedVisualPageCount({ batches: historicalBatches, candidates: historicalCandidates, pageSize: 8, catalogVersion: v4Version })).toBe(5);

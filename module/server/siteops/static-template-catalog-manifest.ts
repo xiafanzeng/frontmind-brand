@@ -6,11 +6,10 @@ import {
 /**
  * Immutable input coordinates for the FrontMind 2.8 Template catalog.
  *
- * The 35-row library preserves the immutable v3-v5 coordinates; v6 published a
- * six-template selection from it. V7 narrows the live catalog to the single
- * FrontMind 蔚蓝帮助中心 layout. Stable candidate ids keep their original
- * library positions even though display order differs per version. Customer
- * requests never refresh these definitions.
+ * The 35-row library preserves the immutable v3-v7 coordinates; v6 published a
+ * six-template selection and v7 narrowed it to one help center. V8 refreshes
+ * that single template at a new immutable source commit while retaining the
+ * stable candidate id. Customer requests never refresh these definitions.
  * The seed command downloads the exact immutable GitHub commit and preview for
  * every row, then records the resulting byte hashes in the active manifest.
  */
@@ -530,9 +529,12 @@ export const HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTem
     ),
   );
 
-const V7_CANDIDATE_IDS = Object.freeze([
+const V8_CANDIDATE_IDS = Object.freeze([
   "static-template-33-helpcenter-search",
 ] as const);
+
+const V8_HELP_CENTER_SOURCE_COMMIT =
+  "e3a761f48786186534699c4f1dcac4c3e02a2e28" as const;
 
 const HISTORICAL_DEFINITIONS_BY_ID = new Map(
   HISTORICAL_FROZEN_STATIC_TEMPLATE_CATALOG.map((definition) => [
@@ -543,27 +545,28 @@ const HISTORICAL_DEFINITIONS_BY_ID = new Map(
 
 export const FROZEN_STATIC_TEMPLATE_CATALOG: readonly FrozenStaticTemplateDefinition[] =
   Object.freeze(
-    V7_CANDIDATE_IDS.map((candidateId, index) => {
+    V8_CANDIDATE_IDS.map((candidateId, index) => {
       const definition = HISTORICAL_DEFINITIONS_BY_ID.get(candidateId);
       if (!definition) {
         throw new Error("STATIC_TEMPLATE_CATALOG_SELECTED_DEFINITION_MISSING");
       }
-      return Object.freeze({ ...definition, order: index + 1 });
+      return Object.freeze({
+        ...definition,
+        order: index + 1,
+        previewUrl:
+          `https://raw.githubusercontent.com/xiafanzeng/frontmind-brand/${V8_HELP_CENTER_SOURCE_COMMIT}/module/server/siteops/local-templates/previews/helpcenter-search-azure.png`,
+        sourceCommitSha: V8_HELP_CENTER_SOURCE_COMMIT,
+      });
     }),
   );
 
-/** The rolling v6 catalog exposed exactly these six admitted entries. */
+/** The rolling v7 catalog exposed the prior immutable help-center source. */
 export const ROLLING_STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: readonly string[] =
   Object.freeze([
     "static-template-33-helpcenter-search",
-    "static-template-34-helpcenter-docs",
-    "static-template-35-helpcenter-minimal",
-    "static-template-15-hirael-nexacore",
-    "static-template-21-hirael-mindloop",
-    "static-template-22-hirael-agency-landing",
   ]);
 
-/** A v7 catalog is ready only when every customer-visible template has passed
+/** A v8 catalog is ready only when every customer-visible template has passed
  * the controlled Vite build, static validation and real-browser admission. */
 export const STATIC_TEMPLATE_REQUIRED_ADMISSION_IDS: readonly string[] =
   Object.freeze(
