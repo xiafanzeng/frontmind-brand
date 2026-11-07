@@ -1,7 +1,6 @@
 import type { BrandPage } from "../module/client/ModuleWorkspace";
 import type { RagReportSection } from "../module/client/dashboard/ai-website-preview/rag-report-navigation";
 import type { EnterpriseRagEvaluationCoordinate } from "../module/client/dashboard/enterprise-rag-evaluation-api";
-import { RAG_SAMPLE_CASES } from "../module/client/dashboard/ai-website-preview/rag-evaluation-cases";
 
 export type StandaloneBrandPage = BrandPage;
 
@@ -19,6 +18,7 @@ const legacyPageAliases: Record<string, StandaloneBrandPage> = {
   "enterprise-rag": "enterprise-qa",
   "website-builder": "website",
 };
+const validReportId = (value: string | null): value is string => Boolean(value && value.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(value));
 
 export function resolveStandaloneBrandPage(value: string) {
   const canonical = value === "reports" ? "diagnostics" : legacyPageAliases[value] ?? value;
@@ -44,7 +44,7 @@ export function standaloneRagReportUrl(section: RagReportSection, workspaceId: s
   const params = new URLSearchParams({ view: "enterprise-qa", report: "1", workspace: workspaceId });
   if (exampleId !== undefined) {
     if (coordinate) throw new Error("示例报告不能混用真实回答标识。");
-    if (!RAG_SAMPLE_CASES.some(example => example.id === exampleId)) throw new Error("示例问答标识无效。");
+    if (!validReportId(exampleId)) throw new Error("报告标识无效。");
     params.set("example", exampleId);
   }
   if (coordinate) {
@@ -54,22 +54,28 @@ export function standaloneRagReportUrl(section: RagReportSection, workspaceId: s
   return `/?${params.toString()}#${section}`;
 }
 
-export function resolveStandaloneRagReport(search: string, workspaceId: string) {
+export function resolveStandaloneRagReport(
+  search: string,
+  workspaceId: string,
+  allowedPreviewExampleIds: ReadonlySet<string> = new Set(),
+) {
   const params = new URLSearchParams(search);
   if (resolveStandaloneBrandPage(params.get("view") ?? "") !== "enterprise-qa" || params.get("report") !== "1") return null;
   const expectedWorkspace = params.get("workspace");
   const task = params.get("sourceQaTaskId");
   const turn = params.get("turnId");
   const requestedExample = params.get("example");
-  const exampleId = RAG_SAMPLE_CASES.find(example => example.id === requestedExample)?.id;
-  const validId = (value: string | null): value is string => Boolean(value && value.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(value));
-  const coordinate = validId(task) && validId(turn) ? { sourceQaTaskId: task, turnId: turn } : undefined;
+  const exampleId = validReportId(requestedExample) &&
+    allowedPreviewExampleIds.has(requestedExample)
+    ? requestedExample
+    : undefined;
+  const coordinate = validReportId(task) && validReportId(turn) ? { sourceQaTaskId: task, turnId: turn } : undefined;
   const error = expectedWorkspace && expectedWorkspace !== workspaceId
       ? "报告链接与当前工作区不一致。请回到对应工作区重新打开，避免查看其他工作区的记录。"
       : requestedExample !== null && (task !== null || turn !== null)
         ? "示例报告不能混用真实回答标识。请从企业 RAG 页面重新打开。"
       : requestedExample !== null && (!exampleId || params.getAll("example").length !== 1)
-        ? "示例问答标识无效。请从企业 RAG 页面重新打开示例报告。"
+        ? "报告标识无效。请从企业知识问答重新打开。"
       : (task !== null || turn !== null) && !coordinate
         ? "回答标识不完整或无效。请从企业 RAG 页面重新打开评估记录。"
         : null;

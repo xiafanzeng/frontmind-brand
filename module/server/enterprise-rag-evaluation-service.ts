@@ -22,6 +22,7 @@ import {
   type EnterpriseRagEvaluationReport,
   type EnterpriseRagEvaluationRunDto,
   type EnterpriseRagEvaluationAdmission,
+  type EnterpriseRagEvaluationAutomaticState,
   validateEnterpriseRagJudgeOutput,
   isGradedRagJudgment,
   isChecklistRagJudgment,
@@ -1786,9 +1787,12 @@ export function createEnterpriseRagEvaluationRuntime(
         };
       }
     }));
+    let automaticState: EnterpriseRagEvaluationAutomaticState = projected.length > 0
+      ? "recorded"
+      : "not_enrolled";
     let automaticExpected = false;
     let automaticAdmission: EnterpriseRagEvaluationAdmission | undefined;
-    if (projected.length === 0 && automaticRagEvaluationEnabled(core.environment)) {
+    if (projected.length === 0) {
       const db = await database();
       const rows = resultRows(await db.execute(sql`
         SELECT metadata FROM conversation_turns
@@ -1803,10 +1807,13 @@ export function createEnterpriseRagEvaluationRuntime(
       const marker = rows.length === 1 ? jsonRecord(jsonRecord(rows[0].metadata)?.autoEvaluation) : null;
       if (isAutomaticRagEvaluationEligible(marker)) {
         automaticAdmission = publicAdmission(marker?.admission);
-        automaticExpected = automaticAdmission?.status !== "blocked";
+        automaticState = automaticAdmission?.status === "blocked"
+          ? "blocked"
+          : "expected";
+        automaticExpected = automaticState === "expected";
       }
     }
-    return { latest: projected[0] ?? null, history: projected, automaticExpected,
+    return { latest: projected[0] ?? null, history: projected, automaticState, automaticExpected,
       ...(automaticAdmission ? { automaticAdmission } : {}) };
   }
 

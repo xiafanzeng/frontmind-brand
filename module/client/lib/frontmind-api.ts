@@ -61,6 +61,8 @@ export interface TaskResponse {
     sourceFileName: string;
     documentCount: number;
     contentHash: string;
+    /** Trusted owner/project identity frozen with the published snapshot. */
+    companyName?: string | null;
   } | null;
   /** Response-logic operation boundary; absent on ordinary tasks. */
   operationRevision?: number;

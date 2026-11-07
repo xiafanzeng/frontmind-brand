@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DimensionJudgment, GateJudgment } from "./rag-evaluation";
-import { RAG_SAMPLE_CASES } from "./rag-evaluation-cases";
+import type { RagCase } from "./rag-evaluation-cases";
+import { peekRagPreviewFixtures } from "./rag-preview-fixture-loader";
 
 /** Snapshot of the synthetic preview only; live conversations use their own service. */
 export type RagPreviewConversationSnapshot = {
@@ -20,6 +21,7 @@ export type RagPreviewConversationSnapshot = {
 export type RagPreviewConversation = RagPreviewConversationSnapshot & { id: string; updatedAt: number };
 
 type HistoryState = { key: string; enabled: boolean; activeId: string; conversations: RagPreviewConversation[]; storageAvailable: boolean; seeded: boolean; seedPending: boolean };
+const EMPTY_PREVIEW_CASES: readonly RagCase[] = [];
 const STORAGE_PREFIX = "frontmind-rag-preview-conversations-v1";
 export const ragPreviewHistoryStorageKey = (scope?: string) => `${STORAGE_PREFIX}.${encodeURIComponent(scope?.trim() || "preview")}`;
 const createId = () => typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -36,24 +38,24 @@ function isConversation(value: unknown): value is RagPreviewConversation {
     Array.isArray(v.dimensions) && v.dimensions.every(d => d && typeof d.id === "string" && (d.level === null || (Number.isInteger(d.level) && d.level >= 0 && d.level <= 4)) && typeof d.rationale === "string" && typeof d.applicable === "boolean" && Array.isArray(d.evidenceIds) && d.evidenceIds.every(id => typeof id === "string")) &&
     Array.isArray(v.gates) && v.gates.every(g => g && typeof g.id === "string" && ["passed", "failed", "pending"].includes(g.status) && typeof g.reason === "string");
 }
-function seedSamples(conversations: RagPreviewConversation[]): RagPreviewConversation[] {
+function seedSamples(conversations: RagPreviewConversation[], samples: readonly RagCase[]): RagPreviewConversation[] {
   const existingSampleIds = new Set(conversations.filter(item => item.mode === "sample" && item.caseId).map(item => item.caseId));
   const timestamp = Date.now();
-  const samples: RagPreviewConversation[] = RAG_SAMPLE_CASES.filter(item => !existingSampleIds.has(item.id)).map(item => ({
+  const additions: RagPreviewConversation[] = samples.filter(item => !existingSampleIds.has(item.id)).map(item => ({
     id: `sample:${item.id}`, updatedAt: timestamp, previousTurns: [], question: item.question, answer: item.answer, need: item.need,
     input: "", caseId: item.id, dimensions: item.dimensions.map(d => ({ ...d, evidenceIds: [...d.evidenceIds] })),
     gates: item.gates.map(g => ({ ...g })), mode: "sample", previewAnswerIdentity: `sample:${item.id}`, completedAt: timestamp,
   }));
   // A pre-existing user session may coincidentally use a reserved sample ID.
   const ids = new Set(conversations.map(item => item.id));
-  return [...conversations, ...samples.map(item => ids.has(item.id) ? { ...item, id: createId() } : item)];
+  return [...conversations, ...additions.map(item => ids.has(item.id) ? { ...item, id: createId() } : item)];
 }
-function load(key: string, enabled: boolean): HistoryState {
+function load(key: string, enabled: boolean, samples: readonly RagCase[]): HistoryState {
   const empty: HistoryState = { key, enabled, activeId: createId(), conversations: [], storageAvailable: true, seeded: false, seedPending: false };
   if (!enabled) return empty;
   let raw: string | null;
   try { raw = localStorage.getItem(key); } catch {
-    const conversations = seedSamples([]);
+    const conversations = seedSamples([], samples);
     return { ...empty, activeId: conversations[0]?.id ?? empty.activeId, conversations, seeded: true, storageAvailable: false };
   }
   let record: { activeId?: unknown; conversations: unknown[]; seeded?: unknown } = { conversations: [] };
@@ -65,7 +67,7 @@ function load(key: string, enabled: boolean): HistoryState {
   }
   let conversations = record.conversations.filter(isConversation).map(item => ({ ...item, previousTurns: item.previousTurns ?? [] }));
   const wasSeeded = record.seeded === true;
-  if (!wasSeeded) conversations = seedSamples(conversations);
+  if (!wasSeeded) conversations = seedSamples(conversations, samples);
   const activeId = typeof record.activeId === "string" && record.activeId ? record.activeId : conversations[0]?.id ?? empty.activeId;
   return { ...empty, activeId, conversations, seeded: true, seedPending: !wasSeeded };
 }
@@ -74,14 +76,15 @@ function snapshotCopy(snapshot: RagPreviewConversationSnapshot): RagPreviewConve
 }
 
 /** Mutations are explicit: the caller saves the displayed snapshot before switching. */
-export function useRagPreviewHistory(scopeKey?: string, enabled = true, startFresh = false) {
+export function useRagPreviewHistory(scopeKey?: string, enabled = true, startFresh = false, fixtures?: readonly RagCase[]) {
   const key = ragPreviewHistoryStorageKey(scopeKey);
+  const samples = fixtures ?? peekRagPreviewFixtures()?.cases ?? EMPTY_PREVIEW_CASES;
   // Reopening a workspace starts a new draft; persisted conversations remain
   // available only through an explicit history selection.
   const initial = useMemo(() => {
-    const loaded = load(key, enabled);
+    const loaded = load(key, enabled, samples);
     return startFresh ? { ...loaded, activeId: createId() } : loaded;
-  }, [key, enabled, startFresh]);
+  }, [key, enabled, startFresh, samples]);
   const current = useRef(initial);
   const [view, setView] = useState(initial);
   if (current.current.key !== key || current.current.enabled !== enabled) current.current = initial;

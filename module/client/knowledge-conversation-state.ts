@@ -44,7 +44,7 @@ export interface LocalMessage {
   enterpriseQaAnswer?: EnterpriseQaAnswerMeta;
   enterpriseQaFollowup?: import("@frontmind/module-contracts/enterprise-qa-experience").EnterpriseQaFollowupMetadata;
   /** Server-authored rule reply; it is never an Agent/provider projection. */
-  enterpriseQaLocalReply?: import("@frontmind/module-contracts/enterprise-qa-experience").EnterpriseQaLocalReplyMetadata;
+  enterpriseQaLocalReply?: import("./lib/enterprise-qa-local-reply").EnterpriseQaLocalReplyMetadataWithKnowledge;
   id: string;
   /** Server-owned conversation order. Browser timestamps are never authoritative. */
   serverSequence?: number;

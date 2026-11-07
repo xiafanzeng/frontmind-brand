@@ -160,7 +160,7 @@ export function EnterpriseQaPreview({
                 className="aqwp-button"
                 onClick={() => setIsNewSession(false)}
               >
-                <MessageSquareText />查看示例问答
+                <MessageSquareText />查看预览问答
               </button>
             </section>
           ) : (

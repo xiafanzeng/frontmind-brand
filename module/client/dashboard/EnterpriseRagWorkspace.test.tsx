@@ -93,7 +93,7 @@ function activeConversation() {
 }
 
 vi.mock("../lib/final-reply", () => ({
-  finalReplyIds: (messages: Array<{ id: string; role: string; generalChat?: { isFinalAnswer?: boolean } }>) => new Set(messages.filter(message => message.role === "assistant" && (message.id === "answer-1" || message.generalChat?.isFinalAnswer)).map(message => message.id)),
+  finalReplyIds: (messages: Array<{ id: string; role: string; generalChat?: { isFinalAnswer?: boolean }; enterpriseQaLocalReply?: { serverOwned?: boolean } }>) => new Set(messages.filter(message => message.role === "assistant" && (message.id === "answer-1" || message.generalChat?.isFinalAnswer || message.enterpriseQaLocalReply?.serverOwned)).map(message => message.id)),
 }));
 
 vi.mock("../host", () => ({
@@ -239,6 +239,30 @@ describe("connected redesigned enterprise RAG workspace", () => {
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
+  it("normalizes legacy epoch seconds for history order, subtitles and answer completion time without rewriting data", () => {
+    const legacySeconds = 1_793_893_500;
+    const legacy = { ...activeConversation(), id: "legacy-seconds", updatedAt: legacySeconds };
+    (legacy.messages[1] as { timestamp: number }).timestamp = legacySeconds;
+    const olderMilliseconds = { ...activeConversation(), id: "older-milliseconds", title: "旧毫秒会话", updatedAt: 1_700_000_000_000 };
+    mocks.active = legacy;
+    mocks.conversations = [olderMilliseconds, legacy];
+    renderHistory();
+    const live = mocks.received?.live as {
+      answerCompletedAt?: number;
+      chat: { completedAt?: number };
+      conversationHistory: { items: Array<{ id: string; subtitle?: string }> };
+    };
+    expect(live.conversationHistory.items.map(item => item.id)).toEqual(["legacy-seconds", "older-milliseconds"]);
+    expect(live.conversationHistory.items[0]?.subtitle).toBe(new Date(legacySeconds * 1000).toLocaleString("zh-CN", {
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
+    }));
+    expect(live.conversationHistory.items[0]?.subtitle).not.toContain("1970");
+    expect(live.answerCompletedAt).toBe(legacySeconds * 1000);
+    expect(live.chat.completedAt).toBe(legacySeconds * 1000);
+    expect(mocks.active.updatedAt).toBe(legacySeconds);
+    expect((mocks.active.messages as Array<{ timestamp: number }>)[1]?.timestamp).toBe(legacySeconds);
+  });
+
   it("waits for deletion to succeed before selecting the next conversation", () => {
     mocks.conversations = [
       { ...activeConversation(), title: "企业问答", updatedAt: 100 },
@@ -254,6 +278,27 @@ describe("connected redesigned enterprise RAG workspace", () => {
     view.rerender(<EnterpriseRagWorkspace />);
     expect(mocks.setActive).toHaveBeenCalledWith("survivor");
     expect(mocks.setWorkbenchTaskQuery).toHaveBeenCalledWith("survivor");
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+  });
+
+  it("atomically opens a usable blank draft after deleting the only conversation", async () => {
+    mocks.conversations = [{ ...activeConversation(), updatedAt: 100 }];
+    const view = renderHistory();
+    type History = { onDelete:(id:string)=>Promise<boolean> };
+    let pending!: Promise<boolean>;
+    act(() => { pending = (mocks.received?.live as {conversationHistory:History}).conversationHistory.onDelete("conversation-1"); });
+    mocks.active = null;
+    mocks.conversations = [];
+    act(() => { view.rerender(<EnterpriseRagWorkspace />); });
+    await act(async () => { expect(await pending).toBe(true); });
+    expect(mocks.received?.live).toMatchObject({
+      conversationReady: true,
+      canCompose: true,
+      canSend: true,
+      answer: "",
+      conversationHistory: { activeId: null },
+    });
+    expect(mocks.setActive).not.toHaveBeenCalled();
     expect(mocks.createConversation).not.toHaveBeenCalled();
   });
 
@@ -285,6 +330,10 @@ describe("connected redesigned enterprise RAG workspace", () => {
     act(() => { expect(history.onSelect("third")).toBe(true); });
     let first!: Promise<boolean>;
     act(() => { first = history.onDelete("conversation-1"); });
+    act(() => {
+      expect(history.onSelect("conversation-1")).toBe(false);
+      expect(history.onSelect("third")).toBe(true);
+    });
     let settled = false; void first.then(() => { settled = true; });
     await act(async () => { await Promise.resolve(); });
     expect(settled).toBe(false);
@@ -299,6 +348,70 @@ describe("connected redesigned enterprise RAG workspace", () => {
     act(() => { view.rerender(<EnterpriseRagWorkspace />); });
     await act(async () => { expect(await second).toBe(true); });
     expect(mocks.setWorkbenchTaskQuery).toHaveBeenLastCalledWith("third");
+  });
+
+  it("keeps a new blank draft selected when the previously active conversation finishes deleting", async () => {
+    mocks.conversations = [
+      { ...activeConversation(), id: "conversation-1", updatedAt: 2 },
+      { ...activeConversation(), id: "survivor", updatedAt: 1 },
+    ];
+    const view = renderHistory();
+    type History = { onDelete:(id:string)=>Promise<boolean> };
+    let pending!: Promise<boolean>;
+    act(() => { pending = (mocks.received?.live as {conversationHistory:History}).conversationHistory.onDelete("conversation-1"); });
+    act(() => { (mocks.received?.live as {onStartNewConversation:()=>void}).onStartNewConversation(); });
+    mocks.active = null;
+    mocks.conversations = mocks.conversations.filter(item => item.id !== "conversation-1");
+    act(() => { view.rerender(<EnterpriseRagWorkspace />); });
+    await act(async () => { expect(await pending).toBe(true); });
+    expect(mocks.setActive).not.toHaveBeenCalled();
+    expect(mocks.received?.live).toMatchObject({ conversationReady: true, answer: "" });
+  });
+
+  it("allows deletion when an old website marker already has a matching final answer", () => {
+    const resolved = activeConversation();
+    (resolved.messages[0] as any).generalChatDispatch = {
+      schemaVersion: 1, kind: "pending_user", clientRequestId: "question-1",
+      providerPrompt: "真实问题", localAssetIds: [], localTaskId: null,
+      modelProfile: "frontmind-base", purpose: "enterprise_qa",
+    };
+    (resolved.messages[1] as any).generalChat.userMessageId = "question-1";
+    mocks.active = { ...resolved, status: "running", updatedAt: 1 };
+    mocks.conversations = [mocks.active];
+    renderHistory();
+    const history = (mocks.received?.live as {conversationHistory:{items:Array<{id:string;deletingDisabled:boolean}>;onDelete:(id:string)=>Promise<boolean>}}).conversationHistory;
+    expect(history.items[0]).toMatchObject({ id: "conversation-1", deletingDisabled: false });
+    act(() => { void history.onDelete("conversation-1"); });
+    expect(mocks.deleteConversation).toHaveBeenCalledWith("conversation-1");
+  });
+
+  it("continues protecting a genuinely running unanswered conversation without a dispatch marker", () => {
+    const running = activeConversation();
+    running.messages = [running.messages[0]];
+    mocks.active = { ...running, status: "running", updatedAt: 1 };
+    mocks.conversations = [mocks.active];
+    renderHistory();
+    const history = (mocks.received?.live as {conversationHistory:{items:Array<{deletingDisabled:boolean}>;onDelete:(id:string)=>Promise<boolean>}}).conversationHistory;
+    expect(history.items[0].deletingDisabled).toBe(true);
+    act(() => { void history.onDelete("conversation-1"); });
+    expect(mocks.deleteConversation).not.toHaveBeenCalled();
+  });
+
+  it("continues protecting a genuinely unresolved dispatch from deletion", () => {
+    const unresolved = activeConversation();
+    unresolved.messages = [unresolved.messages[0]];
+    (unresolved.messages[0] as any).generalChatDispatch = {
+      schemaVersion: 1, kind: "pending_user", clientRequestId: "question-1",
+      providerPrompt: "真实问题", localAssetIds: [], localTaskId: null,
+      modelProfile: "frontmind-base", purpose: "enterprise_qa",
+    };
+    mocks.active = { ...unresolved, updatedAt: 1 };
+    mocks.conversations = [mocks.active];
+    renderHistory();
+    const history = (mocks.received?.live as {conversationHistory:{items:Array<{deletingDisabled:boolean}>;onDelete:(id:string)=>Promise<boolean>}}).conversationHistory;
+    expect(history.items[0].deletingDisabled).toBe(true);
+    act(() => { void history.onDelete("conversation-1"); });
+    expect(mocks.deleteConversation).not.toHaveBeenCalled();
   });
 
   it("resolves a void-host deletion as failed when synchronization reports an error", async () => {
@@ -485,7 +598,7 @@ describe("connected redesigned enterprise RAG workspace", () => {
     expect(mocks.received?.storageScopeKey).toBe("21:workspace-1");
   });
 
-  it("keeps sending available while publication metadata loads without eagerly creating a conversation", () => {
+  it("keeps the draft visible but blocks sending until publication metadata is ready", () => {
     mocks.active = null;
     mocks.conversations = [];
     mocks.currentSource = {
@@ -495,7 +608,7 @@ describe("connected redesigned enterprise RAG workspace", () => {
     };
     const page = render(<EnterpriseRagWorkspace />);
     expect(mocks.createConversation).not.toHaveBeenCalled();
-    expect(mocks.received?.live).toMatchObject({conversationReady:true,canSend:true});
+    expect(mocks.received?.live).toMatchObject({conversationReady:true,canCompose:false,canSend:false});
 
     mocks.currentSource = {
       loaded: true,
@@ -514,21 +627,21 @@ describe("connected redesigned enterprise RAG workspace", () => {
     page.rerender(<EnterpriseRagWorkspace />);
 
     expect(mocks.createConversation).not.toHaveBeenCalled();
-    expect(mocks.received?.live).toMatchObject({ conversationReady: true, canSend: true, knowledgeBinding: "current_publication" });
+    expect(mocks.received?.live).toMatchObject({ conversationReady: true, canCompose: true, canSend: true, knowledgeBinding: "current_publication" });
   });
 
-  it("submits the first draft question while both history and publication metadata remain unresolved", async () => {
+  it("does not submit a first draft while history and publication metadata remain unresolved", async () => {
     mocks.hydrated=false;mocks.loading=true;mocks.active=null;mocks.conversations=[];
     mocks.currentSource={...mocks.currentSource,loaded:false,failed:false,configured:null,provider:null,knowledgeBase:null};
     render(<EnterpriseRagWorkspace/>);
-    type Live={canSend:boolean;conversationReady:boolean;onAsk:(question:string)=>Promise<boolean>;conversationHistory:{loading:boolean}};
+    type Live={canCompose:boolean;canSend:boolean;conversationReady:boolean;onAsk:(question:string)=>Promise<boolean>;conversationHistory:{loading:boolean}};
     const live=mocks.received?.live as Live;
-    expect(live).toMatchObject({canSend:true,conversationReady:true,conversationHistory:{loading:true}});
+    expect(live).toMatchObject({canCompose:false,canSend:false,conversationReady:true,conversationHistory:{loading:true}});
     expect(mocks.createConversation).not.toHaveBeenCalled();
-    await act(async()=>expect(await live.onAsk("发送时由服务端核验资料与凭据")).toBe(true));
-    expect(mocks.createConversation).toHaveBeenCalledWith({title:"企业问答",reuseEmpty:false,purpose:"enterprise_qa",workbenchAgentId:"enterprise-qa"});
-    expect(mocks.send).toHaveBeenCalledWith("发送时由服务端核验资料与凭据",[],expect.objectContaining({id:"new-conversation",purpose:"enterprise_qa",messages:[]}));
-    expect(mocks.setWorkbenchTaskQuery).toHaveBeenCalledWith("new-conversation");
+    await act(async()=>expect(await live.onAsk("知识库未就绪时不能发送")).toBe(false));
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.setWorkbenchTaskQuery).not.toHaveBeenCalled();
   });
 
   it("keeps the new draft editable and selected while historical conversations are still loading", async () => {
@@ -578,6 +691,27 @@ describe("connected redesigned enterprise RAG workspace", () => {
     act(()=>(mocks.received?.live as Live).onSelectAnswer(prior.answerKey));
     expect(mocks.received?.live).toMatchObject({taskId:undefined,turnId:undefined,answerId:"legacy-answer",knowledgeBase:null,knowledgeBinding:"historical_unknown"});
     expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("uses a historical greeting's frozen knowledge identity without a model task pointer",()=>{
+    mocks.active={
+      id:"greeting-conversation",purpose:"enterprise_qa",status:"completed",createdAt:1,updatedAt:2,messages:[
+        {id:"greeting-question",role:"user",content:"你好",timestamp:1},
+        {id:"greeting-answer",role:"assistant",content:"你好，有什么可以帮你？",timestamp:2,enterpriseQaLocalReply:{
+          schemaVersion:1,kind:"local_reply",source:"rule",reason:"greeting",evaluation:"not_required",serverOwned:true,
+          turnId:"11111111-1111-4111-8111-111111111111",userMessageId:"greeting-question",answerMessageId:"greeting-answer",
+          knowledgeBase:{snapshotId:"hospital-snapshot",version:7,sourceFileName:"东莞台心医院-knowledge-base.zip",documentCount:12,companyName:"东莞台心医院"},
+        }},
+      ],
+    };
+    mocks.conversations=[mocks.active];
+    mocks.currentSource={...mocks.currentSource,loaded:true,failed:true,knowledgeBase:null};
+    renderHistory();
+    expect(mocks.received?.live).toMatchObject({
+      taskId:undefined,turnId:"11111111-1111-4111-8111-111111111111",answerId:"greeting-answer",
+      loaded:true,failed:false,knowledgeBinding:"frozen_task",evaluationNotRequired:true,
+      knowledgeBase:{snapshotId:"hospital-snapshot",version:7,companyName:"东莞台心医院"},
+    });
   });
 
   it("does not create a conversation when the model status or provider is unknown", () => {

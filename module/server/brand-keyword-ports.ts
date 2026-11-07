@@ -1,6 +1,7 @@
 import type {CoreSqlTable} from "../contracts/sql-table.js";
 import type {LocalAsset} from "../contracts/core-records.js";
 import type {SQL} from "drizzle-orm";
+import type {BrandSchema} from "../schema/index.js";
 export type BrandKeywordActor={id:number;role:string};
 export type BrandKeywordCredential={id:string;userId:number;version:number;credentialRef:string;fingerprint:string;status:"active"|"retired";verifiedAt:Date|null;agentProfile:"frontmind-base"|"frontmind-pro";provider:"manus"|"zhipu"|"xty_codex";upstreamModel:string;upstreamEffort:string|null};
 export type BrandKeywordEvent=Record<string,unknown>&{id:string;type:string;timestamp:number;providerOriginalRank?:number};
@@ -11,10 +12,11 @@ type Artifact={id:string;operationId:string|null;taskId:string|null;sourceEventI
 type Port=(...args:any[])=>any;
 export interface BrandKeywordPorts {
  agentOperations:CoreSqlTable<Operation>;agentTasks:CoreSqlTable<Task>;agentEvents:CoreSqlTable<Event>;artifacts:CoreSqlTable<Artifact>;localAssets:CoreSqlTable<LocalAsset>;
+ ragStarterQuestionSets:BrandSchema["ragStarterQuestionSets"];knowledgeBaseSnapshots:BrandSchema["knowledgeBaseSnapshots"];
  assertActorAllowed(actor:BrandKeywordActor):void;lockAccountRecord(tx:any,userId:number):Promise<void>;
  getDecryptedCredentialForUser(userId:number):Promise<BrandKeywordCredential|null>;
  getDecryptedCredentialForAccountById(userId:number,id:string):Promise<BrandKeywordCredential|null>;
- createCredentialAgentClient(credential:BrandKeywordCredential,options?:{accountUserId?:number;operationId?:string;localTaskId?:string;intentId?:string;modelPolicy?:"brand_diagnostics_v1"}):{uploadFile:Port;createTask:Port;recoverMissingCreate?:Port;listAllMessages:Port;sendMessage:Port;findCreatedTask:Port;taskDetail:Port;stopTask?:Port};
+ createCredentialAgentClient(credential:BrandKeywordCredential,options?:{accountUserId?:number;operationId?:string;localTaskId?:string;intentId?:string;model?:string;effort?:"low"|"medium"|"high"|"max";modelPolicy?:"brand_diagnostics_v1"}):{uploadFile:Port;createTask:Port;recoverMissingCreate?:Port;listAllMessages:Port;sendMessage:Port;findCreatedTask:Port;taskDetail:Port;stopTask?:Port};
  getDb:Port;projectBrandQuestionExecution:Port;lockCustomerProjectBusinessWrite:Port;currentEnterpriseProjectId:Port;enterpriseWorkspaceUserId:Port;getEnterpriseProjectScope:Port;runWithStoredEnterpriseProjectCleanupScope<T>(ownerUserId:number,enterpriseProjectId:string|null|undefined,action:(archived:boolean)=>T|Promise<T>):Promise<T>;runWithStoredEnterpriseProjectScope<T>(ownerUserId:number,enterpriseProjectId:string|null|undefined,action:()=>T|Promise<T>):Promise<T>;enterpriseAccountOwnerPredicate:Port;enterpriseDashboardTable:Port;enterpriseDashboardOwnerPredicate:Port;
  dashboardPayloadSchema:{parse:Port};getApiCredentialStatus:Port;recordUpstreamResource:Port;getLatestAuthenticatedKnowledgeSnapshot:Port;DashboardRevisionConflictError:new(...args:any[])=>Error;getDashboardWorkspace:Port;getKnowledgeSnapshotById:Port;updateDashboardWorkspace:Port;classifyManusV2StructuredResultEnvelope:Port;latestManusV2TaskState:Port;ManusV2ApiError:new(...args:any[])=>Error&{outcomeUnknown:boolean;status:number|null;providerRequestId?:string|null;code:string;retryable:boolean};manusV2EventOperationToken:Port;manusV2EventsContainOperationToken:Port;orderManusV2EventsByProviderRank:(events:readonly BrandKeywordEvent[],direction:"oldest_first"|"newest_first")=>BrandKeywordEvent[];assertServiceCapability:Port;getUpstreamBaseUrl:Port;sealLocalAssetStorageIdentity:Port;readStoredPresalesFile:Port;removeStoredPresalesFile:Port;stagePresalesFileContent:Port;
 }

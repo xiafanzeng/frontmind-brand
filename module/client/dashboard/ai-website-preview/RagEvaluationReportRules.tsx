@@ -52,7 +52,7 @@ function Formula({ name, inline = false, label }: { name: FormulaName; inline?: 
     : <div className="rag-report-formula" role="group" aria-label={label} tabIndex={0} dangerouslySetInnerHTML={{ __html: markup }} />;
 }
 
-export function RagEvaluationReportRules() {
+export function RagEvaluationReportRules(_props: { preview?: boolean } = {}) {
   return <section id="rules" className="rag-report-section rag-report-rules" aria-labelledby="rag-report-rules-heading" tabIndex={-1}>
     <h2 id="rag-report-rules-heading">01 评分规则</h2>
     <section className="rag-report-rule-section" aria-labelledby="evaluation-scope">
@@ -87,7 +87,7 @@ export function RagEvaluationReportRules() {
         <p>排除不适用项后，按剩余检查项的分值比例计算维度得分，再汇总总分。只有全部适用检查项完成判断，才显示总分；任一项待核验时，总分留空。自动评估结果保留一位小数。</p>
       </div>
       <div className="rag-report-rule-method" id="rule-rag-eval-1-3">
-        <h4>人工评审与合成示例</h4>
+        <h4>人工评审</h4>
         <p>每个维度使用 0–4 级：不满足、少量满足、部分满足、基本满足、充分满足。等级必须附判断理由和证据定位。</p>
         <Formula name="manualScore" label="等级评审总分" />
         <p className="rag-report-formula-note"><Formula name="applicableDimensions" inline /> 为适用维度集合，<Formula name="dimensionWeight" inline /> 为维度权重，<Formula name="level" inline /> 为 0–4 级判断。全部六维适用时，分母为 100。</p>
@@ -141,7 +141,7 @@ export function RagEvaluationReportRules() {
 
     <section className="rag-report-rule-section" aria-labelledby="limits">
       <h3 id="limits" tabIndex={-1}>使用边界与验收参数</h3>
-      <p>单次回答分、企业 RAG 系统分和网站建设评估相互独立。正式验收需要有代表性的测试集和独立复核，不能只凭合成示例、单人自评或少量测试。回答评估结论仅供质量改进参考，不代表网站获准发布。</p>
+      <p>单次回答分、企业 RAG 系统分和网站建设评估相互独立。正式验收需要有代表性的测试集和独立复核，不能只凭单人自评或少量测试。回答评估结论仅供质量改进参考，不代表网站获准发布。</p>
       <p>以下指标是正式验收的初始参考，不是本次回答得分或实测结果。调整指标时，应记录原值、原因和批准情况，便于后续核对。</p>
       <div className="rag-report-table-scroll" role="region" aria-label="初始验收参数" tabIndex={0}>
         <table className="rag-report-rule-table">

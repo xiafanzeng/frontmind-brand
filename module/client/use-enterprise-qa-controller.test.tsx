@@ -295,6 +295,46 @@ describe("enterprise QA controller", () => {
     });
   });
 
+  it("does not retry a legacy marker that already has a server-owned final answer", async () => {
+    const context = conversationContext("task-finished");
+    context.activeConversation!.messages.push({
+      id: "request-finished",
+      role: "user",
+      content: "已经回答的问题",
+      timestamp: 10,
+      generalChatDispatch: {
+        schemaVersion: 1,
+        kind: "pending_user",
+        clientRequestId: "request-finished",
+        providerPrompt: "已经回答的问题",
+        localAssetIds: [],
+        localTaskId: null,
+        modelProfile: "frontmind-base",
+        purpose: "enterprise_qa",
+      },
+    }, {
+      id: "answer-finished",
+      role: "assistant",
+      content: "已经完成的回答",
+      timestamp: 11,
+      generalChat: {
+        schemaVersion: 1,
+        kind: "assistant_projection",
+        isFinalAnswer: true,
+        turnId: "turn-finished",
+        agentTaskId: "task-finished",
+        providerEventId: "event-finished",
+        userMessageId: "request-finished",
+        serverOwned: true,
+      },
+    });
+    mocks.context = context;
+    const { result } = renderHook(() => useEnterpriseQaController({ evaluationIntent: "enterprise_rag_once" }));
+    expect(result.current.pendingDispatch).toBeNull();
+    await act(async () => expect(await result.current.retryPending()).toBe(false));
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
   it("clears an old conversation error after switching to a new conversation", async () => {
     mocks.fetch.mockResolvedValue({
       ok: false,
@@ -412,7 +452,7 @@ describe("same-turn enterprise QA supplements", () => {
     mocks.fetch.mockResolvedValue(jsonReply({ id: "task-running", status: "running", steering: { ...steeringBase, supported: false } }));
     const { result } = renderHook(() => useEnterpriseQaController());
     await waitFor(() => expect(result.current.steering?.supported).toBe(false));
-    await act(async () => { await expect(result.current.steer("草稿")).rejects.toThrow("暂不支持"); });
+    await act(async () => { await expect(result.current.steer("草稿")).resolves.toBe(false); });
     expect(mocks.fetch.mock.calls.some(([path]) => String(path).endsWith("/steer"))).toBe(false);
   });
 });
@@ -490,13 +530,14 @@ describe("enterprise RAG durable followups and local replies", () => {
       return jsonReply({ object: "frontmind.local_reply", conversationId: "qa-conversation", turnId: "11111111-1111-4111-8111-111111111111",
         userMessageId, answerMessageId: "greeting-answer", content: "你好，有什么可以帮你？", status: "completed", completedAt: 1793980800000,
         reason: "greeting", evaluation: "not_required", enterpriseQaLocalReply: { schemaVersion: 1, kind: "local_reply", source: "rule", reason: "greeting",
-          turnId: "11111111-1111-4111-8111-111111111111", userMessageId, answerMessageId: "greeting-answer", serverOwned: true, evaluation: "not_required" } });
+          turnId: "11111111-1111-4111-8111-111111111111", userMessageId, answerMessageId: "greeting-answer", serverOwned: true, evaluation: "not_required",
+          knowledgeBase: { snapshotId: "hospital-snapshot", version: 7, sourceFileName: "东莞台心医院-knowledge-base.zip", documentCount: 12, companyName: "东莞台心医院" } } });
     });
     const view = renderHook(() => useEnterpriseQaController({evaluationIntent:"enterprise_rag_once"}));
     await act(async () => expect(await view.result.current.send("你好")).toBe(true));
     expect(context.updateStatus).toHaveBeenCalledWith("qa-conversation", "completed");
     expect(context.activeConversation?.taskId).toBe("existing-task");
-    expect(context.addMessage).toHaveBeenLastCalledWith("qa-conversation",expect.objectContaining({id:"greeting-answer",enterpriseQaLocalReply:expect.objectContaining({evaluation:"not_required",turnId:"11111111-1111-4111-8111-111111111111"})}));
+    expect(context.addMessage).toHaveBeenLastCalledWith("qa-conversation",expect.objectContaining({id:"greeting-answer",enterpriseQaLocalReply:expect.objectContaining({evaluation:"not_required",turnId:"11111111-1111-4111-8111-111111111111",knowledgeBase:expect.objectContaining({snapshotId:"hospital-snapshot",companyName:"东莞台心医院"})})}));
     expect(context.settleGeneralChatDispatch).toHaveBeenCalledOnce();
   });
 

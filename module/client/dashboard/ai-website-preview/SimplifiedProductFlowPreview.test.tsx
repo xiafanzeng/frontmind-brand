@@ -1,6 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnterpriseRagPreview } from "./EnterpriseRagPreview";
+import { RAG_SAMPLE_CASES } from "./rag-evaluation-cases";
+import { installRagPreviewFixtures } from "./rag-preview-fixture-loader";
+import { ragPreviewFixtures } from "./rag-preview-fixtures-data";
 import {
   loadWebsiteDraft,
   SimplifiedWebsiteBuilderPreview,
@@ -13,6 +16,7 @@ import {
 } from "./evaluation-report-store";
 
 const draftStorageKey = "frontmind.website-builder.draft";
+installRagPreviewFixtures(ragPreviewFixtures);
 
 beforeEach(() => window.localStorage.clear());
 
@@ -563,7 +567,7 @@ describe("simplified AI website preview", () => {
     expect(onOpenWebsite).not.toHaveBeenCalled();
     expect(onOpenWebsiteAssistant).not.toHaveBeenCalled();
 
-    const input = screen.getByLabelText("输入企业 RAG 示例问题");
+    const input = screen.getByLabelText("输入企业 RAG 预览问题");
     fireEvent.change(input, { target: { value: "我想咨询新的具体业务问题" } });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "试用问题" })); });
     expect(screen.getByText("我想咨询新的具体业务问题")).toBeTruthy();

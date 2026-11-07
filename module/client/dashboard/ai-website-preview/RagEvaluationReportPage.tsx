@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { EnterpriseRagEvaluationCoordinate } from "../enterprise-rag-evaluation-api";
 import { RagEvaluationReportRules } from "./RagEvaluationReportRules";
 import { RagEvaluationReportRecords } from "./RagEvaluationReportRecords";
-import { RagEvaluationExampleRecord } from "./RagEvaluationExampleRecord";
-import { RAG_SAMPLE_CASES } from "./rag-evaluation-cases";
+import { ragPreviewFixturesEnabled } from "./rag-preview-fixture-loader";
 import "../../brand-apple-theme.css";
 import "./rag-evaluation-report.css";
 
@@ -12,6 +11,17 @@ const contents = [
   ["calculation", "计算方法"], ["verdicts", "风险与结论"],
   ["uncertainty", "缺失证据"], ["limits", "使用边界与验收参数"],
 ] as const;
+
+const LazyRagEvaluationPreviewRecord = ragPreviewFixturesEnabled
+  ? lazy(() => import("./RagEvaluationPreviewRecord"))
+  : null;
+
+function PreviewExampleRecord({ exampleId }: { exampleId: string }) {
+  if (!LazyRagEvaluationPreviewRecord) {
+    return <section id="records"><h2>02 评估记录</h2><p className="rag-report-message" role="alert">当前构建不提供本地预览记录。</p></section>;
+  }
+  return <Suspense fallback={<section id="records"><h2>02 评估记录</h2><p className="rag-report-message" role="status">正在加载本地示例…</p></section>}><LazyRagEvaluationPreviewRecord exampleId={exampleId} /></Suspense>;
+}
 
 export default function RagEvaluationReportPage({ storageScopeKey, preview, coordinate, exampleId, contextError, returnUrl, brandMarkSrc }: {
   storageScopeKey: string;
@@ -23,10 +33,10 @@ export default function RagEvaluationReportPage({ storageScopeKey, preview, coor
   brandMarkSrc: string;
 }) {
   const [activeSection, setActiveSection] = useState("rules");
-  const example = RAG_SAMPLE_CASES.find(item => item.id === exampleId);
-  const error = contextError ?? (exampleId !== undefined && coordinate
-    ? "示例报告不能混用真实回答标识。"
-    : exampleId !== undefined && !example ? "示例问答标识无效，请重新打开示例报告。" : null);
+  const error = contextError ?? (!preview && exampleId !== undefined
+    ? "报告链接无效。请从企业知识问答打开真实评估记录。"
+    : exampleId !== undefined && coordinate
+    ? "示例报告不能混用真实回答标识。" : null);
   useEffect(() => {
     const previousTitle = document.title;
     document.title = "企业 RAG 评估说明与记录 · FrontMind";
@@ -85,9 +95,9 @@ export default function RagEvaluationReportPage({ storageScopeKey, preview, coor
           <a href="#records" aria-current={activeSection === "records" ? "location" : undefined}>02 评估记录</a>
         </aside>
         <main id="report-content" className="rag-report-content" tabIndex={-1}>
-          <RagEvaluationReportRules />
+          <RagEvaluationReportRules preview={preview} />
           {error ? <section id="records"><h2>02 评估记录</h2><p className="rag-report-message" role="alert">{error}</p></section>
-            : example ? <RagEvaluationExampleRecord example={example} />
+            : preview && exampleId !== undefined ? <PreviewExampleRecord exampleId={exampleId} />
             : <RagEvaluationReportRecords key={`${storageScopeKey}:${coordinate?.sourceQaTaskId ?? ""}:${coordinate?.turnId ?? ""}`} storageScopeKey={storageScopeKey} preview={preview} coordinate={coordinate} />}
         </main>
       </div>

@@ -22,6 +22,7 @@ import {
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import type { ConfirmedResponseLogic, ResponseLogicAppliedModelResult, ResponseLogicDraft, ResponseLogicPublicationMutation } from "../contracts/response-logic.js";
 import type { ResponseLogicRuleEvaluation } from "../contracts/response-logic-evaluation.js";
+import type { RagStarterQuestionEvidence } from "../contracts/rag-starter-questions.js";
 
 
 export type KnowledgeDocumentRecord = {
@@ -472,6 +473,72 @@ const knowledgeBaseSnapshots = mysqlTable(
       table.sourceBuildId,
       table.sourceBuildRevision,
       table.sourceArtifactHash,
+    ),
+  ],
+);
+
+/**
+ * Snapshot-bound versions of the three questions offered in a blank RAG chat.
+ * Provider execution is mirrored in the shared agent ledger; this table owns
+ * the current/draft publication decision and the durable worker lease.
+ */
+const ragStarterQuestionSets = mysqlTable(
+  "rag_starter_question_sets",
+  {
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 })
+      .$defaultFn(() => core.currentEnterpriseProjectId() ?? sql`NULL`),
+    id: varchar("id", { length: 36 }).primaryKey(),
+    userId: int("userId")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    knowledgeSnapshotId: varchar("knowledgeSnapshotId", { length: 36 })
+      .notNull()
+      .references(() => knowledgeBaseSnapshots.id, { onDelete: "cascade" }),
+    knowledgeSnapshotVersion: int("knowledgeSnapshotVersion", { unsigned: true }).notNull(),
+    knowledgeArchiveHash: varchar("knowledgeArchiveHash", { length: 64 }),
+    knowledgeContentHash: varchar("knowledgeContentHash", { length: 64 }).notNull(),
+    ordinal: int("ordinal", { unsigned: true }).notNull(),
+    source: mysqlEnum("source", ["automatic", "regenerate", "manual"]).notNull(),
+    status: mysqlEnum("status", [
+      "queued",
+      "running",
+      "result_pending",
+      "draft_ready",
+      "confirmed",
+      "failed",
+      "attention_required",
+      "superseded",
+    ]).default("queued").notNull(),
+    generationKeyHash: varchar("generationKeyHash", { length: 64 }).notNull(),
+    clientRequestId: varchar("clientRequestId", { length: 36 }),
+    requestHash: varchar("requestHash", { length: 64 }).notNull(),
+    promptVersion: varchar("promptVersion", { length: 64 }).notNull(),
+    operationId: varchar("operationId", { length: 36 }).notNull(),
+    taskId: varchar("taskId", { length: 36 }).notNull(),
+    questions: json("questions").$type<RagStarterQuestionEvidence[] | null>(),
+    errorCode: varchar("errorCode", { length: 128 }),
+    leaseOwner: varchar("leaseOwner", { length: 36 }),
+    leaseExpiresAt: timestamp("leaseExpiresAt"),
+    nextAttemptAt: timestamp("nextAttemptAt"),
+    attemptCount: int("attemptCount", { unsigned: true }).default(0).notNull(),
+    workspaceRevision: int("workspaceRevision", { unsigned: true }).default(1).notNull(),
+    confirmedAt: timestamp("confirmedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("rag_starter_question_sets_generation_uq").on(table.generationKeyHash),
+    uniqueIndex("rag_starter_question_sets_operation_uq").on(table.operationId),
+    uniqueIndex("rag_starter_question_sets_task_uq").on(table.taskId),
+    index("rag_starter_question_sets_owner_status_idx").on(
+      table.enterpriseProjectId,
+      table.userId,
+      table.status,
+      table.workspaceRevision,
+    ),
+    index("rag_starter_question_sets_snapshot_status_idx").on(
+      table.knowledgeSnapshotId,
+      table.status,
     ),
   ],
 );
@@ -2186,7 +2253,7 @@ const responseLogicEvaluations = mysqlTable(
   ],
 );
 
-return { brandIntentWorkspaces, jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles, responseLogicEntries, responseLogicEvaluations };
+return { brandIntentWorkspaces, jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, ragStarterQuestionSets, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles, responseLogicEntries, responseLogicEvaluations };
 }
 export type BrandSchema = ReturnType<typeof createBrandSchema>;
 
@@ -2203,6 +2270,8 @@ export type WorkspaceSiteCheck = BrandSchema["workspaceSiteChecks"]["$inferSelec
 export type KnowledgeImportReceipt = BrandSchema["knowledgeImportReceipts"]["$inferSelect"];
 
 export type KnowledgeBaseSnapshot = BrandSchema["knowledgeBaseSnapshots"]["$inferSelect"];
+
+export type RagStarterQuestionSet = BrandSchema["ragStarterQuestionSets"]["$inferSelect"];
 
 export type KnowledgeBaseBuild = BrandSchema["knowledgeBaseBuilds"]["$inferSelect"];
 
