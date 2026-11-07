@@ -27,14 +27,40 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
   const check = (revision: number) => {if (revision !== memory.revision) throw new Error("清单已更新，请重新读取");};
   return {
     async observe() {return snapshot();},
-    waitForJob: reviewMode ? async (jobId, onUpdate, signal) => {
-      await new Promise(resolve => window.setTimeout(resolve, 1600));
-      if (signal?.aborted) throw new DOMException("Preview cancelled", "AbortError");
-      const job = memory.state.jobs?.find(item => item.id === jobId);
-      if (job) {job.status = "succeeded"; job.result = {completedAt:new Date().toISOString(), questions:structuredClone(memory.state.questions),
-        evaluations:structuredClone(memory.state.evaluations), plans:[]};}
-      const current = persist(); onUpdate(current); return current;
-    } : undefined,
+    async waitForJob(jobId, onUpdate, signal) {
+      const findJob=()=>memory.state.jobs?.find(item=>item.id===jobId);
+      for (const [stage,label] of [["analyzing","正在分析问题与知识依据"],["validating","正在整理评估和优化动作"],["completed","处理完成"]] as const) {
+        await new Promise(resolve=>window.setTimeout(resolve,500));
+        if(signal?.aborted)throw new DOMException("Preview cancelled","AbortError");
+        const job=findJob();
+        if(!job)throw new Error("本地任务不存在");
+        if(job.status==="paused"||job.status==="succeeded")return snapshot();
+        const at=new Date().toISOString();
+        job.progress={stage,updatedAt:at,events:[...(job.progress?.events??[]),{id:crypto.randomUUID(),label,at}]};
+        if(stage==="completed"){
+          for(const id of job.questionIds){
+            const question=memory.state.questions.find(item=>item.id===id);
+            if(!question)continue;
+            const evaluation=evaluateIntent(question,memory.nodes,memory.state.questions);
+            evaluation.provenance={operationId:job.id,inputHash:job.inputHash,skillHash:job.skillHash,model:job.model};
+            memory.state.evaluations=[...memory.state.evaluations.filter(item=>item.questionId!==id),evaluation];
+            if(job.kind==="plan")memory.state.plans=[...memory.state.plans.filter(item=>item.questionId!==id),{...createIntentPlan(question,evaluation,memory.nodes),inputHash:job.inputHash}];
+          }
+          job.status="succeeded";
+          job.result={completedAt:at,questions:structuredClone(memory.state.questions.filter(item=>job.questionIds.includes(item.id))),
+            evaluations:structuredClone(memory.state.evaluations.filter(item=>job.questionIds.includes(item.questionId))),
+            plans:structuredClone(memory.state.plans.filter(item=>job.questionIds.includes(item.questionId)))};
+        }
+        const current=persist();onUpdate(current);
+      }
+      return snapshot();
+    },
+    async control({jobId,action}) {
+      const job=memory.state.jobs?.find(item=>item.id===jobId);
+      if(!job||["succeeded","failed"].includes(job.status))throw new Error("任务已结束或不存在");
+      job.status=action==="pause"?"paused":"running";
+      return persist();
+    },
     async command(value) {
       const input = value as any; check(input.expectedRevision);
       if (input.kind === "update-question" || input.kind === "delete-question") {
@@ -43,6 +69,16 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       }
       if (input.kind === "intake") for (const question of input.questions as IntentQuestion[]) {
         if (!memory.state.questions.some(item => item.id === question.id || item.question === question.question)) memory.state.questions.push(structuredClone(question));
+      }
+      if ((input.kind === "evaluate" || input.kind === "plan") && input.clientRequestId) {
+        if(memory.state.jobs?.some(job=>job.id===input.clientRequestId))return snapshot();
+        if(memory.state.jobs?.some(job=>!["succeeded","failed"].includes(job.status)))throw new Error("已有评估任务，请先完成或继续当前任务");
+        memory.state.jobs??=[];
+        const at=new Date().toISOString();
+        memory.state.jobs.push({id:input.clientRequestId,taskId:input.clientRequestId,kind:input.kind,questionIds:[...input.questionIds],status:"running",
+          createdAt:at,inputHash:`preview:${memory.revision}`,knowledgeHash:"preview",questionsHash:"preview",credentialId:"preview",credentialVersion:0,
+          skillHash:"preview",model:"local-mock",progress:{stage:"submitted",updatedAt:at,events:[{id:crypto.randomUUID(),label:"任务已提交",at}]}});
+        return persist();
       }
       if (input.kind === "evaluate" || input.kind === "plan") for (const id of input.questionIds as string[]) {
         const question = memory.state.questions.find(item => item.id === id)!;

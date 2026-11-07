@@ -1,0 +1,56 @@
+import {afterEach,beforeEach,expect,it,vi} from "vitest";
+import {cleanup,fireEvent,render,screen,waitFor,within} from "@testing-library/react";
+import App from "../../standalone/App";
+import {createIntentPreviewApi} from "../../standalone/intent-preview";
+import {readPreviewCatalog} from "../../standalone/keyword-preview";
+
+Object.defineProperty(window,"matchMedia",{writable:true,value:(query:string)=>({matches:false,media:query,onchange:null,addEventListener(){},removeEventListener(){},addListener(){},removeListener(){},dispatchEvent(){return false;}})});
+Element.prototype.scrollTo=()=>{};
+Element.prototype.scrollIntoView=()=>{};
+beforeEach(()=>{localStorage.clear();window.history.replaceState({},"","/?view=keywords");vi.stubGlobal("fetch",vi.fn(()=>Promise.reject(new Error("unexpected network request"))));});
+afterEach(()=>{cleanup();vi.unstubAllGlobals();});
+it("uses the production screens to recommend, save, evaluate, plan, execute and undo entirely locally",async()=>{
+  render(<App preview/>);
+  fireEvent.change(await screen.findByRole("textbox",{name:"企业名称"}),{target:{value:"台心医院"}});
+  fireEvent.click(screen.getByRole("button",{name:"推荐核心词"}));
+  fireEvent.click(await screen.findByRole("checkbox",{name:"选择核心词：台心医院"}));
+  fireEvent.click(screen.getByRole("button",{name:"生成推荐问题"}));
+  const question="台心医院有哪些值得了解的特点？";
+  fireEvent.click(await screen.findByRole("checkbox",{name:`选择问题：${question}`}));
+  fireEvent.click(screen.getByRole("button",{name:"加入优化清单（1）"}));
+  const selected=await screen.findByRole("checkbox",{name:`选择${question}`});
+  expect(readPreviewCatalog("brand-local-preview").tables.flatMap(table=>table.rows).some(row=>row[0]===question)).toBe(true);
+  fireEvent.click(within(selected.closest("tr")!).getByRole("button",{name:"评估问题"}));
+  await screen.findByText("回答要点支撑矩阵",{},{timeout:6000});
+  fireEvent.click(screen.getByRole("button",{name:/生成优化方案/}));
+  fireEvent.click(await screen.findByRole("button",{name:"确认并执行已选动作"},{timeout:6000}));
+  await screen.findByText("优化执行完成");
+  const data=await createIntentPreviewApi("brand-local-preview").observe();
+  expect(data.state.receipts[0].status).toBe("completed");
+  fireEvent.click(screen.getByRole("button",{name:"撤销本次优化"}));
+  fireEvent.click(await screen.findByRole("button",{name:"确认撤销"}));
+  await waitFor(async()=>expect((await createIntentPreviewApi("brand-local-preview").observe()).state.receipts[0].status).toBe("reverted"));
+  expect(fetch).not.toHaveBeenCalled();
+},20000);
+it("generates, evaluates, optimizes, adopts and publishes an answer using mock REST",async()=>{
+  const api=createIntentPreviewApi("brand-local-preview");
+  await api.command({kind:"intake",expectedRevision:0,questions:[{id:"local-brand:0",question:"隆鼻材料应该怎么选",category:"product_scenario",subdivision:"",tableId:"local-brand",rowIndex:0,sourceRevision:1}]});
+  window.history.replaceState({},"","/?view=intent");
+  render(<App preview/>);
+  fireEvent.click(await screen.findByRole("button",{name:"进入应答逻辑"}));
+  fireEvent.click(await screen.findByRole("button",{name:"生成应答"}));
+  await screen.findByRole("button",{name:"查看四维评估"},{timeout:15000});
+  fireEvent.click(screen.getByRole("button",{name:"查看四维评估"}));
+  await screen.findByText("本地 mock 四维评估：用于预览评估详情与后续优化流程。",{},{timeout:10000});
+  fireEvent.click(screen.getByRole("button",{name:"生成优化方案 →"}));
+  const begin=await screen.findByRole("button",{name:"生成优化版本"});
+  fireEvent.click(begin);
+  fireEvent.click(await screen.findByRole("button",{name:"采用选中项到草稿"},{timeout:10000}));
+  fireEvent.click(await screen.findByRole("button",{name:"确认采用"}));
+  fireEvent.click(await screen.findByRole("button",{name:"更新应答逻辑"}));
+  await waitFor(()=>{
+    const store=JSON.parse(localStorage.getItem("frontmind:response-logic-preview:v1:brand-local-preview")!);
+    expect(store.records[0].confirmed.conclusion).toContain("逐项记录需求");
+  });
+  expect(fetch).not.toHaveBeenCalled();
+},30000);
