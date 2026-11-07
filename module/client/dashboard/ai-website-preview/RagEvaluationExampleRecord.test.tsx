@@ -3,8 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RagEvaluationExampleRecord } from "./RagEvaluationExampleRecord";
 import RagEvaluationReportPage from "./RagEvaluationReportPage";
 import { RAG_SAMPLE_CASES } from "./rag-evaluation-cases";
+import { installRagPreviewFixtures } from "./rag-preview-fixture-loader";
+import { ragPreviewFixtures } from "./rag-preview-fixtures-data";
 import { scoreEvaluation } from "./rag-evaluation";
 import { liveEnterpriseRagEvaluationApi } from "../enterprise-rag-evaluation-api";
+
+installRagPreviewFixtures(ragPreviewFixtures);
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -13,7 +17,8 @@ describe("example report records", () => {
     const example = RAG_SAMPLE_CASES[0];
     render(<RagEvaluationExampleRecord example={example} />);
     const record = screen.getByTestId("rag-report-example-record");
-    expect(record.textContent).toContain("示例 · 预设评审");
+    expect(record.textContent).toContain("示例");
+    expect(record.textContent).not.toContain("预设评审");
     expect(screen.getByText(example.question)).toBeTruthy();
     expect(screen.getByText(example.answer)).toBeTruthy();
     expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(7);
@@ -29,23 +34,23 @@ describe("example report records", () => {
     expect(screen.queryByText(/^\d+(?:\.\d+)?\/100$/)).toBeNull();
   });
 
-  it("keeps example pages independent of live APIs and browser review history", () => {
+  it("keeps example pages independent of live APIs and browser review history", async () => {
     const latest = vi.spyOn(liveEnterpriseRagEvaluationApi, "latest");
     const start = vi.spyOn(liveEnterpriseRagEvaluationApi, "start");
     const read = vi.spyOn(Storage.prototype, "getItem");
     const write = vi.spyOn(Storage.prototype, "setItem");
-    render(<RagEvaluationReportPage storageScopeKey="live:real-workspace" preview={false} exampleId={RAG_SAMPLE_CASES[0].id} contextError={null} returnUrl="/?view=enterprise-qa" brandMarkSrc="/wordmark.svg" />);
-    expect(screen.getByTestId("rag-report-example-record")).toBeTruthy();
+    render(<RagEvaluationReportPage storageScopeKey="preview:example-workspace" preview exampleId={RAG_SAMPLE_CASES[0].id} contextError={null} returnUrl="/?view=enterprise-qa" brandMarkSrc="/wordmark.svg" />);
+    expect(await screen.findByTestId("rag-report-example-record")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "当前回答的自动评估" })).toBeNull();
     expect(latest).not.toHaveBeenCalled(); expect(start).not.toHaveBeenCalled();
     expect(read).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
   });
 
-  it("rejects unknown and mixed contexts before mounting any records", () => {
+  it("rejects unknown and mixed contexts before mounting any records", async () => {
     const latest = vi.spyOn(liveEnterpriseRagEvaluationApi, "latest");
-    const props = { storageScopeKey: "live:a", preview: false, contextError: null, returnUrl: "/", brandMarkSrc: "/wordmark.svg" };
+    const props = { storageScopeKey: "preview:a", preview: true, contextError: null, returnUrl: "/", brandMarkSrc: "/wordmark.svg" };
     const view = render(<RagEvaluationReportPage {...props} exampleId="unknown" />);
-    expect(screen.getByRole("alert").textContent).toContain("标识无效");
+    expect((await screen.findByRole("alert")).textContent).toContain("标识无效");
     view.rerender(<RagEvaluationReportPage {...props} exampleId={RAG_SAMPLE_CASES[0].id} coordinate={{ sourceQaTaskId: "real", turnId: "turn" }} />);
     expect(screen.getByRole("alert").textContent).toContain("不能混用");
     expect(screen.queryByTestId("rag-report-example-record")).toBeNull();

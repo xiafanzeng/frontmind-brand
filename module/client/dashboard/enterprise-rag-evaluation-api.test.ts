@@ -49,7 +49,7 @@ describe("enterprise RAG evaluation API", () => {
   it("reads persisted admission failures without starting an evaluation", async () => {
     const automaticAdmission = { status: "blocked", code: "SOURCE_MESSAGES_INVALID", message: "本次回答的资料绑定不完整，暂时无法评估。", updatedAt: "2026-11-06T15:00:00.000Z" };
     mocks.fetch.mockResolvedValue(json({ latest: null, history: [], automaticExpected: false, automaticAdmission }));
-    expect(await liveEnterpriseRagEvaluationApi.latest({ sourceQaTaskId: "task-1", turnId: "turn-1" })).toEqual({ latest: null, history: [], automaticAdmission });
+    expect(await liveEnterpriseRagEvaluationApi.latest({ sourceQaTaskId: "task-1", turnId: "turn-1" })).toEqual({ latest: null, history: [], automaticState: "blocked", automaticAdmission });
     expect(mocks.fetch.mock.calls[0][1].method).toBe("GET");
   });
   it("rejects malformed admission data instead of displaying an invented state", async () => {
@@ -68,7 +68,7 @@ describe("enterprise RAG evaluation API", () => {
     await vi.advanceTimersByTimeAsync(1); expect(mocks.fetch).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1199); expect(mocks.fetch).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
-    expect(await pending).toEqual({ latest: null, history: [], automaticExpected: true });
+    expect(await pending).toEqual({ latest: null, history: [], automaticState: "expected", automaticExpected: true });
     expect(mocks.fetch).toHaveBeenCalledTimes(3);
     expect(mocks.capture).toHaveBeenCalledTimes(1);
     expect(mocks.fetch.mock.calls.every(([, init]) => init.method === "GET" && init.body === undefined)).toBe(true);
@@ -134,10 +134,25 @@ describe("enterprise RAG evaluation API", () => {
 
     expect(result.latest?.operationId).toBe("operation-1");
     expect(result.history).toHaveLength(1);
+    expect(result.automaticState).toBe("recorded");
     expect(mocks.fetch).toHaveBeenCalledWith(
       "/api/modules/brand/rag-evaluations?sourceQaTaskId=task-1&turnId=turn-1",
       expect.objectContaining({ method: "GET", body: undefined }),
     );
+  });
+
+  it("preserves an explicit not-enrolled state and rejects unknown states", async () => {
+    mocks.fetch.mockResolvedValueOnce(json({ latest: null, history: [], automaticState: "not_enrolled" }));
+    expect((await liveEnterpriseRagEvaluationApi.latest({
+      sourceQaTaskId: "task-1",
+      turnId: "turn-1",
+    })).automaticState).toBe("not_enrolled");
+
+    mocks.fetch.mockResolvedValueOnce(json({ latest: null, history: [], automaticState: "mystery" }));
+    await expect(liveEnterpriseRagEvaluationApi.latest({
+      sourceQaTaskId: "task-1",
+      turnId: "turn-1",
+    })).rejects.toThrow("自动评估状态暂时无法读取");
   });
 
   it("starts evaluation only through an explicit POST with the idempotency id", async () => {

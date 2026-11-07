@@ -8,6 +8,8 @@ import {
 } from "../../standalone/routes";
 import { RAG_SAMPLE_CASES } from "../client/dashboard/ai-website-preview/rag-evaluation-cases";
 
+const previewExampleIds = new Set(RAG_SAMPLE_CASES.map((item) => item.id));
+
 describe("brand standalone business routes", () => {
   it("provides parallel knowledge and diagnosis subpages with stable answer selection", () => {
     expect(standaloneBrandPages.slice(0,2)).toEqual([["knowledge","智能知识库"],["diagnostics","AI 语义诊断"]]);
@@ -63,15 +65,16 @@ describe("brand standalone business routes", () => {
     const url = new URL(standaloneRagReportUrl("records", "workspace-a", undefined, exampleId), "https://brand.frontmind.cn");
     expect(url.searchParams.get("example")).toBe(exampleId);
     expect(url.searchParams.has("sourceQaTaskId")).toBe(false);
-    expect(resolveStandaloneRagReport(url.search, "workspace-a")).toEqual({ coordinate: undefined, exampleId, error: null });
-    expect(resolveStandaloneRagReport(`${url.search}&sourceQaTaskId=real&turnId=turn`, "workspace-a")?.error).toContain("不能混用");
-    expect(resolveStandaloneRagReport(`${url.search}&example=${exampleId}`, "workspace-a")?.error).toContain("标识无效");
+    expect(resolveStandaloneRagReport(url.search, "workspace-a", previewExampleIds)).toEqual({ coordinate: undefined, exampleId, error: null });
+    expect(resolveStandaloneRagReport(`${url.search}&sourceQaTaskId=real&turnId=turn`, "workspace-a", previewExampleIds)?.error).toContain("不能混用");
+    expect(resolveStandaloneRagReport(`${url.search}&example=${exampleId}`, "workspace-a", previewExampleIds)?.error).toContain("标识无效");
     for (const example of ["unknown", "", "../syn-capability", "rag-eval-1.2"]) {
-      const invalid = resolveStandaloneRagReport(`?view=enterprise-qa&report=1&example=${encodeURIComponent(example)}`, "workspace-a");
+      const invalid = resolveStandaloneRagReport(`?view=enterprise-qa&report=1&example=${encodeURIComponent(example)}`, "workspace-a", previewExampleIds);
       expect(invalid?.error).toContain("标识无效");
       expect(invalid?.coordinate).toBeUndefined();
       expect(invalid?.exampleId).toBeUndefined();
     }
+    expect(resolveStandaloneRagReport(url.search, "workspace-a")?.error).toContain("标识无效");
     expect(() => standaloneRagReportUrl("records", "workspace-a", { sourceQaTaskId: "real", turnId: "turn" }, exampleId)).toThrow("不能混用");
   });
 });

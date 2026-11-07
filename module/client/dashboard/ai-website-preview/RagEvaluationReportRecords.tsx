@@ -165,7 +165,7 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
       {preview ? <p className="rag-report-empty">暂无评估记录。</p> : !coordinate ? <p className="rag-report-empty">未选择回答。请从企业 RAG 页面打开对应回答的评估记录。</p> : state.runs.length === 0 && !state.loading && !state.awaiting && !state.error ? <p className="rag-report-empty">当前回答暂无自动评估记录。</p> : null}
       {state.runs.map(run => <AutomaticRecord key={run.operationId} run={run} />)}
     </section>
-    <section className="rag-report-record-group" aria-labelledby="rag-report-manual-title"><h3 id="rag-report-manual-title">当前工作区的人工评审</h3><p className="rag-report-record-note">来自当前浏览器，最多保留30条已保存记录；包含工作区内不同回答。{preview ? "本地预览记录使用合成示例。" : ""}</p>
+    <section className="rag-report-record-group" aria-labelledby="rag-report-manual-title"><h3 id="rag-report-manual-title">当前工作区的人工评审</h3><p className="rag-report-record-note">来自当前浏览器，最多保留30条已保存记录；包含工作区内不同回答。{preview ? "本地预览与正式记录分开保存。" : ""}</p>
       {history.status === "unavailable" && <p role="alert">浏览器存储不可用，暂时无法读取人工评审记录。</p>}
       {history.status === "invalid" && <p role="alert">部分本地记录格式无效，无法完整读取；有效记录仍显示在下方。</p>}
       {manualRecords.length === 0 && history.status === "ready" && <p className="rag-report-empty">暂无已保存的人工评审。</p>}

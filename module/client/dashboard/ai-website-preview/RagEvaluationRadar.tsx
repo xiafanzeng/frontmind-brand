@@ -5,6 +5,7 @@ import { scoreRagChecklist } from "../../../contracts/enterprise-rag-checklist";
 import { RAG_DIMENSIONS } from "./rag-evaluation";
 import { useDataReveal } from "./useDataReveal";
 import { useRagEntranceReady } from "./RagEntranceContext";
+import { RagProgressiveText, textGraphemes } from "./RagProgressiveText";
 
 const labels = ["需求满足", "正确与有据", "信息完整", "引用与时效", "清晰可行动", "边界与安全"];
 const RADAR_VIEWBOX_WIDTH = 400;
@@ -13,11 +14,12 @@ const RADAR_CENTER_X = 200;
 const RADAR_CENTER_Y = 184;
 const RADAR_INNER_RADIUS = 20;
 const RADAR_OUTER_RADIUS = 100;
-const RADAR_MIN_CONTROL_RADIUS = 28;
+const RADAR_MIN_CONTROL_RADIUS = 42;
 const RADAR_LABEL_RADIUS = 152;
 const RADAR_GRID_RADII = [20, 40, 60, 80, 100];
 
 const format = (n: number) => Number(n.toFixed(2)).toString();
+const formatDetailScore = (n: number) => n.toFixed(1);
 const point = (i: number, radius: number) => {
   const angle = -Math.PI / 2 + i * Math.PI / 3;
   return [RADAR_CENTER_X + Math.cos(angle) * radius, RADAR_CENTER_Y + Math.sin(angle) * radius];
@@ -55,19 +57,25 @@ const markerState = (d: EvaluationDimension | undefined, emptyQuestion = false) 
 
 const checkLabels = { met: "满足", partial: "部分满足", unmet: "不满足", undetermined: "待核验", not_applicable: "不适用" };
 
-export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = false }: {
+export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = false, revealKey: externalRevealKey = "" }: {
   dimensions: EvaluationDimension[];
   judgments?: EnterpriseRagChecklistJudgeOutput | null;
   emptyQuestion?: boolean;
+  revealKey?: string;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
-  useEffect(() => { if (emptyQuestion) setSelected(null); }, [emptyQuestion]);
+  const [renderedDetailId, setRenderedDetailId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!emptyQuestion) return;
+    setSelected(null);
+    setRenderedDetailId(null);
+  }, [emptyQuestion]);
   const id = useId();
   const maskId = `${id}-center-mask`;
   const axes = RAG_DIMENSIONS.map(d => dimensions.find(item => item.id === d.id));
-  const revealKey = axes.map(d => `${d?.id}:${d?.status}:${d?.score}:${d?.maxScore}`).join("|");
+  const dimensionRevealKey = axes.map(d => `${d?.id}:${d?.status}:${d?.score}:${d?.maxScore}`).join("|");
   const entranceReady = useRagEntranceReady();
-  const { ref: revealRef, progress, finish: finishReveal } = useDataReveal<HTMLElement>(!emptyQuestion && axes.some(known), `${emptyQuestion}:${revealKey}`, undefined, undefined, entranceReady);
+  const { ref: revealRef, progress, finish: finishReveal } = useDataReveal<HTMLElement>(!emptyQuestion && axes.some(known), `${externalRevealKey}:${emptyQuestion}:${dimensionRevealKey}`, undefined, undefined, entranceReady);
   const checklistDimensions = useMemo(() => {
     if (!judgments) return null;
     try {
@@ -95,13 +103,45 @@ export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = fals
     };
   });
   const innerPoints = axes.map((_, i) => point(i, RADAR_INNER_RADIUS).join(",")).join(" ");
-  const detail = axes.find(d => d?.id === selected);
-  const detailIndex = axes.findIndex(d => d?.id === selected);
+  const detail = axes.find(d => d?.id === renderedDetailId);
+  const detailIndex = axes.findIndex(d => d?.id === renderedDetailId);
   const detailLabel = detailIndex >= 0 ? labels[detailIndex] : detail?.label;
-  const checks = checklistDimensions?.find(d => d.id === selected)?.checks;
+  const checks = checklistDimensions?.find(d => d.id === renderedDetailId)?.checks;
   const normalizedForExclusions = Boolean(checks?.some(check => !check.applicable));
+  const { ref: detailRevealRef, progress: detailScoreProgress } = useDataReveal<HTMLElement>(
+    Boolean(selected && detail && known(detail)),
+    `${externalRevealKey}:${selected ?? "closed"}:${detail?.score ?? "pending"}:${detail?.maxScore ?? "unknown"}:detail`,
+    800,
+    "ease-out",
+    entranceReady,
+  );
+  const detailScoreLabel = detail?.score === null
+    ? detail.status === "not_applicable" ? "不适用" : "待核验"
+    : detail ? `${formatDetailScore(detail.score)} / ${format(detail.maxScore)}` : "";
+  const detailTexts = detail ? [
+    detailLabel ?? detail.label,
+    ...(checks ? checks.flatMap(check => [
+      `${check.label} · ${checkLabels[check.status]}`,
+      check.earned === null ? check.status === "not_applicable" ? check.exclusionReason : "待补证，不计为零分" : `${format(check.earned)} / ${check.weight} 原始分`,
+      check.rationale,
+    ]) : [detail.summary]),
+    ...(normalizedForExclusions ? ["本维存在预先冻结的不适用项，维度分按其余适用项归一计算。"] : []),
+    ...(judgments?.findings.filter(f => f.dimensionIds.includes(detail.id as typeof f.dimensionIds[number])).flatMap(f => [
+      f.summary,
+      f.impact,
+      ...f.claimIds.map(claimId => judgments.claims.find(c => c.id === claimId)?.statement ?? ""),
+    ]) ?? []),
+  ].filter((text): text is string => Boolean(text)) : [];
+  const detailCharacterTotal = Math.max(1, detailTexts.reduce((total, text) => total + textGraphemes(text).length, 0));
+  let detailCharacterOffset = 0;
+  const revealDetailText = (text: string) => {
+    const graphemes = textGraphemes(text);
+    const offset = detailCharacterOffset;
+    detailCharacterOffset += graphemes.length;
+    return <RagProgressiveText graphemes={graphemes} offset={offset} total={detailCharacterTotal} progress={detailScoreProgress} />;
+  };
 
-  return <section ref={revealRef} className="rag-radar" aria-label="六维加权评分">
+  return <section ref={revealRef} className="rag-radar" aria-label="六维加权评分" data-report-reveal-key={externalRevealKey || undefined}>
     <div className="rag-radar-chart">
       <svg viewBox={`0 0 ${RADAR_VIEWBOX_WIDTH} ${RADAR_VIEWBOX_HEIGHT}`} role="img" aria-labelledby={`${id}-title ${id}-description`}>
         <title id={`${id}-title`}>六维质量雷达图</title>
@@ -146,24 +186,40 @@ export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = fals
           disabled={emptyQuestion}
           aria-label={`${labels[i]} ${value}${emptyQuestion ? "" : "，查看详情"}`} aria-expanded={emptyQuestion ? undefined : selected === definition.id} aria-controls={emptyQuestion ? undefined : `${id}-detail`}
           onPointerEnter={finishReveal} onFocus={finishReveal}
-          onClick={() => { finishReveal(); setSelected(selected === definition.id ? null : definition.id); }}>
+          onClick={() => {
+            finishReveal();
+            if (selected === definition.id) {
+              setSelected(null);
+              return;
+            }
+            setRenderedDetailId(definition.id);
+            setSelected(definition.id);
+          }}>
           <span data-testid="rag-radar-point-marker" className={`rag-radar-point-marker ${state}`} style={{ opacity: !emptyQuestion && known(d) ? progress : 1 }} aria-hidden="true" />
         </button>;
       })}
     </div>
-    {!emptyQuestion && detail && <section id={`${id}-detail`} className="rag-radar-detail" aria-label={`${detailLabel}详情`}>
-      <header><h3>{detailLabel}</h3><strong>{detail.score === null ? detail.status === "not_applicable" ? "不适用" : "待核验" : `${format(detail.score)} / ${detail.maxScore}`}</strong></header>
-      {checks ? checks.map(check => <article key={check.id}>
-        <strong>{check.label} · {checkLabels[check.status]}</strong>
-        <small>{check.earned === null ? check.status === "not_applicable" ? check.exclusionReason : "待补证，不计为零分" : `${format(check.earned)} / ${check.weight} 原始分`}</small>
-        <p>{check.rationale}</p><small>证据：{check.evidenceIds.join("、")}</small>
-      </article>) : <><p>{detail.summary}</p><small>证据：{detail.evidenceIds.join("、") || "待补充"}</small></>}
-      {normalizedForExclusions && <p className="rag-muted">本维存在预先冻结的不适用项，维度分按其余适用项归一计算。</p>}
-      {judgments?.findings.filter(f => f.dimensionIds.includes(detail.id as typeof f.dimensionIds[number])).map(f => <article key={f.id}>
-        <strong>{f.summary}</strong><p>{f.impact}</p>
-        {f.claimIds.map(claimId => <blockquote key={claimId}>{judgments.claims.find(c => c.id === claimId)?.statement}</blockquote>)}
-        <small>证据：{f.evidenceIds.join("、")}</small>
-      </article>)}
-    </section>}
+    <div className={`rag-radar-detail-shell${selected && detail ? " is-open" : ""}`} aria-hidden={!selected}>
+      <div className="rag-radar-detail-shell__inner">
+        {!emptyQuestion && detail && <section ref={detailRevealRef} id={`${id}-detail`} className="rag-radar-detail" aria-label={`${detailLabel}详情`}>
+          <div key={renderedDetailId} className="rag-radar-detail__content"><h3>{revealDetailText(detailLabel ?? detail.label)}</h3>
+          {checks ? checks.map(check => <article key={check.id}>
+            <strong>{revealDetailText(`${check.label} · ${checkLabels[check.status]}`)}</strong>
+            <small>{revealDetailText(check.earned === null ? check.status === "not_applicable" ? check.exclusionReason : "待补证，不计为零分" : `${format(check.earned)} / ${check.weight} 原始分`)}</small>
+            <p>{revealDetailText(check.rationale)}</p>
+          </article>) : <p>{revealDetailText(detail.summary)}</p>}
+          {normalizedForExclusions && <p className="rag-muted">{revealDetailText("本维存在预先冻结的不适用项，维度分按其余适用项归一计算。")}</p>}
+          {judgments?.findings.filter(f => f.dimensionIds.includes(detail.id as typeof f.dimensionIds[number])).map(f => <article key={f.id}>
+            <strong>{revealDetailText(f.summary)}</strong><p>{revealDetailText(f.impact)}</p>
+            {f.claimIds.map(claimId => { const statement = judgments.claims.find(c => c.id === claimId)?.statement; return statement ? <blockquote key={claimId}>{revealDetailText(statement)}</blockquote> : null; })}
+          </article>)}</div>
+          <strong className={`rag-radar-detail-score${detail.score === null ? " is-unavailable" : ""}`} aria-label={detailScoreLabel}>
+            {detail.score === null
+              ? <span>{detailScoreLabel}</span>
+              : <><span className={`rag-radar-detail-score__earned${detail.score === 0 ? " is-zero" : ""}`} data-testid="rag-radar-detail-earned" aria-hidden="true">{formatDetailScore(detail.score * detailScoreProgress)}</span><span className="rag-radar-detail-score__maximum" aria-hidden="true">/{format(detail.maxScore)}</span></>}
+          </strong>
+        </section>}
+      </div>
+    </div>
   </section>;
 }

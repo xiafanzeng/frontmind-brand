@@ -11,7 +11,7 @@ export function RagEvaluationExampleRecord({ example }: { example: RagCase }) {
   const score = presentEvaluationScore(result.score, result.verdict === "unusable");
   return <section id="records" className="rag-report-section rag-report-records" aria-labelledby="rag-report-example-heading" data-testid="rag-report-example-record">
     <h2 id="rag-report-example-heading"><span className="rag-report-section-number">02</span> 示例评估记录</h2>
-    <p className="rag-report-record-note">示例 · 预设评审。此记录使用合成问答与资料，供查看评分方法和判断依据。</p>
+    <p className="rag-report-record-note">示例</p>
     <article className="rag-report-record-group" aria-label={example.title}>
       <div className="rag-report-record-line"><h3>{example.title}</h3><span className="rag-report-record-score" aria-label={score.ariaLabel}>{score.text}</span></div>
       <p>{enterpriseRagQualityVerdictLabels[result.verdict]} · {example.summary}</p>

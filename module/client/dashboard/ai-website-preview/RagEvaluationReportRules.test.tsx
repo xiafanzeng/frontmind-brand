@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { renderToString } from "katex";
 import { createRagChecklist, scoreRagChecklist, type RagCheckJudgment } from "../../../contracts/enterprise-rag-checklist";
@@ -18,7 +18,8 @@ describe("report scoring rules", () => {
   it("distinguishes scoring methods without showing version identifiers", () => {
     const { container } = render(<div className="rag-report"><RagEvaluationReportRules /></div>);
     expect(screen.getByRole("heading", { name: /01 评分规则/ })).toBeTruthy();
-    for (const method of ["自动评估", "人工评审与合成示例", "历史规则"]) expect(screen.getByRole("heading", { name: method })).toBeTruthy();
+    for (const method of ["自动评估", "人工评审", "历史规则"]) expect(screen.getByRole("heading", { name: method })).toBeTruthy();
+    expect(container.textContent).not.toContain("合成示例");
     expect(container.textContent).not.toMatch(/rag-eval|1\.[234]/u);
     expect(container.textContent).not.toMatch(/需求说明第十三章|服务端|接口|技术设计/u);
     expect(screen.getByText(/按检查项计分的自动报告只展示已有分数与覆盖率，不推算额外区间/)).toBeTruthy();
@@ -32,6 +33,12 @@ describe("report scoring rules", () => {
     expect(rendered).toEqual(authored);
     for (const dimension of RAG_DIMENSIONS) expect(screen.getByRole("rowheader", { name: dimension.label })).toBeTruthy();
     for (const gate of RAG_GATES) expect(screen.getByRole("rowheader", { name: gate.label })).toBeTruthy();
+  });
+
+  it("keeps the report methodology neutral in local preview", () => {
+    const { container } = render(<div className="rag-report"><RagEvaluationReportRules preview /></div>);
+    expect(within(container).getByRole("heading", { name: "人工评审" })).toBeTruthy();
+    expect(container.textContent).not.toContain("合成示例");
   });
 
   it("matches the documented dimension normalization and weighted coverage for checklist exclusions", () => {

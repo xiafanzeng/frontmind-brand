@@ -40,8 +40,44 @@
 .rag-eval-root .rag-chat .erag-citations { margin-top: 12px; }
 .rag-eval-root .rag-chat-answer-tools { display: flex; margin-top: 8px; }
 .rag-eval-root .rag-chat-empty { margin: 0; color: var(--sfp-muted); line-height: 1.65; }
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-enter-answer { min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--fm-brand-accent); font: inherit; box-shadow: none; cursor: pointer; }
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-enter-answer:hover:not(:disabled) { color: var(--fm-brand-muted); background: transparent; box-shadow: none; transform: none; }
+.rag-eval-root .erag-user-message.rag-chat-user-message--sent { transform-origin:100% 100%; animation:rag-chat-user-message-send 260ms cubic-bezier(.22,1,.36,1) both; }
+.rag-eval-root .rag-chat-welcome { display:grid; gap:10px; min-width:0; color:var(--sfp-ink); line-height:1.65; }
+.rag-eval-root .rag-chat-welcome > p { margin:0; animation:rag-chat-starter-enter 400ms cubic-bezier(.25,.1,.25,1) both; }
+.rag-eval-root .rag-chat-starters { display:grid; gap:10px; min-width:0; }
+.rag-eval-root .rag-chat-starters__questions { display:flex; flex-wrap:wrap; align-items:flex-start; gap:8px; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-starters__questions > button,
+.rag-eval-root .rag-chat-starters__questions > button { --rag-starter-opacity:1; position:relative; box-sizing:border-box; flex:0 0 auto; width:auto; max-width:100%; min-height:32px; padding:3px 10px; border:.5px solid var(--sfp-line); border-radius:9px; background:rgba(255,255,255,.72); box-shadow:0 2px 8px rgba(29,29,31,.06); color:var(--sfp-ink); font:inherit; font-size:13px; line-height:20px; text-align:left; cursor:pointer; opacity:var(--rag-starter-opacity); transform:none; }
+.rag-eval-root .rag-chat-starters__questions > button::before { position:absolute; inset:-6px 0; content:""; }
+.rag-eval-root .rag-chat-starters__questions.is-entrance > button { animation:rag-chat-starter-enter 400ms cubic-bezier(.25,.1,.25,1) both; }
+.rag-eval-root .rag-chat-starters__questions.is-entrance > button:nth-child(1) { animation-delay:80ms; }
+.rag-eval-root .rag-chat-starters__questions.is-entrance > button:nth-child(2) { animation-delay:160ms; }
+.rag-eval-root .rag-chat-starters__questions.is-entrance > button:nth-child(3) { animation-delay:240ms; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-starters__questions > button:hover:not(:disabled),
+.rag-eval-root .rag-chat-starters__questions > button:hover:not(:disabled) { border-color:rgba(117,66,176,.28); background:rgba(117,66,176,.06); box-shadow:0 4px 12px rgba(29,29,31,.08); transform:none; }
+.rag-eval-root .rag-chat-starters__questions > button:focus-visible { outline:2px solid rgba(117,66,176,.55); outline-offset:2px; }
+.rag-eval-root .rag-chat-starters__questions > button:disabled { --rag-starter-opacity:.45; cursor:default; }
+.rag-eval-root .rag-chat-starters--remaining { margin-top:16px; padding-top:16px; border-top:.5px solid var(--sfp-line); }
+@keyframes rag-chat-starter-enter { from { opacity:0; transform:translateY(8px); } to { opacity:var(--rag-starter-opacity); transform:translateY(0); } }
+@keyframes rag-chat-user-message-send { from { opacity:0; transform:translateY(8px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
+@media (prefers-reduced-motion:reduce) {
+  .rag-eval-root .rag-chat-welcome > p,
+  .rag-eval-root .rag-chat-starters__questions.is-entrance > button,
+  .rag-eval-root .erag-user-message.rag-chat-user-message--sent { animation:none; }
+}
+.rag-eval-root .rag-chat-starters__draft { display:grid; gap:8px; padding-top:16px; border-top:.5px solid var(--sfp-line); }
+.rag-eval-root .rag-chat-starters__draft > p,
+.rag-eval-root .rag-chat-starters__status { margin:0; color:var(--sfp-muted); font-size:12px; line-height:18px; }
+.rag-eval-root .rag-chat-starters__preview { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+.rag-eval-root .rag-chat-starters__preview > li { box-sizing:border-box; min-height:44px; padding:8px 16px; border:.5px solid var(--sfp-line); border-radius:12px; background:rgba(255,255,255,.5); color:var(--sfp-muted); line-height:1.5; }
+.rag-eval-root .rag-chat-starters__editor { display:grid; gap:8px; }
+.rag-eval-root .rag-chat-starters__editor label { display:grid; gap:8px; color:var(--sfp-muted); font-size:12px; }
+.rag-eval-root .rag-chat-starters__editor input { box-sizing:border-box; width:100%; min-height:44px; padding:8px 16px; border:.5px solid var(--sfp-line); border-radius:12px; background:rgba(255,255,255,.82); color:var(--sfp-ink); font:inherit; font-size:14px; }
+.rag-eval-root .rag-chat-starters__actions { display:flex; flex-wrap:wrap; gap:8px; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-starters__actions > button,
+.rag-eval-root .rag-chat-starters__actions > button { min-height:44px; padding:8px 16px; border:0; border-radius:12px; background:transparent; box-shadow:none; color:var(--sfp-accent); font:inherit; font-weight:600; cursor:pointer; transform:none; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-starters__actions > button:hover:not(:disabled),
+.rag-eval-root .rag-chat-starters__actions > button:hover:not(:disabled) { background:rgba(117,66,176,.06); box-shadow:none; transform:none; }
+.rag-eval-root .rag-chat-starters__actions > button:disabled { cursor:default; opacity:.45; }
 .rag-eval-root .rag-chat-error { margin: 8px 0 0; color: var(--sfp-ink); font-size: var(--sfp-type-caption); }
 .rag-eval-root .rag-chat-sr-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .rag-eval-root .rag-chat-composer { display: flex; flex-direction: row; align-items: flex-end; }
@@ -120,6 +156,10 @@
   .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-tool { width: 20px; flex-basis: 20px; }
   .rag-eval-root .rag-chat-feedback { flex-basis: 20px; }
   .rag-eval-root .rag-chat article > header { grid-template-columns: 16px minmax(0,1fr); row-gap: 2px; }
+  .rag-eval-root .rag-chat-starters__questions { flex-wrap:nowrap; overflow-x:auto; overscroll-behavior-inline:contain; margin-block:-6px; padding-block:6px; scrollbar-width:none; }
+  .rag-eval-root .rag-chat-starters__questions::-webkit-scrollbar { display:none; }
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat .rag-chat-starters__questions > button,
+  .rag-eval-root .rag-chat .rag-chat-starters__questions > button { max-width:none; white-space:nowrap; }
 }
 
 /* Keep overlapping and full-size gestures at the same optical weight. */
@@ -135,6 +175,9 @@
 .rag-eval-root .rag-chat-copy[data-tooltip-suppressed] .rag-chat-tool-tip { opacity: 0; visibility: hidden; transition-delay: 0s, 180ms; }
 .rag-eval-root .rag-chat-speech-stop { color: #8e8e93; }
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat.erag-test-thread article { padding-bottom: 10px; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat.erag-test-thread article.rag-chat-initial-answer { padding: 12px 12px 8px; }
+.rag-eval-root .rag-chat-initial-answer .rag-chat-response { margin-top: 6px; }
+.rag-eval-root .rag-chat-initial-answer .rag-chat-answer-tools { margin-top: 0; }
 
 .rag-eval-root .rag-chat-completed-digits { letter-spacing: -0.1px; }
 

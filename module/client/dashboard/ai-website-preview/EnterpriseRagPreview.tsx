@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Bot, ChartNoAxesColumnIncreasing, ClipboardCheck, FileText, ShieldCheck, X } from "lucide-react";
 import { loadWebsiteDraft } from "./SimplifiedWebsiteBuilderPreview";
 import { previewKnowledgeCollectionCount, previewKnowledgeFragmentCount } from "./preview-copy";
 import { usePreviewDialog } from "./qa-widget/usePreviewDialog";
 import { RAG_ACCEPTANCE_PARAMS, RAG_ATTRIBUTIONS, RAG_CASE_MODE_LABELS, RAG_DIMENSIONS, RAG_GATES, RAG_RULE_VERSION, resolveConversationOutcome, scoreEvaluation, type DimensionId, type DimensionJudgment, type GateJudgment, type Rating } from "./rag-evaluation";
-import { RAG_SAMPLE_CASES, findRagSample, type RagCase, type RagIssue } from "./rag-evaluation-cases";
+import type { RagCase, RagIssue } from "./rag-evaluation-cases";
 import { enterpriseRagEvaluationSkill } from "./enterprise-rag-evaluation-skill";
 import { saveEvaluationReport } from "./evaluation-report-store";
 import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
@@ -12,6 +12,7 @@ import {
   liveEnterpriseRagEvaluationApi,
 } from "../enterprise-rag-evaluation-api";
 import type {
+  EnterpriseRagEvaluationAutomaticState,
   EnterpriseRagEvaluationReport,
   EnterpriseRagEvaluationRunDto,
 } from "../../../contracts/enterprise-rag-evaluation-run";
@@ -33,7 +34,7 @@ import { RagConversationHistory, type RagConversationHistoryItem } from "./RagCo
 import { useRagPreviewHistory, type RagPreviewConversationSnapshot } from "./useRagPreviewHistory";
 import type { RagChatActivity } from "./rag-chat-activity";
 import { RagImprovementPlan } from "./RagImprovementPlan";
-import { buildRagImprovementPlan } from "./rag-improvement-plan";
+import { buildLiveRagImprovementPlan } from "./rag-live-improvement-plan";
 import { RagAnswerWindows, type AnswerPanel } from "./RagAnswerWindows";
 import { RagTaskChecklist } from "./RagTaskChecklist";
 import { RagProgressiveText, revealOpacity, textGraphemes } from "./RagProgressiveText";
@@ -43,8 +44,14 @@ import { RagEntranceReadyContext } from "./RagEntranceContext";
 import { useRagEvaluationLayout } from "./useRagEvaluationLayout";
 import { RAG_CHECKLIST_RULE_VERSION } from "../../../contracts/enterprise-rag-checklist";
 import { isChecklistRagJudgment } from "../../../contracts/enterprise-rag-evaluation-run";
+import { presentRagReportTask, type RagTaskPresentation } from "./rag-task-presentation";
 import type { RagReportUrlBuilder } from "./rag-report-navigation";
 import { enterpriseRagHistoryStorageKey, loadRagReviewHistory as loadHistory, type RagReviewRecord as RecordEntry } from "./rag-review-history";
+import {
+  peekRagPreviewFixtures,
+  ragPreviewFixturesEnabled,
+  type RagPreviewFixtures,
+} from "./rag-preview-fixture-loader";
 export { enterpriseRagHistoryStorageKey } from "./rag-review-history";
 
 export type EnterpriseRagLiveRuntime = {
@@ -59,12 +66,14 @@ export type EnterpriseRagLiveRuntime = {
     version: number;
     sourceFileName: string;
     documentCount: number;
+    companyName?: string | null;
   } | null;
   currentKnowledgeBase: {
     snapshotId: string;
     version: number;
     sourceFileName: string;
     documentCount: number;
+    companyName?: string | null;
   } | null;
   knowledgeBinding: "current_publication" | "frozen_task" | "historical_unknown";
   conversationId?: string;
@@ -72,13 +81,15 @@ export type EnterpriseRagLiveRuntime = {
   /** Server-owned ordinary-chat turn coordinate for the displayed final answer. */
   turnId?: string;
   conversationReady: boolean;
+  /** Knowledge/model/provider gate only; remains true while a turn is running. */
+  canCompose?: boolean;
   previousTurns?: RagChatTurn[];
   draftAdoptedFrom?: string;
   onDraftInput?: () => void;
   canSend?: boolean;
   selectedAnswerKey?: string;
   onSelectAnswer?: (key: string) => void;
-  chat?: { question: string; answer: string; answerKey: string; sources: Array<{id:string;title:string;kind?:string}>; completedAt?: number; evaluation?: "not_required" };
+  chat?: { question: string; answer: string; answerKey: string; sources: Array<{id:string;title:string;kind?:string}>; completedAt?: number; evaluation?: "not_required"; knowledgeBase?: EnterpriseRagLiveRuntime["knowledgeBase"] };
   evaluationNotRequired?: boolean;
   conversationHistory?: {
     items: RagConversationHistoryItem[];
@@ -122,8 +133,18 @@ export type EnterpriseRagLiveRuntime = {
   onRetryKnowledge: () => void;
   onStartNewConversation: () => void;
   onOpenKnowledge: () => void;
+  starterQuestions?: {
+    current?: { id: string; questions: string[] } | null;
+    draft?: { id: string; questions: string[] } | null;
+    pending?: boolean;
+    error?: string | null;
+    revision?: number;
+  };
+  onConfirmStarterQuestions?: (questions: string[]) => Promise<boolean>;
+  onRegenerateStarterQuestions?: () => Promise<boolean>;
+  onDiscardStarterDraft?: () => Promise<boolean>;
 };
-type Props = {
+export type EnterpriseRagPreviewProps = {
   onOpenWebsite: () => void;
   onOpenWebsiteAssistant: () => void;
   websiteEntryLabel?: string;
@@ -131,12 +152,14 @@ type Props = {
   buildReportUrl?: RagReportUrlBuilder;
   live?: EnterpriseRagLiveRuntime;
 };
+type SurfaceProps = EnterpriseRagPreviewProps & {
+  previewFixtures: RagPreviewFixtures;
+};
 type Drawer = "review" | "evidence" | "rules" | "improve" | "answer" | "history" | null;
 type ReviewDraftContext = { ownerKey: string; scopeKey: string; question: string; answer: string; need: string; knowledgeVersion: string; evidenceOptions: ReviewEvidenceOption[] };
 type ReviewDraft = ReviewDraftContext & { dimensions: DimensionJudgment[]; gates: GateJudgment[]; reviewer: string; confirmed: boolean };
 const AUTOMATIC_REQUEST_KEY = "frontmind-rag-evaluation-request-v1";
 const AUTOMATIC_SUBMITTED_NOTICE = "自动评估已提交；离开页面后任务仍会继续，重新打开可恢复进度。";
-const KNOWLEDGE_VERSION = "KB-SYN-v1";
 const shortLabels = ["需求满足", "正确与有据", "信息完整", "引用与时效", "清晰可行动", "边界与安全"];
 const levels = ["不满足", "少量满足", "部分满足", "基本满足", "充分满足"];
 const dimensionActions: Record<DimensionId, string> = {
@@ -248,11 +271,12 @@ function manualIssues(dimensions: DimensionJudgment[], gates: GateJudgment[]): R
   return [...risks, ...gaps].slice(0, 3);
 }
 
-export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: Props) {
+export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReportUrl, previewFixtures }: SurfaceProps) {
+  const previewCases = previewFixtures.cases;
   const historyStorageKey = enterpriseRagHistoryStorageKey(storageScopeKey);
-  const previewHistory = useRagPreviewHistory(storageScopeKey, !live, true);
+  const previewHistory = useRagPreviewHistory(storageScopeKey, !live, true, previewCases);
   const initialPreview = previewHistory.activeSnapshot;
-  const initialCase = initialPreview?.caseId ? RAG_SAMPLE_CASES.find(item => item.id === initialPreview.caseId) ?? null : null;
+  const initialCase = initialPreview?.caseId ? previewCases.find(item => item.id === initialPreview.caseId) ?? null : null;
   const [websiteDraft] = useState(() =>
     live ? null : loadWebsiteDraft(storageScopeKey),
   );
@@ -306,6 +330,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
   const [automaticReadVersion, setAutomaticReadVersion] = useState(0);
   const [automaticExpectedState, setAutomaticExpected] = useState(false);
   const [automaticAdmissionBlocked, setAutomaticAdmissionBlocked] = useState(false);
+  const [automaticLifecycleState, setAutomaticLifecycleState] = useState<EnterpriseRagEvaluationAutomaticState | null>(null);
   const expectedReadOwner = useRef({ key: "", since: 0 });
   const [automaticRunState, setAutomaticRun] =
     useState<EnterpriseRagEvaluationRunDto | null>(null);
@@ -358,7 +383,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
   const restorePreview = (snapshot: RagPreviewConversationSnapshot | null) => {
     cancelPreview();
     setPreviewPreviousTurns(snapshot?.previousTurns ?? []);
-    setActiveCase(snapshot?.caseId ? RAG_SAMPLE_CASES.find(item => item.id === snapshot.caseId) ?? null : null);
+    setActiveCase(snapshot?.caseId ? previewCases.find(item => item.id === snapshot.caseId) ?? null : null);
     setQuestion(snapshot?.question ?? ""); setAnswer(snapshot?.answer ?? ""); setNeed(snapshot?.need ?? ""); setInput(snapshot?.input ?? "");
     setDimensions(snapshot ? clone(snapshot.dimensions) : emptyDimensions());
     setGates(snapshot ? clone(snapshot.gates) : emptyGates());
@@ -467,6 +492,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
   const automaticLoading = automaticMatchesCurrent && automaticLoadingState;
   const automaticStarting = automaticMatchesCurrent && automaticStartingState;
   const automaticError = automaticMatchesCurrent ? automaticErrorState : "";
+  const automaticState = automaticMatchesCurrent ? automaticLifecycleState : null;
   useEffect(() => {
     automaticMounted.current = true;
     return () => {
@@ -486,17 +512,24 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
     if (automaticDataOwner !== ownerKey) { setAutomaticRun(null); setAutomaticHistory([]); }
     setAutomaticError("");
     setAutomaticAdmissionBlocked(false);
+    setAutomaticLifecycleState(null);
     setAutomaticStarting(false);
     setAutomaticLoading(Boolean(automaticCoordinate));
     if (expectedReadOwner.current.key !== ownerKey) { setAutomaticExpected(false); expectedReadOwner.current = { key: ownerKey, since: Date.now() }; }
     if (!automaticCoordinate) return () => { active = false; };
     void liveEnterpriseRagEvaluationApi
       .latest(automaticCoordinate)
-      .then(({ latest, history: serverHistory, automaticExpected, automaticAdmission }) => {
+      .then(({ latest, history: serverHistory, automaticState: nextAutomaticState, automaticExpected, automaticAdmission }) => {
         if (!isCurrent()) return;
-        const awaiting = !latest && automaticExpected === true;
+        const resolvedAutomaticState = nextAutomaticState ?? (
+          latest || serverHistory.length ? "recorded"
+            : automaticAdmission?.status === "blocked" ? "blocked"
+              : automaticExpected ? "expected" : "not_enrolled"
+        );
+        const awaiting = !latest && resolvedAutomaticState === "expected";
         setAutomaticExpected(awaiting);
-        setAutomaticAdmissionBlocked(automaticAdmission?.status === "blocked");
+        setAutomaticAdmissionBlocked(resolvedAutomaticState === "blocked" || automaticAdmission?.status === "blocked");
+        setAutomaticLifecycleState(resolvedAutomaticState);
         if (awaiting && isCurrent()) {
           const interval = Date.now() - expectedReadOwner.current.since < 60000 ? 2000 : 5000;
           readTimer = window.setTimeout(() => setAutomaticReadVersion(value => value + 1), interval);
@@ -561,6 +594,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
               throw new Error("自动评估结果与当前回答不匹配，已停止展示。");
             }
             setAutomaticRun(next);
+            if (next.report) setAutomaticLifecycleState("recorded");
             if (next.report) {
               setAutomaticHistory((old) => mergeAutomaticRuns([next, ...old]));
             }
@@ -655,21 +689,19 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
       ? activeCase.issues
       : manualIssues(dimensions, gates);
   const conversation = activeCase ? resolveConversationOutcome(activeCase.conversation, activeCase.gates) : null;
-  const taskStatus = mode === "sample" && activeCase && conversation ? conversation.status : "unverified";
-  const taskStatusLabel = mode === "sample" && activeCase && conversation ? conversation.displayLabel : "待确认";
-  const taskHasRisk = taskStatus === "fail" && Boolean(activeCase?.gates.some((gate) => gate.status === "failed"));
   const attributionLabel = activeCase?.conversation.attribution ? RAG_ATTRIBUTIONS.find((item) => item.id === activeCase.conversation.attribution)?.label : null;
   const historicalKnowledge = Boolean(
     live && live.knowledgeBinding !== "current_publication",
   );
-  const knowledgeVersion = activeCase ? KNOWLEDGE_VERSION : live
+  const exampleReadOnly = Boolean(live && activeCase);
+  const knowledgeVersion = activeCase ? previewFixtures.knowledgeVersion : live
     ? live.knowledgeBase
       ? `v${live.knowledgeBase.version}`
       : historicalKnowledge
         ? "历史任务知识版本未知"
         : "尚未发布"
     : activeCase
-      ? KNOWLEDGE_VERSION
+      ? previewFixtures.knowledgeVersion
       : "待绑定正式知识版本";
   const currentSources = activeCase ? activeCase.sources : live
     ? live.sources.map((source) => ({
@@ -681,6 +713,46 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
         excerpt: "",
       }))
     : [];
+  const knowledgeLoading = Boolean(live && !live.loaded && !live.failed);
+  const knowledgeUnavailable = Boolean(live && live.failed && !live.knowledgeBase);
+  const knowledgeValues = [
+    live && !exampleReadOnly ? live.knowledgeBase ? 1 : 0 : previewKnowledgeCollectionCount,
+    live && !exampleReadOnly ? live.knowledgeBase?.documentCount ?? 0 : previewKnowledgeFragmentCount,
+    currentSources.length,
+  ];
+  const knowledgeRevealKey = JSON.stringify([
+    live?.knowledgeBase?.snapshotId ?? "preview",
+    live?.knowledgeBase?.version ?? previewFixtures.knowledgeVersion,
+    ...knowledgeValues,
+    currentSources.map(source => source.id),
+  ]);
+  const { ref: knowledgeStatsRef, progress: knowledgeRevealProgress } = useDataReveal<HTMLDivElement>(
+    !knowledgeLoading && !knowledgeUnavailable,
+    knowledgeRevealKey,
+    800,
+    "ease-out",
+    entranceReady("knowledge"),
+  );
+  const visibleKnowledgeValue = (value: number) => knowledgeLoading || knowledgeUnavailable
+    ? "—"
+    : Math.round(value * knowledgeRevealProgress).toString();
+  const chatKnowledgeBase = live?.chat?.knowledgeBase ?? live?.currentKnowledgeBase ?? null;
+  const liveCompanyName = chatKnowledgeBase?.companyName?.trim() || "";
+  const assistantName = live
+    ? liveCompanyName ? `${liveCompanyName} AI 助手` : "企业知识助手"
+    : previewFixtures.assistantName;
+  const knowledgeGateMessage = !live ? null
+    : live.refreshFailed && live.knowledgeBase
+      ? "知识库状态暂时刷新失败，当前继续使用已确认的知识版本。"
+      : knowledgeLoading
+        ? "正在确认知识库、模型与服务状态。"
+        : live.failed
+          ? "暂时无法读取知识库状态。"
+          : !live.knowledgeBase
+            ? historicalKnowledge ? "此历史任务的知识版本不可用。" : "尚未发布可用知识库。"
+            : live.configured !== true || live.providerLabel === "未配置"
+              ? "企业问答模型或服务尚未配置。"
+              : null;
   const canAsk = live?.canSend !== undefined ? live.canSend : live
     ? live.loaded &&
       !live.failed &&
@@ -697,7 +769,6 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
       live.currentKnowledgeBase &&
       live.currentKnowledgeBase.version > live.knowledgeBase.version,
   );
-  const exampleReadOnly = Boolean(live && activeCase);
   const displayRuleVersion = automaticReport?.evaluator.ruleVersion ?? (live ? RAG_CHECKLIST_RULE_VERSION : RAG_RULE_VERSION);
   const displayVerdicts = automaticReport && !automaticReport.result.answerVerdict ? legacyRagVerdictLabels : verdicts;
   const checklistJudgments = automaticReport && isChecklistRagJudgment(automaticReport.judgments) ? automaticReport.judgments : null;
@@ -725,13 +796,20 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
   const hasQualityJudgment = Boolean(automaticReport || activeCase || dimensions.some(item => item.level !== null) || gates.some(item => item.status !== "pending"));
   const neutralEvaluation = !hasQualityJudgment;
   const awaitingEvaluation = !answer.trim() && !automaticReport;
-  const evaluationFailed = !automaticStarting && Boolean(automaticRun?.status === "failed" || (automaticMatchesCurrent && automaticAdmissionBlocked));
-  const evaluationWaiting = !hasQualityJudgment && !evaluationNotRequired && (automaticBusy || automaticLoading || (automaticCoordinate && !automaticMatchesCurrent));
+  const completedAnswerWithoutAutomaticCoordinate = Boolean(
+    live && !exampleReadOnly && !evaluationNotRequired && answer.trim() && !automaticCoordinate,
+  );
+  const evaluationNotEnrolled = !automaticLoading && !automaticReport && (
+    automaticState === "not_enrolled" || completedAnswerWithoutAutomaticCoordinate
+  );
+  const evaluationBlocked = !automaticStarting && !automaticLoading && automaticState === "blocked" && !automaticReport;
+  const evaluationFailed = !automaticStarting && Boolean(automaticRun?.status === "failed" || evaluationBlocked || (automaticMatchesCurrent && automaticAdmissionBlocked));
+  const evaluationWaiting = !hasQualityJudgment && !evaluationNotRequired && !evaluationNotEnrolled && !evaluationBlocked && (automaticBusy || automaticLoading || automaticState === "expected" || (automaticCoordinate && !automaticMatchesCurrent));
   const tone = neutralEvaluation ? "neutral" : result.gateStatus === "failed" || result.verdict === "unusable" ? "danger" : result.verdict === "improve" ? "pending" : result.complete ? "ready" : "pending";
   const hasPerfectScore = result.complete && result.score === 100 && tone !== "danger";
-  const displayVerdictLabel = !neutralEvaluation ? displayVerdicts[result.verdict].replace(/\s*·\s*/g, " · ") : evaluationNotRequired ? "无需评估" : evaluationFailed ? "评估未完成" : automaticError ? "暂时无法读取评分" : evaluationWaiting ? "正在评估本次回答" : awaitingEvaluation ? "待评估" : "暂无评估";
+  const displayVerdictLabel = !neutralEvaluation ? displayVerdicts[result.verdict].replace(/\s*·\s*/g, " · ") : evaluationNotRequired ? "无需评估" : evaluationNotEnrolled ? "未进入自动评估" : evaluationBlocked ? "评估暂未开始" : evaluationFailed ? "评估未完成" : automaticError ? "暂时无法读取评分" : evaluationWaiting ? "正在评估本次回答" : awaitingEvaluation ? "待评估" : "暂无评估";
   const evaluationSummary = neutralEvaluation
-    ? evaluationNotRequired ? "问候无需评分。" : evaluationFailed || automaticError ? "稍后可重试，当前回答已保留。" : evaluationWaiting ? "结果会自动更新，可继续对话。" : awaitingEvaluation ? "回答完成后开始评估。" : "当前回答没有评估记录。"
+    ? evaluationNotRequired ? "问候无需评分。" : evaluationNotEnrolled ? "该历史回答未进入自动评估流程。" : evaluationFailed || automaticError ? "稍后可重试，当前回答已保留。" : evaluationWaiting ? "结果会自动更新，可继续对话。" : awaitingEvaluation ? "回答完成后开始评估。" : "当前回答没有评估记录。"
     : automaticReport
     ? presentRagSummary(automaticReport.result.summary)
     : result.gateStatus === "failed"
@@ -741,6 +819,44 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
           ? activeCase?.summary
           : "结论基于人工判定，只提供质量建议，不是发布授权。"
         : "完成维度与关键风险核验后，才能形成回答可用性结论。";
+  const taskPresentation: RagTaskPresentation = mode === "sample" && activeCase && conversation
+    ? {
+        status: conversation.status,
+        label: conversation.displayLabel,
+        reason: conversation.reason,
+        qualityConclusion: true,
+      }
+    : automaticReport
+      ? presentRagReportTask(automaticReport)
+      : evaluationNotRequired
+        ? { status: "unverified", label: "无需评估", reason: "问候无需客户任务验收。", qualityConclusion: false }
+        : evaluationWaiting
+          ? { status: "unverified", label: "正在评估本次回答", reason: "正在评估客户任务与必要完成点，请耐心等待。", qualityConclusion: false }
+          : awaitingEvaluation
+            ? { status: "unverified", label: "待评估", reason: "回答完成后，将评估客户任务与必要完成点。", qualityConclusion: false }
+            : evaluationNotEnrolled
+              ? { status: "unverified", label: "未进入自动评估", reason: "该历史回答未进入自动评估流程。", qualityConclusion: false }
+              : evaluationBlocked
+                ? { status: "unverified", label: "评估暂未开始", reason: "客户任务分析暂未开始，请使用现有恢复操作后重试。", qualityConclusion: false }
+                : evaluationFailed || automaticError
+              ? { status: "unverified", label: "评估未完成", reason: "客户任务分析暂未完成，请使用现有恢复操作后重试。", qualityConclusion: false }
+              : live
+                ? { status: "unverified", label: "未进入自动评估", reason: "该历史回答未进入自动评估流程。", qualityConclusion: false }
+                : { status: "unverified", label: "待确认", reason: "完成评审后，将显示客户任务与必要完成点结论。", qualityConclusion: false };
+  const taskWaiting = !automaticReport && evaluationWaiting;
+  const taskHasRisk = mode === "sample" && activeCase
+    ? taskPresentation.status === "fail" && activeCase.gates.some(gate => gate.status === "failed")
+    : taskPresentation.status === "fail" && taskPresentation.qualityConclusion;
+  const taskRevealEnabled = Boolean(automaticReport && mode !== "sample");
+  const { ref: taskRevealRef, progress: taskRevealProgress } = useDataReveal<HTMLElement>(
+    taskRevealEnabled,
+    automaticReport?.reportId ?? `lifecycle:${taskPresentation.label}`,
+    800,
+    "linear",
+    entranceReady("task"),
+  );
+  const taskStatusText = textGraphemes(taskPresentation.label);
+  const taskReasonText = textGraphemes(taskPresentation.reason);
   const { overviewRef, stacked: overviewStacked, summaryTwoLines } = useRagEvaluationLayout(
     `${evaluationSummary}\u0000${displayVerdictLabel}\u0000${result.gateStatus}\u0000${result.coverage}`,
   );
@@ -799,6 +915,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
         );
       }
       setAutomaticRun(next);
+      setAutomaticLifecycleState(next.report ? "recorded" : "expected");
       if (next.report) {
         setAutomaticHistory((old) => mergeAutomaticRuns([next, ...old]));
       }
@@ -846,10 +963,10 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
     return true;
   };
   const submitQuestion = async (queuedQuestion?: string) => {
-    if (!(queuedQuestion ?? input).trim() || previewBusy) return;
+    if (!(queuedQuestion ?? input).trim() || previewBusy) return false;
     const submitted = (queuedQuestion ?? input).trim();
     if (live) {
-      if (!canAsk || exampleReadOnly) return;
+      if (!canAsk || exampleReadOnly) return false;
       const owner = { scope: storageScopeKey, conversation: live.conversationId };
       const revision = ++inputRevision.current;
       const isOwner = () => liveInputOwner.current.scope === owner.scope && (liveInputOwner.current.conversation === owner.conversation || (Boolean(owner.conversation) && liveInputOwner.current.adoptedFrom === owner.conversation));
@@ -863,14 +980,13 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
       if (!accepted) {
         if (isOwner()) {
           if (inputRevision.current === revision) setInput(current => current === "" ? submitted : current);
-          setNotice("问题未成功提交，内容已保留，请重试。");
         } else if (liveInputOwner.current.scope === owner.scope && owner.conversation && !liveDrafts.current.get(owner.conversation)) {
           liveDrafts.current.set(owner.conversation, submitted);
         }
       }
-      return;
+      return accepted;
     }
-    const match = findRagSample(submitted);
+    const match = previewFixtures.findSample(submitted);
     if (question.trim() && answer.trim()) setPreviewPreviousTurns(old => [...old, { id: crypto.randomUUID(), question, answer }]);
     cancelPreview();
     setPreviewAnswerIdentity(`authored:${crypto.randomUUID()}`);
@@ -893,7 +1009,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
       await new Promise<void>(resolve => {
         previewDelay.current = { timer: setTimeout(resolve, 900), resolve };
       });
-      if (operation !== previewOperation.current) return;
+      if (operation !== previewOperation.current) return false;
       previewDelay.current = null;
       selectCase(match);
       setQuestion(submitted);
@@ -901,6 +1017,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
     } else {
       setNotice("此问题不在示例库。请录入实际回答后人工评审；当前预览未连接真实问答服务。");
     }
+    return true;
   };
   useEffect(() => {
     if (live || previewBusy || previewQueue.paused || previewQueue.items[0]?.status !== "queued") return;
@@ -917,7 +1034,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
       ownerKey: answerContextKey,
       scopeKey: historyStorageKey,
       question, answer, need,
-      knowledgeVersion: live ? knowledgeVersion : activeCase ? KNOWLEDGE_VERSION : "人工录入-待绑定正式知识版本",
+      knowledgeVersion: live ? knowledgeVersion : activeCase ? previewFixtures.knowledgeVersion : "人工录入-待绑定正式知识版本",
       evidenceOptions: buildReviewEvidenceOptions({
         answer,
         answerId: live?.answerId ?? automaticReport?.answerMessageId,
@@ -1121,12 +1238,16 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
           </dl>
         </section>}
         </div>
-        <p className="rag-muted rag-evidence-scope-note">{automaticReport ? "自动结论绑定本次回答、服务端冻结知识、规则与模型版本；网站建设评估仍是独立流程。" : live ? "参考资料表示本次回答实际使用的材料；人工复核不会替代服务端自动评估。" : "预设评审只针对这些合成文本与快照；不证明真实服务已抵御注入、越权或其他攻击。"}</p>
+        <p className="rag-muted rag-evidence-scope-note">{automaticReport ? "自动结论绑定本次回答、服务端冻结知识、规则与模型版本；网站建设评估仍是独立流程。" : live ? "参考资料表示本次回答实际使用的材料；人工复核不会替代服务端自动评估。" : "当前人工记录仅用于辅助复核，不替代真实服务验收。"}</p>
       </>}
-      {panel === "rules" && <><h3>六维 100 分</h3><p className="rag-formula">{displayRuleVersion === RAG_CHECKLIST_RULE_VERSION ? "总分由冻结检查项汇总；满足100%／部分满足50%／不满足0%" : "总分 = Σ（维度权重 × 等级 ÷ 4）"}</p>{RAG_DIMENSIONS.map((item) => <article className="rag-evidence" key={item.id}><header><strong>{item.label}</strong><b>{item.weight} 分</b></header><p>{item.question}</p></article>)}<h3>等级与结论</h3><p>{displayRuleVersion === RAG_CHECKLIST_RULE_VERSION ? "各类任务预先固定检查项、分值和适用性；同一缺陷只在主检查项扣分，可选建议不扣分。允许满分和同分，不人为制造差距。证据不足单列待核验。" : "0 不满足 · 1 少量满足 · 2 部分满足 · 3 基本满足 · 4 充分满足。等级必须附判断理由和证据定位。"}</p><p>{["rag-eval-1.3", RAG_CHECKLIST_RULE_VERSION].includes(displayRuleVersion) ? "分数仅作诊断，不设单独否决阈值。核心任务完成且证据完整、无重大风险时可用；有非关键问题时显示可用·待改进。重大风险或核心任务明确失败显示不可用·需修复，必要证据不足显示待核验。" : "历史规则：原始分 ≥90 优秀；≥80 可用；≥70 需要改进；低于 70 不可用。历史结论仍按原冻结规则解释。"}</p>{["rag-eval-1.3", RAG_CHECKLIST_RULE_VERSION].includes(displayRuleVersion) ? <><h3>重大风险与改进项</h3><p>核实建议不等于事实承诺，但其中的电话、操作和企业承诺仍须核验。只按当前任务判断必要信息，不要求无关扩展；来源缺失保留未知。评审覆盖率不代表回答正确率。</p></> : <p>当前展示历史规则与历史结论；新规则不会追溯改判此报告。</p>}<h3>关键风险优先于回答分数</h3><p>任一关键风险成立，该回答直接判为不可用；有风险待核验，不判为可用。此结论是质量建议，不阻止用户进入网站发布确认。</p>{RAG_GATES.map((item) => <article className="rag-evidence" key={item.id}><strong>{item.label}</strong><p>{item.description}</p></article>)}<h3>缺证据不计作通过</h3><p>未判定维度不删除、不补成满分。页面显示已核验权重覆盖率及数学上的可能得分范围；范围不是统计置信区间。不适用项须在正式测试计划中预先批准，当前页面不提供临时剔除。</p><h3>分数的使用边界</h3><p>单次回答分、企业 RAG 系统分与网站建设评估彼此独立。合成示例、单人自评和少量测试都不能替代正式代表集验收或独立复核。任务未完成或关键回答风险成立时，高分不改变该回答的质量结论；但评估结果不拥有网站发布权限。</p><h3>验收参数 · 初始默认值</h3><p>以下参数用于回答质量验收；调整时应记录原值与原因。</p>{RAG_ACCEPTANCE_PARAMS.map((item) => <article className="rag-evidence" key={item.label}><header><strong>{item.label}</strong></header><p>{item.value}</p></article>)}</>}
+      {panel === "rules" && <><h3>六维 100 分</h3><p className="rag-formula">{displayRuleVersion === RAG_CHECKLIST_RULE_VERSION ? "总分由冻结检查项汇总；满足100%／部分满足50%／不满足0%" : "总分 = Σ（维度权重 × 等级 ÷ 4）"}</p>{RAG_DIMENSIONS.map((item) => <article className="rag-evidence" key={item.id}><header><strong>{item.label}</strong><b>{item.weight} 分</b></header><p>{item.question}</p></article>)}<h3>等级与结论</h3><p>{displayRuleVersion === RAG_CHECKLIST_RULE_VERSION ? "各类任务预先固定检查项、分值和适用性；同一缺陷只在主检查项扣分，可选建议不扣分。允许满分和同分，不人为制造差距。证据不足单列待核验。" : "0 不满足 · 1 少量满足 · 2 部分满足 · 3 基本满足 · 4 充分满足。等级必须附判断理由和证据定位。"}</p><p>{["rag-eval-1.3", RAG_CHECKLIST_RULE_VERSION].includes(displayRuleVersion) ? "分数仅作诊断，不设单独否决阈值。核心任务完成且证据完整、无重大风险时可用；有非关键问题时显示可用·待改进。重大风险或核心任务明确失败显示不可用·需修复，必要证据不足显示待核验。" : "历史规则：原始分 ≥90 优秀；≥80 可用；≥70 需要改进；低于 70 不可用。历史结论仍按原冻结规则解释。"}</p>{["rag-eval-1.3", RAG_CHECKLIST_RULE_VERSION].includes(displayRuleVersion) ? <><h3>重大风险与改进项</h3><p>核实建议不等于事实承诺，但其中的电话、操作和企业承诺仍须核验。只按当前任务判断必要信息，不要求无关扩展；来源缺失保留未知。评审覆盖率不代表回答正确率。</p></> : <p>当前展示历史规则与历史结论；新规则不会追溯改判此报告。</p>}<h3>关键风险优先于回答分数</h3><p>任一关键风险成立，该回答直接判为不可用；有风险待核验，不判为可用。此结论是质量建议，不阻止用户进入网站发布确认。</p>{RAG_GATES.map((item) => <article className="rag-evidence" key={item.id}><strong>{item.label}</strong><p>{item.description}</p></article>)}<h3>缺证据不计作通过</h3><p>未判定维度不删除、不补成满分。页面显示已核验权重覆盖率及数学上的可能得分范围；范围不是统计置信区间。不适用项须在正式测试计划中预先批准，当前页面不提供临时剔除。</p><h3>分数的使用边界</h3><p>单次回答分、企业 RAG 系统分与网站建设评估彼此独立。单人自评和少量测试都不能替代正式代表集验收或独立复核。任务未完成或关键回答风险成立时，高分不改变该回答的质量结论；但评估结果不拥有网站发布权限。</p><h3>验收参数 · 初始默认值</h3><p>以下参数用于回答质量验收；调整时应记录原值与原因。</p>{RAG_ACCEPTANCE_PARAMS.map((item) => <article className="rag-evidence" key={item.label}><header><strong>{item.label}</strong></header><p>{item.value}</p></article>)}</>}
       {panel === "improve" && <RagImprovementPlan
-        plan={buildRagImprovementPlan({
+        plan={activeCase ? previewFixtures.buildImprovementPlan({
           sample: mode === "sample" ? activeCase : null,
+          report: automaticReport,
+          issues,
+          complete: result.complete,
+        }) : buildLiveRagImprovementPlan({
           report: automaticReport,
           issues,
           complete: result.complete,
@@ -1148,23 +1269,30 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
       <div className="erag-layout">
         <div className="erag-left-column">
           <section className="sfp-panel erag-knowledge-card" data-rag-entrance="knowledge" data-rag-entrance-immediate={hasNewerPublication || undefined}><div className="erag-card-heading"><div><span className="erag-card-icon"><FileText size={18} /></span><strong>RAG 知识底座</strong></div></div>
-            <div className="erag-stats"><div><strong>{live && !exampleReadOnly ? live.knowledgeBase ? 1 : 0 : previewKnowledgeCollectionCount}</strong><small>{live && !exampleReadOnly ? historicalKnowledge ? "任务冻结快照" : "发布快照" : "知识集合"}</small></div><div><strong>{live && !exampleReadOnly ? live.knowledgeBase?.documentCount ?? 0 : previewKnowledgeFragmentCount}</strong><small>{live && !exampleReadOnly ? "知识文档" : "示例知识片段"}</small></div><div><strong>{currentSources.length}</strong><small>当前来源</small></div></div>
+            <div ref={knowledgeStatsRef} className="erag-stats" data-loading={knowledgeLoading || undefined} data-unavailable={knowledgeUnavailable || undefined}><div><strong className={knowledgeLoading ? "rag-waiting-text" : undefined}>{visibleKnowledgeValue(knowledgeValues[0])}</strong><small>{live && !exampleReadOnly ? historicalKnowledge ? "任务冻结快照" : "发布快照" : "知识集合"}</small></div><div><strong className={knowledgeLoading ? "rag-waiting-text" : undefined}>{visibleKnowledgeValue(knowledgeValues[1])}</strong><small>{live && !exampleReadOnly ? "知识文档" : "示例知识片段"}</small></div><div><strong className={knowledgeLoading ? "rag-waiting-text" : undefined}>{visibleKnowledgeValue(knowledgeValues[2])}</strong><small>当前来源</small></div></div>
             <div className="rag-knowledge-row"><span>{(!exampleReadOnly && live?.knowledgeBase?.sourceFileName) || <>知识版本：{knowledgeVersion}</>}</span><button type="button" className="rag-knowledge-link" onClick={() => openAnswerPanel("evidence", true)}>查看知识与依据</button></div>
+            {knowledgeGateMessage && <div className="rag-knowledge-gate" role={live?.refreshFailed ? "alert" : "status"}>
+              <p>{knowledgeGateMessage}</p>
+              <div>
+                {!historicalKnowledge && <button type="button" className="rag-knowledge-link" onClick={() => live?.onOpenKnowledge()}>前往知识库</button>}
+                <button type="button" className="rag-knowledge-link" onClick={() => live?.onRetryKnowledge()}>重试加载</button>
+              </div>
+            </div>}
           </section>
-          <section className="sfp-panel erag-test-card" data-rag-entrance="chat" data-rag-entrance-immediate={Boolean(live?.busy) || undefined}><div className="erag-card-heading"><div><span className="erag-card-icon"><Bot size={18} /></span><strong>回答示例试用</strong></div><RagConversationHistory
+          <section className="sfp-panel erag-test-card" data-rag-entrance="chat" data-rag-entrance-immediate={Boolean(live?.busy) || undefined}><div className="erag-card-heading"><div><span className="erag-card-icon"><Bot size={18} /></span><strong>企业知识问答</strong></div><RagConversationHistory
               key={`${live ? "live" : "preview"}:${historyStorageKey}`}
               scopeKey={`${live ? "live" : "preview"}:${historyStorageKey}`}
-              items={live ? live.conversationHistory?.items ?? [] : previewHistory.conversations.map(item => ({ id: item.id, title: item.previousTurns[0]?.question || item.question || item.input || "新问答", subtitle: item.caseId ? "合成示例" : undefined }))}
-              activeId={live ? activeCase ? null : live.conversationHistory?.activeId : previewHistory.activeId}
-              examples={live ? RAG_SAMPLE_CASES.map(item => ({ id: item.id, title: item.title })) : []}
-              activeExampleId={exampleReadOnly ? activeCase?.id : undefined}
-              onSelectExample={id => { const item = RAG_SAMPLE_CASES.find(item => item.id === id); if (!item) return false; selectCase(item); return true; }}
+              items={live ? live.conversationHistory?.items ?? [] : previewHistory.conversations.map(item => ({ id: item.id, title: item.previousTurns[0]?.question || item.question || item.input || "新问答", subtitle: item.caseId ? previewFixtures.exampleLabel : undefined }))}
+              activeId={live ? live.conversationHistory?.activeId : activeCase ? null : previewHistory.activeId}
+              examples={!live ? previewCases.map(item => ({ id: item.id, title: item.title })) : []}
+              activeExampleId={!live ? activeCase?.id : undefined}
+              onSelectExample={!live ? id => { const item = previewCases.find(item => item.id === id); if (!item) return false; selectCase(item); return true; } : undefined}
               onNew={startNewConversation}
               onSelect={live ? id => { setActiveCase(null); syncedLiveAnswer.current = ""; return live.conversationHistory?.onSelect(id) ?? false; } : selectPreviewConversation}
               onDelete={live ? live.conversationHistory?.onDelete ?? (() => false) : deletePreviewConversation}
               onOpen={live?.conversationHistory?.onOpen}
               busy={live ? Boolean(live.conversationHistory?.busy) : previewBusy}
-              newDisabled={live ? Boolean(live.conversationHistory?.deletingId) : previewBusy}
+              newDisabled={live ? false : previewBusy}
               loading={live?.conversationHistory?.loading}
               error={live?.conversationHistory?.error}
               deletingId={live?.conversationHistory?.deletingId}
@@ -1176,7 +1304,8 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
               previousTurns={exampleReadOnly ? [] : live ? live.previousTurns : previewPreviousTurns}
               scopeKey={live ? `${storageScopeKey ?? "live"}:${live.conversationId ?? "new"}:${live.taskId ?? "new"}` : `${storageScopeKey ?? "preview"}:${previewHistory.activeId}`}
               live={Boolean(live)}
-              assistantName="Front Mind 企业助手"
+              assistantName={assistantName}
+              knowledgeSource={chatKnowledgeBase}
               readOnly={exampleReadOnly}
               evaluationNotRequired={!exampleReadOnly && (live?.chat ? live.chat.evaluation === "not_required" : evaluationNotRequired)}
               selectedAnswerKey={exampleReadOnly ? `example:${activeCase?.id}` : live?.selectedAnswerKey}
@@ -1198,7 +1327,11 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
               onCancelFollowup={live ? live.onCancelFollowup : async id => { setPreviewQueues(old => ({ ...old, [previewQueueKey]: { ...previewQueue, items: previewQueue.items.filter(item => item.id !== id) } })); return true; }}
               onResumeFollowups={live ? live.onResumeFollowups : async () => { setPreviewQueues(old => ({ ...old, [previewQueueKey]: { ...previewQueue, paused: false } })); return true; }}
               onRetryFollowup={live?.onRetryFollowup}
-              canEdit={!exampleReadOnly}
+              starterQuestions={live?.starterQuestions}
+              onConfirmStarterQuestions={live?.onConfirmStarterQuestions}
+              onRegenerateStarterQuestions={live?.onRegenerateStarterQuestions}
+              onDiscardStarterDraft={live?.onDiscardStarterDraft}
+              canEdit={!exampleReadOnly && (live?.canCompose ?? true)}
               canSubmit={!exampleReadOnly && canAsk && !previewBusy}
               input={exampleReadOnly ? "" : input}
               inputRef={questionInputRef}
@@ -1207,7 +1340,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
               onStop={live ? live.onStop : async () => { setPreviewQueues(old => ({ ...old, [previewQueueKey]: { ...previewQueue, paused: true } })); cancelPreview(); setNotice(""); return true; }}
               onEvidence={key => { if (exampleReadOnly) { openAnswerPanel("evidence", true); return; } if (live?.selectedAnswerKey && key !== live.selectedAnswerKey) { pendingEvidenceSelection.current = key; live.onSelectAnswer?.(key); } else openAnswerPanel("evidence", true); }}
             />
-            {!exampleReadOnly && (live?.notice || (!live?.busy && live?.pendingDispatchQuestion) || notice) && <p className="rag-inline-feedback" role="status">{live ? "暂时无法完成本次提交，内容已保留。" : notice}{live && <button type="button" disabled={live.busy} onClick={() => void (live.pendingDispatchQuestion ? live.onRetryPending() : submitQuestion())}>重试</button>}</p>}
+            {!live && !exampleReadOnly && notice && <p className="rag-inline-feedback" role="status">{notice}</p>}
           </section>
         </div>
         <div className="erag-evaluation-column">
@@ -1228,8 +1361,8 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
               </>}
             </div>
           </div>
-          <div ref={overviewRef} className="rag-evaluation-overview" data-testid="rag-evaluation-overview" data-layout={overviewStacked ? "stacked" : "side-by-side"} data-two-lines={summaryTwoLines ? "true" : "false"}>
-            <RagEvaluationGauge key={automaticReport?.reportId ?? `${question}:${answer}`} score={neutralEvaluation ? null : result.score} preciseScore={neutralEvaluation ? null : automaticReport ? automaticReport.result.score : calculatedResult.rawScore} unavailable={tone === "danger"} />
+          <div ref={overviewRef} className="rag-evaluation-overview" data-testid="rag-evaluation-overview" data-report-reveal-key={automaticReport?.reportId || undefined} data-layout={overviewStacked ? "stacked" : "side-by-side"} data-two-lines={summaryTwoLines ? "true" : "false"} data-waiting={evaluationWaiting || undefined}>
+            <RagEvaluationGauge revealKey={automaticReport?.reportId} score={neutralEvaluation ? null : result.score} preciseScore={neutralEvaluation ? null : automaticReport ? automaticReport.result.score : calculatedResult.rawScore} unavailable={tone === "danger"} />
             <section ref={verdictRevealRef} className={`rag-verdict is-${tone}`} data-evaluation-state={neutralEvaluation ? "lifecycle" : "quality"} aria-label="当前评估摘要">
               <div className="rag-evaluation-summary-flow" data-testid="rag-evaluation-summary-flow">
                 <h3 className="rag-evaluation-status-title" aria-label={displayVerdictLabel}>
@@ -1250,7 +1383,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
             </section>
           </div>
 
-          <RagEvaluationRadar emptyQuestion={neutralEvaluation} key={automaticReport?.reportId ?? `${question}:${answer}`} judgments={checklistJudgments} dimensions={radarDimensions} />
+          <RagEvaluationRadar emptyQuestion={neutralEvaluation} revealKey={automaticReport?.reportId} judgments={checklistJudgments} dimensions={radarDimensions} />
           <div className="rag-evaluation-actions" role="group" aria-label="回答评估详情">
             <button type="button" className="sfp-button sfp-button--ghost rag-evaluation-action" aria-haspopup="dialog" data-answer-panel-trigger="evidence" onClick={() => openAnswerPanel("evidence", true)}>回答依据</button>
             <button type="button" className="sfp-button sfp-button--ghost rag-evaluation-action" aria-haspopup="dialog" data-answer-panel-trigger="improve" disabled={evaluationNotRequired || !answer.trim() || hasPerfectScore} title={hasPerfectScore ? "当前回答已满分，无需优化" : undefined} onClick={() => openAnswerPanel("improve", true)}>优化方案</button>
@@ -1259,13 +1392,13 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
           </aside>
           </RagEntranceReadyContext>
           <RagEntranceReadyContext value={entranceReady("task")}>
-          <section className="sfp-panel rag-task-panel" data-rag-entrance="task" role="region" aria-label="客户任务结果" data-testid="rag-task-panel">
+          <section ref={taskRevealRef} className="sfp-panel rag-task-panel" data-rag-entrance="task" data-report-reveal-key={automaticReport?.reportId || undefined} data-waiting={taskWaiting || undefined} role="region" aria-label="客户任务结果" data-testid="rag-task-panel">
             <header className="rag-task-panel__heading">
               <div className="erag-evaluation-panel__heading">
                 <span className="erag-card-icon" aria-hidden="true"><ClipboardCheck size={18} /></span>
                 <h2>客户任务结果</h2>
               </div>
-              <span className={`rag-case-status is-${taskStatus}${taskHasRisk ? " is-risk" : ""}`} data-testid="rag-task-status"><i className="rag-evaluation-status-orb" aria-hidden="true" />{taskStatusLabel}</span>
+              <span className={`rag-case-status is-${taskPresentation.status}${taskHasRisk ? " is-risk" : ""}`} data-testid="rag-task-status" aria-label={taskPresentation.label}><i className="rag-evaluation-status-orb" aria-hidden="true" /><span className={taskWaiting ? "rag-waiting-text" : undefined}>{taskRevealEnabled ? <RagProgressiveText graphemes={taskStatusText} offset={0} total={taskStatusText.length} progress={taskRevealProgress} /> : taskPresentation.label}</span></span>
             </header>
             {mode === "sample" && activeCase && conversation ? <>
               <p className="rag-conversation__task"><strong>任务描述：</strong>{activeCase.conversation.task}</p>
@@ -1277,7 +1410,7 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
                 <li data-testid="rag-conversation-meta-card">规定运行 {activeCase.conversation.runsRequired} 次</li>
                 {attributionLabel && <li className="is-attribution" data-testid="rag-conversation-meta-card">归因：{attributionLabel}</li>}
               </ul>
-            </> : <p className="rag-conversation__reason">尚未绑定客户任务与必要完成点。单轮回答分数不能替代正式任务验收。</p>}
+            </> : <p className={`rag-conversation__reason${taskWaiting ? " rag-waiting-text" : ""}`} aria-label={taskPresentation.reason}>{taskRevealEnabled ? <RagProgressiveText graphemes={taskReasonText} offset={0} total={taskReasonText.length} progress={taskRevealProgress} /> : taskPresentation.reason}</p>}
           </section>
           </RagEntranceReadyContext>
         </div>
@@ -1299,4 +1432,35 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
 
   </section>;
 }
+const emptyFormalFixtures: RagPreviewFixtures = {
+  cases: [],
+  findSample: () => undefined,
+  knowledgeVersion: "",
+  exampleLabel: "",
+  assistantName: "企业知识助手",
+  buildImprovementPlan: ({ report, issues, complete }) =>
+    buildLiveRagImprovementPlan({ report, issues, complete }),
+};
+const LazyEnterpriseRagPreviewFixtures = ragPreviewFixturesEnabled
+  ? lazy(() => import("./EnterpriseRagPreviewFixtures"))
+  : null;
+
+export function EnterpriseRagPreview(props: EnterpriseRagPreviewProps) {
+  if (props.live) {
+    return <EnterpriseRagPreviewSurface {...props} previewFixtures={emptyFormalFixtures} />;
+  }
+  const installed = peekRagPreviewFixtures();
+  if (installed) {
+    return <EnterpriseRagPreviewSurface {...props} previewFixtures={installed} />;
+  }
+  if (!LazyEnterpriseRagPreviewFixtures) {
+    return <p role="alert">本地预览在当前构建中不可用。</p>;
+  }
+  return (
+    <Suspense fallback={<p role="status">正在加载本地预览…</p>}>
+      <LazyEnterpriseRagPreviewFixtures {...props} />
+    </Suspense>
+  );
+}
+
 export default EnterpriseRagPreview;

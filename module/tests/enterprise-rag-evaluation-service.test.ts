@@ -535,7 +535,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "SOURCE_ANSWER_META_INVALID" });
     const writes = vi.spyOn(h.db, "execute"); writes.mockClear();
     const result = await h.service.latest(SOURCE_TASK_ID, TURN_ID);
-    expect(result).toMatchObject({ latest: null, automaticExpected: false, automaticAdmission: { status: "blocked", code: "SOURCE_ANSWER_META_INVALID" } });
+    expect(result).toMatchObject({ latest: null, automaticState: "blocked", automaticExpected: false, automaticAdmission: { status: "blocked", code: "SOURCE_ANSWER_META_INVALID" } });
     expect(writes.mock.calls.every(([query]) => !new MySqlDialect().sqlToQuery(query).sql.includes("UPDATE"))).toBe(true);
     expect(await h.service.ensureAutomatic(coordinate)).toBeNull();
     expect(h.client.createTask).not.toHaveBeenCalled();
@@ -550,7 +550,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     h.capability.mockRejectedValueOnce(new Error("private-upstream-failure"));
     const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
     await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "MODEL_UNAVAILABLE" });
-    expect(await h.service.latest(SOURCE_TASK_ID, TURN_ID)).toMatchObject({ automaticExpected: true, automaticAdmission: { status: "retrying", code: "EVALUATION_ENQUEUE_DEFERRED" } });
+    expect(await h.service.latest(SOURCE_TASK_ID, TURN_ID)).toMatchObject({ automaticState: "expected", automaticExpected: true, automaticAdmission: { status: "retrying", code: "EVALUATION_ENQUEUE_DEFERRED" } });
     expect(JSON.stringify(h.turnRows[0].metadata)).not.toContain("private-upstream-failure");
     expect(await h.service.ensureAutomatic(coordinate)).toBeNull();
     vi.setSystemTime(Date.now() + 60_000);
@@ -645,7 +645,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
   it("GET 历史及单条观察只读取；后台 sweep 在没有浏览器轮询时推进任务", async () => {
     const h = harness();
     const expected = await h.service.latest(SOURCE_TASK_ID, TURN_ID);
-    expect(expected).toEqual({ latest: null, history: [], automaticExpected: true });
+    expect(expected).toEqual({ latest: null, history: [], automaticState: "expected", automaticExpected: true });
     await h.service.ensureAutomatic({ sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID });
     expect(h.client.createTask).not.toHaveBeenCalled();
     const updates = vi.spyOn(h.db, "update");
@@ -667,7 +667,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     await h.service.latest(SOURCE_TASK_ID, TURN_ID);
     await h.service.observe(id);
     expect(h.client.listAllMessages).toHaveBeenCalledTimes(reads);
-    expect((await h.service.latest(SOURCE_TASK_ID, TURN_ID)).automaticExpected).toBe(false);
+    expect(await h.service.latest(SOURCE_TASK_ID, TURN_ID)).toMatchObject({ automaticState: "recorded", automaticExpected: false });
     expect(updates).not.toHaveBeenCalled();
     expect(inserts).not.toHaveBeenCalled();
   });
@@ -723,7 +723,7 @@ describe("企业 RAG 自动评估持久化服务", () => {
     const h = harness();
     const coordinate = { sourceQaTaskId: SOURCE_TASK_ID, turnId: TURN_ID };
     h.turnRows[0].metadata = {};
-    expect((await h.service.latest(SOURCE_TASK_ID, TURN_ID)).automaticExpected).toBe(false);
+    expect(await h.service.latest(SOURCE_TASK_ID, TURN_ID)).toMatchObject({ automaticState: "not_enrolled", automaticExpected: false });
     await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "SOURCE_AUTO_EVALUATION_NOT_ELIGIBLE" });
     h.turnRows[0].metadata = { autoEvaluation: { intent: "website_assistant", eligible: true } };
     await expect(h.service.ensureAutomatic(coordinate)).rejects.toMatchObject({ code: "SOURCE_AUTO_EVALUATION_NOT_ELIGIBLE" });
@@ -732,6 +732,21 @@ describe("企业 RAG 自动评估持久化服务", () => {
     expect(await h.service.sweep()).toEqual({ advanced: 0, deferred: 0 });
     expect(h.client.createTask).not.toHaveBeenCalled();
     expect(h.client.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("读取状态依据冻结的轮次入场标记，不被当前运行开关改写", async () => {
+    const h = harness();
+    h.core.environment = {};
+    const writes = vi.spyOn(h.db, "execute");
+    writes.mockClear();
+    expect(await h.service.latest(SOURCE_TASK_ID, TURN_ID)).toMatchObject({
+      latest: null,
+      automaticState: "expected",
+      automaticExpected: true,
+    });
+    expect(writes.mock.calls.every(([query]) =>
+      !new MySqlDialect().sqlToQuery(query).sql.includes("UPDATE"),
+    )).toBe(true);
   });
 
   it("下一问已运行时仍评估上一条已完成回答，但不评估未完成轮次", async () => {

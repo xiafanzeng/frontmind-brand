@@ -5,8 +5,10 @@ import {
   type FormEvent,
 } from "react";
 import { MessageCircle, Send, Sparkles, X } from "lucide-react";
-import { previewAssistantSuggestions, previewAssistantUnknownAnswer } from "./preview-copy";
-import { findRagSample } from "./rag-evaluation-cases";
+import {
+  loadRagPreviewFixtures,
+  peekRagPreviewFixtures,
+} from "./rag-preview-fixture-loader";
 
 export type WidgetMessage = {
   id: number;
@@ -21,16 +23,22 @@ export type AssistantExchangeBinding = {
   welcome: string;
 };
 
-function resolveAssistantReply(question: string): { text: string; sources: string[] } {
-  const match = findRagSample(question);
+async function resolveAssistantReply(question: string): Promise<{ text: string; sources: string[] }> {
+  const fixtures = await loadRagPreviewFixtures();
+  const match = fixtures.findSample(question);
   if (match) {
     return {
       text: match.answer,
       sources: match.sources.slice(0, 2).map((source) => source.title),
     };
   }
-  return { text: previewAssistantUnknownAnswer, sources: [] };
+  return { text: "抱歉，当前本地预览资料中没有支持这个问题的内容。", sources: [] };
 }
+
+const unavailableReply = {
+  text: "抱歉，本地预览资料暂时无法读取。",
+  sources: [] as string[],
+};
 
 /**
  * Transitional preview assistant panel. Until the real trial bridge lands, the
@@ -66,6 +74,11 @@ export function PreviewAssistantWidget({
   const [messages, setMessages] = useState<WidgetMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [pending, setPending] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>(() =>
+    interactive
+      ? (peekRagPreviewFixtures()?.cases.slice(0, 3).map((item) => item.question) ?? [])
+      : [],
+  );
   const messageIdRef = useRef(1);
   const pendingTimerRef = useRef<number | null>(null);
 
@@ -73,27 +86,40 @@ export function PreviewAssistantWidget({
     if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
   }, []);
 
+  useEffect(() => {
+    if (!interactive || suggestions.length > 0) return;
+    let cancelled = false;
+    void loadRagPreviewFixtures()
+      .then((fixtures) => {
+        if (!cancelled) setSuggestions(fixtures.cases.slice(0, 3).map((item) => item.question));
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestions([]);
+      });
+    return () => { cancelled = true; };
+  }, [interactive, suggestions.length]);
+
   const ask = (raw: string) => {
     const value = raw.trim();
     if (!value || pending) return;
-    const reply = resolveAssistantReply(value);
+    const reply = resolveAssistantReply(value).catch(() => unavailableReply);
     const submittedBinding = exchangeBinding ?? null;
     setMessages((current) => [...current, { id: messageIdRef.current++, from: "visitor", text: value, sources: [] }]);
     setQuestion("");
     setWidgetOpen(true);
     setPending(true);
     if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
-    pendingTimerRef.current = window.setTimeout(() => {
+    pendingTimerRef.current = window.setTimeout(() => { void reply.then((resolved) => {
       pendingTimerRef.current = null;
       setPending(false);
       setMessages((current) => [
         ...current,
-        { id: messageIdRef.current++, from: "assistant", text: reply.text, sources: reply.sources },
+        { id: messageIdRef.current++, from: "assistant", text: resolved.text, sources: resolved.sources },
       ]);
       if (submittedBinding) {
-        onExchange?.(value, reply.sources.length > 0, submittedBinding);
+        onExchange?.(value, resolved.sources.length > 0, submittedBinding);
       }
-    }, 500);
+    }); }, 500);
   };
 
   const submitQuestion = (event: FormEvent) => {
@@ -132,10 +158,10 @@ export function PreviewAssistantWidget({
                 ))}
               </p>
             ))}
-            {pending && <p className="sfp-widget-bubble sfp-widget-typing">正在检索示例知识…</p>}
+            {pending && <p className="sfp-widget-bubble sfp-widget-typing">正在检索预览知识…</p>}
             {messages.length === 0 && !pending && interactive && (
               <div className="sfp-widget-suggestions">
-                {previewAssistantSuggestions.map((suggestion) => (
+                {suggestions.map((suggestion) => (
                   <button key={suggestion} type="button" onClick={() => ask(suggestion)}>{suggestion}</button>
                 ))}
               </div>
