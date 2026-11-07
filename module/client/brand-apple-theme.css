@@ -1637,30 +1637,6 @@
   color: var(--fm-brand-ink);
 }
 
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-heading {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "copy actions";
-  align-items: start;
-  gap: var(--fm-brand-space-3);
-  margin-bottom: 48px;
-  padding-top: 16px;
-}
-
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading > div:first-child {
-  grid-area: copy;
-  min-width: 0;
-}
-
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading > .rag-toolbar {
-  grid-area: actions;
-  justify-self: end;
-  justify-content: flex-end;
-  flex-wrap: nowrap;
-  gap: 8px;
-  margin: 0;
-}
-
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-toolbar .rag-report-link {
   display: inline-flex;
   align-items: flex-start;
@@ -1682,26 +1658,6 @@
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-toolbar .rag-report-link:focus-visible { outline: 2px solid var(--fm-brand-accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :is(.rag-report-link, .rag-knowledge-link) { transition: none; }
-}
-
-@container sfp (max-width: 760px) {
-  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "actions" "copy";
-  }
-}
-
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-heading h1 {
-  margin-bottom: 16px;
-  font-size: 40px;
-  font-weight: 600;
-  letter-spacing: -0.022em;
-}
-
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-heading p {
-  margin: 0;
-  font-size: 14px;
-  line-height: 22px;
 }
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :where(
@@ -1728,10 +1684,6 @@
   border-radius: var(--fm-brand-radius-small);
   background: var(--fm-brand-accent-soft);
   color: var(--fm-brand-accent);
-}
-
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-toolbar {
-  margin-bottom: var(--fm-brand-space-2);
 }
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :where(.rag-toolbar button, .rag-text-button, .rag-knowledge-row button) {
@@ -2045,18 +1997,6 @@
   border: 0.5px solid var(--fm-brand-line);
   background: rgba(0, 0, 0, 0.05);
   color: var(--fm-brand-ink);
-}
-
-.fm-brand-theme[data-brand-page="website"] .sfp-heading {
-  gap: var(--fm-brand-space-3);
-  margin-bottom: var(--fm-brand-space-3);
-}
-
-.fm-brand-theme[data-brand-page="website"] .sfp-heading h1 {
-  margin-bottom: var(--fm-brand-space-1);
-  font-size: clamp(28px, 3vw, 40px);
-  font-weight: 600;
-  letter-spacing: -0.022em;
 }
 
 .fm-brand-theme[data-brand-page="website"] :where(.sfp-draft-state, .sfp-steps, .sfp-panel, .sfp-preview-panel, .sfp-final-preview) {

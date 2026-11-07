@@ -225,9 +225,11 @@ describe("Brand Apple theme contract", () => {
     const metrics = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-metrics \{([^}]*)\}/)?.[1];
     expect(metrics).toContain("font-size: 12px;");
     expect(metrics).toContain("line-height: 18px;");
-    const ragHeading = css.match(/\.fm-brand-theme\[data-brand-page="enterprise-qa"\] \.rag-eval-root \.sfp-heading h1 \{([^}]*)\}/)?.[1];
-    expect(ragHeading).toContain("font-size: 40px;");
-    expect(ragHeading).not.toContain("clamp(");
+    expect(enterpriseRagPreview).not.toContain("让回答真正满足用户需求");
+    expect(enterpriseRagPreview).not.toContain("用企业资料回答客户问题，核对回答依据，找到改进方向。");
+    expect(enterpriseRagPreview).toContain('className="rag-toolbar rag-evaluation-toolbar"');
+    expect(ragEvaluationCss).toContain(".rag-eval-root .erag-evaluation-panel__heading > .rag-evaluation-toolbar {");
+    expect(ragEvaluationCss).toContain("margin: 0 0 0 auto;");
     expect(ragEvaluationCss).toContain("@container sfp (max-width:400px) { .rag-eval-root .rag-radar-label { width:68px; } }");
     expect(enterpriseRagPreview).toContain('className="rag-evaluation-supporting-meta"');
     expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-width"');

@@ -37,6 +37,11 @@ describe("simplified AI website preview", () => {
     render(<SimplifiedWebsiteBuilderPreview />);
 
     const journey = screen.getByRole("list", { name: "网站建设流程" });
+    const workspaceActions = screen.getByRole("group", { name: "网站状态与操作" });
+    expect(screen.queryByText("从知识库快速搭建帮助中心")).toBeNull();
+    expect(screen.queryByText("先完成网站建设与整体评估，再考虑域名和正式上线。")).toBeNull();
+    expect(journey.nextElementSibling).toBe(workspaceActions);
+    expect(within(workspaceActions).getByText("建设中")).toBeTruthy();
     expect(within(journey).getAllByRole("listitem")).toHaveLength(3);
     expect(within(journey).getByRole("button", { name: /选择模板$/ })).toBeTruthy();
     expect(within(journey).getByRole("button", { name: /网站设计$/ })).toBeTruthy();
