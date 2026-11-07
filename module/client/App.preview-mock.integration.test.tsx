@@ -2,6 +2,7 @@ import {afterEach,beforeEach,expect,it,vi} from "vitest";
 import {cleanup,fireEvent,render,screen,waitFor,within} from "@testing-library/react";
 import App from "../../standalone/App";
 import {createIntentPreviewApi} from "../../standalone/intent-preview";
+import {readPreviewKnowledge} from "../../standalone/knowledge-preview";
 import {readPreviewCatalog} from "../../standalone/keyword-preview";
 
 Object.defineProperty(window,"matchMedia",{writable:true,value:(query:string)=>({matches:false,media:query,onchange:null,addEventListener(){},removeEventListener(){},addListener(){},removeListener(){},dispatchEvent(){return false;}})});
@@ -35,13 +36,21 @@ it("uses the production screens to recommend, save, evaluate, plan, execute and 
   expect(data.state.receipts[0].status).toBe("completed");
   const written=data.state.receipts[0].changes.find(change=>change.action.kind==="node")!;
   expect(data.nodes.find(node=>node.id===written.action.nodeId)?.content).toBe(written.action.after);
+  expect(data.state.todos).toEqual([]);
+  expect(screen.queryByRole("button",{name:"导出评估报告"})).toBeNull();
   fireEvent.click(screen.getByRole("button",{name:"查看知识库变更"}));
+  await waitFor(()=>expect(window.location.search).toContain("view=knowledge"));
+  expect(window.location.search).toContain(`knowledgeNode=${encodeURIComponent(written.action.nodeId!)}`);
+  const snippets=await screen.findAllByText(/本地审核补充：按已核验资料说明适用条件。/,{},{timeout:6000});
+  expect(snippets.some(node=>!node.closest(".knowledge-node-optimization-diff"))).toBe(true);
+  fireEvent.click(screen.getByText("查看本次优化前后差异"));
   expect(await screen.findByLabelText("逐行内容差异")).toBeTruthy();
-  expect(screen.queryByRole("button",{name:"导出变更记录"})).toBeNull();
-  fireEvent.click(screen.getByRole("button",{name:"返回优化工作台"}));
-  fireEvent.click(screen.getByRole("button",{name:"撤销本次优化"}));
-  fireEvent.click(await screen.findByRole("button",{name:"确认撤销"}));
-  await waitFor(async()=>expect((await createIntentPreviewApi("brand-local-preview").observe()).state.receipts[0].status).toBe("reverted"));
+  const persisted=await readPreviewKnowledge("brand-local-preview");
+  expect(persisted.snapshot.documents.find(doc=>doc.id===written.action.nodeId)?.content).toBe(written.action.after);
+  const reopened=createIntentPreviewApi("brand-local-preview");
+  const rollback=await reopened.rollback({expectedRevision:data.revision,receiptId:data.state.receipts[0].id});
+  expect(rollback.state.receipts[0].status).toBe("reverted");
+  expect((await readPreviewKnowledge("brand-local-preview")).snapshot.documents.find(doc=>doc.id===written.action.nodeId)?.content).toBe(written.action.before);
   expect(fetch).not.toHaveBeenCalled();
 },20000);
 it("generates, evaluates, optimizes, adopts and publishes an answer using mock REST",async()=>{

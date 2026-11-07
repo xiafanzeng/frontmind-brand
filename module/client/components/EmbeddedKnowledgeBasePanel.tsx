@@ -175,6 +175,7 @@ export default function EmbeddedKnowledgeBasePanel({
   const [previewProgress, setPreviewProgress] = useState(
     previewData?.progress ?? null,
   );
+  useEffect(()=>{if(previewMode&&previewData)setPreviewProgress(previewData.progress);},[previewMode,previewData]);
   const knowledgeQuery = trpc.workspace.knowledge.useQuery(undefined, {
     enabled: !previewMode && runtime.enabled,
     retry: false,

@@ -20,11 +20,11 @@ describe("intent knowledge evidence", () => {
     const evaluation = evaluateIntent(question, nodes.map(node => ({...node, verified: false})), [question]);
     expect(evaluation.points.every(point => point.status !== "supported")).toBe(true);
   });
-  it("includes body edits in the confirmed plan and keeps missing facts as source tasks", () => {
+  it("includes body edits in the confirmed plan without creating source tasks", () => {
     const evaluation = evaluateIntent(question, nodes, [question]);
     const plan = createIntentPlan(question, evaluation, nodes);
     expect(plan.actions.find(action => action.kind === "node")?.selected).toBe(true);
-    expect(plan.actions.find(action => action.kind === "todo")?.source).toContain("不计入");
+    expect(plan.actions.some(action=>action.kind==="todo")).toBe(false);
     expect(plan.actions.find(action => action.kind === "node")?.before).toBe(nodes[0].content);
   });
   it("does not propose writes to a read-only published snapshot", () => {

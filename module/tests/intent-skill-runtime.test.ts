@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {intentHash, validateIntentSkillResult, type IntentSkillInput} from "../server/intent-skill-runtime";
+import {INTENT_WIRE_SCHEMA,intentHash, validateIntentSkillResult, type IntentSkillInput} from "../server/intent-skill-runtime";
 import type {IntentSkillJob} from "../contracts/intent-workbench";
 
 function fixture(kind: "evaluate" | "plan" = "plan") {
@@ -70,4 +70,11 @@ it("拒绝把没有实际正文差异的动作作为正文优化", () => {
   input.nodes[0].content="# 选材\n\n材料选择依据适用条件。";
   value.plans[0].actions[1].after=input.nodes[0].content;
   expect(()=>validateIntentSkillResult(value,input,job)).toThrow("没有实际变更");
+});
+
+it("新方案只接受正文修改，不把资料待办作为可执行优化",()=>{
+  expect(JSON.stringify(INTENT_WIRE_SCHEMA)).not.toContain('"todo"');
+  const {input,job,value}=fixture();
+  value.plans[0].actions=[{kind:"todo",title:"收集资料",nodeId:null,after:"补充材料",source:"资料缺失"} as any];
+  expect(()=>validateIntentSkillResult(value,input,job)).toThrow("未包含知识库正文修改");
 });

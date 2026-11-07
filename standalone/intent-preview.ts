@@ -116,7 +116,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       check(input.expectedRevision);
       const plans = memory.state.plans.filter(plan => input.questionIds.includes(plan.questionId)).map(knowledgeOnlyIntentPlan);
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({action: structuredClone(action), questionId: plan.questionId, status: "pending" as const})));
-      if (!changes.length) throw new Error("请至少选择一项动作");
+      if (!changes.length) throw new Error("请先生成并勾选知识库正文修改方案");
       if (changes.some(change => change.action.kind === "node" && change.action.before.trim() === change.action.after.trim()))throw new Error("选中的正文修改与原文相同，请修改内容或取消采纳该动作");
       const nodeIds = changes.filter(change => change.action.kind === "node").map(change => change.action.nodeId);
       if (new Set(nodeIds).size !== nodeIds.length) throw new Error("多个方案修改同一节点，请分别执行");
@@ -128,7 +128,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
           const node = memory.nodes.find(item => item.id === action.nodeId)!;
           if (node.content !== action.before) {change.status = "failed"; change.error = "节点已有后续修改"; continue;}
           node.content = action.after; node.verified = false;
-        } else memory.state.todos.push({id: `${receipt.id}:${action.id}`, questionId: change.questionId, title: action.after, source: "", status: "pending"});
+        } else {change.status="failed";change.error="仅执行知识库正文修改";continue;}
         change.status = "succeeded";
       }
       receipt.after = memory.state.questions.filter(question => input.questionIds.includes(question.id)).map(question => evaluateIntent(question, memory.nodes, memory.state.questions));

@@ -293,8 +293,8 @@ describe("优化工作台任务入口", () => {
     initial.state.jobs![0].questionsScope = "selected";
     initial.state.questions.push({...question, id: "q2", question: "其他部署问题"});
     initial.state.evaluations.push({...workspace("succeeded").state.evaluations[0], questionId: "q2"});
-    initial.state.plans.push({questionId: "q2", actions: [{id: "a2", kind: "todo", title: "其他方案",
-      nodeId: null, before: "", after: "原方案草稿", source: "证据", selected: true}]});
+    initial.state.plans.push({questionId: "q2", actions: [{id: "a2", kind: "node", title: "其他方案",
+      nodeId: "fixture-node", before: "", after: "原方案草稿", source: "证据", selected: true}]});
     const {api, finish} = pendingApi(initial);
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api} catalogIntegration={{onOpenAnswer: vi.fn()}}/>);
     await screen.findByRole("region", {name: "问题评估任务"});
@@ -334,8 +334,8 @@ describe("优化工作台任务入口", () => {
     const unevaluated = {...question, id: "q3", question: "尚未评估的问题", rowIndex: 2};
     initial.state.questions.push(other, unevaluated);
     initial.state.evaluations.push({...workspace("succeeded").state.evaluations[0], questionId: "q2"});
-    initial.state.plans.push({questionId: "q2", actions: [{id: "a2", kind: "todo", title: "其他方案",
-      nodeId: null, before: "", after: "原方案草稿", source: "证据", selected: true}]});
+    initial.state.plans.push({questionId: "q2", actions: [{id: "a2", kind: "node", title: "其他方案",
+      nodeId: "fixture-node", before: "", after: "原方案草稿", source: "证据", selected: true}]});
     let ledger = structuredClone(initial);
     let release!: (data: IntentWorkspace) => void;
     const delayed = new Promise<IntentWorkspace>(resolve => {release = resolve;});
@@ -411,8 +411,8 @@ describe("优化工作台任务入口", () => {
     const initial = workspace();
     initial.state.questions.push({...question, id: "q2", question: "其他部署问题", rowIndex: 1});
     initial.state.evaluations.push({...workspace("succeeded").state.evaluations[0], questionId: "q2"});
-    initial.state.plans.push({questionId: "q2", actions: [{id: "a2", kind: "todo", title: "其他方案",
-      nodeId: null, before: "", after: "原方案草稿", source: "证据", selected: true}]});
+    initial.state.plans.push({questionId: "q2", actions: [{id: "a2", kind: "node", title: "其他方案",
+      nodeId: "fixture-node", before: "", after: "原方案草稿", source: "证据", selected: true}]});
     const running = {...structuredClone(initial), revision: 2};
     running.state.jobs = [{...workspace("running").state.jobs![0], questionsScope: "selected"}];
     let release!: (data: IntentWorkspace) => void;
@@ -462,8 +462,8 @@ describe("优化工作台任务入口", () => {
   it.each(["running", "paused"])("%s时当前评估题的四入口独立，修改与删除真正保存，旧结果只按原题查看", async status => {
     const initial = workspace(status);
     initial.state.evaluations = workspace("succeeded").state.evaluations;
-    initial.state.plans = [{questionId: "q1", actions: [{id: "a1", kind: "todo", title: "原题方案",
-      nodeId: null, before: "", after: "核验资料", source: "资料", selected: true}]}];
+    initial.state.plans = [{questionId: "q1", actions: [{id: "a1", kind: "node", title: "原题方案",
+      nodeId: "fixture-node", before: "", after: "核验资料", source: "资料", selected: true}]}];
     const {api, finish} = pendingApi(initial);
     let ledger = structuredClone(initial);
     api.observe = vi.fn(async () => structuredClone(ledger));
@@ -511,7 +511,7 @@ describe("优化工作台任务入口", () => {
     const actions = [
       {id: "question", kind: "question" as const, title: "修改当前问题", nodeId: null, before: "原问题", after: "建议问题", source: "问题证据", selected: true},
       {id: "node", kind: "node" as const, title: "修改知识节点正文", nodeId: "1.01", before: "原正文", after: "建议正文", source: "节点证据", selected: true},
-      {id: "todo", kind: "todo" as const, title: "补充当前资料", nodeId: null, before: "", after: "待核验资料", source: "资料缺口", selected: true},
+      {id: "todo", kind: "node" as const, title: "补充当前资料", nodeId: "fixture-node", before: "", after: "待核验资料", source: "资料缺口", selected: true},
     ];
     saved.state.plans = [{questionId: "q1", actions}];
     saved.state.receipts = [{id: "old-receipt", status: "completed", createdAt: "2026-10-28T00:00:00Z",
@@ -563,36 +563,24 @@ describe("优化工作台任务入口", () => {
     expect(screen.getByRole("heading", {name: /历史节点 · 1\.01/})).toBeTruthy();
     expect(screen.queryByRole("heading", {name: "本次未修改知识库正文"})).toBeNull();
   });
-  it("整张动作卡片切换预览，采纳操作独立，切换后保留编辑草稿且不发起业务请求", async () => {
-    const saved = workspace("succeeded");
-    saved.state.plans = [{questionId: "q1", actions: [
-      {id: "node", kind: "node", title: "补充节点正文", nodeId: "1.01", before: "原节点内容", after: "建议节点内容", source: "节点来源说明", selected: true},
-      {id: "question", kind: "question", title: "明确问题范围", nodeId: null, before: "原问题", after: "建议问题", source: "问题来源说明", selected: true},
-      {id: "todo", kind: "todo", title: "补充资料待办", nodeId: null, before: "", after: "待办内容", source: "待办来源说明", selected: true},
+  it("正文动作只用勾选控制采纳，取消再勾选保留编辑内容且不创建待办", async () => {
+    const saved=workspace("succeeded");
+    saved.state.plans=[{questionId:"q1",actions:[
+      {id:"node",kind:"node",title:"补充节点正文",nodeId:"1.01",before:"原节点内容",after:"建议节点内容",source:"节点来源说明",selected:true},
+      {id:"legacy-todo",kind:"todo",title:"旧资料待办",nodeId:null,before:"",after:"待办内容",source:"旧记录",selected:true},
     ]}];
-    const {api} = pendingApi(saved);
+    const {api}=pendingApi(saved);
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    fireEvent.click(await screen.findByRole("button", {name: "查看优化方案"}));
-    const preview = screen.getByRole("region", {name: "优化动作修改前后"});
-    expect(within(preview).queryByText("节点来源说明")).toBeNull();
-    expect(screen.queryByText("节点正文须人工审核。资料待办不会直接消除知识缺口。")).toBeNull();
-    fireEvent.change(within(preview).getByRole("textbox", {name: "补充节点正文修改后"}), {target: {value: "人工编辑的节点草稿"}});
-    expect(screen.queryByRole("button", {name: "查看并编辑：明确问题范围"})).toBeNull();
-    fireEvent.click(screen.getByRole("button", {name: "查看并编辑：补充资料待办"}));
-    expect(within(preview).getByText("暂无原内容")).toBeTruthy();
-    expect(within(preview).getByRole("textbox", {name: "补充资料待办修改后"})).toHaveProperty("value", "待办内容");
-    fireEvent.click(screen.getByRole("checkbox", {name: "采纳：补充节点正文"}));
-    expect(screen.getByRole("button", {name: "查看并编辑：补充资料待办"}).getAttribute("aria-pressed")).toBe("true");
-    const todo = screen.getByRole("region", {name: "优化动作：补充资料待办"});
-    fireEvent.click(within(todo).getByRole("button", {name: "不采纳"}));
-    expect(within(todo).getByRole("checkbox")).toHaveProperty("checked", false);
-    expect(within(preview).getByRole("textbox")).toHaveProperty("value", "待办内容");
-    fireEvent.click(screen.getByRole("button", {name: "查看并编辑：补充资料待办"}));
-    expect(within(preview).getByText("暂无原内容")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", {name: "查看并编辑：补充节点正文"}));
-    expect(within(preview).getByRole("textbox")).toHaveProperty("value", "人工编辑的节点草稿");
-    expect(api.command).not.toHaveBeenCalled();
-    expect(api.execute).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button",{name:"查看优化方案"}));
+    const editor=screen.getByRole("textbox",{name:"补充节点正文修改后"});
+    fireEvent.change(editor,{target:{value:"人工编辑的节点草稿"}});
+    const checkbox=screen.getByRole("checkbox",{name:"采纳：补充节点正文"});
+    fireEvent.click(checkbox);expect(checkbox).toHaveProperty("checked",false);
+    fireEvent.click(checkbox);expect(checkbox).toHaveProperty("checked",true);
+    expect(editor).toHaveProperty("value","人工编辑的节点草稿");
+    expect(screen.queryByText("旧资料待办")).toBeNull();
+    expect(screen.queryByRole("button",{name:"不采纳"})).toBeNull();
+    expect(api.command).not.toHaveBeenCalled();expect(api.execute).not.toHaveBeenCalled();
   });
   it("列表内只展示评估标题，位于页面标题之后并保留原任务详情和阶段", async () => {
     const initial = workspace("running");
@@ -715,7 +703,7 @@ describe("优化工作台任务入口", () => {
     const initial = workspace("running", kind === "plan" ? "plan" : "evaluate");
     const completed = workspace("succeeded", kind === "plan" ? "plan" : "evaluate");
     if (kind === "plan") completed.state.plans = [{questionId: "q1", actions: [{
-      id: "a", kind: "todo", title: "补充资料", nodeId: null, before: "", after: "已保存建议", source: "缺口", selected: true,
+      id: "a", kind: "node", title: "补充资料", nodeId: "fixture-node", before: "", after: "已保存建议", source: "缺口", selected: true,
     }]}];
     if (kind === "receipt") {
       initial.state.jobs![0].receiptId = "receipt-1";
@@ -774,7 +762,7 @@ describe("优化工作台任务入口", () => {
   it("移除历史入口后重新打开仍能查看已保存评分和方案，不调用模型", async () => {
     const saved = workspace("succeeded", "plan");
     saved.state.plans = [{questionId: "q1", actions: [{
-      id: "a", kind: "todo", title: "补充部署资料", nodeId: null, before: "", after: "补充证据", source: "资料缺口", selected: true,
+      id: "a", kind: "node", title: "补充部署资料", nodeId: "fixture-node", before: "", after: "补充证据", source: "资料缺口", selected: true,
     }]}];
     const {api} = pendingApi(saved);
     const first = render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
@@ -790,8 +778,8 @@ describe("优化工作台任务入口", () => {
   });
   it("查看已保存方案直接复用，只有重新生成方案才提交任务", async () => {
     const saved = workspace("succeeded");
-    saved.state.plans = [{questionId: "q1", actions: [{id: "a", kind: "todo", title: "部署资料",
-      nodeId: null, before: "", after: "保留的方案内容", source: "缺口", selected: true}]}];
+    saved.state.plans = [{questionId: "q1", actions: [{id: "a", kind: "node", title: "部署资料",
+      nodeId: "fixture-node", before: "", after: "保留的方案内容", source: "缺口", selected: true}]}];
     const {api, finish} = pendingApi(saved);
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     fireEvent.click(await screen.findByRole("button", {name: `查看评估：${question.question}`}));
@@ -862,8 +850,8 @@ describe("优化工作台任务入口", () => {
       completedAt: "2026-10-28T00:00:00Z", questions: [question, second],
       evaluations: saved.state.evaluations,
       plans: [question, second].map((item, index) => ({questionId: item.id, actions: [{
-        id: `a-${index}`, kind: "todo", title: `方案-${item.question}`,
-        nodeId: null, before: "", after: `建议-${item.question}`, source: "资料缺口", selected: true,
+        id: `a-${index}`, kind: "node", title: `方案-${item.question}`,
+        nodeId: "fixture-node", before: "", after: `建议-${item.question}`, source: "资料缺口", selected: true,
       }]})),
     };
     const {api} = pendingApi(saved), onOpenAnswer = vi.fn();
@@ -874,8 +862,9 @@ describe("优化工作台任务入口", () => {
     expect(screen.queryByRole("heading", {name: question.question})).toBeNull();
     expect(screen.getByRole("region", {name: `优化动作：方案-${second.question}`})).toBeTruthy();
     expect(screen.queryByRole("region", {name: `优化动作：方案-${question.question}`})).toBeNull();
-    fireEvent.click(screen.getByRole("button", {name: "进入应答逻辑"}));
-    expect(onOpenAnswer).toHaveBeenLastCalledWith(second);
+    expect(screen.queryByRole("button", {name: "进入应答逻辑"})).toBeNull();
+    expect(screen.queryByText("1 个问题")).toBeNull();
+    expect(onOpenAnswer).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", {name: "返回评估详情"}));
     fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
     fireEvent.click(within(screen.getByText(question.question).closest("tr")!).getByRole("button", {name: "查看优化方案"}));
@@ -926,7 +915,7 @@ describe("优化工作台任务入口", () => {
     await screen.findByRole("heading", {name: "实时任务动态"});
     const completed = workspace("succeeded", "plan");
     completed.state.plans = [{questionId: "q1", inputHash: "hash", actions: [{
-      id: "action", kind: "todo", nodeId: null, title: "补充部署资料",
+      id: "action", kind: "node", nodeId: "fixture-node", title: "补充部署资料",
       before: "", after: "补充部署证据", source: "资料缺口", selected: true,
     }]}];
     await act(async () => finish(completed));
@@ -1076,8 +1065,8 @@ describe("优化工作台任务入口", () => {
   });
   it("列表直接进入应答逻辑，保留修改删除及只读评分", async () => {
     const saved = workspace("succeeded"), onOpenAnswer = vi.fn();
-    saved.state.plans = [{questionId: "q1", actions: [{id: "a", kind: "todo", title: "部署资料",
-      nodeId: null, before: "", after: "原方案", source: "缺口", selected: true}]}];
+    saved.state.plans = [{questionId: "q1", actions: [{id: "a", kind: "node", title: "部署资料",
+      nodeId: "fixture-node", before: "", after: "原方案", source: "缺口", selected: true}]}];
     const {api} = pendingApi(saved);
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api} catalogIntegration={{onOpenAnswer}}/>);
     await screen.findByRole("button", {name: "查看优化方案"});

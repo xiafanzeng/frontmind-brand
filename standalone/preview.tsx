@@ -1,3 +1,4 @@
+import {readPreviewKnowledge} from './knowledge-preview';
 import {useState} from 'react';
 import type {BrandConversationClient} from '../module/client/conversation-runtime';
 import type {Conversation} from '../module/client/conversation-types';
@@ -8,8 +9,8 @@ import type {SiteOpsObservationV1} from '../module/contracts/siteops-contract';
 import {readPreviewCatalog} from './keyword-preview';
 export function createPreviewRpc(scope:string):RpcCall{return async(path,_input,mutation)=>{
  if(mutation)throw new Error('此本地预览操作尚未实现。');
- if(path==='workspace.knowledge')return {snapshot:previewKnowledgeSnapshot};
- if(path==='workspace.knowledgeProgress')return {progress:previewKnowledgeProgress};
+ if(path==='workspace.knowledge')return {snapshot:(await readPreviewKnowledge(scope)).snapshot};
+ if(path==='workspace.knowledgeProgress')return {progress:(await readPreviewKnowledge(scope)).progress};
  if(path==='workspace.knowledgeReset.status')return {revision:0,hasKnowledge:true,canReset:false,unavailableReason:'本地示例知识库'};
  const catalog=readPreviewCatalog(scope);
  if(path==='workspace.dashboard')return {revision:catalog.revision,payload:{keywordTables:catalog.tables}};

@@ -53,8 +53,8 @@ const resultSchema = z.object({
 const knowledgeResultSchema = resultSchema.extend({
   plans: z.array(resultSchema.shape.plans.element.extend({
     actions: z.array(resultSchema.shape.plans.element.shape.actions.element.extend({
-      kind: z.enum(["node", "todo"]),
-    })).min(1).max(2),
+      kind: z.literal("node"),
+    })).min(1).max(1),
   })).max(160),
 });
 export const INTENT_WIRE_SCHEMA = z.toJSONSchema(knowledgeResultSchema, {target: "draft-7"});
@@ -85,8 +85,9 @@ export function validateIntentSkillResult(value: unknown, input: IntentSkillInpu
       provenance: {operationId: job.id, inputHash: job.inputHash, skillHash: job.skillHash, model: job.model}};
   });
   const plans: IntentPlan[] = parsed.plans.map(plan => {
-    const actions = plan.actions.filter(action => action.kind !== "question");
+    const actions = plan.actions.filter(action => action.kind === "node");
     if (new Set(plan.actions.map(a => a.kind)).size !== plan.actions.length) throw new IntentSkillRuntimeError("方案包含重复动作");
+    if (!actions.length) throw new IntentSkillRuntimeError("优化方案未包含知识库正文修改，请依据相关可编辑节点重新生成方案");
     const question = input.selectedQuestions.find(q => q.id === plan.questionId)!;
     return {questionId: plan.questionId, inputHash: job.inputHash, actions: actions.map(action => {
       const node = input.nodes.find(node => node.id === action.nodeId);

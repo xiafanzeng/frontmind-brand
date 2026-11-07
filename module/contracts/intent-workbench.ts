@@ -118,9 +118,9 @@ export const emptyIntentState = (): IntentState => ({
   version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [], jobs: [], dismissedHostQuestionIds: [],
 });
 
-/** Legacy question actions remain readable in history, but never become executable drafts. */
+/** Legacy question/todo records remain readable; optimization executes body changes only. */
 export function knowledgeOnlyIntentPlan(plan: IntentPlan): IntentPlan {
-  return {...plan, actions: plan.actions.filter(action => action.kind === "node" || action.kind === "todo")};
+  return {...plan, actions: plan.actions.filter(action => action.kind === "node")};
 }
 
 /** Resolve a current draft or the latest accepted snapshot without changing either. */
@@ -213,9 +213,5 @@ export function createIntentPlan(question: IntentQuestion, evaluation: IntentEva
     nodeId: target.id, before: target.content,
     after: `${target.content.trim()}\n\n## 回答口径与选择边界\n\n针对“${question.question}”，回答应引用本节点已经确认的事实，说明适用条件与判断依据。尚未确认的资料不得作为确定结论；涉及风险和专业决策时，应说明限制并建议进一步核验。\n`,
     source: `${target.branch} / ${target.title}；仅新增回答边界，不生成未经证实的产品或医疗事实`});
-  const gaps = evaluation.points.filter(point => point.status !== "supported");
-  if (gaps.length) actions.push({id: `${question.id}:todo`, kind: "todo", title: "创建资料待办", selected: true, nodeId: null, before: "",
-    after: `请补充并核验：${gaps.map(point => point.title).join("、")}。记录原始来源、核验日期和适用范围后，再更新对应知识节点。`,
-    source: "待办完成前不计入知识支撑分"});
   return {questionId: question.id, actions};
 }

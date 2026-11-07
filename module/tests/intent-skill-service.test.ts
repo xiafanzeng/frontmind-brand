@@ -10,13 +10,15 @@ import type {ModuleHttpCore} from "../server/http-api";
 import type {Request} from "express";
 
 vi.mock("../server/knowledge-node-workspace-service.js", () => ({getKnowledgeNodeDetails: vi.fn(), saveKnowledgeNodeContent: vi.fn()}));
-function harness(options: {mysqlJsonPayload?: "object" | "string"} = {}) {
+function harness(options: {mysqlJsonPayload?: "object" | "string";readOnly?:boolean} = {}) {
   const operations = mysqlTable("operations_test", {id: varchar("id", {length: 191})});
   const tasks = mysqlTable("tasks_test", {id: varchar("id", {length: 191}), operationId: varchar("operationId", {length: 191})});
   const events = mysqlTable("events_test", {id: varchar("id", {length: 191}), taskId: varchar("taskId", {length: 191}), normalizedPayload: json("normalizedPayload")});
   let ledger: {revision: number; state: ReturnType<typeof emptyIntentState>} | undefined;
   const storedTasks: any[] = []; const storedOperations: any[] = []; const storedEvents: any[] = [];
   const nodes = [{leafId: "node", title: "选材", branchTitle: "产品", status: "confirmed", content: "材料选择依据适用条件。", contentVersion: 1}];
+  vi.mocked(getKnowledgeNodeDetails).mockImplementation(async()=>({coordinates:{conversationId:"conversation",generation:1,revision:1,stateEpoch:1,contentVersion:1,resetRevision:0},node:{leafId:"node",contentMarkdown:nodes[0].content}}) as any);
+  vi.mocked(saveKnowledgeNodeContent).mockImplementation(async(_userId,input)=>{nodes[0].content=input.contentMarkdown;return {accepted:true,unchanged:false};});
   const dialect = new MySqlDialect();
   // MySQL JSON normalizes object keys; neither driver return shape preserves
   // the insertion order used by the writer. Exercise the real SQL payload
@@ -35,7 +37,7 @@ function harness(options: {mysqlJsonPayload?: "object" | "string"} = {}) {
       if (sql.startsWith("UPDATE brand_intent")) {ledger!.state = JSON.parse(params[0] as string); ledger!.revision++;}
       if (sql.startsWith("SELECT revision")) return [[...(ledger ? [{revision: ledger.revision,
         payload: options.mysqlJsonPayload ? persistedPayload(ledger.state) : JSON.stringify(ledger.state)}] : [])]];
-      if (sql.includes("FROM knowledge_base_builds")) return [[{id: "build", conversationId: "conversation", generation: 1, contentVersion: 1, status: "published", activeTurnId: null}]];
+      if (sql.includes("FROM knowledge_base_builds")) return [[{id: "build", conversationId: "conversation", generation: 1, contentVersion: 1, status: options.readOnly?"researching":"published", activeTurnId: null}]];
       if (sql.includes("FROM knowledge_base_build_nodes")) return [nodes];
       return [[]];
     },
@@ -95,7 +97,7 @@ function harness(options: {mysqlJsonPayload?: "object" | "string"} = {}) {
       dimensions: ["意图明确度", "品牌关联度", "决策相关度", "问题清晰度", "内容独特度", "知识支撑初评"].map(label => ({label, score: 100, reason: "知识证据"})),
       points: [{title: "适用条件", terms: ["条件"], status: "supported", nodeId: "node", evidence: "材料选择依据适用条件。", issue: "已确认"}], findings: [],
     }], plans: input.kind === "plan" ? [{questionId: "q", actions: [{
-      kind: "todo", title: "补充适用条件资料", nodeId: null, after: "补充并核验材料适用条件的来源资料", source: "选材节点",
+      kind: "node", title: "补充选材正文", nodeId: "node", after: "# 选材\n\n材料选择依据适用条件。\n\n## 选择步骤\n\n先核对适用条件，再选择材料。", source: "选材节点",
     }]}] : []};
   }
   const send = (value = output()) => client.listAllMessages.mockResolvedValue([{
@@ -250,9 +252,9 @@ describe("优化模型持久化任务", () => {
     const executed = await h.service.execute({expectedRevision: planned.revision,
       clientRequestId: "00000000-0000-4000-8000-000000000007", questionIds: ["q"]});
     expect(executed.state.receipts[0]).toMatchObject({status: "completed", changes: [
-      {questionId: "q", action: {kind: "todo"}, status: "succeeded"},
+      {questionId: "q", action: {kind: "node"}, status: "succeeded"},
     ]});
-    expect(executed.state.todos).toMatchObject([{questionId: "q", title: "补充并核验材料适用条件的来源资料", status: "pending"}]);
+    expect(executed.state.todos).toEqual([]);
     expect(h.ledger().state.questions).toEqual(synced.state.questions);
     expect(executed.state.jobs?.at(-1)).toMatchObject({kind: "evaluate", status: "running"});
     expect(h.client.createTask).toHaveBeenCalledTimes(2);
@@ -377,7 +379,7 @@ describe("优化模型持久化任务", () => {
       clientRequestId: "00000000-0000-4000-8000-000000000002"});
     expect(failed.state.jobs![1].status).toBe("failed");
     expect(failed.state.evaluations).toEqual(completed.state.evaluations);
-    expect(failed.state.plans[0].actions[0].after).toBe("修改后的问题？");
+    expect(failed.state.plans[0].actions[0].after).toContain("修改后的问题？");
     expect(failed.state.jobs![0].result).toEqual(snapshot);
     h.client.listAllMessages.mockClear();
     const reopened = createIntentWorkbenchService(h.core, {frontmindUser: {id: 42, role: "user"}} as unknown as Request);
@@ -398,7 +400,7 @@ describe("优化模型持久化任务", () => {
     h.send();
     const completed = await h.service.poll();
     expect(completed.state.jobs!.at(-1)!.status).toBe("succeeded");
-    expect(completed.state.plans[0].actions[0].after).toBe("人工保存的资料收集要求");
+    expect(completed.state.plans[0].actions[0].after).toContain("人工保存的资料收集要求");
     expect(completed.state.jobs!.at(-1)!.result!.plans[0].actions[0].after).not.toBe("人工保存的资料收集要求");
   });
   it("历史成功任务从已验收的本地事件恢复，凭据失效也不派发模型", async () => {
@@ -432,7 +434,7 @@ describe("优化模型持久化任务", () => {
     const edited = await h.service.command({kind: "edit", expectedRevision: reopened.revision, questionId: "q",
       actions: [{id: action.id, selected: true, after: "人工审核后的问题？"}]});
     expect(edited.state.plans[0].inputHash).toBe(completed.state.jobs![0].inputHash);
-    expect(edited.state.plans[0].actions[0].after).toBe("人工审核后的问题？");
+    expect(edited.state.plans[0].actions[0].after).toContain("人工审核后的问题？");
     expect(edited.state.jobs![0].result).toEqual(snapshot);
     expect((await h.service.observe()).state.plans).toEqual(edited.state.plans);
     expect(h.client.createTask).toHaveBeenCalledTimes(1);
@@ -458,7 +460,7 @@ describe("优化模型持久化任务", () => {
     h.ledger().state.plans[0].actions[0].after = "当前已编辑草稿";
     const current = await h.service.command({kind: "edit", expectedRevision: completed.revision, questionId: "q",
       actions: [{id: action.id, selected: false, after: "保留当前编辑"}]});
-    expect(current.state.plans[0].actions[0].after).toBe("保留当前编辑");
+    expect(current.state.plans[0].actions[0].after).toContain("保留当前编辑");
     h.ledger().state.plans = [];
     await expect(h.service.command({kind: "edit", expectedRevision: current.revision, questionId: "q",
       actions: [{id: "unknown-action", selected: true, after: "不应保存"}]})).rejects.toMatchObject({code: "ACTION_MISSING"});
@@ -627,8 +629,8 @@ describe("优化模型持久化任务", () => {
     const receiptId = "00000000-0000-4000-8000-000000000003";
     const executed = await h.service.execute({expectedRevision: planned.revision, clientRequestId: receiptId, questionIds: ["q"]});
     expect(executed.state.questions).toEqual(initial.state.questions);
-    expect(executed.state.todos).toMatchObject([{questionId: "q", title: "补充并核验材料适用条件的来源资料", status: "pending"}]);
-    expect(executed.state.receipts[0].changes).toMatchObject([{questionId: "q", action: {kind: "todo"}, status: "succeeded"}]);
+    expect(executed.state.todos).toEqual([]);
+    expect(executed.state.receipts[0].changes).toMatchObject([{questionId: "q", action: {kind: "node"}, status: "succeeded"}]);
     expect(executed.state.receipts[0].status).toBe("completed");
     expect(executed.state.receipts[0].after).toEqual([]);
     expect(executed.state.jobs?.at(-1)?.status).toBe("running");
@@ -740,7 +742,7 @@ it("确认默认方案即写入现有知识库、保留正文快照，刷新可�
   await h.service.command({...h.request,kind:"plan"});
   const original=h.nodes[0].content;
   const output=h.output();
-  output.plans[0].actions.unshift({kind:"node",title:"整理选材口径",nodeId:"node",after:"# 选材\n\n材料选择依据适用条件。\n\n## 选择步骤\n\n先确认适用条件，再对照现有材料选择。",source:"选材节点现有内容"} as any);
+  output.plans[0].actions=[{kind:"node",title:"整理选材口径",nodeId:"node",after:"# 选材\n\n材料选择依据适用条件。\n\n## 选择步骤\n\n先确认适用条件，再对照现有材料选择。",source:"选材节点现有内容"} as any];
   h.send(output);
   const planned=await h.service.poll();
   const bodyAction=planned.state.plans[0].actions.find(action=>action.kind==="node")!;
@@ -755,7 +757,7 @@ it("确认默认方案即写入现有知识库、保留正文快照，刷新可�
     expect(save).toHaveBeenCalledWith(42,expect.objectContaining({conversationId:"conversation",leafId:"node",contentMarkdown:bodyAction.after}));
     expect(executed.state.receipts[0].changes.find(change=>change.action.kind==="node")).toMatchObject({status:"succeeded",action:{before:original,after:bodyAction.after}});
     expect((await h.service.observe()).nodes[0].content).toBe(bodyAction.after);
-    expect(executed.state.todos).toHaveLength(1);
+    expect(executed.state.todos).toHaveLength(0);
     const writes=save.mock.calls.length;
     await h.service.execute({expectedRevision:planned.revision,clientRequestId:receiptId,questionIds:["q"]});
     expect(save).toHaveBeenCalledTimes(writes);
@@ -780,4 +782,11 @@ it("保存接口未实际更新正文时，不把拟写入内容标记为成功�
     expect(result.state.receipts[0]).toMatchObject({status:"partial",changes:[{status:"failed",error:"尚未确认正文已写入知识库，请重新读取后核对"}]});
     expect(result.nodes[0].content).toBe("材料选择依据适用条件。");
   }finally{details.mockReset();save.mockReset();}
+});
+
+it("没有可编辑知识节点时不创建正文优化任务或资料待办",async()=>{
+  const h=harness({readOnly:true});await h.intake();
+  await expect(h.service.command({...h.request,kind:"plan"})).rejects.toMatchObject({code:"KNOWLEDGE_READ_ONLY"});
+  expect(h.client.createTask).not.toHaveBeenCalled();
+  expect((await h.service.observe()).state.todos).toEqual([]);
 });

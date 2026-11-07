@@ -1,5 +1,7 @@
+import {KnowledgeOptimizationContext} from "./KnowledgeOptimizationContext";
+import KnowledgeChangeComparison from "../dashboard/KnowledgeChangeComparison";
 import { createPortal } from "react-dom";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Check,
   Circle,
@@ -157,6 +159,9 @@ function KnowledgeNodeWorkspaceSession({
   previewDetails,
 }: KnowledgeNodeWorkspaceProps) {
   const { commitKnowledgeBaseObservation } = useConversation();
+  const optimizationReceipt=useContext(KnowledgeOptimizationContext);
+  const requestedLeafId=new URLSearchParams(window.location.search).get("knowledgeNode");
+  const locatedOptimizationNode=useRef<string|null>(null);
   const branches = progress?.branches ?? [];
   const leaves = useMemo(
     () => branches.flatMap((branch) => branch.leaves),
@@ -329,6 +334,11 @@ function KnowledgeNodeWorkspaceSession({
     );
     setDetails(null);
   }, [leaves, selectedLeafId, progress?.build.currentLeafId, editBase]);
+  useEffect(()=>{
+    if(!requestedLeafId||editBase||locatedOptimizationNode.current===requestedLeafId||!leaves.some(leaf=>leaf.id===requestedLeafId))return;
+    locatedOptimizationNode.current=requestedLeafId;
+    setSelectedLeafId(requestedLeafId);setDrawerOpen(true);
+  },[requestedLeafId,leaves,editBase]);
   useEffect(() => {
     if (initiallyLocated.current || !selectedLeafId) return;
     const frame = window.requestAnimationFrame(() => {
@@ -1251,6 +1261,7 @@ function KnowledgeNodeWorkspaceSession({
         ) : (
           <>
             <div className="knowledge-node-workspace__markdown">
+              {optimizationReceipt&&currentDetails&&optimizationReceipt.changes.some(change=>change.action.kind==="node"&&change.action.nodeId===currentDetails.node.leafId&&["succeeded","reverted"].includes(change.status))&&<details className="knowledge-node-optimization-diff"><summary>查看本次优化前后差异</summary><div className="iw-workbench"><KnowledgeChangeComparison changes={optimizationReceipt.changes.filter(change=>change.action.kind==="node"&&change.action.nodeId===currentDetails.node.leafId&&["succeeded","reverted"].includes(change.status))} current={currentDetails.node.contentMarkdown} createdAt={optimizationReceipt.createdAt}/></div></details>}
               {currentDetails?.node.contentMarkdown ? (
                 <MarkdownRenderer
                   hideRelativeImages

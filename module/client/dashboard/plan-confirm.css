@@ -55,7 +55,6 @@
 .iw-workbench .iw-plan-editor .iw-task-content { pointer-events: none; }
 .iw-workbench .iw-plan-editor .iw-task-heading { display: flex; align-items: start; flex-wrap: wrap; gap: 10px; }
 .iw-workbench .iw-plan-editor .iw-task-heading b { flex: 1; min-width: 100px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
-.iw-workbench .iw-plan-editor .iw-task-heading .iw-tag { flex-shrink: 0; font-size: 11px; }
 .iw-workbench .iw-plan-editor .iw-task-heading input {
   position: relative;
   z-index: 2;
@@ -67,17 +66,7 @@
   cursor: pointer;
 }
 .iw-workbench .iw-plan-editor .iw-task-content p { margin: 12px 0 16px; font-size: 12px; line-height: 1.75; overflow-wrap: anywhere; }
-.iw-workbench .iw-plan-editor .iw-task .iw-task-dismiss {
-  position: relative;
-  z-index: 2;
-  pointer-events: auto;
-  padding: 0 4px;
-  background: transparent;
-  box-shadow: none;
-  color: #6b6474;
-}
 .iw-workbench .iw-plan-editor .iw-preview > h3 { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; margin: 0; }
-.iw-workbench .iw-plan-editor .iw-preview > h3 .iw-tag { flex-shrink: 0; }
 .iw-workbench .iw-plan-editor .iw-preview-body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -140,4 +129,25 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .iw-workbench .iw-plan-editor .iw-tasks .iw-task { transition: none; }
+}
+
+/* Keep each question above its actions as the main reading anchor. */
+.fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-navigation {display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
+.fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-navigation .iw-back {margin:0;padding-left:0}
+.fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-regenerate {min-height:34px;padding:5px 0;border:0;border-radius:0;background:transparent;box-shadow:none;color:#93859f;font-size:12px}
+.fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-page-header {margin-bottom:12px}
+.fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-page-header h1 {font-size:20px;line-height:1.5;font-weight:500;color:#807388}
+.fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-page-header p {margin-top:5px;font-size:12px;color:#9b92a2}
+.fm-brand-theme .iw-workbench.iw-view-plan > .iw-steps {margin:0 0 28px;padding:14px 0;border:0;border-radius:0;background:transparent;box-shadow:none;backdrop-filter:none}
+.fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-section {margin-bottom:28px}
+.fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-question-heading {margin:0 0 22px;padding:2px 0 2px 16px;border-left:3px solid #b596d0}
+.fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-question-heading h2 {margin:0;color:#34263f;font-size:25px;line-height:1.6;font-weight:600;letter-spacing:-.3px;overflow-wrap:anywhere}
+.iw-workbench .iw-plan-editor .iw-task-heading b {padding-right:24px}
+.iw-workbench .iw-plan-editor .iw-task-open svg {top:20px;right:16px;bottom:auto}
+.iw-workbench .iw-plan-editor .iw-task-content p {margin:10px 0 0}
+@media(max-width:640px){
+  .fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-navigation {margin-bottom:16px;gap:12px}
+  .fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-question-heading {margin-bottom:18px;padding-left:12px}
+  .fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-question-heading h2 {font-size:21px;line-height:1.65}
+  .fm-brand-theme .iw-workbench.iw-view-plan > .iw-steps {margin-bottom:24px}
 }

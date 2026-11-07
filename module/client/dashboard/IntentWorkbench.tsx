@@ -4,7 +4,7 @@ import {Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Dia
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import ManagedKeywordTables, {type ManagedKeywordTablesProps} from "./ManagedKeywordTables";
 import {liveIntentWorkbenchApi, type IntentWorkbenchApi} from "./intent-workbench-api";
-import type {IntentWorkspace, IntentEvaluation, IntentPlan, IntentAction} from "../../contracts/intent-workbench";
+import type {IntentWorkspace, IntentEvaluation, IntentPlan, IntentAction, IntentReceipt} from "../../contracts/intent-workbench";
 import {findSavedIntentPlan, knowledgeOnlyIntentPlan} from "../../contracts/intent-workbench";
 import "./intent-workbench.css";
 import "./saved-plan-result.css";
@@ -122,14 +122,13 @@ export function PlanEditor({plan: savedPlan, onChange}: {plan: IntentPlan; onCha
       <div className="iw-task-content">
         <div className="iw-task-heading">
           <input type="checkbox" aria-label={`采纳：${item.title}`} checked={item.selected} onChange={event => update(item.id, {selected: event.target.checked})}/>
-          <b>{item.title}</b><span className="iw-tag">{item.kind === "todo" ? "需补资料" : item.kind === "node" ? "需审核" : "低风险"}</span>
+          <b>{item.title}</b>
         </div>
         <p>{item.source}</p>
-        <button type="button" className="iw-task-dismiss" onClick={() => update(item.id, {selected: false})}>不采纳</button>
       </div>
     </section>)}</div>
     <section id={previewId} className="iw-panel iw-preview" aria-label="优化动作修改前后">
-      <h3>{action?.kind === "node" ? "知识节点变更预览" : action?.title ?? "内容变更预览"}<span className="iw-tag">可编辑</span></h3>
+      <h3>{action?.kind === "node" ? "知识节点变更预览" : action?.title ?? "内容变更预览"}</h3>
       {action && <div className="iw-preview-body">
         <section className="iw-plan-before"><h4>修改前</h4>{action.before ? <pre>{action.before}</pre> : <p className="iw-plan-empty">暂无原内容</p>}</section>
         <label className="iw-plan-after"><span>修改后</span><textarea aria-label={`${action.title}修改后`} value={action.after} rows={12} maxLength={300000} onChange={event => update(action.id, {after: event.target.value})}/></label>
@@ -137,12 +136,13 @@ export function PlanEditor({plan: savedPlan, onChange}: {plan: IntentPlan; onCha
     </section>
   </div>;
 }
-export default function IntentWorkbench({keywordProps, initialView = "universe", api = liveIntentWorkbenchApi, onSectionChange, catalogIntegration, initialCatalogState, onCatalogExit}: {
+export default function IntentWorkbench({keywordProps, initialView = "universe", api = liveIntentWorkbenchApi, onSectionChange, catalogIntegration, initialCatalogState, onCatalogExit, onOpenKnowledge}: {
   keywordProps: ManagedKeywordTablesProps; initialView?: "universe" | "list"; api?: IntentWorkbenchApi;
   onSectionChange?: (section: "universe" | "list") => void;
   catalogIntegration?: IntentCatalogIntegration;
   initialCatalogState?: IntentCatalogViewState;
   onCatalogExit?: (state: IntentCatalogViewState) => void;
+  onOpenKnowledge?: (nodeId?: string, receipt?: IntentReceipt) => void;
 }) {
   const [workspace, setWorkspace] = useState<IntentWorkspace | null>(null);
   const [view, setView] = useState<View>(initialView);
@@ -401,8 +401,6 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const listEvaluation = view === "list" && listTask && !dismissedCompletionIds.includes(listTask.id) ? listTask : undefined;
   const refreshingList = view === "list" && Boolean(workspace) && pending && pendingRead && !activeJob;
   const receipt = receiptId ? workspace?.state.receipts.find(item => item.id === receiptId) : workspace?.state.receipts.at(-1);
-  const selectedDraftActions = drafts.flatMap(draft => draft.actions).filter(action => action.selected);
-  const onlyTodoSelected = selectedDraftActions.length > 0 && selectedDraftActions.every(action => action.kind === "todo");
   // The ledger appends newly added questions; reverse that order for newest first.
   const newestOrder = new Map(questions.map((question, position) => [question.id, position]));
   const scoreByQuestion = new Map(evaluations.map(item => [item.questionId, item]));
@@ -655,10 +653,10 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     }, "result");
   }
   function changeDraft(plan: IntentPlan) {draftVersion.current++; setDrafts(items => items.map(item => item.questionId === plan.questionId ? plan : item)); setDraftDirty(true);}
-  function openKnowledge(target?: string) {setNodeId(target ?? receipt?.changes.find(change => change.action.kind === "node" && (change.status === "succeeded" || change.status === "reverted"))?.action.nodeId ?? undefined); navigateView("knowledge");}
-  function exportReport() {
-    const blob = new Blob([JSON.stringify({questions, evaluations, todos: workspace?.state.todos, receipt}, null, 2)], {type: "application/json"});
-    const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "GEO-优化评估报告.json"; anchor.click(); URL.revokeObjectURL(url);
+  function openKnowledge(target?: string) {
+    const changedNode=target??receipt?.changes.find(change=>change.action.kind==="node"&&["succeeded","reverted"].includes(change.status))?.action.nodeId??undefined;
+    if(onOpenKnowledge){onOpenKnowledge(changedNode,receipt);return;}
+    setNodeId(changedNode);navigateView("knowledge");
   }
   const evaluated = scope.map(id => evaluations.find(item => item.questionId === id)).filter((item): item is IntentEvaluation => Boolean(item));
   const activeEvaluation = evaluated[index] ?? evaluated[0];
@@ -716,7 +714,6 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   function openSection(section: "universe" | "list") {navigateView(section); emittedSection.current = section; onSectionChange?.(section);}
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending}>
     <IntentIntakeFeedback state={intakeFeedback}/>
-    {view === "plan" && <div className="iw-toolbar" style={{justifyContent: "flex-end"}}><button disabled={draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>}
     {view === "history" && workspace && <>
       <button className="iw-back" onClick={() => openSection("list")}><ArrowLeft size={15}/>返回问题列表</button>
       <header className="iw-header"><div><h1>历史记录</h1><p>保存评估、优化方案和执行记录，查看不会重新评估。</p></div></header>
@@ -844,21 +841,19 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       </div></div>
     </>}
     {view === "plan" && <>
-      <button className="iw-back" onClick={() => navigateView("evaluation")}><ArrowLeft size={15}/>返回评估详情</button>
-      <header className="iw-header"><div><h1>确认优化方案</h1><p>选择需要执行的动作，查看并编辑具体内容变更。</p></div><span className="iw-tag">{scope.length} 个问题</span></header>
+      <div className="iw-plan-navigation"><button className="iw-back" onClick={() => navigateView("evaluation")}><ArrowLeft size={15}/>返回评估详情</button><button className="iw-plan-regenerate" disabled={draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>
+      <header className="iw-header iw-plan-page-header"><div><h1>确认优化方案</h1><p>选择需要执行的动作，查看并编辑具体内容变更。</p></div></header>
       <Steps step={1}/>
       {drafts.map(draft => <section className="iw-plan-section" key={draft.questionId}>
-        <h2>{questions.find(item => item.id === draft.questionId)?.question}</h2>
-        {catalogIntegration?.onOpenAnswer && questions.find(question => question.id === draft.questionId) && <button onClick={() => catalogIntegration.onOpenAnswer?.(questions.find(question => question.id === draft.questionId)!)}>进入应答逻辑</button>}
+        <header className="iw-plan-question-heading"><h2>{questions.find(item => item.id === draft.questionId)?.question}</h2></header>
         <PlanEditor plan={draft} onChange={changeDraft}/>
-        <p className="iw-method">AI 根据当前知识证据生成方案。请审核修改内容；执行后通过真实模型重新评估。</p>
       </section>)}
-      <div className="iw-sticky"><span>已选正文修改 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected && action.kind === "node").length, 0)}</strong> 项 · 资料待办 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected && action.kind === "todo").length, 0)}</strong> 项</span><div>
+      <div className="iw-sticky"><span>已选正文修改 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected && action.kind === "node").length, 0)}</strong> 项</span><div>
         {draftDirty && <button disabled={savingDrafts} onClick={() => void saveDrafts()}>保存方案草稿</button>}
-        <button className="iw-primary" disabled={pending || Boolean(activeJob) || !drafts.some(draft => draft.actions.some(action => action.selected))} onClick={() => void execute()}>{onlyTodoSelected ? "创建资料待办" : "确认并执行已选动作"}</button>
+        <button className="iw-primary" disabled={pending || Boolean(activeJob) || !drafts.some(draft => draft.actions.some(action => action.selected))} onClick={() => void execute()}>确认并执行已选动作</button>
       </div></div>
     </>}
-    {view === "result" && <><Steps step={2}/>{pending ? <section className="iw-panel iw-executing" role="status"><div className="iw-spinner"/><h2>正在执行优化</h2><p>正在保存已选动作并重新评估，请等待服务器确认。</p><progress/></section> : receipt ? <><section className="iw-panel"><header className="iw-result-hero"><span><Check size={27}/></span><h1>{receipt.status === "reverted" ? "本次优化已撤销" : receipt.status === "partial" ? "优化部分完成" : receipt.status === "running" ? "执行仍待确认" : receipt.changes.length > 0 && receipt.changes.every(change => change.action.kind === "todo") ? "资料待办已创建" : "优化执行完成"}</h1><p>正文已修改 {receipt.changes.filter(change => change.status === "succeeded" && change.action.kind === "node").length} 项 · 资料待办 {receipt.changes.filter(change => change.status === "succeeded" && change.action.kind === "todo").length} 项 · {receipt.changes.filter(change => change.status === "failed").length} 项未完成</p></header><div className="iw-results">{receipt.after.map(after => {const before = receipt.before.find(item => item.questionId === after.questionId); return <div key={after.questionId}><b>{questions.find(item => item.id === after.questionId)?.question}</b><div className="iw-comparison"><p>问题价值 <strong>{before?.value ?? "—"} → {after.value}</strong></p><p>知识支撑 <strong>{before?.support ?? "—"} → {after.support}</strong></p><p>未充分支撑 <strong>{before?.points.filter(point => point.status !== "supported").length ?? "—"} → {after.points.filter(point => point.status !== "supported").length}</strong></p></div></div>;})}{receipt.changes.map(change => <div className="iw-result-row" key={change.action.id}><div><b>{change.action.title}</b><p>{change.error ?? change.action.source}</p></div><span className={`iw-tag ${change.status === "succeeded" ? "supported" : "partial"}`}>{({pending: "待确认", succeeded: "成功", failed: "未完成", reverted: "已撤销"})[change.status]}</span></div>)}</div><footer className="iw-result-footer"><button onClick={exportReport}>导出评估报告</button><button onClick={() => openKnowledge()}>查看知识库变更</button><button disabled={receipt.status === "reverted" || receipt.status === "running"} onClick={() => setUndoOpen(true)}><Undo2 size={15}/>撤销本次优化</button><button className="iw-primary" onClick={() => setView("list")}>返回问题列表</button></footer></section></> : <div className="iw-empty">暂无执行记录</div>}</>}
+    {view === "result" && <><Steps step={2}/>{pending ? <section className="iw-panel iw-executing" role="status"><div className="iw-spinner"/><h2>正在执行优化</h2><p>正在保存已选动作并重新评估，请等待服务器确认。</p><progress/></section> : receipt ? <><section className="iw-panel"><header className="iw-result-hero"><span><Check size={27}/></span><h1>{receipt.status === "reverted" ? "本次优化已撤销" : receipt.status === "partial" ? "优化部分完成" : receipt.status === "running" ? "执行仍待确认" : "优化执行完成"}</h1><p>正文已修改 {receipt.changes.filter(change => change.status === "succeeded" && change.action.kind === "node").length} 项 · {receipt.changes.filter(change => change.status === "failed").length} 项未完成</p></header><div className="iw-results">{receipt.after.map(after => {const before = receipt.before.find(item => item.questionId === after.questionId); return <div key={after.questionId}><b>{questions.find(item => item.id === after.questionId)?.question}</b><div className="iw-comparison"><p>问题价值 <strong>{before?.value ?? "—"} → {after.value}</strong></p><p>知识支撑 <strong>{before?.support ?? "—"} → {after.support}</strong></p><p>未充分支撑 <strong>{before?.points.filter(point => point.status !== "supported").length ?? "—"} → {after.points.filter(point => point.status !== "supported").length}</strong></p></div></div>;})}{receipt.changes.filter(change => change.action.kind === "node").map(change => <div className="iw-result-row" key={change.action.id}><div><b>{change.action.title}</b><p>{change.error ?? change.action.source}</p></div><span className={`iw-tag ${change.status === "succeeded" ? "supported" : "partial"}`}>{({pending: "待确认", succeeded: "成功", failed: "未完成", reverted: "已撤销"})[change.status]}</span></div>)}</div><footer className="iw-result-footer"><button onClick={() => openKnowledge()}>查看知识库变更</button><button disabled={receipt.status === "reverted" || receipt.status === "running"} onClick={() => setUndoOpen(true)}><Undo2 size={15}/>撤销本次优化</button><button className="iw-primary" onClick={() => setView("list")}>返回问题列表</button></footer></section></> : <div className="iw-empty">暂无执行记录</div>}</>}
     {view === "knowledge" && workspace && <><button className="iw-back" onClick={() => setView(receipt ? "result" : "list")}><ArrowLeft size={15}/>返回优化工作台</button><header className="iw-header"><div><h1>知识库变更</h1><p>按本次执行记录查看正文前后差异。</p></div></header><KnowledgeChangesView nodes={workspace.nodes} receipt={receipt} initialNodeId={nodeId}/></>}
     {view === "knowledge" && <div className="iw-knowledge-footer"><p>补充资料、编辑或核验正文，请进入智能知识库。</p><button className="iw-primary" onClick={() => requestWorkspaceNavigation(() => navigate(projectWorkspaceUrl("/?view=knowledge")))}>打开智能知识库</button></div>}
     {blockedModelAction && <Dialog open onOpenChange={open => {if (!open) setBlockedModelAction(null);}}><DialogContent className="fm-brand-portal-theme iw-modal" data-brand-surface="intent-workbench"><DialogHeader>
