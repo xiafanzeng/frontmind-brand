@@ -14,6 +14,7 @@ import {useWorkspaceDraftGuard, projectWorkspaceUrl, requestWorkspaceNavigation}
 import {navigate} from "wouter/use-browser-location";
 import IntentQuestionCatalog, {type IntentCatalogIntegration} from "./IntentQuestionCatalog";
 import IntentTaskProgress from "./IntentTaskProgress";
+import IntentIntakeFeedback, {type IntentIntakeFeedbackState} from "./IntentIntakeFeedback";
 import {IntentListEvaluationStatus, IntentListInitialLoading, IntentListRefreshStatus} from "./IntentListFeedback";
 import {findCatalogQuestion} from "./intent-catalog-link";
 import type {IntentCatalogViewState, IntentCatalogSort} from "./intent-catalog-view";
@@ -145,12 +146,14 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [view, setView] = useState<View>(initialView);
   const [evaluationReturnView, setEvaluationReturnView] = useState<"universe" | "list">("list");
   const [pending, setPending] = useState(false);
+  const [pendingEvaluationKeyword, setPendingEvaluationKeyword] = useState<Pick<Selection, "tableId" | "rowIndex"> | null>(null);
   const [pendingRead, setPendingRead] = useState(false);
   const [watching, setWatching] = useState(false);
   const [progressKind, setProgressKind] = useState<"evaluate" | "plan">("evaluate");
   const [progressJobId, setProgressJobId] = useState<string>();
   const [error, setError] = useState("");
   const [received, setReceived] = useState<string[]>([]);
+  const [intakeFeedback, setIntakeFeedback] = useState<IntentIntakeFeedbackState>(null);
   const [selected, setSelected] = useState<string[]>(initialCatalogState?.selected ?? []);
   const [scope, setScope] = useState<string[]>([]);
   const [index, setIndex] = useState(0);
@@ -187,9 +190,16 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     setView(initialView); setProgressJobId(undefined); setEvaluationReturnView("list");
     setWorkspace(null); setDrafts([]); setDraftDirty(false); setReceived([]); setSelected(initialCatalogState?.selected ?? []); setHistoryId(undefined); setHistoryQuestionId(undefined);
     setQuestionAction(null); setQuestionError("");
+    setPendingEvaluationKeyword(null);
+    setIntakeFeedback(null);
     void run(() => api.observe(), undefined, true, undefined, true);
     return () => {mounted.current = false; generation.current++; watchController.current?.abort();};
   }, [api]);
+  useEffect(() => {
+    if (intakeFeedback !== "success") return;
+    const timer = window.setTimeout(() => setIntakeFeedback(null), 1100);
+    return () => window.clearTimeout(timer);
+  }, [intakeFeedback]);
   useEffect(() => {
     if (emittedSection.current === initialView) {emittedSection.current = undefined; return;}
     if (!running.current) setView(initialView);
@@ -394,6 +404,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   }
   async function addToCatalog(selections: Selection[]) {
     if (!selections.length || pending || running.current) return;
+    const version = generation.current;
+    setIntakeFeedback("saving");
     const incoming = [...new Map(selections.map(item => [`${item.tableId}:${item.rowIndex}`, {
       id: `${item.tableId}:${item.rowIndex}`, question: item.question, category: item.category,
       subdivision: "", tableId: item.tableId, rowIndex: item.rowIndex, sourceRevision: item.dashboardRevision ?? null,
@@ -408,7 +420,9 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         throw new Error("所选词条未能完整加入，请重试加入优化清单。");
       return saved;
     }, "list");
-    if (!data) return;
+    if (!mounted.current || version !== generation.current) return;
+    if (!data) {setIntakeFeedback(null); return;}
+    setIntakeFeedback("success");
     const ids = [...new Set(incoming.map(item => findCatalogQuestion(item, data.state.questions)?.id).filter((id): id is string => Boolean(id)))];
     setReceived(ids); setSelected(ids); setScope(ids); setIndex(0); setExpanded([]); setSingleQueue([]);
     setSearch(""); setSort("newest"); setPage(0);
@@ -423,17 +437,23 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     };
     // Resolve the durable question and latest revision before creating a task.
     // Keep the source table open while the existing watcher updates its score.
-    await run(async () => {
-      const current = await api.observe();
-      if (current.state.jobs?.some(job => !["succeeded", "failed"].includes(job.status)))
-        throw new Error("已有评估任务，请等待完成或继续暂停的任务。已保存的结果仍可查看。");
-      const saved = findCatalogQuestion(incoming, current.state.questions) ? current
-        : await api.command({kind: "intake", expectedRevision: current.revision, questions: [incoming]});
-      const target = findCatalogQuestion(incoming, saved.state.questions);
-      if (!target) throw new Error("词条未能保存，评估尚未开始，请重试。");
-      if (saved.state.evaluations.some(item => item.questionId === target.id)) return saved;
-      return api.command({kind: "evaluate", expectedRevision: saved.revision, questionIds: [target.id], clientRequestId: crypto.randomUUID()});
-    });
+    const version = generation.current;
+    setPendingEvaluationKeyword({tableId: selection.tableId, rowIndex: selection.rowIndex});
+    try {
+      await run(async () => {
+        const current = await api.observe();
+        if (current.state.jobs?.some(job => !["succeeded", "failed"].includes(job.status)))
+          throw new Error("已有评估任务，请等待完成或继续暂停的任务。已保存的结果仍可查看。");
+        const saved = findCatalogQuestion(incoming, current.state.questions) ? current
+          : await api.command({kind: "intake", expectedRevision: current.revision, questions: [incoming]});
+        const target = findCatalogQuestion(incoming, saved.state.questions);
+        if (!target) throw new Error("词条未能保存，评估尚未开始，请重试。");
+        if (saved.state.evaluations.some(item => item.questionId === target.id)) return saved;
+        return api.command({kind: "evaluate", expectedRevision: saved.revision, questionIds: [target.id], clientRequestId: crypto.randomUUID()});
+      });
+    } finally {
+      if (mounted.current && version === generation.current) setPendingEvaluationKeyword(null);
+    }
   }
   async function plan(force = false, ids = scope) {
     if (pending || running.current || !workspace || !ids.length) return;
@@ -529,6 +549,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const retainKeywordPage = view === "universe" || (evaluationReturnView === "universe" && ["progress", "evaluation", "plan"].includes(view));
   function openSection(section: "universe" | "list") {setView(section); emittedSection.current = section; onSectionChange?.(section);}
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending}>
+    <IntentIntakeFeedback state={intakeFeedback}/>
     {view === "plan" && <div className="iw-toolbar" style={{justifyContent: "flex-end"}}><button disabled={pending || Boolean(activeJob) || draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>}
     {view === "history" && workspace && <>
       <button className="iw-back" onClick={() => openSection("list")}><ArrowLeft size={15}/>返回问题列表</button>
@@ -574,17 +595,19 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       returnLabel={evaluationReturnLabel}
       onBack={() => setView(evaluationReturnView)}
       onViewResult={() => void run(() => api.observe(), undefined, true, undefined, true)}/>}
-    {pending && view !== "result" && view !== "progress" && !listEvaluation && !refreshingList && !initialListLoading && <div className="iw-panel" role="status">
+    {pending && view !== "universe" && view !== "result" && view !== "progress" && !listEvaluation && !refreshingList && !initialListLoading && <div className="iw-panel" role="status">
       {activeJob?.repair ? "正在自动修复模型结果并重新校验，请稍候…" : activeJob ? `正在${activeJob.kind === "plan" ? "生成优化方案" : "评估问题"} · ${activeJob.questionIds.length} 条问题，AI 生成可能需要几分钟…` : "正在读取优化工作台…"}
       {activeJob && <><p>已有任务正在处理，完成前暂不能重复评估。</p><button onClick={() => {
-        openTaskDetails(activeJob.id, view === "universe" ? "universe" : "list");
+        openTaskDetails(activeJob.id, "list");
       }}>查看当前任务</button></>}
     </div>}
     {!pending && !error && view !== "progress" && workspace?.state.jobs?.at(-1)?.status === "failed" && <div className="iw-error" role="alert">{workspace.state.jobs.at(-1)?.error}</div>}
-    {retainKeywordPage && <div hidden={view !== "universe"}><header className="iw-header iw-universe-header"><div><h1>词条生成</h1><p>推荐核心词 → 生成问题 → 勾选加入优化清单</p></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => void addToCatalog([selection])} onUseQuestions={items => void addToCatalog(items)}
+    {retainKeywordPage && <div hidden={view !== "universe"}><header className="iw-header iw-universe-header"><div><h1>词条生成</h1><p>推荐核心词 → 生成问题 → 勾选加入优化清单</p></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => addToCatalog([selection])} onUseQuestions={items => addToCatalog(items)}
+      onOptimizationSavingChange={saving => setIntakeFeedback(state => saving ? "saving" : state === "saving" ? null : state)}
       optimizationState={workspace?.state} onViewEvaluation={id => void evaluate([id])}
       onViewEvaluationTask={id => openTaskDetails(id, "universe")}
-      onEvaluateQuestion={selection => void evaluateFromKeywords(selection)} evaluationPending={pending}/></div>}
+      onEvaluateQuestion={selection => void evaluateFromKeywords(selection)} evaluationPending={pending}
+      evaluationPendingKeyword={pendingEvaluationKeyword}/></div>}
     {initialListLoading && <IntentListInitialLoading/>}
     {view !== "universe" && view !== "list" && !workspace && !error && <div role="status" className="iw-empty">正在读取优化工作台…</div>}
     {view === "list" && workspace && <>

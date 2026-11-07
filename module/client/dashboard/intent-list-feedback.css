@@ -29,6 +29,9 @@
 .iw-workbench .iw-list-task-actions button { border-color:#d7c3e9; color:var(--iw-purple); }
 .iw-workbench .iw-list-task-time { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--fm-brand-muted, #636366); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .iw-workbench .iw-list-task-note { margin:10px 0 0 48px; color:var(--fm-brand-muted, #636366); font-size:12px; }
+.iw-workbench .iw-list-task--completed .iw-list-task-main { display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); align-items:center; }
+.iw-workbench .iw-list-task--completed .iw-list-task-copy { grid-column:2; text-align:center; }
+.iw-workbench .iw-list-task--completed .iw-list-task-actions { grid-column:3; justify-self:end; justify-content:flex-end; min-width:0; }
 @media(max-width:600px) {
   .iw-workbench .iw-list-skeleton-tools { gap:8px; }
   .iw-workbench .iw-list-initial-status { padding:16px; }
@@ -40,4 +43,7 @@
   .iw-workbench .iw-list-task-copy { flex-basis:calc(100% - 48px); }
   .iw-workbench .iw-list-task-actions { width:100%; padding-left:48px; gap:10px; }
   .iw-workbench .iw-list-task-actions button { min-height:44px; }
+  .iw-workbench .iw-list-task--completed .iw-list-task-main { grid-template-columns:1fr; justify-items:center; gap:14px; }
+  .iw-workbench .iw-list-task--completed .iw-list-task-copy { grid-column:1; width:100%; }
+  .iw-workbench .iw-list-task--completed .iw-list-task-actions { grid-column:1; justify-self:center; justify-content:center; width:auto; padding-left:0; }
 }

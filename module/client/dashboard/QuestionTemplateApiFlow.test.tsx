@@ -58,7 +58,7 @@ it("只保存所选问题，保留分类，失败可重试并刷新正式词库"
  expect(onSaved).not.toHaveBeenCalled();
  await act(async()=>{fireEvent.click(screen.getByRole("button",{name:/保存词条/}));});
  expect(onSaved).toHaveBeenCalledTimes(1);
- expect(screen.getByRole("status").textContent).toContain("新增 1 条");
+ expect(screen.queryByRole("status")).toBeNull();
  expect(JSON.parse(scope.fetch.mock.calls[3][1].body)).toEqual({brand:"东莞台心医院",questions:[{question:"如何选择综合医院？",coreWord:"综合医院",category:"category",mainCategory:"industry",heat:null}]});
  fireEvent.click(screen.getByRole("tab",{name:"1. 核心词"}));
  fireEvent.change(screen.getByLabelText("企业名称"),{target:{value:"其他医院"}});
@@ -66,12 +66,14 @@ it("只保存所选问题，保留分类，失败可重试并刷新正式词库"
 });
 
 it("新推荐问题直接保存并交接到优化清单，不使用历史选择",async()=>{
- const onOptimize=vi.fn(),onSaved=vi.fn().mockResolvedValue(undefined);
+ let finishSave!:(response:Response)=>void,finishIntake!:()=>void;
+ const onOptimize=vi.fn(()=>new Promise<void>(resolve=>{finishIntake=resolve;})),onSaved=vi.fn().mockResolvedValue(undefined);
+ const onOptimizationSavingChange=vi.fn();
  const selections=[{question:"新推荐问题？",category:"industry",tableId:"question-template-api:v1",rowIndex:4,dashboardRevision:8}];
  scope.fetch.mockResolvedValueOnce(new Response(JSON.stringify({data:[{word:"综合医院",category:"category"}]})))
   .mockResolvedValueOnce(new Response(JSON.stringify({data:[{question:"新推荐问题？"},{question:"未选择问题？"}]})))
-  .mockResolvedValueOnce(new Response(JSON.stringify({success:true,added:1,duplicates:0,selections})));
- render(<QuestionTemplateApiFlow onSaved={onSaved} onOptimize={onOptimize}/>);
+  .mockImplementationOnce(()=>new Promise<Response>(resolve=>{finishSave=resolve;}));
+ render(<QuestionTemplateApiFlow onSaved={onSaved} onOptimize={onOptimize} onOptimizationSavingChange={onOptimizationSavingChange}/>);
  fireEvent.change(screen.getByLabelText("企业名称"),{target:{value:"东莞台心医院"}});
  await act(async()=>{fireEvent.click(screen.getByRole("button",{name:"推荐核心词"}));});
  fireEvent.click(screen.getByRole("checkbox",{name:"选择核心词：综合医院"}));
@@ -79,9 +81,36 @@ it("新推荐问题直接保存并交接到优化清单，不使用历史选择"
  expect(screen.getByRole("button",{name:"加入优化清单（0）"})).toHaveProperty("disabled",true);
  fireEvent.click(screen.getByRole("checkbox",{name:"选择问题：新推荐问题？"}));
  await act(async()=>{fireEvent.click(screen.getByRole("button",{name:"加入优化清单（1）"}));});
+ expect(onOptimizationSavingChange.mock.calls).toEqual([[true]]);
+ expect(onOptimize).not.toHaveBeenCalled();
+ expect(screen.getByRole("button",{name:"加入优化清单（1）"})).toHaveProperty("disabled",true);
+ await act(async()=>{finishSave(new Response(JSON.stringify({success:true,added:1,duplicates:0,selections})));});
  expect(onOptimize).toHaveBeenCalledWith(selections);
+ expect(onOptimizationSavingChange.mock.calls).toEqual([[true]]);
+ expect(onSaved).not.toHaveBeenCalled();
+ await act(async()=>{finishIntake();});
+ expect(onOptimizationSavingChange.mock.calls).toEqual([[true],[false]]);
  expect(onSaved).toHaveBeenCalledTimes(1);
  expect(JSON.parse(scope.fetch.mock.calls[2][1].body).questions.map((item:any)=>item.question)).toEqual(["新推荐问题？"]);
+});
+
+it("推荐保存失败会结束加入动画，保留勾选供重试且不交接",async()=>{
+ const onOptimize=vi.fn(),onOptimizationSavingChange=vi.fn();
+ scope.fetch.mockResolvedValueOnce(new Response(JSON.stringify({data:[{word:"综合医院",category:"category"}]})))
+  .mockResolvedValueOnce(new Response(JSON.stringify({data:[{question:"医院有急诊吗？"}]})))
+  .mockResolvedValueOnce(new Response(JSON.stringify({error:{message:"保存失败"}}),{status:503}));
+ render(<QuestionTemplateApiFlow onOptimize={onOptimize} onOptimizationSavingChange={onOptimizationSavingChange}/>);
+ fireEvent.change(screen.getByLabelText("企业名称"),{target:{value:"东莞台心医院"}});
+ await act(async()=>{fireEvent.click(screen.getByRole("button",{name:"推荐核心词"}));});
+ fireEvent.click(screen.getByRole("checkbox",{name:"选择核心词：综合医院"}));
+ await act(async()=>{fireEvent.click(screen.getByRole("button",{name:/生成推荐问题/}));});
+ fireEvent.click(screen.getByRole("checkbox",{name:"选择问题：医院有急诊吗？"}));
+ await act(async()=>{fireEvent.click(screen.getByRole("button",{name:"加入优化清单（1）"}));});
+ expect(onOptimizationSavingChange.mock.calls).toEqual([[true],[false]]);
+ expect(onOptimize).not.toHaveBeenCalled();
+ expect(screen.getByRole("alert").textContent).toBe("保存失败");
+ expect(screen.getByRole("checkbox",{name:"选择问题：医院有急诊吗？"})).toHaveProperty("checked",true);
+ expect(screen.getByRole("button",{name:"加入优化清单（1）"})).toHaveProperty("disabled",false);
 });
 
 it("更多中的仅保存不交接优化，全选勾选只提交本次推荐",async()=>{

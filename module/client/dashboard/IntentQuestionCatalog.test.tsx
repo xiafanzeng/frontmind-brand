@@ -7,7 +7,7 @@ const q = {id:'q-stable',question:'如何管理企业知识？',category:'indust
 function setup() {
   const onViewPlan=vi.fn(), onGeneratePlan=vi.fn(), onOpenAnswer=vi.fn();
   const props={questions:[q],visible:[q],evaluations:[{questionId:q.id,value:80,support:50,points:[{title:'核验功能',status:'missing'},{title:'部署条件',status:'partial'},{title:'费用依据',status:'missing'}]}] as any,
-    received:[],integration:{onOpenAnswer},search:'',selected:[],pending:false,page:0,pageCount:1,total:1,savedPlanIds:[q.id],
+    received:[q.id],integration:{onOpenAnswer},search:'',selected:[],pending:false,page:0,pageCount:1,total:1,savedPlanIds:[q.id],
     onSearch:vi.fn(),onToggle:vi.fn(),onSelectPage:vi.fn(),onClear:vi.fn(),onEvaluate:vi.fn(),onViewPlan,onGeneratePlan,onPage:vi.fn(),onHistory:vi.fn(),historyCount:9};
   render(<IntentQuestionCatalog {...props}/>);
   return {onViewPlan,onGeneratePlan,onOpenAnswer};
@@ -15,6 +15,8 @@ function setup() {
 describe('approved catalog presentation with real question identities',()=>{
   it('removes secondary labels and folds all actual gaps into one panel',()=>{
     setup();
+    expect(document.querySelector('.iw-handoff-banner')).toBeNull();
+    expect(screen.queryByText(/已接收所选/)).toBeNull();
     expect(screen.queryByText(/查看已保存评估/)).toBeNull();
     expect(screen.queryByRole('button',{name:/历史记录/})).toBeNull();
     expect(screen.queryByRole('columnheader',{name:'优化状态'})).toBeNull();
