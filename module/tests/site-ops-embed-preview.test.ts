@@ -113,6 +113,21 @@ describe("site ops embed preview tokens", () => {
     })).toThrow("SITEOPS_PREVIEW_FRAME_ANCESTORS_INVALID");
   });
 
+  it.each(["'self'", "'none'"])("permits assistant form events with frame ancestors %s", (frameAncestors) => {
+    const nonce = "nonce-1234567890abcdef";
+    const options = { frameAncestors };
+    const original = sandboxedPreviewContentSecurityPolicy(nonce, options);
+    const policy = sandboxedPreviewContentSecurityPolicy(nonce, {
+      ...options,
+      allowFormEvents: true,
+    });
+    const directives = policy.split("; ");
+    expect(directives[0]).toBe("sandbox allow-scripts allow-forms");
+    expect(directives).toContain("form-action 'none'");
+    expect(directives).toContain(`frame-ancestors ${frameAncestors}`);
+    expect(policy.replace("sandbox allow-scripts allow-forms", "sandbox allow-scripts")).toBe(original);
+  });
+
   it("uses a short-lived default TTL", () => {
     expect(SITEOPS_EMBED_PREVIEW_TOKEN_TTL_MS).toBe(10 * 60_000);
   });

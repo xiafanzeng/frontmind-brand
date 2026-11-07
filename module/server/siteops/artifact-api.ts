@@ -613,7 +613,7 @@ export async function createSandboxedPreviewDocument(input: {
 
 export function sandboxedPreviewContentSecurityPolicy(
   nonce: string,
-  options: { frameAncestors?: string } = {},
+  options: { frameAncestors?: string; allowFormEvents?: boolean } = {},
 ) {
   if (!/^[A-Za-z0-9_-]{16,64}$/u.test(nonce)) {
     throw new Error("SITEOPS_PREVIEW_NONCE_INVALID");
@@ -622,7 +622,11 @@ export function sandboxedPreviewContentSecurityPolicy(
   if (!/^'(?:none|self)'$/u.test(frameAncestors)) {
     throw new Error("SITEOPS_PREVIEW_FRAME_ANCESTORS_INVALID");
   }
-  return `sandbox allow-scripts; default-src 'none'; img-src data: blob:; font-src data:; style-src 'nonce-${nonce}'; style-src-attr 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ${siteAssistantApiOrigin()}; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; media-src data: blob:; manifest-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'none'`;
+  // The assistant listens for submit events. form-action still blocks navigation.
+  const sandbox = options.allowFormEvents
+    ? "sandbox allow-scripts allow-forms"
+    : "sandbox allow-scripts";
+  return `${sandbox}; default-src 'none'; img-src data: blob:; font-src data:; style-src 'nonce-${nonce}'; style-src-attr 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ${siteAssistantApiOrigin()}; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; media-src data: blob:; manifest-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'none'`;
 }
 
 export function rewriteSiteOpsPreviewDocument(input: {
@@ -1562,13 +1566,16 @@ async function sendOwnedBuildPreviewDocument(input: {
       "Content-Security-Policy",
       sandboxedPreviewContentSecurityPolicy(document.nonce, {
         frameAncestors: "'self'",
+        allowFormEvents: true,
       }),
     );
   } else {
     input.res.setHeader("X-Frame-Options", "DENY");
     input.res.setHeader(
       "Content-Security-Policy",
-      sandboxedPreviewContentSecurityPolicy(document.nonce),
+      sandboxedPreviewContentSecurityPolicy(document.nonce, {
+        allowFormEvents: true,
+      }),
     );
   }
   input.res.setHeader("Content-Length", String(documentBytes.length));
