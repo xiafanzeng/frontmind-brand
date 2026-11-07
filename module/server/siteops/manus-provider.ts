@@ -8911,6 +8911,7 @@ async function handleNativeReactSiteBuild(input: {
         id: input.context.build.id,
         projectId: input.context.build.projectId,
         knowledgeSnapshotId: input.context.build.knowledgeSnapshotId,
+        knowledgeArchiveHash: input.context.build.knowledgeArchiveHash,
         workflowVersion: input.context.build.workflowVersion,
         selectionHash: input.context.build.selectionHash,
       },

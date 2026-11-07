@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { createHmac } from "node:crypto";
+import { runInNewContext } from "node:vm";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,6 +12,8 @@ import {
   SITEOPS_EMBED_PREVIEW_TOKEN_TTL_MS,
   verifySiteOpsEmbedPreviewToken,
 } from "../server/siteops/artifact-api.js";
+import { signSiteAssistantBuildBinding, verifySiteAssistantBuildBinding } from "../server/siteops/site-assistant-binding.js";
+import { trustedSiteAssistantConfigSource } from "../server/siteops/site-assistant-widget.js";
 
 const SIGNING_SECRET = "test-embed-signing-secret";
 
@@ -147,10 +150,12 @@ describe("site ops embed preview tokens", () => {
       .not.toBe(siteOpsPreviewBridgeToken(`${token}x`, signWithSecret));
   });
 
-  it("initializes the trial bridge before the archived assistant script runs", async () => {
+  it("makes the trial bridge and frozen binding available when an unsigned archived assistant starts", async () => {
     const zip = new JSZip();
     const assistantStartup = "window.bridgeAtStartup = window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__;";
-    zip.file("index.html", '<!doctype html><html><head><script defer src="/assistant.js"></script></head><body></body></html>');
+    zip.file("index.html", '<!doctype html><html><head><script defer src="/assistant-config.js"></script><script defer src="/assistant.js"></script></head><body></body></html>');
+    const archivedConfig = { apiBase: "https://brand.frontmind.cn", design: { allRoutePaths: ["/"] } };
+    zip.file("assistant-config.js", trustedSiteAssistantConfigSource(archivedConfig));
     zip.file("assistant.js", assistantStartup);
     const input = { zip, entryName: "index.html", previewPrefix: "/build/preview/" };
     const assistantBridge = {
@@ -161,14 +166,40 @@ describe("site ops embed preview tokens", () => {
       designRevision: 4,
       draftHash: "d".repeat(64),
     };
-    const embed = await createSandboxedPreviewDocument({ ...input, assistantBridge });
+    const payload = {
+      schemaVersion: 1 as const,
+      buildId: assistantBridge.buildId,
+      knowledgeSnapshotId: assistantBridge.knowledgeSnapshotId,
+      knowledgeArchiveHash: assistantBridge.knowledgeArchiveHash,
+      designRevision: assistantBridge.designRevision,
+      draftHash: assistantBridge.draftHash,
+      assistantName: "试用助手",
+      welcome: "欢迎访问 </script> 预览。",
+      assistantAccent: "#123456",
+    };
+    const assistantBinding = { ...payload, signature: signSiteAssistantBuildBinding(payload, SIGNING_SECRET) };
+    const embed = await createSandboxedPreviewDocument({ ...input, assistantBridge, assistantBinding });
     const html = embed.bytes.toString("utf8");
     const bootstrap = siteOpsPreviewBridgeScript(embed.nonce, assistantBridge);
     expect(html).toContain(`<head>${bootstrap}`);
     expect(html).toContain(`<script nonce="${embed.nonce}" defer>${assistantStartup}</script>`);
+    const window: Record<string, unknown> = {};
+    for (const [, script] of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gu)) {
+      if (script.includes("window.__FRONTMIND_ASSISTANT__=") ||
+          script.includes("window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__=") || script === assistantStartup) {
+        runInNewContext(script, { window });
+      }
+    }
+    expect(window.bridgeAtStartup).toEqual(assistantBridge);
+    const config = window.__FRONTMIND_ASSISTANT__ as typeof archivedConfig & { binding: unknown };
+    expect(config.apiBase).toBe(archivedConfig.apiBase);
+    expect(config.design.allRoutePaths).toEqual([input.previewPrefix]);
+    expect(verifySiteAssistantBuildBinding(config.binding, SIGNING_SECRET)).toEqual(assistantBinding);
 
     const standalone = await createSandboxedPreviewDocument(input);
-    expect(standalone.bytes.toString("utf8")).not.toContain("__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__=");
+    const standaloneHtml = standalone.bytes.toString("utf8");
+    expect(standaloneHtml).not.toContain("__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__=");
+    expect(standaloneHtml).not.toContain("__FRONTMIND_ASSISTANT__.binding=");
   });
 
   it("escapes the bridge bootstrap for a nonce-scoped inline script", () => {
