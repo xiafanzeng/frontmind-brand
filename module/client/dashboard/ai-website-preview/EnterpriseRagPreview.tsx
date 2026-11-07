@@ -1145,7 +1145,6 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
 
   return <section className="sfp-root erag-root rag-eval-root" data-testid={live ? "enterprise-rag-live-root" : undefined}>
     <div ref={backgroundRef}>
-      <header className="sfp-heading erag-heading" data-rag-entrance="heading"><div><h1>让回答真正满足用户需求</h1><p>用企业资料回答客户问题，核对回答依据，找到改进方向。</p></div><div className="rag-toolbar">{buildReportUrl ? <><a className="rag-report-link" href={buildReportUrl("rules", automaticCoordinate ?? undefined, exampleReadOnly ? activeCase?.id : undefined)} target="_blank" rel="noopener" aria-label="评分规则（在新标签页打开）">评分规则</a><a className="rag-report-link" href={buildReportUrl("records", automaticCoordinate ?? undefined, exampleReadOnly ? activeCase?.id : undefined)} target="_blank" rel="noopener" aria-label="评估记录（在新标签页打开）">评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</a></> : <><button onClick={() => setDrawer("rules")}>评分规则</button><button onClick={() => setDrawer("history")}>评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</button></>}</div></header>
       <div className="erag-layout">
         <div className="erag-left-column">
           <section className="sfp-panel erag-knowledge-card" data-rag-entrance="knowledge" data-rag-entrance-immediate={hasNewerPublication || undefined}><div className="erag-card-heading"><div><span className="erag-card-icon"><FileText size={18} /></span><strong>RAG 知识底座</strong></div></div>
@@ -1219,6 +1218,15 @@ export function EnterpriseRagPreview({ storageScopeKey, live, buildReportUrl }: 
               <ChartNoAxesColumnIncreasing size={18} />
             </span>
             <h2>本轮回答质量</h2>
+            <div className="rag-toolbar rag-evaluation-toolbar" role="group" aria-label="评估资料">
+              {buildReportUrl ? <>
+                <a className="rag-report-link" href={buildReportUrl("rules", automaticCoordinate ?? undefined, exampleReadOnly ? activeCase?.id : undefined)} target="_blank" rel="noopener" aria-label="评分规则（在新标签页打开）">评分规则</a>
+                <a className="rag-report-link" href={buildReportUrl("records", automaticCoordinate ?? undefined, exampleReadOnly ? activeCase?.id : undefined)} target="_blank" rel="noopener" aria-label="评估记录（在新标签页打开）">评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</a>
+              </> : <>
+                <button onClick={() => setDrawer("rules")}>评分规则</button>
+                <button onClick={() => setDrawer("history")}>评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</button>
+              </>}
+            </div>
           </div>
           <div ref={overviewRef} className="rag-evaluation-overview" data-testid="rag-evaluation-overview" data-layout={overviewStacked ? "stacked" : "side-by-side"} data-two-lines={summaryTwoLines ? "true" : "false"}>
             <RagEvaluationGauge key={automaticReport?.reportId ?? `${question}:${answer}`} score={neutralEvaluation ? null : result.score} preciseScore={neutralEvaluation ? null : automaticReport ? automaticReport.result.score : calculatedResult.rawScore} unavailable={tone === "danger"} />

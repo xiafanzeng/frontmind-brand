@@ -393,8 +393,8 @@ try {
     "The live Enterprise RAG route did not render the redesigned surface",
   );
   await expectVisible(
-    page.getByRole("heading", { name: "让回答真正满足用户需求" }),
-    "The redesigned Enterprise RAG heading is missing",
+    page.getByRole("group", { name: "评估资料" }),
+    "The Enterprise RAG evaluation resources are missing",
   );
   const businessNavigation = page.getByRole("navigation", {
     name: "切换业务子页面",
@@ -551,8 +551,8 @@ try {
     "The live website route did not render the redesigned builder",
   );
   await expectVisible(
-    page.getByRole("heading", { name: "从知识库快速搭建帮助中心" }),
-    "The redesigned website-builder heading is missing",
+    page.getByRole("list", { name: "网站建设流程" }),
+    "The website-builder flow navigation is missing",
   );
   await expectVisible(
     page.getByTestId("siteops-build-status"),

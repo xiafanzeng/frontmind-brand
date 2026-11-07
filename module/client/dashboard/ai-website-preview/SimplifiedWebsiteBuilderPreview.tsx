@@ -2447,20 +2447,26 @@ export function SimplifiedWebsiteBuilderPreview({
       data-step={activeStep}
       data-testid={siteOps ? "website-builder-live-root" : undefined}
     >
-      <header className="sfp-heading">
-        <div>
-          <h1>从知识库快速搭建帮助中心</h1>
-          {activeStep !== "design" && <p>先完成网站建设与整体评估，再考虑域名和正式上线。</p>}
-        </div>
-        <div className="sfp-heading-actions">
-          {siteOps && displayedBuild?.previewUrl && (
-            <a className="sfp-button sfp-button--primary sfp-view-website" href={displayedBuild.previewUrl} target="_blank" rel="noopener noreferrer" title={`查看构建 v${displayedBuild.ordinal}（新窗口）`}>
-              <ExternalLink size={16} /> 查看网站
-            </a>
-          )}
-          {siteOps && displayedBuild?.sourceUrl && (
-            <a className="sfp-button sfp-button--ghost sfp-view-website" href={displayedBuild.sourceUrl} download>下载源码</a>
-          )}
+      <ol className="sfp-steps" aria-label="网站建设流程">
+        {steps.map((step) => (
+          <li key={step.id} className={step.id === activeStep ? "is-active" : completedSteps[step.id] ? "is-done" : ""} data-complete={completedSteps[step.id]}>
+            <button type="button" onClick={() => goTo(step.id)} aria-current={step.id === activeStep ? "step" : undefined}>
+              <span>{completedSteps[step.id] && step.id !== activeStep ? <Check size={16} /> : step.number}</span>
+              <span><strong>{step.label}</strong></span>
+            </button>
+          </li>
+        ))}
+      </ol>
+
+      <div className="sfp-heading-actions sfp-workspace-actions" role="group" aria-label="网站状态与操作">
+        {siteOps && displayedBuild?.previewUrl && (
+          <a className="sfp-button sfp-button--primary sfp-view-website" href={displayedBuild.previewUrl} target="_blank" rel="noopener noreferrer" title={`查看构建 v${displayedBuild.ordinal}（新窗口）`}>
+            <ExternalLink size={16} /> 查看网站
+          </a>
+        )}
+        {siteOps && displayedBuild?.sourceUrl && (
+          <a className="sfp-button sfp-button--ghost sfp-view-website" href={displayedBuild.sourceUrl} download>下载源码</a>
+        )}
         <div className={`sfp-draft-state ${storageAvailable ? "" : "is-session-only"}`}>
           <i />
           <span>
@@ -2476,19 +2482,7 @@ export function SimplifiedWebsiteBuilderPreview({
             </small>}
           </span>
         </div>
-        </div>
-      </header>
-
-      <ol className="sfp-steps" aria-label="网站建设流程">
-        {steps.map((step) => (
-          <li key={step.id} className={step.id === activeStep ? "is-active" : completedSteps[step.id] ? "is-done" : ""} data-complete={completedSteps[step.id]}>
-            <button type="button" onClick={() => goTo(step.id)} aria-current={step.id === activeStep ? "step" : undefined}>
-              <span>{completedSteps[step.id] && step.id !== activeStep ? <Check size={16} /> : step.number}</span>
-              <span><strong>{step.label}</strong></span>
-            </button>
-          </li>
-        ))}
-      </ol>
+      </div>
 
       {(notice || siteOps?.notice) && <div className="sfp-notice" role="status">{notice || siteOps?.notice}</div>}
       {(liveError || siteOps?.error) && (

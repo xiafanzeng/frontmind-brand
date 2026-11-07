@@ -392,10 +392,14 @@ describe("enterprise RAG evidence-based review UI", () => {
   it("opens report chapters as new-tab links without changing the answer or opening a drawer", async () => {
     const buildReportUrl = vi.fn((section: string) => `/?view=enterprise-qa&report=1#${section}`);
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} buildReportUrl={buildReportUrl} />);
+    expect(screen.queryByText("让回答真正满足用户需求")).toBeNull();
+    expect(screen.queryByText("用企业资料回答客户问题，核对回答依据，找到改进方向。")).toBeNull();
+    const qualityPanel = screen.getByRole("region", { name: "本轮回答质量" });
+    const resources = within(qualityPanel).getByRole("group", { name: "评估资料" });
     const question = screen.getByRole("textbox", { name: "输入企业 RAG 示例问题" });
     fireEvent.change(question, { target: { value: "保留这份草稿" } });
     for (const [name, anchor] of [["评分规则（在新标签页打开）", "rules"], ["评估记录（在新标签页打开）", "records"]]) {
-      const link = screen.getByRole("link", { name });
+      const link = within(resources).getByRole("link", { name });
       expect(link.getAttribute("href")).toBe(`/?view=enterprise-qa&report=1#${anchor}`);
       expect(link.getAttribute("target")).toBe("_blank");
       expect(link.getAttribute("rel")).toContain("noopener");
