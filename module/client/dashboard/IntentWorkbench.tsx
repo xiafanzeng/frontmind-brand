@@ -1,5 +1,5 @@
 import {useEffect, useId, useRef, useState} from "react";
-import {ArrowLeft, ArrowRight, Check, ChevronDown, Sparkles, Undo2} from "lucide-react";
+import {ArrowLeft, ArrowRight, Check, ChevronDown, GripHorizontal, MessageSquareText, Sparkles, Undo2, X} from "lucide-react";
 import {Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter} from "@frontmind/module-ui/components/ui/dialog";
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import ManagedKeywordTables, {type ManagedKeywordTablesProps} from "./ManagedKeywordTables";
@@ -24,15 +24,86 @@ type Selection = Parameters<NonNullable<ManagedKeywordTablesProps["onUseQuestion
 const labels = {supported: "已支撑", partial: "部分支撑", missing: "未支撑"};
 function Score({value}: {value: number}) {return <span className={`iw-score ${value >= 80 ? "good" : value >= 50 ? "warn" : "bad"}`}><b>{value}</b><i><em style={{width: `${value}%`}}/></i></span>;}
 function Steps({step}: {step: number}) {return <div className="iw-steps">{["查看评估", "确认方案", "执行结果"].map((label, index) => <div key={label} className={index <= step ? "active" : ""}><span>{index < step ? <Check size={15}/> : index + 1}</span>{label}{index < 2 && <i/>}</div>)}</div>;}
+function ScoreDimensions({item}: {item: IntentEvaluation}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{left: number; top: number} | null>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const drag = useRef<{id: number; x: number; y: number; left: number; top: number; width: number; height: number} | null>(null);
+  function move(left: number, top: number, width: number, height: number) {
+    setPosition({left: Math.max(12, Math.min(left, window.innerWidth - width - 12)),
+      top: Math.max(12, Math.min(top, window.innerHeight - height - 12))});
+  }
+  function close() {setOpen(false); setPosition(null); drag.current = null;}
+  useEffect(() => {close();}, [item.questionId, item.evaluatedAt]);
+  useEffect(() => {
+    if (!open) return;
+    const resize = () => {
+      const rect = content.current?.getBoundingClientRect();
+      if (rect) move(rect.left, rect.top, rect.width, rect.height);
+    };
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [open]);
+  return <>
+    <button type="button" className="iw-dimensions-trigger" aria-haspopup="dialog" aria-expanded={open}
+      onClick={() => {setPosition(null); setOpen(true);}}>查看 {item.dimensions.length} 项评分维度 <ChevronDown size={14}/></button>
+    <Dialog open={open} onOpenChange={value => {if (!value) close();}}>
+      <DialogContent ref={content} className="fm-brand-portal-theme iw-modal iw-dimensions-modal"
+        data-brand-surface="intent-workbench" showCloseButton={false}
+        style={position ? {left: position.left, top: position.top, transform: "none", translate: "none"} : undefined}>
+        <div className="iw-dimensions-handle" tabIndex={0} aria-label="拖动评分弹窗标题栏，或使用方向键移动"
+          onPointerDown={event => {
+            if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+            const rect = content.current?.getBoundingClientRect();
+            if (!rect) return;
+            event.preventDefault(); event.currentTarget.focus();
+            drag.current = {id: event.pointerId, x: event.clientX, y: event.clientY,
+              left: rect.left, top: rect.top, width: rect.width, height: rect.height};
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={event => {
+            const start = drag.current;
+            if (start?.id === event.pointerId) move(start.left + event.clientX - start.x,
+              start.top + event.clientY - start.y, start.width, start.height);
+          }}
+          onPointerUp={event => {
+            drag.current = null;
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+          }}
+          onPointerCancel={() => {drag.current = null;}}
+          onLostPointerCapture={() => {drag.current = null;}}
+          onKeyDown={event => {
+            if (event.target !== event.currentTarget || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+            const rect = content.current?.getBoundingClientRect();
+            if (!rect) return;
+            event.preventDefault();
+            const step = event.shiftKey ? 40 : 10;
+            move(rect.left + (event.key === "ArrowRight" ? step : event.key === "ArrowLeft" ? -step : 0),
+              rect.top + (event.key === "ArrowDown" ? step : event.key === "ArrowUp" ? -step : 0), rect.width, rect.height);
+          }}>
+          <DialogHeader><DialogTitle>问题价值评分详情</DialogTitle>
+            <DialogDescription>共 {item.dimensions.length} 项评分维度 · 拖动标题栏可移动</DialogDescription></DialogHeader>
+          <GripHorizontal className="iw-dimensions-grip" size={18} aria-hidden="true"/>
+          <button type="button" className="iw-dimensions-close" aria-label="关闭评分详情" onClick={close}><X size={18}/></button>
+        </div>
+        <div className="iw-dimensions-body" tabIndex={0} aria-label="评分维度内容">
+          {item.dimensions.length ? item.dimensions.map(dimension => <section key={dimension.label} className="iw-dimension">
+            <div><h3>{dimension.label}</h3><Score value={dimension.score}/></div><p>{dimension.reason}</p>
+          </section>) : <p>此评估暂无评分维度详情。</p>}
+        </div>
+      </DialogContent>
+    </Dialog>
+  </>;
+}
 function Evaluation({item}: {item: IntentEvaluation}) {
   return <div className="iw-evaluation">
     <div><div className="iw-score-cards">
       <section className="iw-panel iw-score-card"><span>问题价值</span><strong>{item.value}<small> / 100</small></strong>
-        <details className="iw-dimensions"><summary>查看 6 项评分维度 <ChevronDown size={14}/></summary><div>{item.dimensions.map(dimension => <div key={dimension.label}><span>{dimension.label}</span><Score value={dimension.score}/><p>{dimension.reason}</p></div>)}</div></details>
+        <ScoreDimensions item={item}/>
         <p>按意图、品牌关联、决策、清晰度、独特度和知识支撑综合评估。</p></section>
       <section className="iw-panel iw-score-card"><span>知识支撑</span><strong className={item.support >= 80 ? "good" : "warn"}>{item.support}<small> / 100</small></strong><span className="iw-tag">{item.support >= 80 ? "较充分" : item.support >= 50 ? "部分支撑" : "支撑不足"}</span><p>{item.points.filter(point => point.status === "supported").length} 项已支撑 · {item.points.filter(point => point.status === "partial").length} 项部分支撑 · {item.points.filter(point => point.status === "missing").length} 项未支撑</p></section>
     </div><section className="iw-panel"><h3>回答要点支撑矩阵 <small>{item.points.length} 个必要回答要点</small></h3><div className="iw-table-wrap"><table><thead><tr><th>回答要点</th><th>支撑状态</th><th>匹配知识节点 / 证据</th><th>内容问题</th></tr></thead><tbody>{item.points.map(point => <tr key={point.title}><td><b>{point.title}</b></td><td><span className={`iw-tag ${point.status}`}>{labels[point.status]}</span></td><td>{point.nodeTitle ?? "暂无匹配节点"}{point.evidence && <p className="iw-evidence">{point.evidence}</p>}</td><td>{point.issue}</td></tr>)}</tbody></table></div></section></div>
-    <aside className="iw-panel iw-diagnosis"><h3>诊断摘要</h3>{item.findings.length ? item.findings.map(finding => <p key={finding}><Sparkles size={16}/>{finding}</p>) : <p><Check size={16}/>当前要点均有相关内容支撑。</p>}<div className="iw-method">{item.method === "skill_v1" ? "AI 基于当前知识证据评估" : "历史规则评估 / 演示数据"} · 非真实搜索热度<br/>更新时间：{new Date(item.evaluatedAt).toLocaleString("zh-CN")}<br/>引用待核验资料不计为充分支撑。</div></aside>
+    <aside className="iw-panel iw-diagnosis"><h3>诊断摘要</h3>{item.findings.length ? item.findings.map(finding => <p key={finding}><Sparkles size={16}/>{finding}</p>) : <p><Check size={16}/>当前要点均有相关内容支撑。</p>}<div className="iw-method">更新时间：<time dateTime={item.evaluatedAt}>{new Date(item.evaluatedAt).toLocaleString("zh-CN")}</time></div></aside>
   </div>;
 }
 export function PlanEditor({plan: savedPlan, onChange}: {plan: IntentPlan; onChange: (plan: IntentPlan) => void}) {
@@ -72,6 +143,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
 }) {
   const [workspace, setWorkspace] = useState<IntentWorkspace | null>(null);
   const [view, setView] = useState<View>(initialView);
+  const [evaluationReturnView, setEvaluationReturnView] = useState<"universe" | "list">("list");
   const [pending, setPending] = useState(false);
   const [pendingRead, setPendingRead] = useState(false);
   const [watching, setWatching] = useState(false);
@@ -112,7 +184,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const container = useRef<HTMLDivElement>(null);
   useEffect(() => {
     mounted.current = true; generation.current++; running.current = false;
-    setView(initialView); setProgressJobId(undefined);
+    setView(initialView); setProgressJobId(undefined); setEvaluationReturnView("list");
     setWorkspace(null); setDrafts([]); setDraftDirty(false); setReceived([]); setSelected(initialCatalogState?.selected ?? []); setHistoryId(undefined); setHistoryQuestionId(undefined);
     setQuestionAction(null); setQuestionError("");
     void run(() => api.observe(), undefined, true, undefined, true);
@@ -305,6 +377,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   }
   async function evaluate(ids: string[], force = false) {
     if (pending || running.current || !ids.length) return;
+    if (view === "universe" || view === "list") setEvaluationReturnView(view);
     setScope(ids); setIndex(0); setExpanded([]);
     setSingleQueue(ids.length === 1 ? [...new Set([ids[0], ...filtered.filter(item =>
       evaluations.some(evaluation => evaluation.questionId === item.id)).map(item => item.id)])] : []);
@@ -340,6 +413,27 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     setReceived(ids); setSelected(ids); setScope(ids); setIndex(0); setExpanded([]); setSingleQueue([]);
     setSearch(""); setSort("newest"); setPage(0);
     emittedSection.current = "list"; onSectionChange?.("list");
+  }
+  async function evaluateFromKeywords(selection: Selection) {
+    if (pending || running.current) return;
+    if (activeJob) {setError("已有评估任务，请等待完成或继续暂停的任务。已保存的结果仍可查看。"); return;}
+    const incoming = {
+      id: `${selection.tableId}:${selection.rowIndex}`, question: selection.question, category: selection.category,
+      subdivision: "", tableId: selection.tableId, rowIndex: selection.rowIndex, sourceRevision: selection.dashboardRevision ?? null,
+    };
+    // Resolve the durable question and latest revision before creating a task.
+    // Keep the source table open while the existing watcher updates its score.
+    await run(async () => {
+      const current = await api.observe();
+      if (current.state.jobs?.some(job => !["succeeded", "failed"].includes(job.status)))
+        throw new Error("已有评估任务，请等待完成或继续暂停的任务。已保存的结果仍可查看。");
+      const saved = findCatalogQuestion(incoming, current.state.questions) ? current
+        : await api.command({kind: "intake", expectedRevision: current.revision, questions: [incoming]});
+      const target = findCatalogQuestion(incoming, saved.state.questions);
+      if (!target) throw new Error("词条未能保存，评估尚未开始，请重试。");
+      if (saved.state.evaluations.some(item => item.questionId === target.id)) return saved;
+      return api.command({kind: "evaluate", expectedRevision: saved.revision, questionIds: [target.id], clientRequestId: crypto.randomUUID()});
+    });
   }
   async function plan(force = false, ids = scope) {
     if (pending || running.current || !workspace || !ids.length) return;
@@ -393,10 +487,46 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   function openSavedPlan(id: string) {
     const saved = workspace && findSavedIntentPlan(workspace.state, id);
     if (saved) {
+      if (view === "list") setEvaluationReturnView("list");
       setScope([id]); setIndex(0); setExpanded([]); setSingleQueue([]);
       setDrafts([structuredClone(saved)]); setDraftDirty(false); setView("plan");
     }
   }
+  function openTaskDetails(jobId: string, returnView: "universe" | "list") {
+    const job = workspace?.state.jobs?.find(item => item.id === jobId);
+    if (!job) return;
+    // Inspect the selected task without submitting or restarting its watcher.
+    setEvaluationReturnView(returnView); setScope(job.questionIds); setIndex(0);
+    setExpanded([]); setSingleQueue([]); setProgressJobId(job.id);
+    setProgressKind(job.kind); setView("progress");
+  }
+  async function openCompletedEvaluation(jobId: string) {
+    const job = workspace?.state.jobs?.find(item => item.id === jobId && item.status === "succeeded");
+    if (!job) return;
+    // Completion already supplied validated results. Viewing never evaluates again.
+    setEvaluationReturnView("list"); setScope(job.questionIds); setIndex(0);
+    setExpanded([]); setSingleQueue([]);
+    const hasResults = (data: IntentWorkspace) => job.questionIds.every(id => {
+      const item = data.state.evaluations.find(item => item.questionId === id);
+      if (!item || (item.provenance?.operationId && item.provenance.operationId !== job.id)) return false;
+      const saved = data.state.jobs?.find(item => item.id === job.id)?.result?.evaluations.find(item => item.questionId === id);
+      if (saved) return saved.evaluatedAt === item.evaluatedAt;
+      const created = Date.parse(job.createdAt ?? "");
+      return !Number.isFinite(created) || Date.parse(item.evaluatedAt) >= created;
+    });
+    if (workspace && hasResults(workspace)) {
+      setError(""); setView("evaluation"); return;
+    }
+    // The terminal event can arrive before its result snapshot. Recover by reading.
+    await run(async () => {
+      const current = await api.observe();
+      if (!hasResults(current))
+        throw new Error("评估结果尚未完整读取，请重新读取。");
+      return current;
+    }, "evaluation", false, undefined, true);
+  }
+  const evaluationReturnLabel = evaluationReturnView === "universe" ? "已保存词条" : "问题列表";
+  const retainKeywordPage = view === "universe" || (evaluationReturnView === "universe" && ["progress", "evaluation", "plan"].includes(view));
   function openSection(section: "universe" | "list") {setView(section); emittedSection.current = section; onSectionChange?.(section);}
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending}>
     {view === "plan" && <div className="iw-toolbar" style={{justifyContent: "flex-end"}}><button disabled={pending || Boolean(activeJob) || draftDirty} onClick={() => void plan(true)}>重新生成方案</button></div>}
@@ -439,20 +569,22 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     </>}
     {error && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true, undefined, true)}>重新读取</button></div>}
     {view === "progress" && <IntentTaskProgress job={workspace?.state.jobs?.find(item => item.id === progressJobId)}
-      kind={progressKind} count={scope.length} error={error} pending={pending} updating={watching}
+      kind={progressKind} error={error} pending={pending} updating={watching}
       onPause={api.control ? () => void controlJob("pause") : undefined} onResume={api.control ? () => void controlJob("resume") : undefined}
-      onBack={() => setView("list")}
-      onViewResult={() => void run(() => api.observe(), undefined, true, undefined, true)}
-      onReload={() => void run(() => api.observe(), undefined, true, undefined, true)}/>}
+      returnLabel={evaluationReturnLabel}
+      onBack={() => setView(evaluationReturnView)}
+      onViewResult={() => void run(() => api.observe(), undefined, true, undefined, true)}/>}
     {pending && view !== "result" && view !== "progress" && !listEvaluation && !refreshingList && !initialListLoading && <div className="iw-panel" role="status">
       {activeJob?.repair ? "正在自动修复模型结果并重新校验，请稍候…" : activeJob ? `正在${activeJob.kind === "plan" ? "生成优化方案" : "评估问题"} · ${activeJob.questionIds.length} 条问题，AI 生成可能需要几分钟…` : "正在读取优化工作台…"}
       {activeJob && <><p>已有任务正在处理，完成前暂不能重复评估。</p><button onClick={() => {
-        setScope(activeJob.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]); setProgressJobId(activeJob.id); setProgressKind(activeJob.kind); setView("progress");
+        openTaskDetails(activeJob.id, view === "universe" ? "universe" : "list");
       }}>查看当前任务</button></>}
     </div>}
     {!pending && !error && view !== "progress" && workspace?.state.jobs?.at(-1)?.status === "failed" && <div className="iw-error" role="alert">{workspace.state.jobs.at(-1)?.error}</div>}
-    {view === "universe" && <><header className="iw-header iw-universe-header"><div><h1>词条生成</h1><p>推荐核心词 → 生成问题 → 勾选加入优化清单</p></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => void addToCatalog([selection])} onUseQuestions={items => void addToCatalog(items)}
-      optimizationState={workspace?.state} onViewEvaluation={id => void evaluate([id])}/></>}
+    {retainKeywordPage && <div hidden={view !== "universe"}><header className="iw-header iw-universe-header"><div><h1>词条生成</h1><p>推荐核心词 → 生成问题 → 勾选加入优化清单</p></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => void addToCatalog([selection])} onUseQuestions={items => void addToCatalog(items)}
+      optimizationState={workspace?.state} onViewEvaluation={id => void evaluate([id])}
+      onViewEvaluationTask={id => openTaskDetails(id, "universe")}
+      onEvaluateQuestion={selection => void evaluateFromKeywords(selection)} evaluationPending={pending}/></div>}
     {initialListLoading && <IntentListInitialLoading/>}
     {view !== "universe" && view !== "list" && !workspace && !error && <div role="status" className="iw-empty">正在读取优化工作台…</div>}
     {view === "list" && workspace && <>
@@ -467,9 +599,10 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       }}
         headerStatus={refreshingList ? <IntentListRefreshStatus/> : undefined}
         taskFeedback={listEvaluation ? <IntentListEvaluationStatus job={listEvaluation} uncertain={Boolean(error)} pending={pending}
+          onViewResult={() => void openCompletedEvaluation(listEvaluation.id)}
           onPause={api.control ? () => void controlJob("pause") : undefined} onResume={api.control ? () => void controlJob("resume") : undefined}
           onViewTask={() => {
-          setScope(listEvaluation.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]); setProgressJobId(listEvaluation.id); setProgressKind(listEvaluation.kind); setView("progress");
+          openTaskDetails(listEvaluation.id, "list");
         }}/> : undefined}
         savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan} onGeneratePlan={id => void plan(false, [id])}
         historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setHistoryQuestionId(undefined); setView("history");}}
@@ -482,12 +615,23 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         onSelectPage={checked => setSelected(ids => checked ? [...new Set([...ids, ...visible.map(item => item.id)])] : ids.filter(id => !visible.some(item => item.id === id)))}/>
       {workspace.state.receipts.some(item => item.status === "running") && <div className="iw-sticky"><span>有执行尚未确认完成</span><button disabled={pending} onClick={() => {const runningReceipt = workspace.state.receipts.find(item => item.status === "running")!; setReceiptId(runningReceipt.id); setView("result"); void run(() => api.execute({expectedRevision: revision, clientRequestId: runningReceipt.id, questionIds: [...new Set(runningReceipt.changes.map(change => change.questionId))]}));}}>继续原执行</button></div>}
     </>}
-    {view === "evaluation" && pending && <><button className="iw-back" onClick={() => setView("list")}><ArrowLeft size={15}/>返回问题列表</button><header className="iw-header"><div><h1>{activeJob?.kind === "plan" ? "正在生成优化方案" : `正在评估 ${scope.length} 条问题`}</h1><p>任务完成后显示最新评估结果，请勿重复提交。</p></div></header><Steps step={activeJob?.kind === "plan" ? 1 : 0}/></>}
-    {view === "evaluation" && !pending && !activeEvaluation && <div className="iw-panel"><p>当前任务尚无有效评估结果，请返回列表查看任务提示。</p><button onClick={() => setView("list")}>返回问题列表</button></div>}
+    {view === "evaluation" && pending && <><button className="iw-back" onClick={() => setView(evaluationReturnView)}><ArrowLeft size={15}/>返回{evaluationReturnLabel}</button><header className="iw-header"><div><h1>{activeJob?.kind === "plan" ? "正在生成优化方案" : `正在评估 ${scope.length} 条问题`}</h1><p>任务完成后显示最新评估结果，请勿重复提交。</p></div></header><Steps step={activeJob?.kind === "plan" ? 1 : 0}/></>}
+    {view === "evaluation" && !pending && !activeEvaluation && <div className="iw-panel"><p>当前任务尚无有效评估结果，请返回列表查看任务提示。</p><button onClick={() => setView(evaluationReturnView)}>返回{evaluationReturnLabel}</button></div>}
     {view === "evaluation" && !pending && activeEvaluation && <>
-      <button className="iw-back" onClick={() => setView("list")}><ArrowLeft size={15}/>返回问题列表</button><header className="iw-header"><div><h1>{scope.length > 1 ? "批量评估结果" : questions.find(item => item.id === activeEvaluation.questionId)?.question}</h1><p>查看问题价值、必要回答要点与可引用的知识依据。</p></div>{scope.length === 1 && <div><span className="iw-tag">{Math.max(1, singleQueue.indexOf(scope[0]) + 1)} / {Math.max(1, singleQueue.length)}</span> <button disabled={pending || !singleQueue[singleQueue.indexOf(scope[0]) + 1]} onClick={() => void nextEvaluation()}>下一条 <ArrowRight size={15}/></button></div>}</header><Steps step={0}/>
+      <button className="iw-back" onClick={() => setView(evaluationReturnView)}><ArrowLeft size={15}/>返回{evaluationReturnLabel}</button>
+      <header className="iw-header iw-evaluation-header">
+        <div className="iw-evaluation-question">
+          <span className="iw-question-mark" aria-hidden="true"><MessageSquareText size={20}/></span>
+          <div className="iw-question-heading"><span className="iw-question-caption">{scope.length > 1 ? "评估概览" : "当前评估问题"}</span>
+            <h1>{scope.length > 1 ? "批量评估结果" : questions.find(item => item.id === activeEvaluation.questionId)?.question}</h1>
+            <p>查看问题价值、必要回答要点与可引用的知识依据。</p>
+          </div>
+        </div>
+        {scope.length === 1 && <div className="iw-question-navigation"><span className="iw-tag">{Math.max(1, singleQueue.indexOf(scope[0]) + 1)} / {Math.max(1, singleQueue.length)}</span>
+          <button disabled={pending || !singleQueue[singleQueue.indexOf(scope[0]) + 1]} onClick={() => void nextEvaluation()}>下一条 <ArrowRight size={15}/></button>
+        </div>}
+      </header><Steps step={0}/>
       <p className="iw-method">正在查看已保存的评估结果；“重新评估”会基于当前知识库创建新任务。</p>
-      {scope.length === 1 && catalogIntegration?.onOpenAnswer && questions.find(question => question.id === scope[0]) && <button onClick={() => catalogIntegration.onOpenAnswer?.(questions.find(question => question.id === scope[0])!)}>进入应答逻辑</button>}
       {scope.length > 1 && <><p className="iw-method">每个问题独立评估、独立生成建议，最后统一确认和执行。</p><div className="iw-batch-summary">{[
         ["已评估问题", `${evaluated.length} / ${scope.length} 条`],
         ["存在知识缺口", `${evaluated.filter(item => item.points.some(point => point.status !== "supported")).length} 条`],
@@ -520,13 +664,13 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     {view === "result" && <><Steps step={2}/>{pending ? <section className="iw-panel iw-executing" role="status"><div className="iw-spinner"/><h2>正在执行优化</h2><p>正在保存已选动作并重新评估，请等待服务器确认。</p><progress/></section> : receipt ? <><section className="iw-panel"><header className="iw-result-hero"><span><Check size={27}/></span><h1>{receipt.status === "reverted" ? "本次优化已撤销" : receipt.status === "partial" ? "优化部分完成" : receipt.status === "running" ? "执行仍待确认" : "优化执行完成"}</h1><p>{receipt.changes.filter(change => change.status === "succeeded").length} 项成功 · {receipt.changes.filter(change => change.status === "failed").length} 项未完成 · 资料待办不计作知识补齐</p></header><div className="iw-results">{receipt.after.map(after => {const before = receipt.before.find(item => item.questionId === after.questionId); return <div key={after.questionId}><b>{questions.find(item => item.id === after.questionId)?.question}</b><div className="iw-comparison"><p>问题价值 <strong>{before?.value ?? "—"} → {after.value}</strong></p><p>知识支撑 <strong>{before?.support ?? "—"} → {after.support}</strong></p><p>未充分支撑 <strong>{before?.points.filter(point => point.status !== "supported").length ?? "—"} → {after.points.filter(point => point.status !== "supported").length}</strong></p></div></div>;})}{receipt.changes.map(change => <div className="iw-result-row" key={change.action.id}><div><b>{change.action.title}</b><p>{change.error ?? change.action.source}</p></div><span className={`iw-tag ${change.status === "succeeded" ? "supported" : "partial"}`}>{({pending: "待确认", succeeded: "成功", failed: "未完成", reverted: "已撤销"})[change.status]}</span></div>)}</div><footer className="iw-result-footer"><button onClick={exportReport}>导出评估报告</button><button onClick={() => openKnowledge()}>查看知识库变更</button><button disabled={receipt.status === "reverted" || receipt.status === "running"} onClick={() => setUndoOpen(true)}><Undo2 size={15}/>撤销本次优化</button><button className="iw-primary" onClick={() => setView("list")}>返回问题列表</button></footer></section></> : <div className="iw-empty">暂无执行记录</div>}</>}
     {view === "knowledge" && workspace && <><button className="iw-back" onClick={() => setView(receipt ? "result" : "list")}><ArrowLeft size={15}/>返回优化工作台</button><header className="iw-header"><div><h1>知识库变更</h1><p>按本次执行记录查看正文前后差异。</p></div><button onClick={exportReport}>导出变更记录</button></header><KnowledgeChangesView nodes={workspace.nodes} receipt={receipt} initialNodeId={nodeId}/></>}
     {view === "knowledge" && <div className="iw-sticky"><p>继续编辑、确认节点、上传资料和下载知识库，请进入原有知识库工作区。</p><button className="iw-primary" onClick={() => requestWorkspaceNavigation(() => navigate(projectWorkspaceUrl("/?view=knowledge")))}>打开智能知识库</button></div>}
-    {questionAction && <Dialog open onOpenChange={open => {if (!open && !pending) setQuestionAction(null);}}><DialogContent className="fm-brand-portal-theme iw-modal iw-question-modal" data-brand-surface="intent-workbench"><DialogHeader>
+    {questionAction && <Dialog open onOpenChange={open => {if (!open && !pending) setQuestionAction(null);}}><DialogContent className={`fm-brand-portal-theme iw-modal iw-question-modal${questionAction.kind === "delete" ? " iw-delete-modal" : ""}`} data-brand-surface="intent-workbench"><DialogHeader>
       <DialogTitle>{questionAction.kind === "edit" ? "修改问题" : "删除问题？"}</DialogTitle>
       <DialogDescription>{questionAction.kind === "edit" ? "修改后保存到当前优化清单。原评分和方案保留在历史记录，修改后的问题需重新评估。" : "仅从当前优化清单移除该问题及其资料待办。已保存词库、历史任务、应答内容和执行记录保留。"}</DialogDescription>
     </DialogHeader>
       {questionAction.kind === "edit" ? <div className="iw-question-fields">
         <label>问题内容<textarea aria-label="问题内容" value={questionDraft.question} disabled={pending} rows={4} maxLength={500} onChange={event => setQuestionDraft(draft => ({...draft, question: event.target.value}))}/></label>
-      </div> : <p>{questionAction.question.question}</p>}
+      </div> : <p className="iw-delete-question">{questionAction.question.question}</p>}
       {questionError && <p role="alert">{questionError}</p>}
       <DialogFooter><button disabled={pending} onClick={() => setQuestionAction(null)}>取消</button>
         <button className="iw-primary" disabled={pending} onClick={() => void saveQuestionAction()}>{pending ? "正在保存…" : questionAction.kind === "edit" ? "保存修改" : "确认删除"}</button>

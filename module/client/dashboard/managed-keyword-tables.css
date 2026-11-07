@@ -394,8 +394,52 @@
 :where(.brand-keyword-workspace) .qt-company-field {
   display: block;
   color: var(--ink, #171321);
-  font-size: 13px;
+  font-size: 18px;
   font-weight: var(--fm-weight-semibold, 600);
+  line-height: 28px;
+}
+.brand-keyword-workspace .qt-api-flow .panel-head.qt-flow-header.qt-flow-header--words {
+  justify-content: space-between;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.brand-keyword-workspace .qt-api-flow .qt-company-field {
+  padding-left: 16px;
+}
+.brand-keyword-workspace .qt-api-flow .qt-flow-body.qt-flow-body--words {
+  padding-top: 14px;
+}
+.brand-keyword-workspace .qt-api-flow .qt-flow-body--words .qt-company-row {
+  margin-top: 0;
+}
+.brand-keyword-workspace .qt-api-flow .qt-flow-body--words .qt-empty {
+  margin-top: 20px;
+}
+.brand-keyword-workspace .qt-api-flow .qt-company-input {
+  padding-left: 16px;
+  background: #fff !important;
+}
+.brand-keyword-workspace .qt-api-flow .qt-core-selection-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--fm-brand-ink, #20232b);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 28px;
+}
+.brand-keyword-workspace .qt-api-flow .qt-core-selection-ratio {
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: #f1ebf7;
+  color: var(--fm-brand-accent, #7542b0);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
 }
 :where(.brand-keyword-workspace) .qt-company-row {
   display: flex;
@@ -589,8 +633,8 @@
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-label:has(input:focus-visible) {outline:2px solid #7545a0;outline-offset:3px}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-row-disabled .keyword-selection-label {opacity:.55;cursor:default}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button{display:inline-flex;align-items:center;justify-content:flex-start;gap:9px;height:36px;min-height:36px;margin-top:8px;padding:0 10px;border:1px solid #e4dceb;border-radius:8px;background:#faf8fc;color:#645171;font-size:13px;line-height:18px;text-decoration:none;box-shadow:none;transform:none;cursor:pointer;transition:background-color .15s,border-color .15s}
-.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:hover{background:#f2edf7;border-color:#c5b0d6;box-shadow:none;transform:none}
-.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:active{background:#eae1f2;box-shadow:none;transform:none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:hover:not(:disabled){background:#f2edf7;border-color:#c5b0d6;box-shadow:none;transform:none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:active:not(:disabled){background:#eae1f2;box-shadow:none;transform:none}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:focus-visible{outline:2px solid #7545a0;outline-offset:3px}
 .keyword-evaluation-button .keyword-evaluation-metric{display:inline-flex;align-items:baseline;gap:5px}
 .keyword-evaluation-button .keyword-evaluation-metric>span{font-size:12px;color:#7b6f86}
@@ -601,7 +645,7 @@
 :where(.brand-keyword-workspace) .keyword-source-filter select {max-width:100%;padding:8px 12px;border:1px solid #d0d5dd;border-radius:8px;background:#fff}
 :where(.brand-keyword-workspace) .qt-api-flow input[type=checkbox] {width:16px;height:16px}
 
-.fm-brand-theme .brand-keyword-workspace .qt-api-flow .fm-question-category-pill {
+.fm-brand-theme .brand-keyword-workspace .qt-api-flow .fm-question-category-pill:not(.qt-main-category-pill) {
   border:1px solid var(--qt-source-border,#ded2eb);
   font-weight:600;
 }
@@ -620,3 +664,8 @@
   --fm-question-category-accent:#447b55;
   --qt-source-border:#c5dfcb;
 }
+.fm-brand-theme .brand-keyword-workspace .qt-category-picker {position:relative;display:inline-flex;vertical-align:middle}
+.fm-brand-theme .brand-keyword-workspace .qt-category-picker select {position:absolute;inset:0;width:100%;height:100%;min-width:0;margin:0;padding:0;border:0;opacity:0;cursor:pointer}
+.fm-brand-theme .brand-keyword-workspace .qt-category-picker:has(select:focus-visible) .qt-main-category-pill {outline:2px solid #7545a0;outline-offset:3px}
+.fm-brand-theme .brand-keyword-workspace .qt-category-picker:has(select:disabled) {opacity:.5}
+.fm-brand-theme .brand-keyword-workspace .qt-category-picker select:disabled {cursor:not-allowed}
