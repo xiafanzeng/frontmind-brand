@@ -31,6 +31,7 @@ const commandSchema = z.discriminatedUnion("kind", [
     actions: z.array(z.object({id, selected: z.boolean(), after: z.string().trim().min(1).max(300000)}).strict()).max(3)}).strict(),
   z.object({kind: z.literal("todo"), expectedRevision: z.number().int().nonnegative(), todoId: id,
     source: z.string().trim().min(1).max(2000)}).strict(),
+  z.object({kind: z.literal("restore-question"), expectedRevision: z.number().int().nonnegative(), questionId: id}).strict(),
 ]);
 function rows(result: any): any[] {return Array.isArray(result?.[0]) ? result[0] : [];}
 function digest(value: string) {return createHash("sha256").update(value).digest("hex");}
@@ -581,13 +582,28 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         }
         if (state.questions.length > 500) throw new IntentWorkbenchError("LIST_LIMIT", "优化清单最多保留 500 条问题");
       } else if (input.kind === "update-question" || input.kind === "delete-question") {
-        if (isHostIntentQuestion(state.questions.find(question => question.id === input.questionId)))
+        const target = state.questions.find(question => question.id === input.questionId);
+        if (input.kind === "update-question" && isHostIntentQuestion(target))
           throw new IntentWorkbenchError("FORMAL_QUESTION_MAINTENANCE_REQUIRED", "正式问题请通过问题维护入口修改或删除；原应答与历史记录会保留");
-        try {mutateIntentQuestion(state, input);}
-        catch (cause) {
-          if (cause instanceof IntentQuestionMutationError) throw new IntentWorkbenchError(cause.code, cause.message);
-          throw cause;
+        if (input.kind === "delete-question" && (isHostIntentQuestion(target) || (state.dismissedHostQuestionIds ?? []).includes(input.questionId))) {
+          // Dismissing a host question hides it from THIS checklist only; the host
+          // catalog stays authoritative and unchecking + re-checking there restores it.
+          state.dismissedHostQuestionIds = [...new Set([...(state.dismissedHostQuestionIds ?? []), input.questionId])];
+          state.questions = state.questions.filter(item => item.id !== input.questionId);
+          state.todos = state.todos.filter(item => item.questionId !== input.questionId);
+          state.evaluations = state.evaluations.filter(item => item.questionId !== input.questionId);
+          state.plans = state.plans.filter(item => item.questionId !== input.questionId);
+        } else {
+          try {mutateIntentQuestion(state, input);}
+          catch (cause) {
+            if (cause instanceof IntentQuestionMutationError) throw new IntentWorkbenchError(cause.code, cause.message);
+            throw cause;
+          }
         }
+      } else if (input.kind === "restore-question") {
+        // Undo for a dismissed host question; observe() re-injects it from the
+        // host catalog. Unknown ids stay a harmless no-op so a stale undo cannot fail.
+        state.dismissedHostQuestionIds = (state.dismissedHostQuestionIds ?? []).filter(id => id !== input.questionId);
       } else if (input.kind === "edit") {
         let plan = state.plans.find(item => item.questionId === input.questionId);
         if (!plan) {

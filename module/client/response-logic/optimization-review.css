@@ -64,7 +64,7 @@
 .rl-change-mark.remove {--marker-ink:#e9cdbdb3;--marker-edge:#ad856d}
 .rl-review-text {white-space:pre-wrap;overflow-wrap:anywhere}
 .rl-candidate-read {padding:16px;border:1px solid #e5ddeb;background:#fcfafe;border-radius:10px;min-height:220px}
-.rl-review-text .rl-change-mark {display:inline;padding:0;margin:0;border:0;border-radius:0;box-shadow:none;font:inherit;line-height:inherit;color:inherit;text-align:inherit;cursor:pointer;box-decoration-break:clone;-webkit-box-decoration-break:clone;background:linear-gradient(178deg,transparent 22%,var(--marker-ink) 28%,var(--marker-ink) 86%,transparent 93%);text-decoration-skip-ink:none}
+.rl-review-text .rl-change-mark {display:inline;padding:0;margin:0;border:0;border-radius:0;box-shadow:none;font:inherit;line-height:inherit;color:inherit;text-align:inherit;cursor:pointer;box-decoration-break:clone;-webkit-box-decoration-break:clone;background:linear-gradient(180deg,transparent 18%,var(--marker-ink) 26%,var(--marker-ink) 84%,transparent 92%);text-decoration-skip-ink:none}
 .rl-review-text .rl-change-mark.remove .rl-change-text {text-decoration:line-through;text-decoration-thickness:1px;text-decoration-color:var(--marker-edge)}
 .rl-review-text .rl-change-mark:hover,.rl-review-text .rl-change-mark.is-selected {text-decoration:underline;text-decoration-color:var(--marker-edge);text-decoration-thickness:1px;text-underline-offset:3px}
 .rl-review-text .rl-change-mark:focus-visible {outline:1px dashed var(--marker-edge);outline-offset:3px}

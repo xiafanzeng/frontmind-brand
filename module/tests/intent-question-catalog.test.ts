@@ -44,4 +44,25 @@ describe("host formal question projection", () => {
     expect(reconcileHostIntentQuestions(state, [])).toBe(true);
     expect(state.questions.map(q => q.id)).toEqual(["native"]);
   });
+  it("hides dismissed host questions until the host unchecks and re-checks them", () => {
+    const state = emptyIntentState();
+    state.dismissedHostQuestionIds = [question.id];
+    // Still offered by the host: no re-injection and a stable no-change result.
+    expect(reconcileHostIntentQuestions(state, [question])).toBe(false);
+    expect(state.questions).toEqual([]);
+    // A ledger copy left behind by a legacy path is dropped and invalidated.
+    state.questions = [question];
+    state.evaluations = [{questionId: question.id}] as never;
+    expect(reconcileHostIntentQuestions(state, [question])).toBe(true);
+    expect(state.questions).toEqual([]);
+    expect(state.evaluations).toEqual([]);
+    // Host unchecked: the stale dismissal is pruned (persisted change), then a
+    // later re-check re-enters the checklist.
+    state.questions = [];
+    state.dismissedHostQuestionIds = [question.id];
+    expect(reconcileHostIntentQuestions(state, [])).toBe(true);
+    expect(state.dismissedHostQuestionIds).toEqual([]);
+    expect(reconcileHostIntentQuestions(state, [question])).toBe(true);
+    expect(state.questions).toEqual([question]);
+  });
 });

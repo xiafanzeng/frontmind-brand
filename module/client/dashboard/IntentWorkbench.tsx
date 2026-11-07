@@ -23,6 +23,8 @@ import type {IntentQuestion} from "../../contracts/intent-workbench";
 type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge" | "progress" | "history" | "history-detail";
 type Selection = Parameters<NonNullable<ManagedKeywordTablesProps["onUseQuestion"]>>[0];
 const labels = {supported: "已支撑", partial: "部分支撑", missing: "未支撑"};
+/** Mirrors HOST_QUESTION_TABLE in module/server/intent-question-catalog.ts; kept local so client code never imports the server tree. */
+const HOST_QUESTION_TABLE_ID = "dashboard:confirmed";
 function Score({value}: {value: number}) {return <span className={`iw-score ${value >= 80 ? "good" : value >= 50 ? "warn" : "bad"}`}><b>{value}</b><i><em style={{width: `${value}%`}}/></i></span>;}
 function Steps({step}: {step: number}) {return <div className="iw-steps">{["查看评估", "确认方案", "执行结果"].map((label, index) => <div key={label} className={index <= step ? "active" : ""}><span>{index < step ? <Check size={15}/> : index + 1}</span>{label}{index < 2 && <i/>}</div>)}</div>;}
 function ScoreDimensions({item}: {item: IntentEvaluation}) {
@@ -178,6 +180,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [questionAction, setQuestionAction] = useState<{kind: "edit" | "delete"; question: IntentQuestion} | null>(null);
   const [questionDraft, setQuestionDraft] = useState({question: ""});
   const [questionError, setQuestionError] = useState("");
+  const [deletedRecently, setDeletedRecently] = useState<IntentQuestion | null>(null);
   const mounted = useRef(true);
   const generation = useRef(0);
   const running = useRef(false);
@@ -218,6 +221,11 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     const timer = window.setTimeout(() => setIntakeFeedback(null), 1100);
     return () => window.clearTimeout(timer);
   }, [intakeFeedback]);
+  useEffect(() => {
+    if (!deletedRecently) return;
+    const timer = window.setTimeout(() => setDeletedRecently(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [deletedRecently]);
   useEffect(() => {
     if (initialViewRef.current === initialView) return;
     initialViewRef.current = initialView;
@@ -414,6 +422,54 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     navigationVersion.current++;
     setQuestionError(""); setQuestionAction({kind, question});
     setQuestionDraft({question: question.question});
+  }
+  /** Approved v3 behavior: deleting from the checklist runs immediately; the old
+   *  confirmation dialog is replaced by an undo bar. Host questions are dismissed
+   *  server-side (the host catalog stays authoritative and re-checking there
+   *  restores them); manually added questions come back through intake. */
+  async function deleteQuestionNow(question: IntentQuestion) {
+    if (questionSaving.current) return;
+    navigationVersion.current++;
+    setQuestionError("");
+    questionSaving.current = true; setSavingQuestionId(question.id);
+    const version = generation.current;
+    const currentSession = () => mounted.current && generation.current === version;
+    try {
+      const current = await api.observe();
+      if (!currentSession()) return;
+      applyWorkspace(current);
+      const data = await command({kind: "delete-question", questionId: question.id});
+      if (!currentSession()) return;
+      applyWorkspace(data);
+      setSelected(ids => ids.filter(id => id !== question.id));
+      setReceived(ids => ids.filter(id => id !== question.id));
+      setScope(ids => ids.filter(id => id !== question.id));
+      setSingleQueue(ids => ids.filter(id => id !== question.id));
+      setDeletedRecently(question);
+    } catch (cause) {
+      if (currentSession()) setError(cause instanceof Error ? cause.message : "删除失败，请重试");
+    } finally {
+      if (currentSession()) {questionSaving.current = false; setSavingQuestionId(undefined);}
+    }
+  }
+  async function undoDeleteQuestion() {
+    const question = deletedRecently;
+    if (!question || questionSaving.current) return;
+    questionSaving.current = true;
+    const version = generation.current;
+    const currentSession = () => mounted.current && generation.current === version;
+    try {
+      setDeletedRecently(null);
+      const data = await command(question.tableId === HOST_QUESTION_TABLE_ID
+        ? {kind: "restore-question", questionId: question.id}
+        : {kind: "intake", questions: [question]});
+      if (!currentSession()) return;
+      applyWorkspace(data);
+    } catch (cause) {
+      if (currentSession()) setError(cause instanceof Error ? cause.message : "恢复失败，请重新添加该问题");
+    } finally {
+      if (currentSession()) questionSaving.current = false;
+    }
   }
   async function saveQuestionAction() {
     if (!questionAction || questionSaving.current) return;
@@ -701,7 +757,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       }}>查看当前任务</button></>}
     </div>}
     {!pending && !error && view !== "progress" && workspace?.state.jobs?.at(-1)?.status === "failed" && <div className="iw-error" role="alert">{workspace.state.jobs.at(-1)?.error}</div>}
-    {retainKeywordPage && <div hidden={view !== "universe"}><header className="iw-header iw-universe-header"><div><h1>词条生成</h1><p>推荐核心词 → 生成问题 → 勾选加入优化清单</p></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => addToCatalog([selection])} onUseQuestions={items => addToCatalog(items)}
+    {retainKeywordPage && <div className="iw-enter" hidden={view !== "universe"}><header className="iw-header iw-universe-header"><div><h1>词条生成</h1><p>推荐核心词 → 生成问题 → 勾选加入优化清单</p></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => addToCatalog([selection])} onUseQuestions={items => addToCatalog(items)}
       onOptimizationSavingChange={saving => setIntakeFeedback(state => saving ? "saving" : state === "saving" ? null : state)}
       optimizationState={workspace?.state} onViewEvaluation={id => void evaluate([id])}
       onViewEvaluationTask={id => openTaskDetails(id, "universe")}
@@ -709,7 +765,13 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       evaluationPendingKeyword={pendingEvaluationKeyword}/></div>}
     {initialListLoading && <IntentListInitialLoading/>}
     {view !== "universe" && view !== "list" && !workspace && !error && <div role="status" className="iw-empty">正在读取优化工作台…</div>}
-    {view === "list" && workspace && <>
+    {view === "list" && workspace && <div className="iw-enter">
+      {deletedRecently && <div className="iw-undo-bar" role="status">
+        <b>{deletedRecently.question}</b>
+        <span>已从优化清单删除</span>
+        <button type="button" onClick={() => void undoDeleteQuestion()}>撤销删除</button>
+        <button type="button" aria-label="关闭删除提示" onClick={() => setDeletedRecently(null)}>×</button>
+      </div>}
       <IntentQuestionCatalog questions={questions} visible={visible} evaluations={evaluations} activeJob={activeJob} received={received} integration={{
         ...catalogIntegration,
         onOpenAnswer: catalogIntegration?.onOpenAnswer ? question => {
@@ -718,7 +780,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
           catalogIntegration.onOpenAnswer?.(question);
         } : undefined,
         onEditQuestion: catalogIntegration?.onEditQuestion ?? (question => openQuestionAction("edit", question)),
-        onDeleteQuestion: catalogIntegration?.onDeleteQuestion ?? (question => openQuestionAction("delete", question)),
+        onDeleteQuestion: catalogIntegration?.onDeleteQuestion ?? (question => void deleteQuestionNow(question)),
       }}
         headerStatus={refreshingList ? <IntentListRefreshStatus/> : undefined}
         taskFeedback={listEvaluation ? <IntentListEvaluationStatus job={listEvaluation} uncertain={Boolean(error)} pending={pending}
@@ -737,7 +799,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         onToggle={toggle} onClear={() => setSelected([])} onEvaluate={ids => void evaluate(ids)} onPage={setPage}
         onSelectPage={checked => setSelected(ids => checked ? [...new Set([...ids, ...visible.map(item => item.id)])] : ids.filter(id => !visible.some(item => item.id === id)))}/>
       {workspace.state.receipts.some(item => item.status === "running") && <div className="iw-sticky"><span>有执行尚未确认完成</span><button disabled={pending} onClick={() => {const runningReceipt = workspace.state.receipts.find(item => item.status === "running")!; setReceiptId(runningReceipt.id); setView("result"); void run(() => api.execute({expectedRevision: revision, clientRequestId: runningReceipt.id, questionIds: [...new Set(runningReceipt.changes.map(change => change.questionId))]}));}}>继续原执行</button></div>}
-    </>}
+    </div>}
     {view === "evaluation" && pending && !activeEvaluation && <><button className="iw-back" onClick={() => navigateView(evaluationReturnView)}><ArrowLeft size={15}/>返回{evaluationReturnLabel}</button><header className="iw-header"><div><h1>{activeJob?.kind === "plan" ? "正在生成优化方案" : `正在评估 ${scope.length} 条问题`}</h1><p>任务完成后显示最新评估结果，请勿重复提交。</p></div></header><Steps step={activeJob?.kind === "plan" ? 1 : 0}/></>}
     {view === "evaluation" && !pending && !activeEvaluation && <div className="iw-panel"><p>当前任务尚无有效评估结果，请返回列表查看任务提示。</p><button onClick={() => navigateView(evaluationReturnView)}>返回{evaluationReturnLabel}</button></div>}
     {view === "evaluation" && activeEvaluation && <>

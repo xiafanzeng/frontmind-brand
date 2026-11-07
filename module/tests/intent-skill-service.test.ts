@@ -210,11 +210,32 @@ describe("优化模型持久化任务", () => {
     expect((await h.service.observe()).revision).toBe(first.revision);
     expect(h.client.createTask).not.toHaveBeenCalled();
     expect(h.storedTasks).toEqual([]);
-    await expect(h.service.command({kind: "delete-question", questionId: questions[0].id,
-      expectedRevision: first.revision})).rejects.toMatchObject({code: "FORMAL_QUESTION_MAINTENANCE_REQUIRED"});
+    // 方案B：宿主问题可从本清单移除（dismissal）；目录仍持有它时不回注，revision 稳定。
+    const removed = await h.service.command({kind: "delete-question", questionId: questions[0].id,
+      expectedRevision: first.revision});
+    expect(removed.state.questions.map(q => q.id)).toEqual(questions.slice(1).map(q => q.id));
+    expect(removed.state.dismissedHostQuestionIds).toEqual([questions[0].id]);
+    const dismissedView = await h.service.observe();
+    expect(dismissedView.state.questions.map(q => q.id)).toEqual(questions.slice(1).map(q => q.id));
+    expect((await h.service.observe()).revision).toBe(dismissedView.revision);
+    // 撤销：清除 dismissal 后，宿主目录下一次读取重新注入（追加到清单尾部）。
+    const restored = await h.service.command({kind: "restore-question", questionId: questions[0].id,
+      expectedRevision: dismissedView.revision});
+    expect(restored.state.questions.map(q => q.id)).toEqual(expect.arrayContaining(questions.map(q => q.id)));
+    expect(restored.state.questions).toHaveLength(questions.length);
+    expect(restored.state.dismissedHostQuestionIds).toEqual([]);
+    // 宿主取消勾选后 dismissal 过期清除，重新勾选的问题再次进入清单。
+    await h.service.command({kind: "delete-question", questionId: questions[0].id,
+      expectedRevision: restored.revision});
     questions = questions.slice(1);
-    const refreshed = await h.service.observe();
-    expect(refreshed.state.questions.map(q => q.id)).toEqual(questions.map(q => q.id));
+    const unchecked = await h.service.observe();
+    expect(unchecked.state.questions.map(q => q.id)).toEqual(questions.map(q => q.id));
+    expect(unchecked.state.dismissedHostQuestionIds).toEqual([]);
+    const recheckedCatalog = [first.state.questions[0], ...questions];
+    questions = recheckedCatalog;
+    const rechecked = await h.service.observe();
+    expect(rechecked.state.questions.map(q => q.id)).toEqual(expect.arrayContaining(recheckedCatalog.map(q => q.id)));
+    expect(rechecked.state.questions).toHaveLength(recheckedCatalog.length);
     expect(h.client.createTask).not.toHaveBeenCalled();
   });
   it("正式问题的资料待办执行保留原题及来源，并启动独立复评", async () => {

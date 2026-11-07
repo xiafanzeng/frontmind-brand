@@ -393,13 +393,12 @@ describe("优化工作台任务入口", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const editedRow = screen.getByText("修改后的其他问题").closest("tr")!;
     fireEvent.click(within(editedRow).getByRole("button", {name: "删除问题"}));
-    fireEvent.click(screen.getByRole("button", {name: "确认删除"}));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.queryByText("修改后的其他问题")).toBeNull();
+    await screen.findByRole("button", {name: "撤销删除"});
+    expect(screen.queryByRole("row", {name: /修改后的其他问题/})).toBeNull();
     await act(async () => release(staleAcknowledgement));
     expect(screen.getByRole("heading", {name: "优化问题"})).toBeTruthy();
     expect(screen.queryByText(other.question)).toBeNull();
-    expect(screen.queryByText("修改后的其他问题")).toBeNull();
+    expect(screen.queryByRole("row", {name: /修改后的其他问题/})).toBeNull();
     expect(ledger.state.questions.find(item => item.id === "q1")?.question).toBe(question.question);
     expect(vi.mocked(api.command).mock.calls.filter(([value]: any) => value.kind === "evaluate")).toHaveLength(phase === "submit" ? 1 : 0);
     if (phase !== "submit") {
@@ -493,9 +492,8 @@ describe("优化工作台任务入口", () => {
     expect(screen.getByText("修改后的当前评估题")).toBeTruthy();
     expect(screen.getByRole("button", {name: "评估问题"})).toHaveProperty("disabled", true);
     fireEvent.click(screen.getByRole("button", {name: "删除问题"}));
-    fireEvent.click(screen.getByRole("button", {name: "确认删除"}));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.queryByText("修改后的当前评估题")).toBeNull();
+    await screen.findByRole("button", {name: "撤销删除"});
+    expect(screen.queryByRole("row", {name: /修改后的当前评估题/})).toBeNull();
     const completed = {...ledger, revision: 10, state: {...ledger.state, jobs: [{...ledger.state.jobs![0],
       status: "succeeded" as const, result: {completedAt: "2026-11-07T00:00:00Z", questions: [question],
         evaluations: workspace("succeeded").state.evaluations, plans: []}}]}};
@@ -1142,22 +1140,26 @@ describe("优化工作台任务入口", () => {
     expect(api.command).not.toHaveBeenCalled();
     expect(api.execute).not.toHaveBeenCalled();
   });
-  it("删除必须确认，取消不写入，确认后清除选中项并保留历史入口", async () => {
+  it("删除直接执行并支持撤销，不再弹出确认框", async () => {
     const initial = workspace("succeeded"), removed = structuredClone(initial);
     removed.state.questions = []; removed.state.evaluations = [];
-    const api: IntentWorkbenchApi = {observe: vi.fn(async () => initial), command: vi.fn(async () => removed),
+    const restored = structuredClone(initial);
+    const api: IntentWorkbenchApi = {observe: vi.fn(async () => initial),
+      command: vi.fn(async (value: any) => value.kind === "intake" ? structuredClone(restored) : structuredClone(removed)),
       execute: vi.fn(), rollback: vi.fn()};
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     fireEvent.click(await screen.findByRole("checkbox", {name: `选择${question.question}`}));
     fireEvent.click(screen.getByRole("button", {name: "删除问题"}));
-    fireEvent.click(screen.getByRole("button", {name: "取消"}));
-    expect(api.command).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", {name: "删除问题"}));
-    fireEvent.click(screen.getByRole("button", {name: "确认删除"}));
+    // 已确认的交互：无确认弹窗，命令立即发出。
+    expect(screen.queryByRole("button", {name: "确认删除"})).toBeNull();
+    await waitFor(() => expect(api.command).toHaveBeenCalledWith({kind: "delete-question", questionId: "q1", expectedRevision: 1}));
     await waitFor(() => expect(screen.queryByRole("button", {name: "删除问题"})).toBeNull());
-    expect(api.command).toHaveBeenCalledWith({kind: "delete-question", questionId: "q1", expectedRevision: 1});
     expect(screen.queryByRole("button", {name: "批量评估并优化（1）"})).toBeNull();
     expect(screen.queryByRole("button", {name: /历史记录/})).toBeNull();
+    // 撤销条出现；手工加入的问题通过 intake 恢复。
+    fireEvent.click(await screen.findByRole("button", {name: "撤销删除"}));
+    await waitFor(() => expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "intake", questions: [question]})));
+    await screen.findByRole("button", {name: "删除问题"});
   });
   it("另一问题生成方案只针对该问题，不沿用上一次查看的评分范围", async () => {
     const saved = workspace("succeeded");

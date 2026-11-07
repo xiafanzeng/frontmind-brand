@@ -1,4 +1,4 @@
-import {type ReactNode} from "react";
+import {type CSSProperties, type ReactNode} from "react";
 import {Search, ChevronRight, ArrowDown, ArrowDownUp} from "lucide-react";
 import type {IntentQuestion, IntentEvaluation, IntentSkillJob} from "../../contracts/intent-workbench";
 import type {IntentCatalogSort} from "./intent-catalog-view";
@@ -51,11 +51,12 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
     <section className="iw-panel iw-table-wrap iw-catalog-table"><table>
       <colgroup><col className="iw-catalog-col-select"/><col className="iw-catalog-col-question"/><col className="iw-catalog-col-value"/><col className="iw-catalog-col-support"/><col className="iw-catalog-col-gaps"/><col className="iw-catalog-col-actions"/></colgroup>
       <thead><tr><th><input type="checkbox" aria-label="选择当前页问题" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => onSelectPage(event.target.checked)}/></th><th>候选问题</th>{scoreHeader("value", "问题价值")}{scoreHeader("support", "知识支撑")}<th>主要缺口</th><th>操作</th></tr></thead>
-      <tbody>{visible.map(question => {
+      <tbody>{visible.map((question, index) => {
         const evaluation = evaluations.find(item => item.questionId === question.id);
         const evaluating = activeJob?.kind === "evaluate" && activeJob.questionIds.includes(question.id);
         const gaps = evaluation?.points.filter(point => point.status !== "supported");
         return <tr key={question.id} data-question-id={question.id} className={`${selected.includes(question.id) ? "selected" : ""} ${received.includes(question.id) ? "iw-new-row" : ""}`}
+          style={{"--i": index} as CSSProperties}
           aria-selected={selected.includes(question.id)} tabIndex={0}
           onClick={event => {
             if ((event.target as Element).closest("button, input, label, a, select, textarea, summary, [role=button]")) return;

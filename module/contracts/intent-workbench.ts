@@ -105,6 +105,8 @@ export type IntentState = {
   todos: IntentTodo[];
   receipts: IntentReceipt[];
   jobs?: IntentSkillJob[];
+  /** Host questions removed from this checklist. Re-checking the question in the host catalog clears the dismissal. */
+  dismissedHostQuestionIds?: string[];
 };
 export type IntentWorkspace = {
   revision: number;
@@ -113,7 +115,7 @@ export type IntentWorkspace = {
   preview: boolean;
 };
 export const emptyIntentState = (): IntentState => ({
-  version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [], jobs: [],
+  version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [], jobs: [], dismissedHostQuestionIds: [],
 });
 
 /** Legacy question actions remain readable in history, but never become executable drafts. */
