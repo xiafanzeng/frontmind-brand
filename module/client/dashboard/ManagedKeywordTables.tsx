@@ -78,7 +78,7 @@ export type ManagedKeywordTablesProps = {
 };
 
 const KEYWORD_SOURCE_DESCRIPTION =
-  "已保存的推荐问题与历史词库按来源分开展示，可加入优化清单或查看已有评估。";
+  "已保存的推荐问题与历史词库统一展示，可加入优化清单或查看已有评估。";
 
 function normalizedColumnName(value: unknown) {
   return String(value ?? "")
@@ -305,7 +305,7 @@ export default function ManagedKeywordTables({
         );
         const displayColumns = keywordDisplayColumns(table.columns);
         const rows = table.rows
-          .map((row, rowIndex) => ({ row, rowIndex }))
+          .map((row, rowIndex) => ({ row, rowIndex, sourceTableId: table.id }))
           .filter(({ row }) => {
             if (
               categoryFilter !== "all" &&
@@ -345,6 +345,22 @@ export default function ManagedKeywordTables({
           table.rows.length > 0,
       );
   }, [categoryFilter, keyword, subdivisionFilter, tableFilter, sourceTables]);
+  // Present one customer-facing table while preserving each row's durable source identity.
+  const displayTables = useMemo(() => {
+    if (!generationEnabled) return visibleTables;
+    const columns = ["问题", "主分类", "问题细分"];
+    const rows = [...visibleTables].reverse().flatMap(table => {
+      const questionIndex = questionColumnIndex(table.columns);
+      const categoryIndex = keywordCategoryColumnIndex(table.columns);
+      const subdivisionIndex = questionSubdivisionColumnIndex(table.columns);
+      return table.rows.map(({row, rowIndex, sourceTableId}) => ({
+        row: [row[questionIndex], row[categoryIndex], subdivisionIndex < 0 ? "—" : row[subdivisionIndex] || "—"],
+        rowIndex, sourceTableId,
+      }));
+    });
+    return rows.length ? [{id: "saved-keywords", title: "已保存词条", columns,
+      displayColumns: keywordDisplayColumns(columns), rows}] : [];
+  }, [generationEnabled, visibleTables]);
   const totalRows = useMemo(
     () => tables.reduce((total, table) => total + table.rows.length, 0),
     [tables],
@@ -403,7 +419,6 @@ export default function ManagedKeywordTables({
         <>
           {onUseQuestions && batchItems.length > 0 && (
             <div className="keyword-batch-actions" role="status">
-              <span className="keyword-batch-summary">已选择 <strong>{batchItems.length}</strong> 条词条</span>
               <div><button type="button" onClick={() => setBatchSelection({})}>清空选择</button>
               <button type="button" className="iw-primary" onClick={() => onUseQuestions(batchItems)}>批量加入优化清单（{batchItems.length}）</button></div>
             </div>
@@ -493,7 +508,7 @@ export default function ManagedKeywordTables({
             )}
           </div>
           <div className="saas-content-area">
-            {visibleTables.map((table) => {
+            {displayTables.map((table) => {
               const tableQuestionColumnIndex = questionColumnIndex(
                 table.columns,
               );
@@ -530,7 +545,7 @@ export default function ManagedKeywordTables({
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map(({ row, rowIndex }) => {
+                        {rows.map(({ row, rowIndex, sourceTableId }) => {
                           const question = safeText(
                             row[tableQuestionColumnIndex],
                           );
@@ -540,13 +555,13 @@ export default function ManagedKeywordTables({
                           const quotaAccess = category
                             ? quotaAvailability?.[category]
                             : undefined;
-                          const linked = optimizationState ? findCatalogQuestion({question, tableId: table.id, rowIndex}, optimizationState.questions) : undefined;
+                          const linked = optimizationState ? findCatalogQuestion({question, tableId: sourceTableId, rowIndex}, optimizationState.questions) : undefined;
                           const evaluation = linked ? optimizationState?.evaluations.find(item => item.questionId === linked.id) : undefined;
                           const evaluationJob = optimizationState?.jobs?.find(job => !["succeeded", "failed"].includes(job.status));
                           const evaluating = linked && evaluationJob?.kind === "evaluate" && evaluationJob.questionIds.includes(linked.id);
-                          const submittingEvaluation = evaluationPending && evaluationPendingKeyword?.tableId === table.id &&
+                          const submittingEvaluation = evaluationPending && evaluationPendingKeyword?.tableId === sourceTableId &&
                             evaluationPendingKeyword.rowIndex === rowIndex;
-                          const selectionKey = `${table.id}:${rowIndex}`;
+                          const selectionKey = `${sourceTableId}:${rowIndex}`;
                           const isSelected = Boolean(batchSelection[selectionKey]);
                           const selectionDisabled = (isWorkbench && dashboardRevision == null) || !question || !category || quotaAccess?.available === false;
                           const toggleSelection = () => {
@@ -554,15 +569,15 @@ export default function ManagedKeywordTables({
                             setBatchSelection(current => {
                               const next = {...current};
                               if (next[selectionKey]) delete next[selectionKey];
-                              else next[selectionKey] = {question, category, tableId: table.id, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})};
+                              else next[selectionKey] = {question, category, tableId: sourceTableId, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})};
                               return next;
                             });
                           };
                           return (
                             <tr
-                              key={`${table.id}-${rowIndex}`}
+                              key={`${sourceTableId}-${rowIndex}`}
                               className={onUseQuestions ? `keyword-row-selectable${isSelected ? " keyword-row-selected" : ""}${selectionDisabled ? " keyword-row-disabled" : ""}` : undefined}
-                              aria-selected={onUseQuestions ? isSelected : isWorkbench ? selectedKeyword?.tableId === table.id && selectedKeyword.rowIndex === rowIndex : undefined}
+                              aria-selected={onUseQuestions ? isSelected : isWorkbench ? selectedKeyword?.tableId === sourceTableId && selectedKeyword.rowIndex === rowIndex : undefined}
                               tabIndex={onUseQuestions && !selectionDisabled ? 0 : undefined}
                               onClick={onUseQuestions ? event => {
                                 if ((event.target as HTMLElement).closest("button, input, label, a, select, textarea, [role=button]")) return;
@@ -603,7 +618,7 @@ export default function ManagedKeywordTables({
                                       : "low";
                                   return (
                                     <td
-                                      key={`${table.id}-${rowIndex}-${columnIndex}`}
+                                      key={`${sourceTableId}-${rowIndex}-${columnIndex}`}
                                       className={
                                         normalizedColumn === "问题"
                                           ? "keyword-question-cell"
@@ -647,7 +662,7 @@ export default function ManagedKeywordTables({
                                   disabled={selectionDisabled || evaluationPending || Boolean(evaluationJob)}
                                   onClick={() => {
                                     if (!category) return;
-                                    onEvaluateQuestion({question, category, tableId: table.id, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})});
+                                    onEvaluateQuestion({question, category, tableId: sourceTableId, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})});
                                   }}>
                                   <span>{evaluating ? evaluationJob?.status === "paused" ? "评估已暂停" : "评估中…" : submittingEvaluation ? "正在处理…" : "评估问题"}</span>
                                   <ChevronRight size={14} aria-hidden="true"/>
@@ -671,12 +686,12 @@ export default function ManagedKeywordTables({
                                       const selection = {
                                         question,
                                         category,
-                                        tableId: table.id,
+                                        tableId: sourceTableId,
                                         rowIndex,
                                       };
                                       const item = {...selection, ...(dashboardRevision != null ? {dashboardRevision} : {})};
                                       if (onUseQuestions) {
-                                        const key = `${table.id}:${rowIndex}`;
+                                        const key = `${sourceTableId}:${rowIndex}`;
                                         setBatchSelection(current => {
                                           const next = {...current};
                                           if (next[key]) delete next[key]; else next[key] = item;
@@ -688,7 +703,7 @@ export default function ManagedKeywordTables({
                                     {quotaAccess?.available === false
                                       ? quotaAccess.unavailableLabel ||
                                         "该类额度已满"
-                                      : onUseQuestions && batchSelection[`${table.id}:${rowIndex}`] ? "已选择 ✓" : "选择词条"}
+                                      : onUseQuestions && batchSelection[`${sourceTableId}:${rowIndex}`] ? "已选择 ✓" : "选择词条"}
                                   </button>
                                 </td>
                               )}
@@ -735,7 +750,7 @@ export default function ManagedKeywordTables({
                 </KeywordPanel>
               );
             })}
-            {visibleTables.length === 0 && (
+            {displayTables.length === 0 && (
               <KeywordEmptyPanel
                 title="没有匹配的词库内容"
                 description="请调整搜索词或筛选条件后重试。"

@@ -48,6 +48,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
       </div>
     </header>
     {taskFeedback}
+    {selected.length > 0 && <div className="iw-selection-bar"><span>已选择 <strong>{selected.length}</strong> 条问题</span><div><button onClick={onClear}>清空选择</button><button className="iw-primary" disabled={pending || Boolean(activeJob)} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div></div>}
     <section className="iw-panel iw-table-wrap iw-catalog-table"><table>
       <colgroup><col className="iw-catalog-col-select"/><col className="iw-catalog-col-question"/><col className="iw-catalog-col-value"/><col className="iw-catalog-col-support"/><col className="iw-catalog-col-gaps"/><col className="iw-catalog-col-actions"/></colgroup>
       <thead><tr><th><input type="checkbox" aria-label="选择当前页问题" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => onSelectPage(event.target.checked)}/></th><th>候选问题</th>{scoreHeader("value", "问题价值")}{scoreHeader("support", "知识支撑")}<th>主要缺口</th><th>操作</th></tr></thead>
@@ -86,6 +87,6 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
       </tr>;})}</tbody>
     </table>{!visible.length && <div className="iw-empty">{questions.length ? "没有匹配问题，请调整筛选条件。" : "从推荐问题或已保存词库中选择词条，加入优化清单。"}</div>}</section>
     {pageCount > 1 && <div className="iw-pagination"><button disabled={page === 0} onClick={() => onPage(page - 1)}>上一页</button><span>{page + 1} / {pageCount}</span><button disabled={page + 1 >= pageCount} onClick={() => onPage(page + 1)}>下一页</button></div>}
-    {selected.length > 0 && <div className="iw-selection-bar"><span>已选择 <strong>{selected.length}</strong> 条问题</span><div><button onClick={onClear}>清空选择</button><button className="iw-primary" disabled={pending || Boolean(activeJob)} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div></div>}
+
   </>;
 }

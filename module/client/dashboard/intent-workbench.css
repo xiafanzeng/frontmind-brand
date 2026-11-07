@@ -214,3 +214,24 @@
 .iw-undo-bar b{flex:1;min-width:0;font-weight:550;color:#344054;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .iw-undo-bar>button{border:0;background:transparent;min-height:28px;color:#7545a0;font-weight:600;cursor:pointer}
 .iw-undo-bar>button:last-child{color:#98a2b3;font-weight:400}
+
+/* Receipt detail uses one quiet surface; follow-ups never masquerade as body edits. */
+.fm-brand-theme .iw-workbench .iw-knowledge-empty{display:grid;grid-template-columns:48px minmax(0,1fr);gap:20px;padding:28px;border:1px solid #ebe7f0;border-radius:14px;box-shadow:none}
+.iw-knowledge-empty-icon{display:flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:12px;background:#f5f1fa;color:#8860a7}
+.iw-knowledge-empty-content h2{margin:0 0 8px;font-size:20px;font-weight:600;line-height:1.5;color:#34283f}
+.iw-knowledge-empty-content>p{margin:0;color:#82798d;font-size:14px;line-height:1.8}
+.iw-knowledge-empty-content .iw-knowledge-empty-meta{margin-top:20px;font-size:12px;color:#9a92a2}
+.iw-workbench .iw-knowledge-followups{margin-top:24px;padding-top:20px;border-top:1px solid #efecf3}
+.fm-brand-theme .iw-workbench .iw-knowledge-followups h3{justify-content:flex-start;gap:8px;margin:0 0 12px;padding:0;border:0;font-size:13px;color:#796c86}
+.iw-knowledge-followups h3 span{font-variant-numeric:tabular-nums;color:#7545a0}
+.iw-knowledge-followups ul,.iw-knowledge-failures{list-style:none;margin:0;padding:0}
+.iw-knowledge-followups li+li{margin-top:16px}
+.iw-knowledge-followups b{font-size:14px;font-weight:500;color:#4f435b}
+.iw-knowledge-followups li p{margin:5px 0 0;color:#8b8195;font-size:13px;line-height:1.8}
+.iw-knowledge-failures li{margin-top:12px;color:#a4414a;font-size:13px}
+.iw-workbench .iw-knowledge-footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-top:24px;padding:0;background:transparent;border:0;box-shadow:none}
+.iw-knowledge-footer p{margin:0;color:#918899;font-size:13px;line-height:1.8}
+.fm-brand-theme .iw-workbench .iw-knowledge-footer button{min-height:38px;padding:8px 16px;font-size:13px;box-shadow:none}
+.fm-brand-theme .iw-workbench .iw-change-controls button{border-color:transparent;background:transparent;box-shadow:none}
+.fm-brand-theme .iw-workbench .iw-change-controls button[aria-pressed=true]{color:#7545a0;background:#f5f0fa}
+@media(max-width:640px){.fm-brand-theme .iw-workbench .iw-knowledge-empty{grid-template-columns:36px minmax(0,1fr);gap:14px;padding:20px 16px}.iw-knowledge-empty-icon{width:36px;height:36px;border-radius:10px}.iw-knowledge-empty-content h2{font-size:18px}.iw-knowledge-empty-content>p{font-size:13px}}

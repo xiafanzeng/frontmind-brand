@@ -317,6 +317,11 @@
   gap: 16px;
 }
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-company-title {margin: 0;font-size: 22px;line-height: 1.65;letter-spacing: -.4px;color: #34283f;font-weight: 600}
+/* The generated questions are a flat table below the shared journey. */
+.fm-brand-theme .brand-keyword-workspace .qt-guided-flow > .global-keyword-panel.qt-question-results {border: 0;border-radius: 0;background: transparent;box-shadow: none}
+.fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-question-results > .qt-flow-body {padding: 0}
+.fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-question-selection-heading {display: flex;align-items: center;flex-wrap: wrap;gap: 20px}
+.fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-question-selection-toolbar {margin: 0 0 20px;padding: 0;border: 0;border-radius: 0;background: transparent;box-shadow: none}
 /* Keep stage navigation and counts light; the table uses the single outer panel. */
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-stage-heading {display: flex;align-items: center;justify-content: space-between;flex-wrap: wrap;gap: 12px;margin-bottom: 24px}
 .fm-brand-theme .brand-keyword-workspace .qt-guided-flow .qt-stage-link {display: inline-flex;align-items: center;gap: 6px;padding: 6px 0;border: 0;border-radius: 0;background: transparent;color: #7545a0;font: inherit;font-size: 13px;box-shadow: none;cursor: pointer}

@@ -629,6 +629,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     const validDrafts = drafts.filter(draft => scope.includes(draft.questionId)).map(knowledgeOnlyIntentPlan);
     if (!validDrafts.length || validDrafts.some(draft => !draft.actions.length)) {setError("方案没有可执行的知识库优化动作，请重新生成方案"); return;}
     if (validDrafts.some(draft => draft.actions.some(action => action.selected && !action.after.trim()))) {setError("请填写已选动作的修改内容"); return;}
+    const executingDraftVersion = draftVersion.current;
     await run(async () => {
       let current = workspace;
       for (const draft of validDrafts) current = await api.command({kind: "edit", expectedRevision: current.revision, questionId: draft.questionId,
@@ -636,7 +637,12 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       // A rejected execution must keep the acknowledged draft and revision,
       // rather than exposing an unrelated historical receipt as its result.
       setWorkspace(current);
-      setDraftDirty(false);
+      if (executingDraftVersion === draftVersion.current) {
+        // run() checks this ref before React commits the state update. The
+        // acknowledged draft must not block its own result navigation.
+        draftDirtyRef.current = false;
+        setDraftDirty(false);
+      }
       executeId.current ??= crypto.randomUUID();
       const result = await api.execute({expectedRevision: current.revision, clientRequestId: executeId.current, questionIds: scope});
       if (!result.state.receipts.some(item => item.id === executeId.current))
@@ -845,14 +851,14 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         <PlanEditor plan={draft} onChange={changeDraft}/>
         <p className="iw-method">AI 根据当前知识证据生成方案。请审核修改内容；执行后通过真实模型重新评估。</p>
       </section>)}
-      <div className="iw-sticky"><span>已选择 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected).length, 0)}</strong> 项 · 执行后重新评估实际支撑</span><div>
+      <div className="iw-sticky"><span>已选正文修改 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected && action.kind === "node").length, 0)}</strong> 项 · 资料待办 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected && action.kind === "todo").length, 0)}</strong> 项</span><div>
         {draftDirty && <button disabled={savingDrafts} onClick={() => void saveDrafts()}>保存方案草稿</button>}
         <button className="iw-primary" disabled={pending || Boolean(activeJob) || !drafts.some(draft => draft.actions.some(action => action.selected))} onClick={() => void execute()}>确认并执行已选动作</button>
       </div></div>
     </>}
     {view === "result" && <><Steps step={2}/>{pending ? <section className="iw-panel iw-executing" role="status"><div className="iw-spinner"/><h2>正在执行优化</h2><p>正在保存已选动作并重新评估，请等待服务器确认。</p><progress/></section> : receipt ? <><section className="iw-panel"><header className="iw-result-hero"><span><Check size={27}/></span><h1>{receipt.status === "reverted" ? "本次优化已撤销" : receipt.status === "partial" ? "优化部分完成" : receipt.status === "running" ? "执行仍待确认" : "优化执行完成"}</h1><p>{receipt.changes.filter(change => change.status === "succeeded").length} 项成功 · {receipt.changes.filter(change => change.status === "failed").length} 项未完成 · 资料待办不计作知识补齐</p></header><div className="iw-results">{receipt.after.map(after => {const before = receipt.before.find(item => item.questionId === after.questionId); return <div key={after.questionId}><b>{questions.find(item => item.id === after.questionId)?.question}</b><div className="iw-comparison"><p>问题价值 <strong>{before?.value ?? "—"} → {after.value}</strong></p><p>知识支撑 <strong>{before?.support ?? "—"} → {after.support}</strong></p><p>未充分支撑 <strong>{before?.points.filter(point => point.status !== "supported").length ?? "—"} → {after.points.filter(point => point.status !== "supported").length}</strong></p></div></div>;})}{receipt.changes.map(change => <div className="iw-result-row" key={change.action.id}><div><b>{change.action.title}</b><p>{change.error ?? change.action.source}</p></div><span className={`iw-tag ${change.status === "succeeded" ? "supported" : "partial"}`}>{({pending: "待确认", succeeded: "成功", failed: "未完成", reverted: "已撤销"})[change.status]}</span></div>)}</div><footer className="iw-result-footer"><button onClick={exportReport}>导出评估报告</button><button onClick={() => openKnowledge()}>查看知识库变更</button><button disabled={receipt.status === "reverted" || receipt.status === "running"} onClick={() => setUndoOpen(true)}><Undo2 size={15}/>撤销本次优化</button><button className="iw-primary" onClick={() => setView("list")}>返回问题列表</button></footer></section></> : <div className="iw-empty">暂无执行记录</div>}</>}
-    {view === "knowledge" && workspace && <><button className="iw-back" onClick={() => setView(receipt ? "result" : "list")}><ArrowLeft size={15}/>返回优化工作台</button><header className="iw-header"><div><h1>知识库变更</h1><p>按本次执行记录查看正文前后差异。</p></div><button onClick={exportReport}>导出变更记录</button></header><KnowledgeChangesView nodes={workspace.nodes} receipt={receipt} initialNodeId={nodeId}/></>}
-    {view === "knowledge" && <div className="iw-sticky"><p>继续编辑、确认节点、上传资料和下载知识库，请进入原有知识库工作区。</p><button className="iw-primary" onClick={() => requestWorkspaceNavigation(() => navigate(projectWorkspaceUrl("/?view=knowledge")))}>打开智能知识库</button></div>}
+    {view === "knowledge" && workspace && <><button className="iw-back" onClick={() => setView(receipt ? "result" : "list")}><ArrowLeft size={15}/>返回优化工作台</button><header className="iw-header"><div><h1>知识库变更</h1><p>按本次执行记录查看正文前后差异。</p></div></header><KnowledgeChangesView nodes={workspace.nodes} receipt={receipt} initialNodeId={nodeId}/></>}
+    {view === "knowledge" && <div className="iw-knowledge-footer"><p>补充资料、编辑或核验正文，请进入智能知识库。</p><button className="iw-primary" onClick={() => requestWorkspaceNavigation(() => navigate(projectWorkspaceUrl("/?view=knowledge")))}>打开智能知识库</button></div>}
     {blockedModelAction && <Dialog open onOpenChange={open => {if (!open) setBlockedModelAction(null);}}><DialogContent className="fm-brand-portal-theme iw-modal" data-brand-surface="intent-workbench"><DialogHeader>
       <DialogTitle>等待当前任务完成</DialogTitle>
       <DialogDescription>当前任务完成后可{blockedModelAction === "plan" ? "生成新的优化方案" : "评估其他问题"}。已保存的结果和方案可随时查看。</DialogDescription>

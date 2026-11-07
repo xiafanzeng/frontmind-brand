@@ -736,9 +736,7 @@
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button[aria-pressed="true"] {background: transparent;color: #7545a0;box-shadow: none}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button[aria-pressed="true"]::after {content: "";position: absolute;bottom: -1px;left: 0;right: 0;height: 3px;border-radius: 3px 3px 0 0;background: #8452aa}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button b {display: inline-block;margin-left: 6px;padding: 1px 7px;border-radius: 6px;background: #f0ebf6;color: #815a9f;font-size: 11px;line-height: 18px;font-weight: 600}
-.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions {justify-content: space-between;gap: 12px;margin: 0 0 12px;padding: 0;border: 0;border-radius: 0;background: transparent;box-shadow: none}
-.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-summary {font-size: 13px;color: #8a8093}
-.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-summary strong {color: #7545a0}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions {justify-content: flex-end;gap: 12px;margin: 0 0 12px;padding: 0;border: 0;border-radius: 0;background: transparent;box-shadow: none}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions button {min-height: 36px;padding: 7px 14px;border-radius: 9px;font-size: 13px;box-shadow: none}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .saas-toolbar.keyword-toolbar-saas {gap: 16px;margin: 0 0 18px;padding: 0;border: 0;border-radius: 0;background: transparent;box-shadow: none}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .saas-search {border: 1px solid #ebe7f0;border-radius: 10px;background: #faf9fc;min-height: 42px}
