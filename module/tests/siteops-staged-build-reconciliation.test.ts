@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { eq, type SQL } from "drizzle-orm";
-import { MySqlDialect, mysqlTable, varchar } from "drizzle-orm/mysql-core";
+import { and, eq, isNull, type SQL } from "drizzle-orm";
+import { int, MySqlDialect, mysqlTable, varchar } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureManusBuildReconciliationCore,
@@ -51,9 +51,9 @@ function snapshot(): ExistingManusBuildReconciliationSnapshot {
     project: {
       id: "project-id", userId: 7, currentKnowledgeSnapshotId: "snapshot-id",
       currentBuildId: "parent-id", currentTaskStartedAt: new Date("2026-11-06T00:00:00.000Z"),
-      status: "failed", revision: 12,
+      status: "failed", revision: 12, enterpriseProjectId: null,
     },
-    turn: { id: "turn-id", userId: 7, expectedRevision: 10 },
+    turn: { id: "turn-id", userId: 7, expectedRevision: 10, enterpriseProjectId: null },
     latestBuildId: "build-id", latestBuildOrdinal: 43, latestBuildOperationId: "operation-id",
   };
 }
@@ -126,12 +126,23 @@ function table<const Name extends string, const Columns extends readonly string[
 const tables = {
   siteBuilds: table("site_builds", ["id", "projectId", "ordinal", "status", "quotaState", "quotaPeriodId", "upstreamManusTaskId", "errorCode", "contentPlanLocalAssetId", "contentPlanSha256", "contractLocalAssetId", "contractHash", "sourceLocalAssetId", "sourceHash", "distLocalAssetId", "distHash", "qaLocalAssetId", "provenanceLocalAssetId"]),
   siteOperations: table("site_operations", ["id", "projectId", "buildId", "status", "provider", "providerTaskId", "errorCode", "leaseOwner", "leaseExpiresAt", "kind", "createdAt"]),
-  siteProjects: table("site_projects", ["id", "userId", "status", "revision", "currentBuildId", "currentKnowledgeSnapshotId"]),
+  siteProjects: mysqlTable("site_projects", {
+    id: varchar("id", { length: 36 }),
+    userId: int("user_id"),
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }),
+    status: varchar("status", { length: 32 }),
+    revision: int("revision"),
+    currentBuildId: varchar("current_build_id", { length: 36 }),
+    currentKnowledgeSnapshotId: varchar("current_knowledge_snapshot_id", { length: 36 }),
+  }),
   conversationTurns: table("conversation_turns", ["id"]),
 };
 configureManusBuildReconciliationCore({
   tables: tables as unknown as ManusBuildReconciliationCore["tables"],
-  enterpriseOwnerPredicate: (project, userId) => eq(project.userId, userId),
+  enterpriseOwnerPredicate: (project, userId) => and(
+    eq(project.userId, userId),
+    isNull(project.enterpriseProjectId),
+  )!,
 });
 
 function transaction(saved: ReturnType<typeof snapshot>, affected: number[] = []) {
@@ -163,6 +174,46 @@ function transaction(saved: ReturnType<typeof snapshot>, affected: number[] = []
 }
 
 describe("staged source reconciliation writes", () => {
+  it.each([
+    {
+      scope: "enterprise",
+      enterpriseProjectId: "enterprise-project-id",
+      operator: "= ?",
+      scopeParams: ["enterprise-project-id"],
+    },
+    { scope: "legacy", enterpriseProjectId: null, operator: "is null", scopeParams: [] },
+  ])("compares the locked $scope scope in the project CAS", async ({ enterpriseProjectId, operator, scopeParams }) => {
+    const saved = snapshot();
+    saved.project.enterpriseProjectId = saved.turn.enterpriseProjectId = enterpriseProjectId;
+    const { db, updates } = transaction(saved);
+
+    await reconcileExistingManusBuild(db, { buildId: "build-id", now });
+
+    const conditions = [
+      "`site_projects`.`id` = ?",
+      "`site_projects`.`user_id` = ?",
+      "`site_projects`.`enterpriseProjectId` " + operator,
+      "`site_projects`.`status` = ?",
+      "`site_projects`.`revision` = ?",
+      "`site_projects`.`current_build_id` = ?",
+      "`site_projects`.`current_knowledge_snapshot_id` = ?",
+    ];
+    expect(updates[2].condition).toMatchObject({
+      sql: "(" + conditions.join(" and ") + ")",
+      params: ["project-id", 7, ...scopeParams, "failed", 12, "parent-id", "snapshot-id"],
+    });
+  });
+
+  it("rejects a same-owner turn in another enterprise scope before any update", async () => {
+    const saved = snapshot();
+    saved.project.enterpriseProjectId = "enterprise-project-id";
+    saved.turn.enterpriseProjectId = "another-enterprise-project-id";
+    const { db, updates } = transaction(saved);
+
+    await expect(reconcileExistingManusBuild(db, { buildId: "build-id", now })).rejects.toThrow("SITEOPS_RECONCILE_PROJECT_SCOPE_MISMATCH");
+    expect(updates).toHaveLength(0);
+  });
+
   it("checks the null quota pair and frozen plan in the build CAS without reserving quota", async () => {
     const { db, updates } = transaction(snapshot());
     await expect(reconcileExistingManusBuild(db, { buildId: "build-id", now })).resolves.toMatchObject({

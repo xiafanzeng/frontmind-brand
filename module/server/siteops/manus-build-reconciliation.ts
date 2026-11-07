@@ -7,10 +7,8 @@ let conversationTurns: SiteOpsInfrastructureTables["conversationTurns"];
 let siteBuilds: SiteOpsInfrastructureTables["siteBuilds"];
 let siteOperations: SiteOpsInfrastructureTables["siteOperations"];
 let siteProjects: SiteOpsInfrastructureTables["siteProjects"];
-let enterpriseOwnerPredicate: ManusBuildReconciliationCore["enterpriseOwnerPredicate"];
 export function configureManusBuildReconciliationCore(core: ManusBuildReconciliationCore) {
  ({conversationTurns,siteBuilds,siteOperations,siteProjects}=core.tables);
- ({enterpriseOwnerPredicate}=core);
 }
 
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
@@ -85,12 +83,12 @@ type ReconciliationProject = Pick<
   | "currentTaskStartedAt"
   | "status"
   | "revision"
->;
+> & Partial<Pick<typeof siteProjects.$inferSelect, "enterpriseProjectId">>;
 
 type ReconciliationTurn = Pick<
   typeof conversationTurns.$inferSelect,
   "id" | "userId" | "expectedRevision"
->;
+> & Partial<Pick<typeof conversationTurns.$inferSelect, "enterpriseProjectId">>;
 
 export type ExistingManusBuildReconciliationSnapshot = {
   build: ReconciliationBuild;
@@ -295,6 +293,9 @@ export function prepareExistingManusBuildReconciliation(
   if (project.currentBuildId !== expectedCurrentBuildId) {
     reject("SITEOPS_RECONCILE_PROJECT_HEAD_CHANGED");
   }
+  if (turn.enterpriseProjectId !== project.enterpriseProjectId) {
+    reject("SITEOPS_RECONCILE_PROJECT_SCOPE_MISMATCH");
+  }
   if (
     !operation.conversationTurnId ||
     turn.id !== operation.conversationTurnId ||
@@ -401,6 +402,12 @@ async function loadReconciliationSnapshotForUpdate(tx: any, buildId: string) {
     .for("update");
   const turn = turnRows[0] as typeof conversationTurns.$inferSelect | undefined;
   if (!turn) reject("SITEOPS_RECONCILE_CONVERSATION_TURN_NOT_FOUND");
+  if (
+    project.enterpriseProjectId === undefined ||
+    turn.enterpriseProjectId === undefined
+  ) {
+    reject("SITEOPS_RECONCILE_PROJECT_SCOPE_MISSING");
+  }
 
   const latestBuildRows = await tx
     .select({ id: siteBuilds.id, ordinal: siteBuilds.ordinal })
@@ -601,7 +608,12 @@ export async function reconcileExistingManusBuild(
       .where(
         and(
           eq(siteProjects.id, prepared.projectId),
-          enterpriseOwnerPredicate(siteProjects, prepared.userId),
+          eq(siteProjects.userId, prepared.userId),
+          // The operator CLI has no request scope. Use the project row locked above.
+          nullableCoordinate(
+            siteProjects.enterpriseProjectId,
+            snapshot.project.enterpriseProjectId,
+          ),
           eq(siteProjects.status, prepared.previousProjectStatus),
           eq(siteProjects.revision, prepared.previousProjectRevision),
           nullableCoordinate(
