@@ -299,7 +299,7 @@ describe("优化工作台任务入口", () => {
     await screen.findByRole("region", {name: "问题评估任务"});
     const currentRow = screen.getByText(question.question).closest("tr")!;
     const otherRow = screen.getByText("其他部署问题").closest("tr")!;
-    expect(within(currentRow).getByRole("button", {name: "修改问题"})).toHaveProperty("disabled", true);
+    expect(within(currentRow).getByRole("button", {name: "修改问题"})).toHaveProperty("disabled", false);
     expect(within(otherRow).getByRole("button", {name: "修改问题"})).toHaveProperty("disabled", false);
     expect(within(otherRow).getByRole("button", {name: "进入应答逻辑"})).toHaveProperty("disabled", false);
     fireEvent.click(within(otherRow).getByRole("button", {name: "查看优化方案"}));
@@ -325,6 +325,187 @@ describe("优化工作台任务入口", () => {
     await waitFor(() => expect(api.control).toHaveBeenLastCalledWith({jobId: "job-1", action: "resume"}));
     expect(screen.getByRole("heading", {name: "优化问题"})).toBeTruthy();
     expect(api.command).not.toHaveBeenCalled();
+  });
+  it.each(["submit", "pause", "resume"] as const)("%s请求未返回时四个入口可操作，独立保存使用最新版本，迟到响应不恢复旧问题", async phase => {
+    const initial = workspace(phase === "submit" ? undefined : phase === "pause" ? "running" : "paused");
+    if (initial.state.jobs?.[0]) initial.state.jobs[0].questionsScope = "selected";
+    const other = {...question, id: "q2", question: "其他部署问题", rowIndex: 1};
+    const unevaluated = {...question, id: "q3", question: "尚未评估的问题", rowIndex: 2};
+    initial.state.questions.push(other, unevaluated);
+    initial.state.evaluations.push({...workspace("succeeded").state.evaluations[0], questionId: "q2"});
+    initial.state.plans.push({questionId: "q2", actions: [{id: "a2", kind: "todo", title: "其他方案",
+      nodeId: null, before: "", after: "原方案草稿", source: "证据", selected: true}]});
+    let ledger = structuredClone(initial);
+    let release!: (data: IntentWorkspace) => void;
+    const delayed = new Promise<IntentWorkspace>(resolve => {release = resolve;});
+    const {api} = pendingApi(initial);
+    api.observe = vi.fn(async () => structuredClone(ledger));
+    api.command = vi.fn(async (value: any) => {
+      if (value.kind === "evaluate") {
+        ledger.revision = 10;
+        ledger.state.jobs = [{...workspace("running").state.jobs![0], questionsScope: "selected"}];
+        return delayed;
+      }
+      expect(value.expectedRevision).toBe(ledger.revision);
+      ledger = structuredClone(ledger); ledger.revision++;
+      if (value.kind === "edit") ledger.state.plans[0].actions[0].after = value.actions[0].after;
+      if (value.kind === "update-question") ledger.state.questions.find(item => item.id === value.questionId)!.question = value.question;
+      if (value.kind === "delete-question") ledger.state.questions = ledger.state.questions.filter(item => item.id !== value.questionId);
+      return structuredClone(ledger);
+    });
+    api.control = vi.fn(() => {
+      ledger.revision = 10;
+      ledger.state.jobs![0].status = phase === "pause" ? "paused" : "running";
+      return delayed;
+    });
+    const onOpenAnswer = vi.fn();
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api} catalogIntegration={{onOpenAnswer}}/>);
+    const row = () => screen.getByText(other.question).closest("tr")!;
+    await screen.findByText(other.question);
+    if (phase !== "submit")
+      await waitFor(() => expect(screen.getByRole("button", {name: phase === "resume" ? "继续评估" : "暂停评估"})).toHaveProperty("disabled", false));
+    if (phase === "submit") {
+      fireEvent.click(within(screen.getByText(question.question).closest("tr")!).getByRole("button", {name: "评估问题"}));
+      fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    } else fireEvent.click(screen.getByRole("button", {name: phase === "pause" ? "暂停评估" : "继续评估"}));
+    const staleAcknowledgement = structuredClone(ledger);
+    for (const name of ["进入应答逻辑", "查看优化方案", "修改问题", "删除问题"])
+      expect(within(row()).getByRole("button", {name})).toHaveProperty("disabled", false);
+    expect(within(screen.getByText(question.question).closest("tr")!).getByRole("button", {name: "修改问题"})).toHaveProperty("disabled", false);
+    fireEvent.click(within(row()).getByRole("button", {name: "进入应答逻辑"}));
+    expect(onOpenAnswer).toHaveBeenCalledWith(other);
+    fireEvent.click(within(row()).getByRole("button", {name: `查看评估：${other.question}`}));
+    expect(screen.getByText("回答要点支撑矩阵")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    fireEvent.click(within(row()).getByRole("button", {name: "查看优化方案"}));
+    fireEvent.change(screen.getByRole("textbox", {name: "其他方案修改后"}), {target: {value: "并发保存的方案"}});
+    const save = screen.getByRole("button", {name: "保存方案草稿"});
+    expect(save).toHaveProperty("disabled", false);
+    fireEvent.click(save);
+    await waitFor(() => expect(screen.queryByRole("button", {name: "保存方案草稿"})).toBeNull());
+    expect(ledger.state.plans[0].actions[0].after).toBe("并发保存的方案");
+    fireEvent.click(screen.getByRole("button", {name: "返回评估详情"}));
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    fireEvent.click(within(row()).getByRole("button", {name: "修改问题"}));
+    fireEvent.change(screen.getByRole("textbox", {name: "问题内容"}), {target: {value: "修改后的其他问题"}});
+    expect(screen.getByRole("button", {name: "保存修改"})).toHaveProperty("disabled", false);
+    fireEvent.click(screen.getByRole("button", {name: "保存修改"}));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const editedRow = screen.getByText("修改后的其他问题").closest("tr")!;
+    fireEvent.click(within(editedRow).getByRole("button", {name: "删除问题"}));
+    fireEvent.click(screen.getByRole("button", {name: "确认删除"}));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByText("修改后的其他问题")).toBeNull();
+    await act(async () => release(staleAcknowledgement));
+    expect(screen.getByRole("heading", {name: "优化问题"})).toBeTruthy();
+    expect(screen.queryByText(other.question)).toBeNull();
+    expect(screen.queryByText("修改后的其他问题")).toBeNull();
+    expect(ledger.state.questions.find(item => item.id === "q1")?.question).toBe(question.question);
+    expect(vi.mocked(api.command).mock.calls.filter(([value]: any) => value.kind === "evaluate")).toHaveLength(phase === "submit" ? 1 : 0);
+    if (phase !== "submit") {
+      expect(api.control).toHaveBeenCalledTimes(1);
+      expect(api.control).toHaveBeenCalledWith({jobId: "job-1", action: phase});
+    }
+  });
+  it("迟到的评估提交确认与任务完成均不抢走其他问题的未保存方案", async () => {
+    const initial = workspace();
+    initial.state.questions.push({...question, id: "q2", question: "其他部署问题", rowIndex: 1});
+    initial.state.evaluations.push({...workspace("succeeded").state.evaluations[0], questionId: "q2"});
+    initial.state.plans.push({questionId: "q2", actions: [{id: "a2", kind: "todo", title: "其他方案",
+      nodeId: null, before: "", after: "原方案草稿", source: "证据", selected: true}]});
+    const running = {...structuredClone(initial), revision: 2};
+    running.state.jobs = [{...workspace("running").state.jobs![0], questionsScope: "selected"}];
+    let release!: (data: IntentWorkspace) => void;
+    const delayed = new Promise<IntentWorkspace>(resolve => {release = resolve;});
+    const {api, finish} = pendingApi(initial);
+    api.command = vi.fn(() => delayed);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    await screen.findByText("其他部署问题");
+    await waitFor(() => expect(within(screen.getByText(question.question).closest("tr")!).getByRole("button", {name: "评估问题"})).toHaveProperty("disabled", false));
+    fireEvent.click(within(screen.getByText(question.question).closest("tr")!).getByRole("button", {name: "评估问题"}));
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    fireEvent.click(screen.getByRole("button", {name: "查看优化方案"}));
+    fireEvent.change(screen.getByRole("textbox", {name: "其他方案修改后"}), {target: {value: "未保存的新草稿"}});
+    await act(async () => release(running));
+    expect(screen.getByRole("heading", {name: "确认优化方案"})).toBeTruthy();
+    expect(screen.getByRole("textbox", {name: "其他方案修改后"})).toHaveProperty("value", "未保存的新草稿");
+    await act(async () => finish({...running, revision: 3, state: {...running.state,
+      jobs: [{...running.state.jobs![0], status: "succeeded"}]}}));
+    expect(screen.getByRole("textbox", {name: "其他方案修改后"})).toHaveProperty("value", "未保存的新草稿");
+    expect(api.command).toHaveBeenCalledTimes(1);
+  });
+  it.each(["running", "paused"])("%s评估只禁用评估问题，生成方案独立派发且重复点击复用原方案任务", async status => {
+    const initial = workspace(status);
+    initial.state.jobs![0].questionsScope = "selected";
+    initial.state.questions.push({...question, id: "q2", question: "其他部署问题", rowIndex: 1},
+      {...question, id: "q3", question: "尚未评估的问题", rowIndex: 2});
+    initial.state.evaluations.push({...workspace("succeeded").state.evaluations[0], questionId: "q2"});
+    const {api} = pendingApi(initial);
+    const planned = {...initial, revision: 2, state: {...initial.state, jobs: [...initial.state.jobs!, {
+      ...initial.state.jobs![0], id: "plan-2", kind: "plan" as const, status: "running" as const, questionIds: ["q2"],
+    }]}};
+    vi.mocked(api.command).mockResolvedValue(planned);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    await screen.findByText("其他部署问题");
+    const row = screen.getByText("尚未评估的问题").closest("tr")!;
+    expect(within(row).getByRole("button", {name: "评估问题"})).toHaveProperty("disabled", true);
+    fireEvent.click(within(row).getByRole("button", {name: "评估问题"}));
+    expect(api.command).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "生成优化方案"}));
+    await waitFor(() => expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "plan", questionIds: ["q2"]})));
+    await waitFor(() => expect(api.waitForJob).toHaveBeenCalledWith("plan-2", expect.any(Function), expect.any(AbortSignal)));
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    fireEvent.click(screen.getByRole("button", {name: "生成优化方案"}));
+    expect(api.command).toHaveBeenCalledTimes(1);
+    expect(initial.state.jobs![0].status).toBe(status);
+  });
+  it.each(["running", "paused"])("%s时当前评估题的四入口独立，修改与删除真正保存，旧结果只按原题查看", async status => {
+    const initial = workspace(status);
+    initial.state.evaluations = workspace("succeeded").state.evaluations;
+    initial.state.plans = [{questionId: "q1", actions: [{id: "a1", kind: "todo", title: "原题方案",
+      nodeId: null, before: "", after: "核验资料", source: "资料", selected: true}]}];
+    const {api, finish} = pendingApi(initial);
+    let ledger = structuredClone(initial);
+    api.observe = vi.fn(async () => structuredClone(ledger));
+    api.command = vi.fn(async (value: any) => {
+      expect(value.expectedRevision).toBe(ledger.revision);
+      ledger = structuredClone(ledger); ledger.revision++;
+      if (value.kind === "update-question") ledger.state.questions[0].question = value.question;
+      if (value.kind === "delete-question") ledger.state.questions = [];
+      ledger.state.evaluations = []; ledger.state.plans = [];
+      return structuredClone(ledger);
+    });
+    const onOpenAnswer = vi.fn();
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api} catalogIntegration={{onOpenAnswer}}/>);
+    await screen.findByText(question.question);
+    for (const name of ["进入应答逻辑", "查看优化方案", "修改问题", "删除问题"])
+      expect(screen.getByRole("button", {name})).toHaveProperty("disabled", false);
+    fireEvent.click(screen.getByRole("button", {name: "进入应答逻辑"}));
+    expect(onOpenAnswer).toHaveBeenCalledWith(question);
+    fireEvent.click(screen.getByRole("button", {name: "查看优化方案"}));
+    expect(screen.getByRole("textbox", {name: "原题方案修改后"})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "返回评估详情"}));
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    fireEvent.click(screen.getByRole("button", {name: "修改问题"}));
+    fireEvent.change(screen.getByRole("textbox", {name: "问题内容"}), {target: {value: "修改后的当前评估题"}});
+    fireEvent.click(screen.getByRole("button", {name: "保存修改"}));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByText("修改后的当前评估题")).toBeTruthy();
+    expect(screen.getByRole("button", {name: "评估问题"})).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", {name: "删除问题"}));
+    fireEvent.click(screen.getByRole("button", {name: "确认删除"}));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByText("修改后的当前评估题")).toBeNull();
+    const completed = {...ledger, revision: 10, state: {...ledger.state, jobs: [{...ledger.state.jobs![0],
+      status: "succeeded" as const, result: {completedAt: "2026-11-07T00:00:00Z", questions: [question],
+        evaluations: workspace("succeeded").state.evaluations, plans: []}}]}};
+    if (status === "running") {
+      await act(async () => finish(completed));
+      fireEvent.click(screen.getByRole("button", {name: "查看评估结果"}));
+      expect(screen.getByRole("heading", {name: "已保存任务结果"})).toBeTruthy();
+      expect(screen.getByRole("heading", {name: question.question})).toBeTruthy();
+    }
+    expect(api.command).toHaveBeenCalledTimes(2);
   });
   it.each(["执行被拒绝", "没有本次回执"])("%s时保留全选草稿，不把旧回执当成本次结果，重试成功后只展示匹配回执", async failure => {
     const saved = workspace("succeeded");
@@ -414,14 +595,17 @@ describe("优化工作台任务入口", () => {
     expect(api.command).not.toHaveBeenCalled();
     expect(api.execute).not.toHaveBeenCalled();
   });
-  it("列表内展示真实评估阶段，位于标题之后并保留原任务入口", async () => {
+  it("列表内只展示评估标题，位于页面标题之后并保留原任务详情和阶段", async () => {
     const initial = workspace("running");
     initial.state.jobs![0].progress = {stage: "analyzing", updatedAt: new Date().toISOString(), events: []};
     const {api, finish} = pendingApi(initial);
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     await screen.findByRole("region", {name: "问题评估任务"});
     const feedback = screen.getByRole("region", {name: "问题评估任务"});
-    expect(within(feedback).getByText("正在分析知识与评分")).toBeTruthy();
+    expect(within(feedback).getByRole("heading", {name: "正在评估 1 条问题"})).toBeTruthy();
+    expect(within(feedback).queryByText("正在分析知识与评分")).toBeNull();
+    expect(within(feedback).queryByText("任务在后台处理，可继续查看和处理其他问题。")).toBeNull();
+    expect(feedback.querySelector(".iw-list-task-icon")).toBeNull();
     expect(within(feedback).queryByText(/已耗时/)).toBeNull();
     expect(screen.getByRole("heading", {name: "优化问题"}).compareDocumentPosition(feedback) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText("正在读取优化工作台…")).toBeNull();
@@ -473,12 +657,12 @@ describe("优化工作台任务入口", () => {
     expect(api.command).not.toHaveBeenCalled();
   });
   it.each([
-    ["running", undefined, "任务执行中，详细阶段暂不可用"],
-    ["queued", undefined, "评估任务已排队，等待执行"],
-    ["create_unknown", "analyzing", "任务状态暂不可确认，请查看当前任务恢复查询。"],
-    ["running", "validating", "正在校验并保存评估结果"],
-    ["running", "repairing", "正在修复评估结果并重新校验"],
-  ] as const)("列表提示按 %s / %s 显示真实状态，不推算阶段", async (status, stage, label) => {
+    ["running", undefined, "正在评估 1 条问题"],
+    ["queued", undefined, "正在评估 1 条问题"],
+    ["create_unknown", "analyzing", "评估任务待确认 · 1 条问题"],
+    ["running", "validating", "正在评估 1 条问题"],
+    ["running", "repairing", "正在评估 1 条问题"],
+  ] as const)("列表提示按 %s / %s 保留单行任务标题，省略阶段说明", async (status, stage, label) => {
     const initial = workspace(status);
     initial.state.jobs![0].createdAt = new Date(Date.now() - 84_000).toISOString();
     if (stage) initial.state.jobs![0].progress = {stage, updatedAt: new Date().toISOString(), events: []};
@@ -486,7 +670,8 @@ describe("优化工作台任务入口", () => {
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     await screen.findByRole("region", {name: "问题评估任务"});
     const feedback = screen.getByRole("region", {name: "问题评估任务"});
-    expect(within(feedback).getByText(label)).toBeTruthy();
+    expect(within(feedback).getByRole("heading", {name: label})).toBeTruthy();
+    expect(feedback.querySelector("p")).toBeNull();
     expect(within(feedback).getByText(/已耗时 1分/)).toBeTruthy();
     expect(within(feedback).queryByRole("progressbar")).toBeNull();
     expect(api.command).not.toHaveBeenCalled();

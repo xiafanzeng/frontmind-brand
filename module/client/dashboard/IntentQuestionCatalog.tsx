@@ -68,19 +68,19 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
           }}>
         <td><CatalogCell><input type="checkbox" aria-label={`选择${question.question}`} checked={selected.includes(question.id)} onChange={() => onToggle(question.id)}/></CatalogCell></td>
         <td><CatalogCell><b>{question.question}</b></CatalogCell></td>
-        <td><CatalogCell>{evaluating ? "评估中…" : evaluation ? <button className="iw-score-link" disabled={pending} aria-label={`查看评估：${question.question}`} onClick={() => onEvaluate([question.id])}><strong className={evaluation.value >= 80 ? "good" : "warn"}>{evaluation.value} / 100</strong></button> : "待评估"}</CatalogCell></td>
-        <td><CatalogCell>{evaluating ? "评估中…" : evaluation ? <button className="iw-score-link" disabled={pending} aria-label={`查看知识支撑：${question.question}`} onClick={() => onEvaluate([question.id])}><strong>{evaluation.support} / 100</strong></button> : "待评估"}</CatalogCell></td>
+        <td><CatalogCell>{evaluating ? "评估中…" : evaluation ? <button className="iw-score-link" aria-label={`查看评估：${question.question}`} onClick={() => onEvaluate([question.id])}><strong className={evaluation.value >= 80 ? "good" : "warn"}>{evaluation.value} / 100</strong></button> : "待评估"}</CatalogCell></td>
+        <td><CatalogCell>{evaluating ? "评估中…" : evaluation ? <button className="iw-score-link" aria-label={`查看知识支撑：${question.question}`} onClick={() => onEvaluate([question.id])}><strong>{evaluation.support} / 100</strong></button> : "待评估"}</CatalogCell></td>
         <td><CatalogCell>{evaluating ? "正在检查知识依据" : !gaps ? "评估后显示" : gaps.length ? <details className="iw-catalog-gaps" open={onGapToggle ? expandedGaps.includes(question.id) : undefined} onToggle={event => onGapToggle?.(question.id, event.currentTarget.open)}>
           <summary><span className="iw-gap-summary-text"><span className="iw-gap-title" title={gaps[0].title}>{gaps[0].title}</span>{gaps.length > 1 && <span className="iw-gap-suffix">等</span>}</span><ChevronRight size={15} aria-hidden="true"/></summary>
           <ul>{gaps.map((point,index) => <li key={`${index}-${point.title}`}><span className="iw-gap-index" aria-hidden="true">{String(index + 1).padStart(2,"0")}</span><span>{point.title}</span></li>)}</ul>
         </details> : "暂无关键缺口"}</CatalogCell></td>
         <td><div className="iw-catalog-actions">
-          <button className="iw-primary iw-answer-entry" disabled={pending || !integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
+          <button className="iw-primary iw-answer-entry" disabled={!integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
           {savedPlanIds.includes(question.id)
-            ? <button className="iw-plan-entry" disabled={pending} onClick={() => onViewPlan(question.id)}>查看优化方案</button>
-            : <button className="iw-plan-entry" title={activeJob ? "请先完成当前评估任务" : undefined} disabled={pending || Boolean(activeJob)} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
-          <button title={mutationBlockedIds.includes(question.id) ? "该问题正在评估，完成后可修改" : undefined} disabled={pending || mutationBlockedIds.includes(question.id) || !integration?.onEditQuestion} onClick={() => integration?.onEditQuestion?.(question)}>修改问题</button>
-          <button title={mutationBlockedIds.includes(question.id) ? "该问题正在评估，完成后可删除" : undefined} disabled={pending || mutationBlockedIds.includes(question.id) || !integration?.onDeleteQuestion} onClick={() => integration?.onDeleteQuestion?.(question)}>删除问题</button>
+            ? <button className="iw-plan-entry" onClick={() => onViewPlan(question.id)}>查看优化方案</button>
+            : <button className="iw-plan-entry" disabled={!evaluation && (pending || Boolean(activeJob))} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
+          <button title={mutationBlockedIds.includes(question.id) ? "该问题正在处理，完成后可修改" : undefined} disabled={mutationBlockedIds.includes(question.id) || !integration?.onEditQuestion} onClick={() => integration?.onEditQuestion?.(question)}>修改问题</button>
+          <button title={mutationBlockedIds.includes(question.id) ? "该问题正在处理，完成后可删除" : undefined} disabled={mutationBlockedIds.includes(question.id) || !integration?.onDeleteQuestion} onClick={() => integration?.onDeleteQuestion?.(question)}>删除问题</button>
         </div></td>
       </tr>;})}</tbody>
     </table>{!visible.length && <div className="iw-empty">{questions.length ? "没有匹配问题，请调整筛选条件。" : "从推荐问题或已保存词库中选择词条，加入优化清单。"}</div>}</section>
