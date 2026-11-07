@@ -23,14 +23,14 @@ describe("真实优化 Skill 输出校验", () => {
     expect(intentHash({a: 1, nested: {x: 2, y: 3}})).toBe(intentHash({nested: {y: 3, x: 2}, a: 1}));
     expect(intentHash(["a|b", "c"])).not.toBe(intentHash(["a", "b|c"]));
   });
-  it("保留模型评分及来源，节点变更默认需要人工采纳", () => {
+  it("保留模型评分及来源，正文修改默认纳入待确认执行方案", () => {
     const {input, job, value} = fixture();
     const result = validateIntentSkillResult(value, input, job);
     expect(result.evaluations[0].method).toBe("skill_v1");
     expect(result.evaluations[0].provenance?.operationId).toBe(job.id);
     expect(result.plans[0].actions).toHaveLength(1);
     expect(result.plans[0].actions[0].kind).toBe("node");
-    expect(result.plans[0].actions[0].selected).toBe(false);
+    expect(result.plans[0].actions[0].selected).toBe(true);
     expect(result.plans[0].actions[0].before).toBe(input.nodes[0].content);
   });
   it.each(["operationToken", "inputHash"] as const)("拒绝其他任务的 %s", field => {
@@ -63,4 +63,11 @@ describe("真实优化 Skill 输出校验", () => {
     input.kind = "plan"; value.plans[0].actions.push(value.plans[0].actions[0]);
     expect(() => validateIntentSkillResult(value, input, job)).toThrow("重复动作");
   });
+});
+
+it("拒绝把没有实际正文差异的动作作为正文优化", () => {
+  const {input,job,value}=fixture();
+  input.nodes[0].content="# 选材\n\n材料选择依据适用条件。";
+  value.plans[0].actions[1].after=input.nodes[0].content;
+  expect(()=>validateIntentSkillResult(value,input,job)).toThrow("没有实际变更");
 });

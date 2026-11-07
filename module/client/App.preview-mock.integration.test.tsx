@@ -13,9 +13,9 @@ it("uses the production screens to recommend, save, evaluate, plan, execute and 
   render(<App preview/>);
   fireEvent.change(await screen.findByRole("textbox",{name:"企业名称"}),{target:{value:"台心医院"}});
   fireEvent.click(screen.getByRole("button",{name:"推荐核心词"}));
-  fireEvent.click(await screen.findByRole("checkbox",{name:"选择核心词：台心医院资质与口碑"}));
+  fireEvent.click(await screen.findByRole("checkbox",{name:"选择核心词：台心医院"}));
   fireEvent.click(screen.getByRole("button",{name:"生成推荐问题"}));
-  const question="台心医院资质与口碑有哪些值得了解的特点？";
+  const question="台心医院有哪些值得了解的特点？";
   fireEvent.click(await screen.findByRole("checkbox",{name:`选择问题：${question}`}));
   fireEvent.click(screen.getByRole("button",{name:"加入优化清单（1）"}));
   const selected=await screen.findByRole("checkbox",{name:`选择${question}`});
@@ -26,11 +26,15 @@ it("uses the production screens to recommend, save, evaluate, plan, execute and 
   await screen.findByText("回答要点支撑矩阵",{},{timeout:6000});
   fireEvent.click(screen.getByRole("button",{name:/生成优化方案/}));
   await screen.findByRole("button",{name:"确认并执行已选动作"},{timeout:6000});
-  fireEvent.click(screen.getByRole("checkbox",{name:"采纳：补充知识节点正文"}));
+  expect(screen.getByRole("checkbox",{name:"采纳：补充知识节点正文"})).toHaveProperty("checked",true);
+  const bodyEditor=screen.getByRole("textbox",{name:"补充知识节点正文修改后"}) as HTMLTextAreaElement;
+  fireEvent.change(bodyEditor,{target:{value:`${bodyEditor.value}\n\n本地审核补充：按已核验资料说明适用条件。`}});
   fireEvent.click(screen.getByRole("button",{name:"确认并执行已选动作"}));
   await screen.findByText("优化执行完成");
   const data=await createIntentPreviewApi("brand-local-preview").observe();
   expect(data.state.receipts[0].status).toBe("completed");
+  const written=data.state.receipts[0].changes.find(change=>change.action.kind==="node")!;
+  expect(data.nodes.find(node=>node.id===written.action.nodeId)?.content).toBe(written.action.after);
   fireEvent.click(screen.getByRole("button",{name:"查看知识库变更"}));
   expect(await screen.findByLabelText("逐行内容差异")).toBeTruthy();
   expect(screen.queryByRole("button",{name:"导出变更记录"})).toBeNull();

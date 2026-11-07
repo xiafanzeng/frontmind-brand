@@ -2,6 +2,7 @@
 import {describe, expect, it, vi} from "vitest";
 import {mysqlTable, varchar, json, MySqlDialect} from "drizzle-orm/mysql-core";
 import {createIntentWorkbenchService} from "../server/intent-workbench-service";
+import {getKnowledgeNodeDetails,saveKnowledgeNodeContent} from "../server/knowledge-node-workspace-service.js";
 import {registerIntentSkillPorts} from "../server/intent-skill-runtime";
 import {emptyIntentState, findSavedIntentPlan} from "../contracts/intent-workbench";
 import type {BrandKeywordPorts} from "../server/brand-keyword-ports";
@@ -732,4 +733,51 @@ describe("优化模型持久化任务", () => {
     expect((await h.service.poll()).state.jobs?.[0].status).toBe("running");
     expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
   });
+});
+
+it("确认默认方案即写入现有知识库、保留正文快照，刷新可见且可撤销", async () => {
+  const h=harness();await h.intake();
+  await h.service.command({...h.request,kind:"plan"});
+  const original=h.nodes[0].content;
+  const output=h.output();
+  output.plans[0].actions.unshift({kind:"node",title:"整理选材口径",nodeId:"node",after:"# 选材\n\n材料选择依据适用条件。\n\n## 选择步骤\n\n先确认适用条件，再对照现有材料选择。",source:"选材节点现有内容"} as any);
+  h.send(output);
+  const planned=await h.service.poll();
+  const bodyAction=planned.state.plans[0].actions.find(action=>action.kind==="node")!;
+  expect(bodyAction.selected).toBe(true);
+  const details=vi.mocked(getKnowledgeNodeDetails);
+  const save=vi.mocked(saveKnowledgeNodeContent);
+  details.mockImplementation(async()=>({coordinates:{conversationId:"conversation",generation:1,revision:1,stateEpoch:1,contentVersion:1,resetRevision:0},node:{leafId:"node",contentMarkdown:h.nodes[0].content}}) as any);
+  save.mockImplementation(async(_userId,input)=>{h.nodes[0].content=input.contentMarkdown;return {} as any;});
+  try{
+    const receiptId="00000000-0000-4000-8000-000000000099";
+    const executed=await h.service.execute({expectedRevision:planned.revision,clientRequestId:receiptId,questionIds:["q"]});
+    expect(save).toHaveBeenCalledWith(42,expect.objectContaining({conversationId:"conversation",leafId:"node",contentMarkdown:bodyAction.after}));
+    expect(executed.state.receipts[0].changes.find(change=>change.action.kind==="node")).toMatchObject({status:"succeeded",action:{before:original,after:bodyAction.after}});
+    expect((await h.service.observe()).nodes[0].content).toBe(bodyAction.after);
+    expect(executed.state.todos).toHaveLength(1);
+    const writes=save.mock.calls.length;
+    await h.service.execute({expectedRevision:planned.revision,clientRequestId:receiptId,questionIds:["q"]});
+    expect(save).toHaveBeenCalledTimes(writes);
+    h.send();const completed=await h.service.poll();
+    const reverted=await h.service.rollback({expectedRevision:completed.revision,receiptId});
+    expect(reverted.nodes[0].content).toBe(original);
+    expect(reverted.state.receipts[0].status).toBe("reverted");
+    expect(reverted.state.receipts[0].changes[0].action.after).toBe(bodyAction.after);
+  }finally{details.mockReset();save.mockReset();}
+});
+
+it("保存接口未实际更新正文时，不把拟写入内容标记为成功变更", async () => {
+  const h=harness();await h.intake();await h.service.command({...h.request,kind:"plan"});
+  const output=h.output();
+  output.plans[0].actions=[{kind:"node",title:"整理选材口径",nodeId:"node",after:"# 选材\n\n材料选择依据适用条件。\n\n先核对适用条件，再选择材料。",source:"选材节点"} as any];
+  h.send(output);const planned=await h.service.poll();
+  const details=vi.mocked(getKnowledgeNodeDetails),save=vi.mocked(saveKnowledgeNodeContent);
+  details.mockResolvedValue({coordinates:{conversationId:"conversation",generation:1,revision:1,stateEpoch:1,contentVersion:1,resetRevision:0},node:{leafId:"node",contentMarkdown:h.nodes[0].content}} as any);
+  save.mockResolvedValue({accepted:true,unchanged:false});
+  try{
+    const result=await h.service.execute({expectedRevision:planned.revision,clientRequestId:"00000000-0000-4000-8000-000000000098",questionIds:["q"]});
+    expect(result.state.receipts[0]).toMatchObject({status:"partial",changes:[{status:"failed",error:"尚未确认正文已写入知识库，请重新读取后核对"}]});
+    expect(result.nodes[0].content).toBe("材料选择依据适用条件。");
+  }finally{details.mockReset();save.mockReset();}
 });

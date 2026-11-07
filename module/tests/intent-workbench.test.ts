@@ -20,10 +20,10 @@ describe("intent knowledge evidence", () => {
     const evaluation = evaluateIntent(question, nodes.map(node => ({...node, verified: false})), [question]);
     expect(evaluation.points.every(point => point.status !== "supported")).toBe(true);
   });
-  it("creates a pending source task without fabricating facts or auto-selecting node edits", () => {
+  it("includes body edits in the confirmed plan and keeps missing facts as source tasks", () => {
     const evaluation = evaluateIntent(question, nodes, [question]);
     const plan = createIntentPlan(question, evaluation, nodes);
-    expect(plan.actions.find(action => action.kind === "node")?.selected).toBe(false);
+    expect(plan.actions.find(action => action.kind === "node")?.selected).toBe(true);
     expect(plan.actions.find(action => action.kind === "todo")?.source).toContain("不计入");
     expect(plan.actions.find(action => action.kind === "node")?.before).toBe(nodes[0].content);
   });

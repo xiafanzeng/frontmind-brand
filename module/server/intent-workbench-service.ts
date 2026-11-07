@@ -661,6 +661,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       });
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({questionId: plan.questionId, action: structuredClone(action), status: "pending" as const})));
       if (!changes.length) throw new IntentWorkbenchError("EMPTY_PLAN", "请至少选择一项动作");
+      if (changes.some(change => change.action.kind === "node" && change.action.before.trim() === change.action.after.trim()))
+        throw new IntentWorkbenchError("EMPTY_NODE_CHANGE", "选中的正文修改与原文相同，请修改内容或取消采纳该动作");
       const nodeIds = changes.filter(change => change.action.kind === "node").map(change => change.action.nodeId);
       if (new Set(nodeIds).size !== nodeIds.length) throw new IntentWorkbenchError("NODE_CONFLICT", "多个方案修改同一知识节点，请分别执行并重新生成方案");
       ledger.state.receipts.push({id: input.clientRequestId, status: "running", createdAt: new Date().toISOString(), changes,
@@ -697,6 +699,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
               expectedResetRevision: details.coordinates.resetRevision, contentMarkdown: change.action.after,
             });
           }
+          const savedNode = (await knowledge()).nodes.find(item => item.id === change.action.nodeId);
+          if (!savedNode || savedNode.content !== change.action.after)
+            throw new IntentWorkbenchError("NODE_WRITE_UNCONFIRMED", "尚未确认正文已写入知识库，请重新读取后核对");
         }
       } catch (error) {
         failure = error instanceof IntentWorkbenchError ? error.message : "节点保存未完成，原文已保留；请重新读取知识库";

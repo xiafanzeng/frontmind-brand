@@ -209,7 +209,7 @@ export function evaluateIntent(question: IntentQuestion, nodes: IntentNode[], ca
 export function createIntentPlan(question: IntentQuestion, evaluation: IntentEvaluation, nodes: IntentNode[]): IntentPlan {
   const target = matchIntentNode(question.question, nodes.filter(node => node.editable));
   const actions: IntentAction[] = [];
-  if (target) actions.push({id: `${question.id}:node`, kind: "node", title: "补充知识节点正文", selected: false,
+  if (target) actions.push({id: `${question.id}:node`, kind: "node", title: "补充知识节点正文", selected: true,
     nodeId: target.id, before: target.content,
     after: `${target.content.trim()}\n\n## 回答口径与选择边界\n\n针对“${question.question}”，回答应引用本节点已经确认的事实，说明适用条件与判断依据。尚未确认的资料不得作为确定结论；涉及风险和专业决策时，应说明限制并建议进一步核验。\n`,
     source: `${target.branch} / ${target.title}；仅新增回答边界，不生成未经证实的产品或医疗事实`});

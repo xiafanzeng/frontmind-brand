@@ -1,3 +1,4 @@
+import {readPreviewCatalog} from "./keyword-preview";
 import {createIntentPlan, emptyIntentState, evaluateIntent, knowledgeOnlyIntentPlan, type IntentWorkspace, type IntentState, type IntentNode, type IntentQuestion} from "../module/contracts/intent-workbench";
 import type {IntentWorkbenchApi} from "../module/client/dashboard/intent-workbench-api";
 import {updateIntentQuestionSchema, deleteIntentQuestionSchema, mutateIntentQuestion} from "../module/contracts/intent-question-mutations";
@@ -21,6 +22,19 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
     memory.state.jobs = [{id:"question-ui-review",taskId:"question-ui-review",kind:"evaluate",questionIds:memory.state.questions.map(question=>question.id),
       status:"running",createdAt:new Date().toISOString(),inputHash:"preview",knowledgeHash:"preview",questionsHash:"preview",
       credentialId:"preview",credentialVersion:0,skillHash:"preview",model:"local-preview"}];
+  }
+  function ensureCompanyFixtures() {
+    const catalog = readPreviewCatalog(scope);
+    for (const question of memory.state.questions) {
+      const table = catalog.tables.find(table => table.id === question.tableId);
+      const brandIndex = table?.columns.indexOf("企业名称") ?? -1;
+      const brand = brandIndex >= 0 ? String(table?.rows[question.rowIndex]?.[brandIndex] ?? "").trim() : "";
+      if (!brand) continue;
+      const id = `preview-company:${brand}`;
+      if (memory.nodes.some(node => node.id === id)) continue;
+      memory.nodes.push({id, title: `${brand}企业资料`, branch: "品牌信息", verified: true, editable: true,
+        content: `# ${brand}企业资料\n\n这是用于界面预览的合成知识库，企业名称为${brand}。\n\n## 品牌与服务资料\n\n品牌介绍、机构资质、团队信息和服务流程可按公开来源逐项核验；具体服务范围、费用及适用条件以正式确认信息为准。\n\n## 信息使用边界\n\n本地示例不代表该企业的真实资质、服务或评价；未核验的信息不得作为确定结论。`});
+    }
   }
   const snapshot = () => structuredClone(memory);
   const persist = () => {memory.revision++; localStorage.setItem(key, JSON.stringify(memory)); return snapshot();};
@@ -70,6 +84,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       if (input.kind === "intake") for (const question of input.questions as IntentQuestion[]) {
         if (!memory.state.questions.some(item => item.id === question.id || item.question === question.question)) memory.state.questions.push(structuredClone(question));
       }
+      if (input.kind === "evaluate" || input.kind === "plan") ensureCompanyFixtures();
       if ((input.kind === "evaluate" || input.kind === "plan") && input.clientRequestId) {
         if(memory.state.jobs?.some(job=>job.id===input.clientRequestId))return snapshot();
         if(memory.state.jobs?.some(job=>!["succeeded","failed"].includes(job.status)))throw new Error("已有评估任务，请先完成或继续当前任务");
@@ -102,6 +117,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       const plans = memory.state.plans.filter(plan => input.questionIds.includes(plan.questionId)).map(knowledgeOnlyIntentPlan);
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({action: structuredClone(action), questionId: plan.questionId, status: "pending" as const})));
       if (!changes.length) throw new Error("请至少选择一项动作");
+      if (changes.some(change => change.action.kind === "node" && change.action.before.trim() === change.action.after.trim()))throw new Error("选中的正文修改与原文相同，请修改内容或取消采纳该动作");
       const nodeIds = changes.filter(change => change.action.kind === "node").map(change => change.action.nodeId);
       if (new Set(nodeIds).size !== nodeIds.length) throw new Error("多个方案修改同一节点，请分别执行");
       const receipt: IntentState["receipts"][number] = {id: input.clientRequestId, status: "running", createdAt: new Date().toISOString(), before: structuredClone(memory.state.evaluations.filter(item => input.questionIds.includes(item.questionId))), after: [], changes};

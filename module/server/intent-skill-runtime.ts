@@ -91,9 +91,13 @@ export function validateIntentSkillResult(value: unknown, input: IntentSkillInpu
     return {questionId: plan.questionId, inputHash: job.inputHash, actions: actions.map(action => {
       const node = input.nodes.find(node => node.id === action.nodeId);
       if (action.kind === "node" ? !node?.editable : action.nodeId !== null) throw new IntentSkillRuntimeError("方案目标节点不可编辑");
-      return {...action, id: `${job.id}:${question.id}:${action.kind}`, selected: action.kind !== "node",
-        before: action.kind === "node" ? node!.content : "",
-        after: action.kind === "node" ? projectKnowledgeBaseCustomerMarkdown({leafTitle: node!.title, markdown: action.after}) : action.after};
+      const after = action.kind === "node" ? projectKnowledgeBaseCustomerMarkdown({leafTitle: node!.title, markdown: action.after}) : action.after;
+      if (action.kind === "node" && after.trim() === node!.content.trim())
+        throw new IntentSkillRuntimeError("正文优化没有实际变更，请生成修改后的完整正文");
+      // Confirmation of the reviewed plan authorizes these writes. Users can
+      // still explicitly deselect any action before submitting the plan.
+      return {...action, id: `${job.id}:${question.id}:${action.kind}`, selected: true,
+        before: action.kind === "node" ? node!.content : "", after};
     })};
   });
   return {evaluations, plans};
