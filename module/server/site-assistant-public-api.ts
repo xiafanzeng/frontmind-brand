@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { createHash, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import type { GeneralChatDispatchMetadata } from "@frontmind/module-contracts/chat-dispatch";
+import type { EnterpriseQaLocalReply } from "@frontmind/module-contracts/enterprise-qa-experience";
 import { enterpriseQaProgress } from "../contracts/enterprise-qa-progress.js";
 import {
   siteAssistantBindingKnowledgeKey,
@@ -74,6 +75,7 @@ type AssistantSession = {
   conversationId: string;
   taskId: string | null;
   turns: number;
+  createdAt: number;
   lastSeenAt: number;
   /** Knowledge identity the session was started under; a different binding
    * always starts a new conversation instead of continuing the old one. */
@@ -98,8 +100,14 @@ export type SiteAssistantAskErrorCode =
   | "ASSISTANT_BINDING_UNSUPPORTED"
   | "ASSISTANT_BINDING_INVALID";
 
-const ASSISTANT_NAME = "AI 助手";
-const ASSISTANT_GREETING = "你好，我是本站的 AI 助手，可以就网站内容向你解答。";
+function siteAssistantIdentity(companyName?: string) {
+  const company = companyName?.trim();
+  const name = company ? `${company} AI 助手` : "企业知识助手";
+  return {
+    name,
+    greeting: `你好，我是${name}，可以根据当前已发布的知识库为你解答。`,
+  };
+}
 const TERMINAL_TASK_STATUSES = new Set([
   "completed",
   "cancelled",
@@ -226,6 +234,19 @@ export function extractAssistantAnswer(task: unknown): AssistantAnswerMessage | 
   return null;
 }
 
+function enterpriseQaLocalReply(value: unknown): EnterpriseQaLocalReply | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const reply = value as Partial<EnterpriseQaLocalReply>;
+  return reply.object === "frontmind.local_reply" &&
+    reply.status === "completed" &&
+    reply.evaluation === "not_required" &&
+    typeof reply.conversationId === "string" &&
+    typeof reply.userMessageId === "string" &&
+    typeof reply.content === "string" && Boolean(reply.content.trim())
+    ? reply as EnterpriseQaLocalReply
+    : null;
+}
+
 /**
  * Build the internal JSON client. node:http is used deliberately: the module
  * gateway validates the Host header, and fetch/undici silently drops custom
@@ -286,7 +307,7 @@ export function createSiteAssistantInternalClient(
 
 export type SiteAssistantRuntime = {
   config: () => Promise<
-    | { status: "ok"; knowledgeBase: { version: number; documentCount: number; sourceFileName: string } | null }
+    | { status: "ok"; knowledgeBase: { version: number; documentCount: number; sourceFileName: string; companyName?: string } | null }
     | { status: "unavailable" }
   >;
 };
@@ -316,6 +337,7 @@ export function readSiteAssistantRuntime(
           version: number;
           documentCount?: unknown;
           sourceFileName?: unknown;
+          companyName?: unknown;
         };
         return {
           status: "ok",
@@ -324,6 +346,9 @@ export function readSiteAssistantRuntime(
             documentCount: Number(value.documentCount) || 0,
             sourceFileName:
               typeof value.sourceFileName === "string" ? value.sourceFileName : "",
+            ...(typeof value.companyName === "string" && value.companyName.trim()
+              ? { companyName: value.companyName.trim() }
+              : {}),
           },
         };
       } catch {
@@ -381,9 +406,10 @@ export function createSiteAssistantPublicApi(
         "AI 助手暂时不可用，请稍后再试。",
       );
     }
+    const assistant = siteAssistantIdentity(state.knowledgeBase?.companyName);
     res.json({
       schemaVersion: 1,
-      assistant: { name: ASSISTANT_NAME, greeting: ASSISTANT_GREETING },
+      assistant,
       knowledgeBase: state.knowledgeBase,
     });
   });
@@ -487,6 +513,7 @@ export function createSiteAssistantPublicApi(
         "本站尚未发布可用的知识库，AI 助手暂不能回答。",
       );
     }
+    const assistantIdentity = siteAssistantIdentity(knowledge.knowledgeBase.companyName);
 
     if (!session) {
       session = {
@@ -494,6 +521,7 @@ export function createSiteAssistantPublicApi(
         conversationId: `site-assistant-${randomUUID()}`,
         taskId: null,
         turns: 0,
+        createdAt: timestamp,
         lastSeenAt: timestamp,
         bindingKey,
         messages: [],
@@ -542,6 +570,7 @@ export function createSiteAssistantPublicApi(
       const generalChatDispatch = {
         schemaVersion: 1,
         kind: "pending_user" as const,
+        evaluationIntent: "enterprise_rag_once" as const,
         clientRequestId,
         providerPrompt: question,
         localAssetIds: [] as string[],
@@ -553,10 +582,66 @@ export function createSiteAssistantPublicApi(
         id: clientRequestId,
         role: "user" as const,
         content: question,
-        timestamp: Math.floor(timestamp / 1000),
+        timestamp,
+      };
+      const syncTerminalConversation = async (
+        terminalStatus: "completed" | "failed",
+        terminalTaskId?: string | null,
+      ) => {
+        const completedAt = now();
+        const settledMessages = [...session.messages, userMessage];
+        const taskId = terminalTaskId ?? session.taskId;
+        session.messages = settledMessages;
+        const finalSync = await client.json(
+          "POST",
+          "/api/brand/conversations/sync",
+          {
+            purpose: "enterprise_qa",
+            conversations: [{
+              id: session.conversationId,
+              title: assistantIdentity.name,
+              purpose: "enterprise_qa",
+              messages: settledMessages,
+              status: terminalStatus,
+              ...(taskId ? {
+                taskId,
+                previousResponseId: taskId,
+                executionKind: "general_chat_v2" as const,
+              } : {}),
+              createdAt: session.createdAt,
+              updatedAt: completedAt,
+              completedAt,
+            }],
+            deletedIds: [],
+          },
+        );
+        if (finalSync.status >= 400) {
+          throw Object.assign(new Error("ASSISTANT_FINAL_SYNC_FAILED"), {
+            internalStatus: finalSync.status,
+          });
+        }
+      };
+      const settleTerminalConversation = async (
+        terminalStatus: "completed" | "failed",
+        terminalTaskId?: string | null,
+      ) => {
+        try {
+          await syncTerminalConversation(terminalStatus, terminalTaskId);
+        } catch (error) {
+          // The task/local error is authoritative. Never retry or replace it
+          // with a new paid request merely because this projection sync failed.
+          console.warn("[site-assistant] final_sync_failed", {
+            code: "ASSISTANT_FINAL_SYNC_FAILED",
+            internalStatus: (error as { internalStatus?: unknown }).internalStatus,
+            sessionTurns: session.turns,
+          });
+        }
+      };
+      const pendingUserMessage = {
+        ...userMessage,
         generalChatDispatch,
       };
-      const syncedMessages = [...session.messages, userMessage];
+      const syncedMessages = [...session.messages, pendingUserMessage];
       const sync = await client.json(
         "POST",
         "/api/brand/conversations/sync",
@@ -565,15 +650,16 @@ export function createSiteAssistantPublicApi(
           conversations: [
             {
               id: session.conversationId,
-              title: "官网 AI 助手",
+              title: assistantIdentity.name,
               purpose: "enterprise_qa",
               messages: syncedMessages,
               status: "running",
               ...(session.taskId
                 ? {taskId: session.taskId, previousResponseId: session.taskId}
                 : {}),
-              createdAt: Math.floor(timestamp / 1000) - session.turns,
-              updatedAt: Math.floor(timestamp / 1000),
+              ...(session.taskId ? {executionKind: "general_chat_v2" as const} : {}),
+              createdAt: session.createdAt,
+              updatedAt: timestamp,
             },
           ],
           deletedIds: [],
@@ -595,6 +681,7 @@ export function createSiteAssistantPublicApi(
               clientRequestId,
               prompt: question,
               localAssetIds: [],
+              evaluationIntent: "enterprise_rag_once",
             },
           )
         : await client.json("POST", "/api/frontmind/v2/tasks", {
@@ -604,6 +691,7 @@ export function createSiteAssistantPublicApi(
             modelProfile: "frontmind-base",
             purpose: "enterprise_qa",
             localAssetIds: [],
+            evaluationIntent: "enterprise_rag_once",
             // The signed pin belongs to task creation; conversation metadata
             // follows the shared dispatch schema.
             ...(verifiedBinding
@@ -616,9 +704,28 @@ export function createSiteAssistantPublicApi(
               : {}),
           });
       if (dispatch.status >= 400 || !dispatch.json) {
+        await settleTerminalConversation("failed", session.taskId);
         throw Object.assign(new Error("ASSISTANT_TASK_DISPATCH_FAILED"), {
           internalStatus: dispatch.status,
         });
+      }
+      const localReply = enterpriseQaLocalReply(dispatch.json);
+      if (localReply) {
+        if (localReply.conversationId !== session.conversationId ||
+            localReply.userMessageId !== clientRequestId) {
+          throw new Error("ASSISTANT_LOCAL_REPLY_IDENTITY_MISMATCH");
+        }
+        session.messages = [...session.messages, userMessage];
+        if (disconnected()) return;
+        const payload = {
+          schemaVersion: 1,
+          session: session.token,
+          answer: { text: localReply.content, sources: [] },
+          knowledge: { version: knowledge.knowledgeBase.version },
+        };
+        if (streaming) res.end(`${JSON.stringify({type: "answer", ...payload})}\n`);
+        else res.json(payload);
+        return;
       }
       const taskId =
         (dispatch.json as { id?: unknown }).id ??
@@ -665,6 +772,7 @@ export function createSiteAssistantPublicApi(
       }
 
       if (status !== "completed") {
+        await settleTerminalConversation("failed", taskId);
         return publicError(
           res,
           502,
@@ -675,6 +783,7 @@ export function createSiteAssistantPublicApi(
       }
       const answer = extractAssistantAnswer(task);
       if (!answer) {
+        await settleTerminalConversation("failed", taskId);
         return publicError(
           res,
           502,
@@ -683,7 +792,7 @@ export function createSiteAssistantPublicApi(
           { session: session.token },
         );
       }
-      session.messages = syncedMessages;
+      await settleTerminalConversation("completed", taskId);
       if (disconnected()) return;
       const payload = {
         schemaVersion: 1,

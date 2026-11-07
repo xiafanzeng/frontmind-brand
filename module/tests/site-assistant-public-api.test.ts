@@ -45,7 +45,7 @@ const config = {
 
 const runtimeConfigWithKnowledge: Handler = {
   match: (call) => call.method === "GET" && call.path.startsWith("/api/frontmind/v2/runtime-config"),
-  json: {knowledgeBase: {snapshotId: "snap-1", version: 3, sourceFileName: "company.md", documentCount: 7}},
+  json: {knowledgeBase: {snapshotId: "snap-1", version: 3, sourceFileName: "company.md", documentCount: 7, companyName: "东莞台心医院"}},
 };
 
 const assistantOutput = [
@@ -220,8 +220,11 @@ describe("public site assistant api", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       schemaVersion: 1,
-      assistant: {name: "AI 助手"},
-      knowledgeBase: {version: 3, documentCount: 7},
+      assistant: {
+        name: "东莞台心医院 AI 助手",
+        greeting: "你好，我是东莞台心医院 AI 助手，可以根据当前已发布的知识库为你解答。",
+      },
+      knowledgeBase: {version: 3, documentCount: 7, companyName: "东莞台心医院"},
     });
     expect(response.headers.get("access-control-allow-origin")).toBe("*");
   });
@@ -263,10 +266,11 @@ describe("public site assistant api", () => {
     expect(response.body.answer.sources).toEqual([{id: "doc-1", title: "公司介绍", kind: "published_knowledge"}]);
     expect(response.body.knowledge).toEqual({version: 3});
     expect(typeof response.body.session).toBe("string");
-    expect(calls.some((call) => call.path === "/api/brand/conversations/sync")).toBe(true);
+    const syncs = calls.filter((call) => call.path === "/api/brand/conversations/sync");
+    expect(syncs).toHaveLength(2);
     const create = calls.find((call) => call.path === "/api/frontmind/v2/tasks");
-    expect(create?.body).toMatchObject({purpose: "enterprise_qa", prompt: "你们提供什么服务？", modelProfile: "frontmind-base"});
-    const sync = calls.find((call) => call.path === "/api/brand/conversations/sync");
+    expect(create?.body).toMatchObject({purpose: "enterprise_qa", prompt: "你们提供什么服务？", modelProfile: "frontmind-base", evaluationIntent: "enterprise_rag_once"});
+    const sync = syncs[0];
     expect(sync?.body).toMatchObject({
       purpose: "enterprise_qa",
       conversations: [
@@ -278,6 +282,7 @@ describe("public site assistant api", () => {
       ],
       deletedIds: [],
     });
+    expect(sync?.body.conversations[0].title).toBe("东莞台心医院 AI 助手");
     // The dispatched user message must be synced under the same id the task
     // creation references, carrying the matching dispatch metadata.
     const syncedMessage = sync?.body.conversations[0].messages[0];
@@ -291,7 +296,21 @@ describe("public site assistant api", () => {
       localTaskId: null,
       modelProfile: "frontmind-base",
       purpose: "enterprise_qa",
+      evaluationIntent: "enterprise_rag_once",
     });
+    expect(sync?.body.conversations[0]).toMatchObject({
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_000_000,
+    });
+    expect(syncs[1].body.conversations[0]).toMatchObject({
+      status: "completed",
+      taskId: "task-9",
+      previousResponseId: "task-9",
+      executionKind: "general_chat_v2",
+      createdAt: 1_700_000_000_000,
+      messages: [{ id: syncedMessage.id }],
+    });
+    expect(syncs[1].body.conversations[0].messages[0].generalChatDispatch).toBeUndefined();
   });
 
   it("continues an existing session through the task message route", async () => {
@@ -319,12 +338,95 @@ describe("public site assistant api", () => {
     // Every turn syncs the same conversation, with the task pointers set and
     // the continuation dispatch metadata bound to the running task.
     const syncs = calls.filter((call) => call.path === "/api/brand/conversations/sync");
-    expect(syncs).toHaveLength(2);
+    expect(syncs).toHaveLength(4);
     expect(syncs[0].body.conversations[0].taskId).toBeUndefined();
-    expect(syncs[1].body.conversations[0]).toMatchObject({taskId: "task-1", previousResponseId: "task-1"});
-    expect(syncs[1].body.conversations[0].messages.map((message: {role: string; content: string}) => message.content)).toEqual(["第一轮", "第二轮"]);
-    expect(syncs[1].body.conversations[0].messages[1].generalChatDispatch).toMatchObject({localTaskId: "task-1", modelProfile: null});
-    expect(syncs[1].body.conversations[0].messages[1].generalChatDispatch.purpose).toBeUndefined();
+    expect(syncs[1].body.conversations[0]).toMatchObject({status: "completed", taskId: "task-1", previousResponseId: "task-1", executionKind: "general_chat_v2"});
+    expect(syncs[2].body.conversations[0]).toMatchObject({status: "running", taskId: "task-1", previousResponseId: "task-1", executionKind: "general_chat_v2"});
+    expect(syncs[2].body.conversations[0].messages.map((message: {role: string; content: string}) => message.content)).toEqual(["第一轮", "第二轮"]);
+    expect(syncs[2].body.conversations[0].messages[0].generalChatDispatch).toBeUndefined();
+    expect(syncs[2].body.conversations[0].messages[1].generalChatDispatch).toMatchObject({localTaskId: "task-1", modelProfile: null, evaluationIntent: "enterprise_rag_once"});
+    expect(syncs[2].body.conversations[0].messages[1].generalChatDispatch.purpose).toBeUndefined();
+    const continuation = calls.find((call) => call.path === "/api/frontmind/v2/tasks/task-1/messages");
+    expect(continuation?.body).toMatchObject({evaluationIntent: "enterprise_rag_once"});
+    expect(syncs[3].body.conversations[0].messages.every((message: {generalChatDispatch?: unknown}) => message.generalChatDispatch === undefined)).toBe(true);
+  });
+
+  it("returns a persisted greeting only after the published-knowledge gate", async () => {
+    const {calls} = mountApi([
+      runtimeConfigWithKnowledge,
+      conversationSync,
+      {match: call => call.path === "/api/frontmind/v2/tasks", json: () => {
+        const create = calls.find(call => call.path === "/api/frontmind/v2/tasks")!;
+        const body = create.body as {conversationId: string; clientRequestId: string};
+        return {
+          object: "frontmind.local_reply",
+          conversationId: body.conversationId,
+          turnId: "11111111-1111-4111-8111-111111111111",
+          userMessageId: body.clientRequestId,
+          answerMessageId: "local-answer",
+          content: "你好，有什么可以帮你？",
+          status: "completed",
+          completedAt: 1_700_000_000_001,
+          reason: "greeting",
+          evaluation: "not_required",
+          enterpriseQaLocalReply: {
+            schemaVersion: 1,
+            kind: "local_reply",
+            source: "rule",
+            reason: "greeting",
+            evaluation: "not_required",
+            serverOwned: true,
+            turnId: "11111111-1111-4111-8111-111111111111",
+            userMessageId: body.clientRequestId,
+            answerMessageId: "local-answer",
+          },
+        };
+      }},
+    ]);
+    const response = await ask({question: "你好"});
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      answer: {text: "你好，有什么可以帮你？", sources: []},
+      knowledge: {version: 3},
+    });
+    expect(calls.filter(call => call.path.startsWith("/api/frontmind/v2/runtime-config"))).toHaveLength(1);
+    expect(calls.filter(call => call.path === "/api/brand/conversations/sync")).toHaveLength(1);
+    expect(calls.filter(call => call.method === "GET" && call.path.includes("/tasks/"))).toHaveLength(0);
+    const create = calls.find(call => call.path === "/api/frontmind/v2/tasks")!;
+    expect(create.body).toMatchObject({evaluationIntent: "enterprise_rag_once"});
+  });
+
+  it("keeps an authoritative answer usable when only terminal snapshot sync fails", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const {calls} = mountApi([
+        runtimeConfigWithKnowledge,
+        {match: call => call.path === "/api/brand/conversations/sync" && (call.body as any)?.conversations?.[0]?.status === "running", json: {ok: true}},
+        {match: call => call.path === "/api/brand/conversations/sync" && (call.body as any)?.conversations?.[0]?.status === "completed", status: 503, json: {secret: "must-not-log"}},
+        {match: call => call.path === "/api/frontmind/v2/tasks", json: completedTask},
+      ]);
+      const response = await ask({question: "你们提供什么服务？"});
+      expect(response.status).toBe(200);
+      expect(response.body.answer.text).toBe("FrontMind 提供品牌知识管理。");
+      expect(calls.filter(call => call.path === "/api/brand/conversations/sync")).toHaveLength(2);
+      expect(warning).toHaveBeenCalledWith("[site-assistant] final_sync_failed", expect.objectContaining({code: "ASSISTANT_FINAL_SYNC_FAILED", internalStatus: 503}));
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("must-not-log");
+    } finally { warning.mockRestore(); }
+  });
+
+  it("does not log a rejected final-sync exception", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      mountApi([
+        runtimeConfigWithKnowledge,
+        {match: call => call.path === "/api/brand/conversations/sync" && (call.body as any)?.conversations?.[0]?.status === "running", json: {ok: true}},
+        {match: call => call.path === "/api/brand/conversations/sync" && (call.body as any)?.conversations?.[0]?.status === "completed", json: () => { throw new Error("private-network-secret"); }},
+        {match: call => call.path === "/api/frontmind/v2/tasks", json: completedTask},
+      ]);
+      expect((await ask({question: "你们提供什么服务？"})).status).toBe(200);
+      expect(warning).toHaveBeenCalledWith("[site-assistant] final_sync_failed", expect.objectContaining({code: "ASSISTANT_FINAL_SYNC_FAILED"}));
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("private-network-secret");
+    } finally { warning.mockRestore(); }
   });
 
   it("starts a new session when the token is unknown", async () => {
@@ -367,8 +469,19 @@ describe("public site assistant api", () => {
     expect(response.body.error.code).toBe("ASSISTANT_KNOWLEDGE_UNAVAILABLE");
   });
 
+  it("keeps a pure greeting behind the published-knowledge gate", async () => {
+    const {calls} = mountApi([
+      {match: (call) => call.method === "GET" && call.path.startsWith("/api/frontmind/v2/runtime-config"), json: {knowledgeBase: null}},
+    ]);
+    const response = await ask({question: "你好"});
+    expect(response.status).toBe(503);
+    expect(response.body.error.code).toBe("ASSISTANT_KNOWLEDGE_UNAVAILABLE");
+    expect(calls.some((call) => call.path.startsWith("/api/frontmind/v2/tasks"))).toBe(false);
+    expect(calls.some((call) => call.path === "/api/brand/conversations/sync")).toBe(false);
+  });
+
   it("never leaks internal error detail when dispatch fails", async () => {
-    mountApi([
+    const {calls} = mountApi([
       runtimeConfigWithKnowledge,
       {match: (call) => call.method === "POST" && call.path === "/api/brand/conversations/sync", json: {}},
       {
@@ -381,6 +494,36 @@ describe("public site assistant api", () => {
     expect(response.status).toBe(503);
     expect(response.body.error.code).toBe("ASSISTANT_UNAVAILABLE");
     expect(JSON.stringify(response.body)).not.toContain("internal secret detail");
+    const syncs = calls.filter(call => call.path === "/api/brand/conversations/sync");
+    expect(syncs).toHaveLength(2);
+    expect(syncs[1]!.body.conversations[0]).toMatchObject({
+      status: "failed",
+      messages: [{role: "user", content: "你们是谁"}],
+    });
+    expect(syncs[1]!.body.conversations[0].messages[0].generalChatDispatch).toBeUndefined();
+  });
+
+  it("settles a failed terminal task without inventing an answer", async () => {
+    const {calls} = mountApi([
+      runtimeConfigWithKnowledge,
+      conversationSync,
+      {match: call => call.path === "/api/frontmind/v2/tasks", json: {
+        id: "task-failed", status: "failed", output: [],
+      }},
+    ]);
+    const response = await ask({question: "失败的问题"});
+    expect(response.status).toBe(502);
+    expect(response.body.error.code).toBe("ASSISTANT_ANSWER_UNAVAILABLE");
+    const syncs = calls.filter(call => call.path === "/api/brand/conversations/sync");
+    expect(syncs).toHaveLength(2);
+    expect(syncs[1]!.body.conversations[0]).toMatchObject({
+      status: "failed",
+      taskId: "task-failed",
+      previousResponseId: "task-failed",
+      executionKind: "general_chat_v2",
+      messages: [{role: "user", content: "失败的问题"}],
+    });
+    expect(syncs[1]!.body.conversations[0].messages[0].generalChatDispatch).toBeUndefined();
   });
 
   it("returns 404 with CORS headers for unknown assistant routes", async () => {
@@ -486,7 +629,7 @@ describe("public site assistant build bindings", () => {
     expect(second.status).toBe(200);
     expect(second.body.session).not.toBe(first.body.session);
     const conversations = calls
-      .filter((call) => call.path === "/api/brand/conversations/sync")
+      .filter((call) => call.path === "/api/brand/conversations/sync" && (call.body as {conversations:Array<{status:string}>}).conversations[0]!.status === "running")
       .map((call) => (call.body as {conversations: Array<{id: string}>}).conversations[0]!.id);
     expect(conversations).toHaveLength(2);
     expect(conversations[1]).not.toBe(conversations[0]);

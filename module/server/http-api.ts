@@ -16,6 +16,7 @@ import {
  createEnterpriseRagEvaluationService,
 } from "@frontmind/module-brand/server/enterprise-rag-evaluation-service";
 import { recordRagEvaluationError } from "@frontmind/module-brand/server/enterprise-rag-evaluation-errors";
+import {createRagStarterQuestionService,RagStarterQuestionError} from "@frontmind/module-brand/server/rag-starter-question-service";
 
 import type { DiagnosticCollectionPort } from "./diagnostic-monitor.js";
 
@@ -35,6 +36,30 @@ export interface ModuleHttpCore {
 export function createModuleHttpApi(core:ModuleHttpCore):Router {
  const router=Router();
  router.use('/diagnostics',createDiagnosticRouter(core));
+ const sendStarterError=(res:Response,error:unknown)=>{
+  const known=error instanceof RagStarterQuestionError;
+  const invalid=error instanceof z.ZodError;
+  res.status(known?error.status:invalid?400:503).json({error:{
+   code:known?error.code:invalid?"INVALID_INPUT":"RAG_STARTER_UNAVAILABLE",
+   message:known?error.message:invalid?"预设问题内容不符合要求。":"预设问题服务暂时无法读取，请稍后重试。",
+  }});
+ };
+ router.get("/rag-starter-questions",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createRagStarterQuestionService(core,req).read());}
+  catch(error){sendStarterError(res,error);}
+ });
+ router.post("/rag-starter-questions/regenerations",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.status(202).json(await createRagStarterQuestionService(core,req).regenerate(req.body));}
+  catch(error){sendStarterError(res,error);}
+ });
+ router.put("/rag-starter-questions/current",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createRagStarterQuestionService(core,req).confirm(req.body));}
+  catch(error){sendStarterError(res,error);}
+ });
+ router.delete("/rag-starter-questions/draft",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createRagStarterQuestionService(core,req).discard(req.body));}
+  catch(error){sendStarterError(res,error);}
+ });
  const ragEvaluationCoordinate=z.object({
   sourceQaTaskId:z.string().uuid(),
   turnId:z.string().uuid(),

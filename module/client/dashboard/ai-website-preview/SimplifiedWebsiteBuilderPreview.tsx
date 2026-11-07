@@ -329,6 +329,12 @@ export type WebsiteDraftV2 = {
   design: WebsiteDesignDraft;
 };
 
+const defaultAssistantName = import.meta.env.DEV || import.meta.env.MODE === "preview" || import.meta.env.MODE === "test"
+  ? "FrontMind 企业助手"
+  : "企业知识助手";
+const isGenericAssistantIdentity = (value: string) =>
+  value === defaultAssistantName || /^FrontMind\s*企业助手$/u.test(value.trim());
+
 const defaultDraft = (): WebsiteDraftV2 => ({
   version: 2,
   updatedAt: 0,
@@ -343,7 +349,7 @@ const defaultDraft = (): WebsiteDraftV2 => ({
     featuredPageIds: initialPages.map((page) => page.id),
     siteAccent: "#6f35a5",
     assistant: {
-      name: "FrontMind 企业助手",
+      name: defaultAssistantName,
       welcome: "您好，我可以根据企业资料回答产品、服务与使用问题。",
       accent: "#6f35a5",
       followSiteAccent: true,
@@ -608,6 +614,7 @@ function resolveStateAction<T>(current: T, next: SetStateAction<T>) {
 }
 
 function MiniSitePreview({
+  assistantInteractive,
   assistantAccent,
   assistantName,
   brandMark,
@@ -624,6 +631,7 @@ function MiniSitePreview({
   templateId,
   welcome,
 }: {
+  assistantInteractive: boolean;
   assistantAccent: string;
   assistantName: string;
   brandMark: string;
@@ -760,6 +768,7 @@ function MiniSitePreview({
           assistantName={assistantName}
           exchangeBinding={exchangeBinding}
           initiallyOpen={showAssistant}
+          interactive={assistantInteractive}
           onExchange={onExchange}
           showSources={showSources}
           welcome={welcome}
@@ -1413,7 +1422,14 @@ export function SimplifiedWebsiteBuilderPreview({
       const localSelectionTargetsLiveRoutes = !firstHydrationForProject
         || (localFeaturedRouteIds.size > 0
           && [...localFeaturedRouteIds].every((id) => liveRouteIds.has(id)));
-      const nextAssistantName = designPreferences?.assistant.name ?? current.assistantName;
+      const trustedCompanyName = brief.companyName.trim();
+      const briefAssistantName = trustedCompanyName
+        ? `${trustedCompanyName} AI 助手`
+        : "企业知识助手";
+      const nextAssistantName = designPreferences?.assistant.name
+        ?? (firstHydrationForProject && isGenericAssistantIdentity(current.assistantName)
+          ? briefAssistantName
+          : current.assistantName);
       const nextWelcome = designPreferences?.assistant.welcome ?? current.welcome;
       const assistantIdentityChanged =
         nextAssistantName !== current.assistantName || nextWelcome !== current.welcome;
@@ -2686,7 +2702,7 @@ export function SimplifiedWebsiteBuilderPreview({
                 <header><span>2</span><div><h3>页面与栏目</h3></div></header>
                 <div className="sfp-knowledge-summary" data-testid="website-design-knowledge-summary">
                   <FileText size={17} />
-                  <span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 示例知识范围"}</strong>{!siteOps && <small>{previewKnowledgeCollectionCount} 个知识集合 · {previewKnowledgeFragmentCount} 个示例片段</small>}</span>
+                  <span><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "当前已发布知识库" : "当前 RAG 预览知识范围"}</strong>{!siteOps && <small>{previewKnowledgeCollectionCount} 个知识集合 · {previewKnowledgeFragmentCount} 个预览片段</small>}</span>
                 </div>
                 {siteOps && recommendationFieldEdited.featuredRoutes && (
                   <p className="sfp-recommend-row" data-testid="website-routes-recommend-flag">
@@ -2841,6 +2857,7 @@ export function SimplifiedWebsiteBuilderPreview({
               <section className="sfp-preview-panel sfp-builder-preview-panel" aria-label="网站与助手统一预览" data-testid="website-design-preview">
                 <div className="sfp-preview-heading"><span><strong>知识驱动统一预览</strong><small>{selectedTemplate.name} · {enabledPages.length} 个主栏目</small></span><DevicePicker device={device} onChange={setDevice} /></div>
                 <MiniSitePreview
+                  assistantInteractive={!siteOps}
                   assistantAccent={effectiveAssistantAccent}
                   assistantName={assistantName}
                   brandMark={brandMark}

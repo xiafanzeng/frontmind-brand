@@ -10,9 +10,13 @@ import {knowledgeBasePackageWriterTaskId,knowledgeBasePublicationBindingHash} fr
 import {isMaterializedBuildPublishable} from './knowledge-base-materialized-quality.js';
 import {effectiveKnowledgeArchiveCharacterCount,knowledgeArchiveFormalText,markedKnowledgeArchiveFormalContent} from './knowledge-archive-text-utils.js';
 import {customerSafeKnowledgeFilename,toCustomerSafeKnowledgeAsset,toCustomerSafeKnowledgeDocument} from './knowledge-base-public-artifacts.js';
+import {reserveRagStarterQuestionSet} from './rag-starter-question-reservation.js';
+import type {BrandKeywordPorts} from './brand-keyword-ports.js';
 type AuthenticatedUser={id:number};
 export interface KnowledgeSnapshotServiceCore {
  tables:BrandSchema;
+agentOperations:BrandKeywordPorts['agentOperations'];
+agentTasks:BrandKeywordPorts['agentTasks'];
 lockCustomerProjectBusinessWrite:Port;
 enterpriseProjectUrl:(url:string)=>string;
 enterpriseProjectPredicate:(...args:any[])=>SQL;
@@ -21,10 +25,14 @@ lockActiveWebsiteProjectLifecycle:Port;
 isKnowledgeSnapshotArchiveAvailable:(...args:any[])=>Promise<boolean>;
 requireDb:()=>Promise<MySql2Database<any>>;
 assertWorkspaceAccess:Port;
-lockKnowledgeOwnerIdentity(tx:any,userId:number):Promise<void>;}
+lockKnowledgeOwnerIdentity(tx:any,userId:number):Promise<void>;
+currentEnterpriseProjectId():string|null;}
 let knowledgeBaseBuilds:BrandSchema['knowledgeBaseBuilds'];
 let knowledgeImportReceipts:BrandSchema['knowledgeImportReceipts'];
 let knowledgeBaseSnapshots:BrandSchema['knowledgeBaseSnapshots'];
+let ragStarterQuestionSets:BrandSchema['ragStarterQuestionSets'];
+let starterAgentOperations:KnowledgeSnapshotServiceCore['agentOperations'];
+let starterAgentTasks:KnowledgeSnapshotServiceCore['agentTasks'];
 let lockCustomerProjectBusinessWrite:KnowledgeSnapshotServiceCore['lockCustomerProjectBusinessWrite'];
 let enterpriseProjectUrl:KnowledgeSnapshotServiceCore['enterpriseProjectUrl'];
 let enterpriseProjectPredicate:KnowledgeSnapshotServiceCore['enterpriseProjectPredicate'];
@@ -34,9 +42,13 @@ let isKnowledgeSnapshotArchiveAvailable:KnowledgeSnapshotServiceCore['isKnowledg
 let requireDb:KnowledgeSnapshotServiceCore['requireDb'];
 let assertWorkspaceAccess:KnowledgeSnapshotServiceCore['assertWorkspaceAccess'];
 let lockKnowledgeOwnerIdentity:(tx:any,userId:number)=>Promise<void>;
+let currentEnterpriseProjectId:()=>string|null;
 export function configureKnowledgeSnapshotServiceCore(core:KnowledgeSnapshotServiceCore) {
-({knowledgeBaseBuilds,knowledgeImportReceipts,knowledgeBaseSnapshots}=core.tables);
+({knowledgeBaseBuilds,knowledgeImportReceipts,knowledgeBaseSnapshots,ragStarterQuestionSets}=core.tables);
+starterAgentOperations=core.agentOperations;
+starterAgentTasks=core.agentTasks;
 ({lockCustomerProjectBusinessWrite,enterpriseProjectUrl,enterpriseProjectPredicate,enterpriseOwnerPredicate,lockActiveWebsiteProjectLifecycle,isKnowledgeSnapshotArchiveAvailable,requireDb,assertWorkspaceAccess, lockKnowledgeOwnerIdentity}=core);
+currentEnterpriseProjectId=core.currentEnterpriseProjectId;
 }
 
 
@@ -442,6 +454,21 @@ export async function createKnowledgeSnapshot(input: {
       totalBytes: input.totalBytes,
       status: "active",
       createdByUserId: input.actorUserId,
+    });
+    await reserveRagStarterQuestionSet({
+      tx,
+      table: ragStarterQuestionSets,
+      agentOperations: starterAgentOperations,
+      agentTasks: starterAgentTasks,
+      enterpriseProjectId: currentEnterpriseProjectId(),
+      userId: input.userId,
+      snapshot: {
+        id,
+        version,
+        archiveHash: input.archiveHash ?? null,
+        documents: input.documents,
+      },
+      source: "automatic",
     });
     if (input.importReceiptClaim) {
       const completedAt = new Date();

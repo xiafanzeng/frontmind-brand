@@ -27,6 +27,7 @@ export type RagEvaluationGaugeProps = {
   score: number | null | undefined;
   preciseScore?: number | null;
   unavailable?: boolean;
+  revealKey?: string;
 };
 
 const roundGeometry = (value: number) => Number(value.toFixed(2));
@@ -49,7 +50,7 @@ function formatScore(score: number) {
   return Math.floor(score).toString();
 }
 
-export function RagEvaluationGauge({ score, preciseScore, unavailable = false }: RagEvaluationGaugeProps) {
+export function RagEvaluationGauge({ score, preciseScore, unavailable = false, revealKey = "" }: RagEvaluationGaugeProps) {
   const entranceReady = useRagEntranceReady();
   const maskId = `rag-gauge-cutout-${useId().replace(/:/g, "")}`;
   const tooltipId = `rag-gauge-tooltip-${useId().replace(/:/g, "")}`;
@@ -65,7 +66,7 @@ export function RagEvaluationGauge({ score, preciseScore, unavailable = false }:
   const exactScore = isDisplayableScore(preciseScore) ? preciseScore : valid ? score : null;
   const { ref: revealRef, progress, finish: finishReveal } = useDataReveal<HTMLOutputElement>(
     valid && exactScore !== null,
-    `${score}:${exactScore}:${unavailable}`,
+    `${revealKey}:${score}:${exactScore}:${unavailable}`,
     undefined,
     undefined,
     entranceReady,
@@ -83,6 +84,7 @@ export function RagEvaluationGauge({ score, preciseScore, unavailable = false }:
   return <output
     ref={revealRef}
     data-testid="rag-evaluation-score"
+    data-report-reveal-key={revealKey || undefined}
     className={`erag-evaluation-score rag-evaluation-gauge rag-evaluation-gauge-card${unavailable ? " is-danger is-muted" : valid ? "" : " is-empty is-muted"}`}
     aria-label="六维诊断评分"
     aria-live={progress < 1 ? "off" : "polite"}

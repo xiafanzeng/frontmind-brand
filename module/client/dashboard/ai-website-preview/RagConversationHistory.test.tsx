@@ -15,6 +15,26 @@ async function open() {
   return await screen.findByRole("dialog", { name: "历史问答" });
 }
 describe("conversation history", () => {
+  it("locks only the deleting conversation while keeping new, other histories and examples available", async () => {
+    const callbacks = props();
+    const onSelectExample = vi.fn(async () => true);
+    render(<RagConversationHistory {...callbacks} deletingId="one" newDisabled={false} examples={[{ id: "example", title: "能力示例" }]} onSelectExample={onSelectExample} />);
+    const create = screen.getByRole("button", { name: "新建问答" });
+    expect((create as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(create);
+    expect(callbacks.onNew).toHaveBeenCalledOnce();
+    const dialog = await open();
+    const deleting = within(dialog).getByRole("button", { name: "企业能力介绍" }) as HTMLButtonElement;
+    expect(deleting.disabled).toBe(true);
+    expect(deleting.hasAttribute("title")).toBe(false);
+    expect(within(dialog).queryByText("正在删除此对话")).toBeNull();
+    expect((within(dialog).getByRole("button", { name: "部署要求" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((within(dialog).getByRole("button", { name: "能力示例 示例" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: "部署要求" }));
+    await waitFor(() => expect(callbacks.onSelect).toHaveBeenCalledWith("two"));
+    expect(callbacks.onDelete).not.toHaveBeenCalled();
+  });
+
   it("allows an explicitly enabled New action while busy history rows remain locked", async () => {
     const callbacks = props();
     render(<RagConversationHistory {...callbacks} busy newDisabled={false} />);
@@ -38,12 +58,12 @@ describe("conversation history", () => {
     const dialog = await open();
     expect(within(dialog).getByRole("status", { name: "正在加载历史问答" }).textContent).toBe("");
     expect(within(dialog).queryByText("正在加载历史问答…")).toBeNull();
-    const section = within(dialog).getByRole("region", { name: "示例问答" });
-    expect(within(section).getAllByText("示例 · 预设评审")).toHaveLength(2);
+    const section = within(dialog).getByRole("region", { name: "预览问答" });
+    expect(within(section).getAllByText("示例")).toHaveLength(2);
     expect(within(section).queryByRole("button", { name: /^删除/ })).toBeNull();
-    const active = within(section).getByRole("button", { name: "能力介绍示例 示例 · 预设评审" });
+    const active = within(section).getByRole("button", { name: "能力介绍示例 示例" });
     expect(active.getAttribute("aria-current")).toBe("true");
-    const next = within(section).getByRole("button", { name: "风险判断示例 示例 · 预设评审" });
+    const next = within(section).getByRole("button", { name: "风险判断示例 示例" });
     expect((next as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(next);
     expect(onSelectExample).toHaveBeenCalledWith("example-risk");
@@ -58,7 +78,7 @@ describe("conversation history", () => {
     render(<RagConversationHistory {...callbacks} error="读取历史失败" examples={[{ id: "example", title: "能力示例" }]} onSelectExample={onSelectExample} />);
     const dialog = await open();
     expect(within(dialog).getByRole("alert").textContent).toBe("读取历史失败");
-    const example = within(dialog).getByRole("button", { name: "能力示例 示例 · 预设评审" });
+    const example = within(dialog).getByRole("button", { name: "能力示例 示例" });
     expect((example as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(example); expect(onSelectExample).toHaveBeenCalledWith("example");
     expect(callbacks.onDelete).not.toHaveBeenCalled();
@@ -72,7 +92,7 @@ describe("conversation history", () => {
     const onSelectExample = vi.fn(() => pending);
     render(<RagConversationHistory {...callbacks} examples={[{ id: "example", title: "能力示例" }]} onSelectExample={onSelectExample} />);
     const dialog = await open();
-    const choice = within(dialog).getByRole("button", { name: "能力示例 示例 · 预设评审" });
+    const choice = within(dialog).getByRole("button", { name: "能力示例 示例" });
     fireEvent.click(choice);
     expect(onSelectExample).toHaveBeenCalledOnce();
     expect(screen.getByRole("dialog", { name: "历史问答" })).toBe(dialog);
@@ -91,7 +111,7 @@ describe("conversation history", () => {
     const dialog = await open();
     fireEvent.click(within(dialog).getByRole("button", { name: "删除企业能力介绍" }));
     expect(callbacks.onDelete).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "能力示例 示例 · 预设评审" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "能力示例 示例" }));
     await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledWith("one"));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
     expect(onSelectExample).toHaveBeenCalledWith("example");

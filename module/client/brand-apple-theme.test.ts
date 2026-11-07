@@ -27,6 +27,10 @@ const ragEvaluationCss = readFileSync(
   resolve(process.cwd(), "client/dashboard/ai-website-preview/rag-evaluation-ui.css"),
   "utf8",
 );
+const ragChatCss = readFileSync(
+  resolve(process.cwd(), "client/dashboard/ai-website-preview/rag-chat.css"),
+  "utf8",
+);
 const enterpriseRagPreview = readFileSync(
   resolve(process.cwd(), "client/dashboard/ai-website-preview/EnterpriseRagPreview.tsx"),
   "utf8",
@@ -230,7 +234,7 @@ describe("Brand Apple theme contract", () => {
     expect(enterpriseRagPreview).toContain('className="rag-toolbar rag-evaluation-toolbar"');
     expect(ragEvaluationCss).toContain(".rag-eval-root .erag-evaluation-panel__heading > .rag-evaluation-toolbar {");
     expect(ragEvaluationCss).toContain("margin: 0 0 0 auto;");
-    expect(ragEvaluationCss).toContain("@container sfp (max-width:400px) { .rag-eval-root .rag-radar-label { width:68px; } }");
+    expect(ragEvaluationCss).toMatch(/@container sfp \(max-width:400px\) \{[\s\S]*?\.rag-eval-root \.rag-radar-label \{ width:68px; \}[\s\S]*?\}/);
     expect(enterpriseRagPreview).toContain('className="rag-evaluation-supporting-meta"');
     expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-width"');
     expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-height"');
@@ -318,12 +322,40 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-radar-point-control {");
     expect(ragEvaluationCss).toContain("width:44px");
     expect(ragEvaluationCss).toContain("height:44px");
+    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-radar-point-control { width:36px; height:36px; min-height:36px; }");
+    expect(ragRadar).toContain("const RADAR_MIN_CONTROL_RADIUS = 42;");
     expect(ragEvaluationCss).toContain(".rag-radar-point-control[aria-expanded=true]");
     expect(css).toContain(".rag-radar-point-control:hover:not(:disabled)");
     expect(css).not.toContain(".rag-radar-label:hover:not(:disabled)");
   });
 
+  it("keeps starter questions visually compact without shrinking their touch target", () => {
+    const start = ragChatCss.indexOf('.rag-eval-root .rag-chat-starters__questions > button {');
+    const end = ragChatCss.indexOf('.rag-eval-root .rag-chat-starters__questions.is-entrance', start);
+    const starterStyle = ragChatCss.slice(start, end);
+    expect(starterStyle).toContain("flex:0 0 auto;");
+    expect(starterStyle).toContain("min-height:32px;");
+    expect(starterStyle).toContain("padding:3px 10px;");
+    expect(starterStyle).toContain("border:.5px solid var(--sfp-line);");
+    expect(starterStyle).toContain("border-radius:9px;");
+    expect(starterStyle).toContain("box-shadow:0 2px 8px rgba(29,29,31,.06);");
+    expect(starterStyle).toContain("inset:-6px 0;");
+    expect(ragChatCss).toMatch(/\.rag-chat-starters__questions > button:hover:not\(:disabled\) \{[^}]*box-shadow:0 4px 12px rgba\(29,29,31,.08\);/);
+    expect(ragChatCss).toContain("flex-wrap:nowrap; overflow-x:auto;");
+    expect(ragChatCss).toContain("max-width:none; white-space:nowrap;");
+  });
+
+  it("gives only newly sent user messages a reduced-motion-safe entrance", () => {
+    expect(ragChatCss).toContain(".erag-user-message.rag-chat-user-message--sent");
+    expect(ragChatCss).toContain("animation:rag-chat-user-message-send 260ms cubic-bezier(.22,1,.36,1) both;");
+    expect(ragChatCss).toContain("@keyframes rag-chat-user-message-send");
+    expect(ragChatCss).toMatch(/@media \(prefers-reduced-motion:reduce\)[\s\S]*\.erag-user-message\.rag-chat-user-message--sent \{ animation:none; \}/);
+  });
+
   it("uses five transparent-center radar levels and distinct marker states", () => {
+    expect(ragEvaluationCss).toContain("--rag-radar-score-muted:var(--sfp-muted,#6b7280);");
+    expect(ragEvaluationCss).toContain(".rag-radar-detail-score__earned.is-zero { color:var(--rag-radar-score-muted); }");
+    expect(ragEvaluationCss).toContain(".rag-radar-detail-score__maximum { color:var(--rag-radar-score-muted);");
     expect(ragRadar).toContain("const RADAR_INNER_RADIUS = 20;");
     expect(ragRadar).toContain("[20, 40, 60, 80, 100]");
     expect(ragRadar).not.toContain("rag-radar-tick");

@@ -2,6 +2,8 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RAG_SAMPLE_CASES } from "./rag-evaluation-cases";
+import { installRagPreviewFixtures } from "./rag-preview-fixture-loader";
+import { ragPreviewFixtures } from "./rag-preview-fixtures-data";
 import { ragPreviewHistoryStorageKey, useRagPreviewHistory, type RagPreviewConversationSnapshot } from "./useRagPreviewHistory";
 
 const sample = (question: string): RagPreviewConversationSnapshot => ({
@@ -9,6 +11,7 @@ const sample = (question: string): RagPreviewConversationSnapshot => ({
   question, answer: `回答${question}`, need: "了解产品", input: "草稿", caseId: null,
   dimensions: [], gates: [], mode: "manual", previewAnswerIdentity: `authored:${question}`, completedAt: 123,
 });
+installRagPreviewFixtures(ragPreviewFixtures);
 beforeEach(() => {
   vi.restoreAllMocks(); localStorage.clear();
   for (const scope of ["a", "b", "project-a"]) localStorage.setItem(ragPreviewHistoryStorageKey(scope), JSON.stringify({ seeded: true, conversations: [] }));

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RagEvaluationRadar } from "./RagEvaluationRadar";
 import { RAG_DIMENSIONS } from "./rag-evaluation";
 import type { EvaluationDimension } from "./evaluation-skill-contract";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const dimensions = (): EvaluationDimension[] => RAG_DIMENSIONS.map(d => ({
   id: d.id,
@@ -68,10 +68,48 @@ describe("five-layer transparent-center accessible radar", () => {
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("heading", { name: "正确与有据" })).toBeTruthy();
     expect(screen.queryByText("正确性与依据忠实度")).toBeNull();
-    expect(screen.getByText("22.5 / 25")).toBeTruthy();
-    expect(screen.getByText(/合成来源段落1/)).toBeTruthy();
+    expect(screen.getByLabelText("22.5 / 25")).toBeTruthy();
+    expect(screen.queryByText(/合成来源段落1/)).toBeNull();
+    const shell = document.querySelector(".rag-radar-detail-shell");
+    expect(shell?.classList.contains("is-open")).toBe(true);
     fireEvent.click(button);
-    expect(screen.queryByText("22.5 / 25")).toBeNull();
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(shell?.classList.contains("is-open")).toBe(false);
+    expect(shell?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("reveals a classic earned-over-maximum score and never exposes internal evidence IDs", () => {
+    let frameId = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    vi.stubGlobal("IntersectionObserver", undefined);
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; }));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn((id: number) => frames.delete(id)));
+    const runFrame = (timestamp: number) => act(() => {
+      const callbacks = [...frames.values()];
+      frames.clear();
+      callbacks.forEach(callback => callback(timestamp));
+    });
+    const items = dimensions();
+    items[0] = { ...items[0], score: 3.75, maxScore: 15, evidenceIds: ["promise-1", "audit:KB-SYN-v1"] };
+    render(<RagEvaluationRadar dimensions={items} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /需求满足 25%/ }));
+    const score = screen.getByLabelText("3.8 / 15");
+    const earned = screen.getByTestId("rag-radar-detail-earned");
+    const detailCharacters = [...document.querySelectorAll<HTMLElement>(".rag-radar-detail__content [aria-hidden='true'] > span")];
+    expect(score.querySelector(".rag-radar-detail-score__maximum")?.textContent).toBe("/15");
+    expect(earned.textContent).toBe("0.0");
+    expect(detailCharacters.length).toBeGreaterThan(2);
+    expect(detailCharacters[0].style.opacity).toBe("0");
+    expect(screen.queryByText(/promise-1|audit:KB-SYN-v1|证据：/)).toBeNull();
+    runFrame(0);
+    runFrame(400);
+    expect(earned.textContent).toBe("3.3");
+    expect(Number(detailCharacters[0].style.opacity)).toBeGreaterThan(Number(detailCharacters.at(-1)?.style.opacity ?? 0));
+    runFrame(800);
+    expect(earned.textContent).toBe("3.8");
+    expect(detailCharacters.at(-1)?.style.opacity).toBe("1");
   });
 
   it("keeps pending and N/A axes distinct without filling an incomplete area", () => {
@@ -120,6 +158,7 @@ describe("five-layer transparent-center accessible radar", () => {
 
   it("places six real zero scores on distinct inner-ring vertices", () => {
     const items = dimensions().map(item => ({ ...item, score: 0, status: "failed" as const }));
+    items[0] = { ...items[0], maxScore: 15 };
     render(<RagEvaluationRadar dimensions={items} />);
 
     const buttons = screen.getAllByTestId("rag-evaluation-dimension");
@@ -129,5 +168,11 @@ describe("five-layer transparent-center accessible radar", () => {
     expect(buttons.every(button => button.querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-zero"))).toBe(true);
     expect(buttons.every(button => !(button.style.left === "50%" && button.style.top === "50%"))).toBe(true);
     expect(screen.getByTestId("rag-radar-area")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /需求满足 0%/ }));
+    const earned = screen.getByTestId("rag-radar-detail-earned");
+    expect(earned.textContent).toBe("0.0");
+    expect(earned.classList.contains("is-zero")).toBe(true);
+    expect(earned.parentElement?.querySelector(".rag-radar-detail-score__maximum")?.textContent).toBe("/15");
+    expect(screen.getByLabelText("0.0 / 15")).toBeTruthy();
   });
 });

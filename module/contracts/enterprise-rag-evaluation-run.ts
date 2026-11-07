@@ -1012,9 +1012,18 @@ export type EnterpriseRagEvaluationAdmission = {
   updatedAt: string;
 };
 
+export type EnterpriseRagEvaluationAutomaticState =
+  | "recorded"
+  | "expected"
+  | "blocked"
+  | "not_enrolled";
+
 export type EnterpriseRagEvaluationHistoryDto = {
   latest: EnterpriseRagEvaluationRunDto | null;
   history: EnterpriseRagEvaluationRunDto[];
+  /** Read-only enrollment state for this exact answer coordinate. Optional
+   * only for rolling compatibility with an older server response. */
+  automaticState?: EnterpriseRagEvaluationAutomaticState;
   /** Trusted completed turn is awaiting its automatic operation reservation. */
   automaticExpected?: boolean;
   automaticAdmission?: EnterpriseRagEvaluationAdmission;

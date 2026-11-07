@@ -1,6 +1,7 @@
 import type {
   EnterpriseRagEvaluationHistoryDto,
   EnterpriseRagEvaluationAdmission,
+  EnterpriseRagEvaluationAutomaticState,
   EnterpriseRagEvaluationRunDto,
   EnterpriseRagEvaluationStartInput,
 } from "../../contracts/enterprise-rag-evaluation-run";
@@ -132,6 +133,24 @@ function parseAdmission(value: unknown): EnterpriseRagEvaluationAdmission | unde
     message: admission.message, updatedAt: admission.updatedAt };
 }
 
+function parseAutomaticState(
+  value: unknown,
+  history: readonly EnterpriseRagEvaluationRunDto[],
+  admission: EnterpriseRagEvaluationAdmission | undefined,
+  automaticExpected: boolean,
+): EnterpriseRagEvaluationAutomaticState {
+  if (value !== undefined) {
+    if (["recorded", "expected", "blocked", "not_enrolled"].includes(String(value))) {
+      return value as EnterpriseRagEvaluationAutomaticState;
+    }
+    throw new Error("自动评估状态暂时无法读取，请稍后重试。");
+  }
+  // Rolling compatibility with the previous additive DTO.
+  if (history.length > 0) return "recorded";
+  if (admission?.status === "blocked") return "blocked";
+  return automaticExpected ? "expected" : "not_enrolled";
+}
+
 function isRun(value: unknown): value is EnterpriseRagEvaluationRunDto {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const run = value as Record<string, unknown>;
@@ -227,11 +246,20 @@ export const liveEnterpriseRagEvaluationApi = {
     if (!Array.isArray(result.history)) {
       throw new Error("自动评估历史接口返回的数据结构不正确，请刷新后重试。");
     }
+    const history = result.history.map(parseRun);
+    const automaticAdmission = parseAdmission(result.automaticAdmission);
+    const automaticExpected = result.automaticExpected === true;
     return {
       latest,
-      history: result.history.map(parseRun),
-      ...(result.automaticExpected === true ? { automaticExpected: true } : {}),
-      ...(result.automaticAdmission ? { automaticAdmission: parseAdmission(result.automaticAdmission) } : {}),
+      history,
+      automaticState: parseAutomaticState(
+        result.automaticState,
+        history,
+        automaticAdmission,
+        automaticExpected,
+      ),
+      ...(automaticExpected ? { automaticExpected: true } : {}),
+      ...(automaticAdmission ? { automaticAdmission } : {}),
     };
   },
 

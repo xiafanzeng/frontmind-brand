@@ -676,6 +676,22 @@ describe("redesigned live website builder setup", () => {
     });
   });
 
+  it("derives a fresh formal assistant identity from the trusted company brief", async () => {
+    const current = recommendableObservation();
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ observation: current, onAction: vi.fn() }}
+        storageScope="live:7:trusted-assistant-identity"
+      />,
+    );
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("助手名称") as HTMLInputElement).value)
+        .toBe("测试企业 AI 助手"),
+    );
+  });
+
   it("shows the real-build progress bar with stage and elapsed time while a build runs", () => {
     const running = liveBuildObservation("awaiting_visual_selection");
     const startedAt = new Date(Date.now() - 3 * 60_000).toISOString();

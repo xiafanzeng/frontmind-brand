@@ -26,10 +26,18 @@
   backdrop-filter: blur(20px) saturate(180%);
 }
 .rag-eval-root .erag-stats { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.rag-eval-root .erag-stats strong { min-width:2ch; font-variant-numeric:tabular-nums; }
+.rag-eval-root .erag-stats[data-loading="true"] strong,
+.rag-eval-root .erag-stats[data-unavailable="true"] strong { display:inline-block; width:2ch; }
 .rag-eval-root .erag-composer input { min-width:0; }
 .rag-knowledge-row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; color:var(--sfp-muted); font-size:var(--sfp-type-caption); }
 .rag-eval-root .erag-knowledge-card .rag-knowledge-row > span { min-width:0; overflow-wrap:anywhere; }
 .rag-eval-root .erag-knowledge-card .rag-knowledge-row > button { flex:0 0 auto; margin-inline-start:auto; white-space:nowrap; }
+.rag-knowledge-gate { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-top:8px; padding-top:8px; border-top:1px solid color-mix(in srgb,var(--sfp-border) 72%,transparent); color:var(--sfp-muted); font-size:var(--sfp-type-caption); line-height:1.5; }
+.rag-knowledge-gate p { margin:0; }
+.rag-knowledge-gate > div { display:flex; flex:0 0 auto; align-items:center; gap:2px; }
+.rag-knowledge-gate .rag-knowledge-link { border:0; background:transparent; color:var(--sfp-accent); font:inherit; font-weight:600; padding:1px 5px; border-radius:6px; cursor:pointer; white-space:nowrap; }
+.rag-knowledge-gate .rag-knowledge-link:focus-visible { outline:2px solid var(--sfp-accent); outline-offset:2px; }
 .rag-preview-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:16px; }
 .rag-preview-tools .rag-case-picker { flex:1 1 220px; min-width:0; margin-top:0; }
 .rag-preview-tools .rag-case-picker select { min-width:0; }
@@ -43,7 +51,6 @@
 .rag-verdict.is-pending { --rag-status-color:#ff9f0a; --rag-status-glow:rgba(255,159,10,.2); border-color:#f0d9aa; background:#fffaf1; }
 .rag-verdict.is-danger { --rag-status-color:#d85b72; --rag-status-glow:rgba(216,91,114,.2); border-color:#e9b8c2; background:#fff4f5; }
 .rag-eval-root .rag-verdict.is-neutral { --rag-status-color:#aeaeb2; --rag-status-glow:rgba(174,174,178,.2); }
-.rag-eval-root .rag-verdict[data-evaluation-state="lifecycle"] .rag-evaluation-summary-copy { min-height:42px; }
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-read-retry,
 .rag-eval-root .rag-evaluation-read-retry { display:inline; min-height:0; margin-left:8px; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; color:var(--sfp-accent); font:inherit; cursor:pointer; }
 .rag-danger-text { color:#a1324d; }
@@ -337,6 +344,7 @@
 }
 .rag-case-status.is-pass { --rag-status-color:#30b56f; --rag-status-glow:rgba(48,181,111,.2); }
 .rag-case-status.is-fail { --rag-status-color:#ff9f0a; --rag-status-glow:rgba(255,159,10,.2); }
+.rag-case-status.is-pending { --rag-status-color:#ff9f0a; --rag-status-glow:rgba(255,159,10,.2); }
 .rag-case-status.is-unverified { --rag-status-color:#aeaeb2; --rag-status-glow:rgba(174,174,178,.2); }
 .rag-case-status.is-risk { --rag-status-color:#d85b72; --rag-status-glow:rgba(216,91,114,.2); }
 .rag-conversation__task { margin:0; font-size:var(--sfp-type-body); color:var(--sfp-ink); }
@@ -365,6 +373,8 @@
 @container sfp (max-width:400px) {
   .rag-eval-root .erag-evaluation-panel { padding:16px; }
   .rag-eval-root .rag-task-panel { padding: 16px; }
+  .rag-eval-root .rag-task-panel__heading { align-items:flex-start; flex-wrap:wrap; gap:8px 16px; }
+  .rag-eval-root .rag-task-panel__heading .rag-case-status { max-width:100%; white-space:normal; }
   .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-panel.erag-evaluation-panel,
   .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-panel.rag-task-panel { padding:16px; }
 }
@@ -399,9 +409,17 @@
   .rag-eval-root .rag-radar-point-control::before,
   .rag-eval-root .rag-radar-point-marker { transform:translate(var(--rag-point-relative-x,0),var(--rag-point-relative-y,0)); }
 }
-.rag-eval-root .rag-radar-detail { margin-top:12px; border:1px solid var(--sfp-line,#e5e5ed); border-radius:10px; padding:14px; overflow-wrap:anywhere; }
-.rag-eval-root .rag-radar-detail header { display:flex; justify-content:space-between; gap:12px; align-items:start; }
+.rag-eval-root .rag-radar-detail-shell { display:grid; grid-template-rows:0fr; opacity:0; transform:translateY(-8px); visibility:hidden; pointer-events:none; transition:grid-template-rows 300ms cubic-bezier(.25,.1,.25,1),opacity 300ms cubic-bezier(.25,.1,.25,1),transform 300ms cubic-bezier(.25,.1,.25,1),visibility 0s linear 300ms; }
+.rag-eval-root .rag-radar-detail-shell.is-open { grid-template-rows:1fr; opacity:1; transform:translateY(0); visibility:visible; pointer-events:auto; transition:grid-template-rows 300ms cubic-bezier(.25,.1,.25,1),opacity 300ms cubic-bezier(.25,.1,.25,1),transform 300ms cubic-bezier(.25,.1,.25,1),visibility 0s; }
+.rag-eval-root .rag-radar-detail-shell__inner { min-height:0; overflow:hidden; }
+.rag-eval-root .rag-radar-detail { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:start; margin-top:12px; border:1px solid var(--sfp-line,#e5e5ed); border-radius:10px; padding:14px; background:transparent; box-shadow:none; overflow-wrap:anywhere; }
+.rag-eval-root .rag-radar-detail__content { min-width:0; }
 .rag-eval-root .rag-radar-detail h3 { margin:0; font-size:14px; font-weight:600; letter-spacing:-.011em; }
+.rag-eval-root .rag-radar-detail-score { --rag-radar-score-muted:var(--sfp-muted,#6b7280); display:inline-flex; align-self:center; align-items:baseline; gap:1px; min-width:0; color:#7736a6; font-variant-numeric:tabular-nums; line-height:1; white-space:nowrap; }
+.rag-eval-root .rag-radar-detail-score__earned { color:#7736a6; font-size:30px; font-weight:600; letter-spacing:-.032em; }
+.rag-eval-root .rag-radar-detail-score__earned.is-zero { color:var(--rag-radar-score-muted); }
+.rag-eval-root .rag-radar-detail-score__maximum { color:var(--rag-radar-score-muted); font-size:12px; font-weight:500; letter-spacing:-.021em; }
+.rag-eval-root .rag-radar-detail-score.is-unavailable { color:var(--sfp-muted,#6b7280); font-size:12px; font-weight:600; letter-spacing:-.011em; line-height:1.5; }
 .rag-eval-root .rag-radar-detail article { border-top:1px solid var(--sfp-line,#e5e5ed); padding:10px 0; }
 .rag-eval-root .rag-radar-detail small { display:block; color:var(--sfp-muted,#6b7280); }
 .rag-eval-root .rag-radar-detail p { margin:6px 0; }
@@ -409,7 +427,15 @@
 .rag-eval-root .rag-optional-suggestions { margin:12px 0; color:var(--sfp-muted,#6b7280); font-size:12px; }
 .rag-eval-root .rag-optional-suggestions summary { cursor:pointer; min-height:32px; }
 .rag-eval-root .rag-risk-summary { border-left:3px solid #c65969; padding-left:10px; font-size:13px; }
-@container sfp (max-width:400px) { .rag-eval-root .rag-radar-label { width:68px; } }
+@container sfp (max-width:400px) {
+  .rag-eval-root .rag-radar-label { width:68px; }
+  .rag-eval-root .rag-radar-point-control { width:36px; height:36px; min-height:36px; }
+  .rag-eval-root .rag-radar-point-control::before { inset:2px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .rag-eval-root .rag-radar-detail-shell,
+  .rag-eval-root .rag-radar-detail-shell.is-open { transition:none; }
+}
 
 /* Approved Apple summary-and-gauge layout; the score geometry below is unchanged. */
 .rag-eval-root .erag-evaluation-panel__heading {
@@ -449,6 +475,25 @@
   box-shadow: 0 8px 24px rgba(29, 29, 31, 0.08);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   backdrop-filter: blur(20px) saturate(180%);
+}
+
+.rag-eval-root .rag-evaluation-overview[data-waiting="true"] { overflow:hidden; }
+
+.rag-eval-root .rag-evaluation-overview[data-waiting="true"]::after {
+  position:absolute;
+  z-index:4;
+  inset:0;
+  border-radius:inherit;
+  background:linear-gradient(100deg,transparent 28%,rgba(255,255,255,.52) 48%,transparent 68%);
+  background-size:220% 100%;
+  content:"";
+  pointer-events:none;
+  animation:rag-evaluation-surface-shimmer 1.6s linear infinite;
+}
+
+@keyframes rag-evaluation-surface-shimmer {
+  from { background-position:100% 0; }
+  to { background-position:-120% 0; }
 }
 
 .rag-eval-root .rag-evaluation-overview > .rag-verdict {
@@ -748,6 +793,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .rag-eval-root .rag-evaluation-gauge-marker { transition: none; }
+  .rag-eval-root .rag-evaluation-overview[data-waiting="true"]::after { display:none; animation:none; }
 }
 
 /* The right report column determines desktop height; history is contained. */

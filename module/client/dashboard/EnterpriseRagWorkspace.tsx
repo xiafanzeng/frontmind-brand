@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Conversation } from "../conversation-types";
-import { ragLiveTurns } from "./ai-website-preview/rag-live-turns";
+import { normalizeRagEpochMilliseconds, ragLiveTurns } from "./ai-website-preview/rag-live-turns";
 import {
   brandHost,
   ConversationPurposeProvider,
@@ -21,6 +21,8 @@ import {
   EnterpriseRagPreview,
   type EnterpriseRagLiveRuntime,
 } from "./ai-website-preview/EnterpriseRagPreview";
+import { hasUnresolvedGeneralChatDispatch } from "../lib/general-chat-dispatch-state";
+import { useRagStarterQuestions } from "./rag-starter-questions-api";
 
 import type { RagReportUrlBuilder } from "./ai-website-preview/rag-report-navigation";
 
@@ -40,6 +42,14 @@ type EnterpriseRagLiveWorkspaceProps = EnterpriseRagWorkspaceProps & {
   allowConversationCreation: boolean;
 };
 
+function conversationDeletionBlocked(conversation: Conversation) {
+  if (hasUnresolvedGeneralChatDispatch(conversation.messages)) return true;
+  if (conversation.status !== "running" && conversation.status !== "pending") return false;
+  // Old website-assistant rows can retain a running scalar after the server
+  // final is already present. Only an actually unanswered latest turn remains locked.
+  return !ragLiveTurns(conversation, false).at(-1)?.answer;
+}
+
 function EnterpriseRagLiveWorkspace({
   currentPublication,
   retryCurrentPublication,
@@ -52,8 +62,10 @@ function EnterpriseRagLiveWorkspace({
   buildReportUrl,
 }: EnterpriseRagLiveWorkspaceProps) {
   const workspace = useConversation();
+  const starterQuestions = useRagStarterQuestions(true);
   const creating = useRef(false);
   const pendingDelete = useRef<{ id: string; wasActive: boolean; resolve: (ok: boolean) => void } | null>(null);
+  const deletingIdRef = useRef<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [newDraft, setNewDraft] = useState<{ key: string; explicit: boolean } | null>(() => ({ key: `draft:${crypto.randomUUID()}`, explicit: true }));
   const [draftAdoptedFrom, setDraftAdoptedFrom] = useState<string>();
@@ -63,11 +75,24 @@ function EnterpriseRagLiveWorkspace({
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
   const activeIdRef = useRef(active?.id ?? null);
-  useEffect(() => { activeIdRef.current = active?.id ?? null; }, [active?.id]);
-  useEffect(() => () => { pendingDelete.current?.resolve(false); pendingDelete.current = null; }, []);
+  useEffect(() => {
+    // The host clears an active row while acknowledging its deletion. Keep
+    // the last explicit selection until the removal effect can choose the
+    // successor; explicit history/new-draft navigation updates this ref
+    // synchronously and therefore remains authoritative during that window.
+    if (active?.id) activeIdRef.current = active.id;
+    else if (!pendingDelete.current) activeIdRef.current = null;
+  }, [active?.id]);
+  useEffect(() => () => {
+    pendingDelete.current?.resolve(false);
+    pendingDelete.current = null;
+    deletingIdRef.current = null;
+  }, []);
   const conversations = workspace.state.conversations.filter(item =>
     item.purpose === "enterprise_qa" || (!item.purpose && item.workbenchAgentId === "enterprise-qa"),
-  ).sort((a, b) => b.updatedAt - a.updatedAt);
+  ).sort((a, b) =>
+    (normalizeRagEpochMilliseconds(b.updatedAt) ?? Number.NEGATIVE_INFINITY) -
+    (normalizeRagEpochMilliseconds(a.updatedAt) ?? Number.NEGATIVE_INFINITY));
   const historyBusy = false;
   const localTaskId = active?.previousResponseId ?? active?.taskId ?? null;
   const { source: taskSource, retry: retryTaskSource } =
@@ -104,6 +129,7 @@ function EnterpriseRagLiveWorkspace({
 
   const startNewConversation = useCallback(() => {
     if (creating.current) return;
+    activeIdRef.current = null;
     setNewDraft({ key: `draft:${crypto.randomUUID()}`, explicit: true });
     setDraftAdoptedFrom(undefined);
     setSelectedAnswerKey(null);
@@ -118,14 +144,16 @@ function EnterpriseRagLiveWorkspace({
     if (!pending) return;
     if (workspace.syncError) {
       pendingDelete.current = null;
+      deletingIdRef.current = null;
       setDeletingId(null);
       pending.resolve(false);
       return;
     }
     if (conversations.some(item => item.id === pending.id)) return;
     pendingDelete.current = null;
+    deletingIdRef.current = null;
     setDeletingId(null);
-    if (!pending.wasActive || (workspace.activeConversation && workspace.activeConversation.id !== pending.id)) {
+    if (!pending.wasActive || activeIdRef.current !== pending.id) {
       pending.resolve(true);
       return;
     }
@@ -138,6 +166,10 @@ function EnterpriseRagLiveWorkspace({
       workspace.setActive(next.id);
       setWorkbenchTaskQuery(next.id);
     } else {
+      activeIdRef.current = null;
+      setNewDraft({ key: `draft:${crypto.randomUUID()}`, explicit: true });
+      setDraftAdoptedFrom(undefined);
+      setSelectedAnswerKey(null);
       const url = new URL(window.location.href);
       url.searchParams.delete("workbenchTask");
       window.history.replaceState(window.history.state, "", url);
@@ -160,9 +192,27 @@ function EnterpriseRagLiveWorkspace({
   const selectedTaskId = selectedTurn?.taskId;
   const { source: otherAnswerSource } = useEnterpriseQaKnowledgeSource(selectedTaskId, Boolean(selectedTaskId && selectedTaskId !== localTaskId));
   const reviewSource = selectedTaskId === localTaskId ? taskSource : otherAnswerSource;
-  const reviewKnowledge = selectedTaskId ? selectedTaskId === localTaskId ? knowledgeBase : reviewSource.knowledgeBase : newDraft ? currentPublication.knowledgeBase : null;
+  const localReplyKnowledge = selectedTurn?.knowledgeBase ?? null;
+  const reviewKnowledge = selectedTaskId
+    ? selectedTaskId === localTaskId ? knowledgeBase : reviewSource.knowledgeBase
+    : localReplyKnowledge ?? (newDraft ? currentPublication.knowledgeBase : null);
   const userMessage = active?.messages.findLast(message => message.role === "user");
-  const previousTurns = turns.slice(0, -1);
+  const knowledgeForTurn = (turn: (typeof turns)[number]) => turn.knowledgeBase
+    ?? (turn.taskId && turn.taskId === localTaskId ? boundTaskKnowledgeBase : null)
+    ?? (turn.answerKey === selectedTurn?.answerKey ? reviewKnowledge : null)
+    ?? undefined;
+  const presentedCurrentTurn = currentTurn
+    ? { ...currentTurn, knowledgeBase: knowledgeForTurn(currentTurn) }
+    : undefined;
+  const previousTurns = turns.slice(0, -1).map(turn => ({
+    ...turn,
+    knowledgeBase: knowledgeForTurn(turn),
+  }));
+  const conversationReady = Boolean(newDraft || active?.purpose === "enterprise_qa");
+  const conversationKnowledgeReady = localTaskId
+    ? Boolean(boundTaskKnowledgeBase)
+    : allowConversationCreation;
+  const canCompose = conversationReady && conversationKnowledgeReady;
 
   const steering = controller.steering;
   const persistedQuestion = userMessage?.content || "";
@@ -172,8 +222,8 @@ function EnterpriseRagLiveWorkspace({
     !persistedQuestion.startsWith(`${steering.effectiveQuestion}\n\n补充：`)
     ? steering.effectiveQuestion : persistedQuestion;
   const live: EnterpriseRagLiveRuntime = {
-    loaded: selectedTaskId ? reviewSource.loaded || Boolean(reviewKnowledge) : loaded,
-    failed: selectedTaskId ? reviewSource.failed && !reviewKnowledge : failed,
+    loaded: selectedTaskId ? reviewSource.loaded || Boolean(reviewKnowledge) : localReplyKnowledge ? true : loaded,
+    failed: selectedTaskId ? reviewSource.failed && !reviewKnowledge : localReplyKnowledge ? false : failed,
     refreshFailed: Boolean(
       selectedSource.refreshFailed || currentPublication.refreshFailed,
     ),
@@ -185,14 +235,17 @@ function EnterpriseRagLiveWorkspace({
         : enterpriseQaProviderLabel(selectedSource.provider),
     knowledgeBase: reviewKnowledge ?? null,
     currentKnowledgeBase: currentPublication.knowledgeBase ?? null,
-    knowledgeBinding: selectedTurn?.answer && !selectedTaskId ? "historical_unknown" : selectedTaskId ? reviewKnowledge ? "frozen_task" : "historical_unknown" : knowledgeBinding,
+    knowledgeBinding: selectedTurn?.answer && !selectedTaskId
+      ? localReplyKnowledge ? "frozen_task" : "historical_unknown"
+      : selectedTaskId ? reviewKnowledge ? "frozen_task" : "historical_unknown" : knowledgeBinding,
     conversationId: newDraft?.key ?? active?.id ?? new URL(location.href).searchParams.get("workbenchTask") ?? undefined,
     draftAdoptedFrom,
     onDraftInput: () => { if (newDraft && !newDraft.explicit) setNewDraft({ ...newDraft, explicit: true }); },
     taskId: selectedTurn?.taskId,
     turnId: selectedTurn?.turnId,
-    conversationReady: Boolean(newDraft || active?.purpose === "enterprise_qa"),
-    canSend: !controller.busy && !controller.pendingDispatch && Boolean(newDraft || active?.purpose === "enterprise_qa"),
+    conversationReady,
+    canCompose,
+    canSend: canCompose && !controller.busy && !controller.pendingDispatch,
     question: selectedTurn?.question ?? "",
     questionId: selectedTurn?.questionId,
     answer: selectedTurn?.answer ?? "",
@@ -202,7 +255,7 @@ function EnterpriseRagLiveWorkspace({
     evaluationNotRequired: selectedTurn?.evaluation === "not_required",
     selectedAnswerKey: selectedTurn?.answerKey,
     onSelectAnswer: key => { if (turns.some(turn => turn.answerKey === key && turn.answer && turn.evaluation !== "not_required")) setSelectedAnswerKey(key); },
-    chat: { question: effectiveQuestion, answer: currentTurn?.answer ?? "", answerKey: currentTurn?.answerKey ?? `draft:${newDraft?.key ?? active?.id ?? "new"}`, sources: currentTurn?.sources ?? [], completedAt: currentTurn?.completedAt, evaluation: currentTurn?.evaluation },
+    chat: { question: effectiveQuestion, answer: presentedCurrentTurn?.answer ?? "", answerKey: presentedCurrentTurn?.answerKey ?? `draft:${newDraft?.key ?? active?.id ?? "new"}`, sources: presentedCurrentTurn?.sources ?? [], completedAt: presentedCurrentTurn?.completedAt, evaluation: presentedCurrentTurn?.evaluation, knowledgeBase: presentedCurrentTurn?.knowledgeBase ?? (newDraft ? currentPublication.knowledgeBase : undefined) },
     sources: (selectedTurn?.sources ?? []) as EnterpriseRagLiveRuntime["sources"],
     busy: controller.busy,
     running: controller.running,
@@ -219,6 +272,7 @@ function EnterpriseRagLiveWorkspace({
     pendingDispatchQuestion: controller.pendingDispatch?.question,
     notice: controller.notice || workspace.syncError || undefined,
     onAsk: async (question) => {
+      if (!canCompose) return false;
       setSelectedAnswerKey(null);
       if (!newDraft) return controller.send(question, []);
       if (creating.current) return false;
@@ -241,12 +295,36 @@ function EnterpriseRagLiveWorkspace({
     },
     onStartNewConversation: startNewConversation,
     onOpenKnowledge: () => navigateWithinWorkspace("/?view=knowledge"),
+    starterQuestions: {
+      current: starterQuestions.data?.current
+        ? { id: starterQuestions.data.current.id, questions: starterQuestions.data.current.questions }
+        : null,
+      draft: starterQuestions.data?.draft
+        ? { id: starterQuestions.data.draft.id, questions: starterQuestions.data.draft.questions }
+        : null,
+      pending: starterQuestions.data?.pending ?? false,
+      error: starterQuestions.data?.error ?? starterQuestions.error?.message ?? null,
+      revision: starterQuestions.data?.revision ?? 0,
+    },
+    onConfirmStarterQuestions: async questions => {
+      await starterQuestions.confirm(questions);
+      return true;
+    },
+    onRegenerateStarterQuestions: async () => {
+      await starterQuestions.regenerate();
+      return true;
+    },
+    onDiscardStarterDraft: async () => {
+      await starterQuestions.discard();
+      return true;
+    },
     conversationHistory: {
       items: conversations.map(item => {
         const firstQuestion = item.messages.find(message => message.role === "user" && message.content.trim())?.content;
         const title = (!item.title || item.title === "企业问答") && firstQuestion ? firstQuestion.replace(/\s+/gu, " ").trim() : item.title || "新问答";
-        return { id: item.id, title, subtitle: Number.isFinite(item.updatedAt) ? new Date(item.updatedAt).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : undefined,
-          deletingDisabled: item.status === "running" || item.status === "pending" || item.messages.some(message => Boolean(message.generalChatDispatch)) };
+        const updatedAt = normalizeRagEpochMilliseconds(item.updatedAt);
+        return { id: item.id, title, subtitle: updatedAt !== undefined ? new Date(updatedAt).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : undefined,
+          deletingDisabled: conversationDeletionBlocked(item) };
       }),
       activeId: newDraft ? null : active?.id,
       loading: !workspace.hydrated || workspace.loading,
@@ -255,6 +333,7 @@ function EnterpriseRagLiveWorkspace({
       deletingId,
       onOpen: () => { void workspace.refreshConversations(); },
       onSelect: (id: string) => {
+        if (deletingIdRef.current === id) return false;
         const item = workspaceRef.current.state.conversations.find(candidate => candidate.id === id && (candidate.purpose === "enterprise_qa" || (!candidate.purpose && candidate.workbenchAgentId === "enterprise-qa")));
         if (!item) return false;
         setNewDraft(null); setDraftAdoptedFrom(undefined); setSelectedAnswerKey(null);
@@ -265,14 +344,16 @@ function EnterpriseRagLiveWorkspace({
       },
       onDelete: (id: string) => {
         const item = workspaceRef.current.state.conversations.find(candidate => candidate.id === id && (candidate.purpose === "enterprise_qa" || (!candidate.purpose && candidate.workbenchAgentId === "enterprise-qa")));
-        if (!item || item.status === "running" || item.status === "pending" || (id === activeIdRef.current && controller.pendingDispatch) || item.messages.some(message => Boolean(message.generalChatDispatch)) || pendingDelete.current) return Promise.resolve(false);
+        if (!item || (id === activeIdRef.current && controller.pendingDispatch) || conversationDeletionBlocked(item) || pendingDelete.current) return Promise.resolve(false);
         return new Promise<boolean>(resolve => {
           workspaceRef.current.clearSyncError();
           pendingDelete.current = { id, wasActive: id === activeIdRef.current, resolve };
+          deletingIdRef.current = id;
           setDeletingId(id);
           const fail = () => {
             if (pendingDelete.current?.id !== id) return;
             pendingDelete.current = null;
+            deletingIdRef.current = null;
             setDeletingId(null);
             resolve(false);
           };

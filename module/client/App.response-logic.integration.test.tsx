@@ -73,6 +73,14 @@ beforeEach(async () => {
 afterEach(cleanup);
 
 describe("standalone response-logic navigation (integration)", () => {
+  it("uses the same spaced AI website label as the formal dashboard", async () => {
+    window.history.replaceState({}, "", "/?view=enterprise-qa");
+    render(<App preview />);
+
+    expect((await screen.findByRole("button", { name: "AI 专用官网" })).getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByRole("button", { name: "AI专用官网" })).toBeNull();
+  });
+
   it("returns from the workbench to the same filtered catalog selection", async () => {
     window.history.replaceState({}, "", "/?view=intent");
     render(<App preview />);

@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GeneralChatDispatchMetadata } from "@frontmind/module-contracts/chat-dispatch";
-import { enterpriseQaLocalReplyMetadataSchema } from "@frontmind/module-contracts/enterprise-qa-experience";
-import type { EnterpriseQaLocalReply as LocalReply, EnterpriseQaQueuedFollowupReceipt as QueuedReply, EnterpriseQaFollowupItem as EnterpriseQaFollowup, EnterpriseQaFollowupSnapshot as FollowupSnapshot } from "@frontmind/module-contracts/enterprise-qa-experience";
+import type { EnterpriseQaQueuedFollowupReceipt as QueuedReply, EnterpriseQaFollowupItem as EnterpriseQaFollowup, EnterpriseQaFollowupSnapshot as FollowupSnapshot } from "@frontmind/module-contracts/enterprise-qa-experience";
 import { brandHost, useConversation } from "./host";
 import type { Conversation, LocalMessage } from "./conversation-types";
 import type { TaskResponse } from "./lib/frontmind-api";
+import {
+  enterpriseQaLocalReplyWithKnowledgeSchema,
+  type EnterpriseQaLocalReplyWithKnowledge as LocalReply,
+} from "./lib/enterprise-qa-local-reply";
 import { readEnterpriseQaSteering, type EnterpriseQaSteering } from "./enterprise-qa-steering";
 import {
   isQaTaskTerminal,
   startEnterpriseQaPolling,
 } from "./enterprise-qa-polling";
+import { latestBrowserOwnedUnresolvedGeneralChatDispatch } from "./lib/general-chat-dispatch-state";
 
 type QaTask = {
   object?: "frontmind.local_task";
@@ -204,14 +208,12 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
         setOwnerNotice(conversation.id, "请先选择企业问答任务");
         return false;
       }
-      const ownedPending = conversation.messages.findLast(message => message.role === "user" && message.generalChatDispatch && !message.enterpriseQaFollowup?.serverOwned);
+      const ownedPending = latestBrowserOwnedUnresolvedGeneralChatDispatch(conversation.messages);
       if (!ownedPending && evaluationIntent && !attachments.length && (["running", "pending"].includes(conversation.status) || (followupStates.current.get(conversation.id)?.items.some(item => ["queued", "dispatching", "failed"].includes(item.status)) ?? false))) return enqueueFollowup(text);
       sendingOwners.current.add(conversation.id); redraw(value => value + 1);
       setOwnerNotice(conversation.id, "");
       try {
-        let pending = conversation.messages.findLast(
-          (message) => message.role === "user" && message.generalChatDispatch && !message.enterpriseQaFollowup?.serverOwned,
-        );
+        let pending = latestBrowserOwnedUnresolvedGeneralChatDispatch(conversation.messages);
         if (pending && pending.content !== text) {
           throw new Error("上一条消息尚未确认，请先重试该消息。");
         }
@@ -317,11 +319,11 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
           return true;
         }
         if (result.object === "frontmind.local_reply") {
-          const marker = enterpriseQaLocalReplyMetadataSchema.safeParse(result.enterpriseQaLocalReply);
+          const marker = enterpriseQaLocalReplyWithKnowledgeSchema.safeParse(result.enterpriseQaLocalReply);
           if (result.conversationId !== conversation.id || result.userMessageId !== pending.id || result.evaluation !== "not_required" || !marker.success || marker.data.turnId !== result.turnId || marker.data.answerMessageId !== result.answerMessageId || marker.data.userMessageId !== result.userMessageId) throw new Error("回复身份尚未确认，请重试读取。");
           contextRef.current.addMessage(conversation.id, {
             id: result.answerMessageId, role: "assistant", content: result.content, timestamp: result.completedAt,
-            enterpriseQaLocalReply: result.enterpriseQaLocalReply,
+            enterpriseQaLocalReply: marker.data,
           });
           contextRef.current.settleGeneralChatDispatch(conversation.id, pending.id);
           contextRef.current.updateStatus(conversation.id, "completed");
@@ -392,13 +394,14 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
   }, [request, evaluationIntent]);
 
   const running = ["running", "pending"].includes(active?.status ?? "");
-  const pendingMessage = active?.messages.findLast(
-    (message) => message.role === "user" && Boolean(message.generalChatDispatch) && !message.enterpriseQaFollowup?.serverOwned,
-  );
+  const pendingMessage = active
+    ? latestBrowserOwnedUnresolvedGeneralChatDispatch(active.messages)
+    : undefined;
   const retryPending = useCallback(async () => {
-    const pending = contextRef.current.activeConversation?.messages.findLast(
-      (message) => message.role === "user" && Boolean(message.generalChatDispatch) && !message.enterpriseQaFollowup?.serverOwned,
-    );
+    const messages = contextRef.current.activeConversation?.messages;
+    const pending = messages
+      ? latestBrowserOwnedUnresolvedGeneralChatDispatch(messages)
+      : undefined;
     return pending ? send(pending.content, []) : false;
   }, [send]);
   const activeTaskId = active?.previousResponseId ?? active?.taskId;
@@ -412,7 +415,7 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
     if (!conversation || !taskId || !userId || !value || preview) return false;
     if (!steering?.supported || steeringState?.conversationId !== conversation.id ||
       steeringState.userId !== userId || !["running", "pending"].includes(conversation.status)) {
-      throw new Error("当前回答暂不支持本轮补充，输入内容已保留。");
+      return false;
     }
     const turnId = steering.turnId;
     const owner = JSON.stringify([conversation.id, taskId, turnId, userId]);
