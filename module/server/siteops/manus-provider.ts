@@ -427,6 +427,22 @@ const providerBuildCheckpointSchema = z.enum([
 export const NATIVE_SOURCE_VALIDATOR_VERSION =
   "native-react-source-and-build-v5.2026-08-30" as const;
 
+const STAGED_DOCUMENT_VIEW_RECOVERY_VALIDATOR_VERSION =
+  "isolated-route-context-v1" as const;
+
+const legacyStagedDocumentViewRecoverySchema = z.object({
+  verdictSignature: z.string().regex(/^[a-f0-9]{64}$/u),
+  startedAt: z.string().datetime().optional(),
+}).strict();
+
+const stagedDocumentViewRecoverySchema = z.union([
+  legacyStagedDocumentViewRecoverySchema,
+  legacyStagedDocumentViewRecoverySchema.extend({
+    validatorVersion: z.literal(STAGED_DOCUMENT_VIEW_RECOVERY_VALIDATOR_VERSION),
+    previousStartedAt: z.string().datetime().optional(),
+  }),
+]);
+
 const nativeSourceAttachmentScopeSchema = z
   .object({
     taskId: z.string().min(1).max(255),
@@ -790,10 +806,7 @@ const providerStateV2Schema = providerStateV1Schema
       .optional(),
     artifactStaging: formalBuildArtifactStagingSchema.optional(),
     existingTaskOnly: z.boolean().optional(),
-    stagedDocumentViewRecovery: z.object({
-      verdictSignature: z.string().regex(/^[a-f0-9]{64}$/u),
-      startedAt: z.string().datetime().optional(),
-    }).strict().optional(),
+    stagedDocumentViewRecovery: stagedDocumentViewRecoverySchema.optional(),
     fallbackPreviewFailureCount: z
       .number()
       .int()
@@ -2911,23 +2924,54 @@ function stagedDocumentViewRejection(
   return verdict;
 }
 
+function recoveryStartedAfterRejection(
+  startedAt: string,
+  rejectedAt: string,
+  now: Date,
+) {
+  const started = Date.parse(startedAt);
+  return started > Date.parse(rejectedAt) && started < now.getTime();
+}
+
 /** Admit only the same staged source rejected after a browser-audit failure.
  * The CLI separately checks the failed revision and its project ownership. */
 export function existingTaskOnlyStagedDocumentViewRecoveryState(
   input: StagedDocumentViewRecoveryCoordinates & { result: unknown },
 ) {
   const parsed = providerStateV2Schema.safeParse(input.result);
-  if (!parsed.success || parsed.data.existingTaskOnly || parsed.data.stagedDocumentViewRecovery) {
+  if (!parsed.success) {
     throw new Error("SITEOPS_RECONCILE_STAGED_DOCUMENT_VIEW_STATE_INVALID");
   }
   const state = parsed.data;
-  const verdict = stagedDocumentViewRejection(state, input);
+  const now = input.now ?? new Date();
+  const verdict = stagedDocumentViewRejection(state, { ...input, now });
   if (!verdict) throw new Error("SITEOPS_RECONCILE_STAGED_DOCUMENT_VIEW_STATE_INVALID");
-  return transitionProviderState(state, {
-    stage: state.stage,
-    existingTaskOnly: true,
-    stagedDocumentViewRecovery: { verdictSignature: verdict.verdictSignature },
-  });
+  let previousStartedAt: string | undefined;
+  if (state.existingTaskOnly || state.stagedDocumentViewRecovery) {
+    const previous = state.stagedDocumentViewRecovery;
+    if (
+      state.existingTaskOnly !== true ||
+      !previous?.startedAt ||
+      "validatorVersion" in previous ||
+      previous.verdictSignature !== verdict.verdictSignature ||
+      !recoveryStartedAfterRejection(previous.startedAt, verdict.rejectedAt, now)
+    ) {
+      throw new Error("SITEOPS_RECONCILE_STAGED_DOCUMENT_VIEW_STATE_INVALID");
+    }
+    previousStartedAt = previous.startedAt;
+  }
+  return {
+    resumedConsumedRecovery: previousStartedAt !== undefined,
+    recoveryState: transitionProviderState(state, {
+      stage: state.stage,
+      existingTaskOnly: true,
+      stagedDocumentViewRecovery: {
+        verdictSignature: verdict.verdictSignature,
+        validatorVersion: STAGED_DOCUMENT_VIEW_RECOVERY_VALIDATOR_VERSION,
+        ...(previousStartedAt ? { previousStartedAt } : {}),
+      },
+    }),
+  };
 }
 
 export function existingTaskOnlyBoundFallback(result: unknown) {
@@ -10445,6 +10489,8 @@ export function createManusSiteOpsProviderHandler(
         const { contentPlanLocalAssetId, contentPlanSha256 } = context.build;
         if (
           !marker ||
+          !("validatorVersion" in marker) ||
+          marker.validatorVersion !== STAGED_DOCUMENT_VIEW_RECOVERY_VALIDATOR_VERSION ||
           marker.startedAt ||
           !recoveryState?.existingTaskOnly ||
           context.build.workflowVersion !== SITEOPS_MATERIALIZER_V2_9.frontMindVersion ||
@@ -10456,6 +10502,7 @@ export function createManusSiteOpsProviderHandler(
         ) {
           throw stagedDocumentViewRecoveryUnavailable(state);
         }
+        const now = new Date();
         const verdict = stagedDocumentViewRejection(recoveryState, {
           taskId: operation.providerTaskId,
           operationId: operation.id,
@@ -10463,8 +10510,14 @@ export function createManusSiteOpsProviderHandler(
           projectId: operation.projectId,
           contentPlanLocalAssetId,
           contentPlanSha256,
+          now,
         });
-        if (verdict?.verdictSignature !== marker.verdictSignature) {
+        if (
+          !verdict ||
+          verdict.verdictSignature !== marker.verdictSignature ||
+          (marker.previousStartedAt &&
+            !recoveryStartedAfterRejection(marker.previousStartedAt, verdict.rejectedAt, now))
+        ) {
           throw stagedDocumentViewRecoveryUnavailable(state);
         }
       }

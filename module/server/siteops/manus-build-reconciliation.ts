@@ -218,9 +218,12 @@ export function prepareExistingManusBuildReconciliation(
     };
   }
 
-  let recoveryState: Record<string, unknown>;
+  let recovery: {
+    recoveryState: Record<string, unknown>;
+    resumedConsumedRecovery: boolean;
+  };
   try {
-    recoveryState = stagedPlan
+    recovery = stagedPlan
       ? existingTaskOnlyStagedDocumentViewRecoveryState({
           result: operation.result,
           taskId: operation.providerTaskId,
@@ -231,10 +234,13 @@ export function prepareExistingManusBuildReconciliation(
           contentPlanSha256: stagedPlan.sha256,
           now,
         })
-      : existingTaskOnlyRecoveryState({
-          result: operation.result,
-          taskId: operation.providerTaskId,
-        });
+      : {
+          recoveryState: existingTaskOnlyRecoveryState({
+            result: operation.result,
+            taskId: operation.providerTaskId,
+          }),
+          resumedConsumedRecovery: false,
+        };
   } catch {
     reject(
       stagedPlan
@@ -242,6 +248,7 @@ export function prepareExistingManusBuildReconciliation(
         : "SITEOPS_RECONCILE_NATIVE_REPAIR_STATE_REQUIRED",
     );
   }
+  const { recoveryState, resumedConsumedRecovery } = recovery;
   const boundFallbackMarker = stagedPlan ? null : existingTaskOnlyBoundFallback(recoveryState);
   const boundFallback = boundFallbackMarker?.artifactBindings ?? null;
   const genericFailure =
@@ -296,12 +303,14 @@ export function prepareExistingManusBuildReconciliation(
   if (turn.enterpriseProjectId !== project.enterpriseProjectId) {
     reject("SITEOPS_RECONCILE_PROJECT_SCOPE_MISMATCH");
   }
+  // A completed revalidation increments the revision once in the terminal worker transaction.
+  const expectedRevisionDelta = resumedConsumedRecovery ? 3 : 2;
   if (
     !operation.conversationTurnId ||
     turn.id !== operation.conversationTurnId ||
     turn.userId !== build.userId ||
     turn.expectedRevision === null ||
-    project.revision !== turn.expectedRevision + 2
+    project.revision !== turn.expectedRevision + expectedRevisionDelta
   ) {
     reject("SITEOPS_RECONCILE_PROJECT_REVISION_CHANGED");
   }
