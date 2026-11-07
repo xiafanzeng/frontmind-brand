@@ -43,18 +43,20 @@ export type ManagedKeywordQuotaAvailability = Partial<
   >
 >;
 
+export type ManagedKeywordQuestionSelection = {
+  question: string;
+  category: KeywordCategoryKey;
+  tableId: string;
+  rowIndex: number;
+  dashboardRevision?: number;
+  workbenchTaskId?: string;
+};
+
 export type ManagedKeywordTablesProps = {
   tables: ManagedKeywordTable[];
   loading?: boolean;
   error?: unknown;
-  onUseQuestion?: (question: {
-    question: string;
-    category: KeywordCategoryKey;
-    tableId: string;
-    rowIndex: number;
-    dashboardRevision?: number;
-    workbenchTaskId?: string;
-  }) => void;
+  onUseQuestion?: (question: ManagedKeywordQuestionSelection) => void;
   /** Optional batch intake; existing host-owned single selection stays compatible. */
   onUseQuestions?: (questions: Array<{
     question: string; category: KeywordCategoryKey; tableId: string;
@@ -68,6 +70,9 @@ export type ManagedKeywordTablesProps = {
   selectedKeyword?: { tableId: string; rowIndex: number } | null;
   optimizationState?: IntentState;
   onViewEvaluation?: (questionId: string) => void;
+  onViewEvaluationTask?: (jobId: string) => void;
+  onEvaluateQuestion?: (question: ManagedKeywordQuestionSelection) => void;
+  evaluationPending?: boolean;
 };
 
 const KEYWORD_SOURCE_DESCRIPTION =
@@ -205,6 +210,9 @@ export default function ManagedKeywordTables({
   selectedKeyword,
   optimizationState,
   onViewEvaluation,
+  onViewEvaluationTask,
+  onEvaluateQuestion,
+  evaluationPending = false,
 }: ManagedKeywordTablesProps) {
   const { isWorkbench } = useBusinessWorkspace();
   const utils = trpc.useUtils();
@@ -530,6 +538,8 @@ export default function ManagedKeywordTables({
                             : undefined;
                           const linked = optimizationState ? findCatalogQuestion({question, tableId: table.id, rowIndex}, optimizationState.questions) : undefined;
                           const evaluation = linked ? optimizationState?.evaluations.find(item => item.questionId === linked.id) : undefined;
+                          const evaluationJob = optimizationState?.jobs?.find(job => !["succeeded", "failed"].includes(job.status));
+                          const evaluating = linked && evaluationJob?.kind === "evaluate" && evaluationJob.questionIds.includes(linked.id);
                           const selectionKey = `${table.id}:${rowIndex}`;
                           const isSelected = Boolean(batchSelection[selectionKey]);
                           const selectionDisabled = (isWorkbench && dashboardRevision == null) || !question || !category || quotaAccess?.available === false;
@@ -563,10 +573,25 @@ export default function ManagedKeywordTables({
                                   checked={isSelected}
                                   disabled={selectionDisabled}
                                   onChange={toggleSelection}/><span>{isSelected ? "已选择" : "选择词条"}</span></label>
-                                {evaluation && linked && onViewEvaluation ? <button type="button" className="keyword-evaluation-button" aria-label={`查看评估：${question}`} title="查看完整评估" onClick={() => onViewEvaluation(linked.id)}>
+                                {evaluating && evaluationJob && onViewEvaluationTask ? <button type="button" className="keyword-evaluation-button"
+                                  aria-label={`查看评估详情：${question}`} title="查看当前评估任务的进度"
+                                  onClick={() => onViewEvaluationTask(evaluationJob.id)}>
+                                  <span>{evaluationJob.status === "paused" ? "评估已暂停" : evaluationJob.status === "pausing" ? "正在暂停" : evaluationJob.status === "resuming" ? "正在继续" : "评估中"} · 查看详情</span>
+                                  <ChevronRight size={14} aria-hidden="true"/>
+                                </button> : evaluation && linked && onViewEvaluation ? <button type="button" className="keyword-evaluation-button" aria-label={`查看评估：${question}`} title="查看完整评估" onClick={() => onViewEvaluation(linked.id)}>
                                   <span className="keyword-evaluation-metric"><span>价值</span><strong>{evaluation.value}</strong></span>
                                   <span className="keyword-evaluation-divider" aria-hidden="true"/>
                                   <span className="keyword-evaluation-metric"><span>支撑</span><strong>{evaluation.support}</strong></span>
+                                  <ChevronRight size={14} aria-hidden="true"/>
+                                </button> : optimizationState && onEvaluateQuestion ? <button type="button" className="keyword-evaluation-button keyword-evaluation-start"
+                                  aria-label={`评估问题：${question}`}
+                                  title={evaluationJob ? "请先完成当前评估任务" : "评估当前词条"}
+                                  disabled={selectionDisabled || evaluationPending || Boolean(evaluationJob)}
+                                  onClick={() => {
+                                    if (!category) return;
+                                    onEvaluateQuestion({question, category, tableId: table.id, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})});
+                                  }}>
+                                  <span>{evaluating ? evaluationJob?.status === "paused" ? "评估已暂停" : "评估中…" : evaluationPending ? "正在处理…" : "评估问题"}</span>
                                   <ChevronRight size={14} aria-hidden="true"/>
                                 </button> :
                                   <small>{!optimizationState ? "优化状态尚未读取" : linked ? "已在优化清单 · 待评估" : "尚未加入优化"}</small>}

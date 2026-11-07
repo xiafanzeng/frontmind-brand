@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import App from "../../standalone/App";
 import { createIntentPreviewApi } from "../../standalone/intent-preview";
 import type { IntentQuestion } from "../contracts/intent-workbench";
@@ -27,7 +27,7 @@ vi.mock("./ResponseLogicWorkspace", () => ({
 
 const seedQuestion: IntentQuestion = {
   id: "t:9",
-  question: "隆鼻材料应该怎么选",
+  question: "导航测试：隆鼻材料应该怎么选",
   category: "产品场景词",
   subdivision: "场景方案",
   tableId: "t",
@@ -81,29 +81,49 @@ describe("standalone response-logic navigation (integration)", () => {
     fireEvent.change(search,{target:{value:"隆鼻"}});
     expect(screen.queryByRole("combobox", {name:"问题分类"})).toBeNull();
     fireEvent.click(screen.getByRole("button", {name:"按知识支撑从低到高排列"}));
-    fireEvent.click(screen.getByRole("checkbox",{name:`选择${seedQuestion.question}`}));
-    const enter = await screen.findByRole("button", { name: "进入应答逻辑" });
+    const selected = screen.getByRole("checkbox",{name:`选择${seedQuestion.question}`});
+    fireEvent.click(selected);
+    const enter = within(selected.closest("tr")!).getByRole("button", { name: "进入应答逻辑" });
     expect((enter as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(enter);
 
     await waitFor(() => expect(window.location.search).toBe("?view=response-logic"));
-    const workspace = screen.getByLabelText("rl-workspace:t:9");
+    const workspace = await screen.findByLabelText("rl-workspace:t:9");
     expect(workspace.textContent).toContain("隆鼻材料应该怎么选");
 
     fireEvent.click(screen.getByRole("button", { name: "返回候选问题" }));
     await waitFor(() => expect(window.location.search).toBe("?view=intent"));
-    expect(await screen.findByRole("button", { name: `查看评估：${seedQuestion.question}` })).toBeTruthy();
+    expect(await screen.findByRole("checkbox", {name:`选择${seedQuestion.question}`})).toHaveProperty("checked",true);
     expect(screen.getByRole("textbox", {name:"搜索优化问题"})).toHaveProperty("value","隆鼻");
     expect(screen.queryByRole("combobox", {name:"问题分类"})).toBeNull();
     expect(screen.getByRole("button", {name:"按知识支撑从低到高排列"}).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("checkbox", {name:`选择${seedQuestion.question}`})).toHaveProperty("checked",true);
   });
 
-  it("guards a direct /?view=response-logic visit without question context", () => {
+  it("opens the catalog directly after an orphan answer route, including a reload", async () => {
     window.history.replaceState({}, "", "/?view=response-logic");
+    const view = render(<App preview />);
+    await waitFor(() => expect(window.location.search).toBe("?view=intent"));
+    expect(await screen.findByRole("textbox", {name:"搜索优化问题"})).toBeTruthy();
+    expect(screen.queryByText(/请从「优化问题」列表中选择问题/)).toBeNull();
+    view.unmount();
     render(<App preview />);
-    expect(screen.getByText(/请从「优化问题」列表中选择问题/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "返回优化问题" }));
+    expect(await screen.findByRole("checkbox", {name:`选择${seedQuestion.question}`})).toBeTruthy();
     expect(window.location.search).toBe("?view=intent");
+  });
+
+  it.each(["keywords", "intent"] as const)("opens and remounts %s without going through the other page", async page => {
+    window.history.replaceState({}, "", `/?view=${page}`);
+    const view = render(<App preview />);
+    const findPage = () => page === "keywords"
+      ? screen.findByRole("textbox", {name:"企业名称"})
+      : screen.findByRole("textbox", {name:"搜索优化问题"});
+    expect(await findPage()).toBeTruthy();
+    expect(window.location.search).toBe(`?view=${page}`);
+    view.unmount();
+    render(<App preview />);
+    expect(await findPage()).toBeTruthy();
+    expect(window.location.search).toBe(`?view=${page}`);
+    expect(screen.queryByText(/请从「优化问题」列表中选择问题/)).toBeNull();
   });
 });

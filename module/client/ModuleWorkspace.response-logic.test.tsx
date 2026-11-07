@@ -24,8 +24,8 @@ vi.mock("./BrandResponseLogicEntry", () => ({
 }));
 
 vi.mock("./dashboard/IntentWorkbench", () => ({
-  default: ({ catalogIntegration }: { catalogIntegration?: IntentCatalogIntegration }) => (
-    <section aria-label="intent-workbench">
+  default: ({ catalogIntegration, initialView }: { catalogIntegration?: IntentCatalogIntegration; initialView?: "universe" | "list" }) => (
+    <section aria-label="intent-workbench" data-section={initialView}>
       <button
         type="button"
         disabled={!catalogIntegration?.onOpenAnswer}
@@ -92,7 +92,21 @@ describe("response-logic entry navigation", () => {
     expect(screen.getByRole("button", { name: "进入应答逻辑" })).toBeTruthy();
   });
 
-  it("shows a guarded hint when the workbench is opened without a question", () => {
+  it.each(["keywords", "intent"] as const)("opens %s independently without a selected question", page => {
+    const onResponseLogicBack = vi.fn();
+    render(
+      <ModuleWorkspace
+        context={context}
+        page={page}
+        keywordData={keywordData}
+        onResponseLogicBack={onResponseLogicBack}
+      />,
+    );
+    expect(screen.getByLabelText("intent-workbench").getAttribute("data-section")).toBe(page === "keywords" ? "universe" : "list");
+    expect(onResponseLogicBack).not.toHaveBeenCalled();
+  });
+
+  it("shows the catalog immediately and restores its route when no answer question is selected", () => {
     const onResponseLogicBack = vi.fn();
     render(
       <ModuleWorkspace
@@ -102,15 +116,9 @@ describe("response-logic entry navigation", () => {
         onResponseLogicBack={onResponseLogicBack}
       />,
     );
-    const status = screen.getByRole("status");
-    const backButton = screen.getByRole("button", { name: "返回优化问题" });
-    expect(status.textContent).toContain("请从「优化问题」列表中选择问题");
-    expect(status.classList.contains("fm-brand-empty-state")).toBe(true);
-    expect(status.getAttribute("style")).toBeNull();
-    expect(backButton.classList.contains("fm-brand-button")).toBe(true);
-    expect(backButton.classList.contains("fm-brand-button--secondary")).toBe(true);
-    expect(backButton.getAttribute("style")).toBeNull();
-    fireEvent.click(backButton);
+    expect(screen.getByLabelText("intent-workbench").getAttribute("data-section")).toBe("list");
+    expect(screen.getByLabelText("intent-workbench").closest("[data-brand-page]")?.getAttribute("data-brand-page")).toBe("intent");
+    expect(screen.queryByText(/请从「优化问题」列表中选择问题/)).toBeNull();
     expect(onResponseLogicBack).toHaveBeenCalledTimes(1);
   });
 });

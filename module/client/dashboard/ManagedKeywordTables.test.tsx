@@ -50,4 +50,52 @@ describe("推荐保存与历史词库", () => {
     expect(onViewEvaluation).toHaveBeenCalledWith("saved-1");
     expect(screen.getByRole("checkbox", {name: "选择新推荐问题"})).toHaveProperty("checked", false);
   });
+  it.each([false, true])("未加入或已加入但未评估的词条都可直接评估，且不切换行选择（已加入：%s）", linked => {
+    const state = emptyIntentState(), onEvaluateQuestion = vi.fn(), onUseQuestions = vi.fn();
+    if (linked) state.questions.push({id: "saved-1", question: "新推荐问题", tableId: "question-template-api:v1", rowIndex: 0,
+      category: "industry", subdivision: "", sourceRevision: 6});
+    render(<ManagedKeywordTables tables={tables} generationEnabled dashboardRevision={6} onUseQuestions={onUseQuestions}
+      optimizationState={state} onEvaluateQuestion={onEvaluateQuestion}/>);
+    fireEvent.click(screen.getByRole("button", {name: /已保存词条 162/}));
+    const checkbox = screen.getByRole("checkbox", {name: "选择新推荐问题"});
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", {name: "评估问题：新推荐问题"}));
+    expect(onEvaluateQuestion).toHaveBeenCalledWith({question: "新推荐问题", category: "industry", tableId: "question-template-api:v1", rowIndex: 0, dashboardRevision: 6});
+    expect(checkbox).toHaveProperty("checked", true);
+    expect(onUseQuestions).not.toHaveBeenCalled();
+  });
+  it("同一问题正在评估时显示任务状态，阻止重复点击评估", () => {
+    const state = emptyIntentState(), onEvaluateQuestion = vi.fn();
+    state.questions.push({id: "saved-1", question: "新推荐问题", tableId: "question-template-api:v1", rowIndex: 0,
+      category: "industry", subdivision: "", sourceRevision: 6});
+    state.jobs = [{id: "job-1", kind: "evaluate", status: "running", questionIds: ["saved-1"]} as any];
+    render(<ManagedKeywordTables tables={tables} generationEnabled onUseQuestions={vi.fn()} optimizationState={state}
+      onEvaluateQuestion={onEvaluateQuestion}/>);
+    fireEvent.click(screen.getByRole("button", {name: /已保存词条 162/}));
+    const button = screen.getByRole("button", {name: "评估问题：新推荐问题"});
+    expect(button.textContent).toBe("评估中…");
+    expect(button).toHaveProperty("disabled", true);
+    fireEvent.click(button);
+    expect(onEvaluateQuestion).not.toHaveBeenCalled();
+  });
+  it.each(["queued", "running", "paused", "pausing", "resuming"])("评估任务可查看详情且不触发评估或行选择（%s）", status => {
+    const state = emptyIntentState(), onEvaluateQuestion = vi.fn(), onViewEvaluationTask = vi.fn();
+    state.questions.push({id: "saved-1", question: "新推荐问题", tableId: "question-template-api:v1", rowIndex: 0,
+      category: "industry", subdivision: "", sourceRevision: 6});
+    state.jobs = [{id: "job-1", kind: "evaluate", status, questionIds: ["saved-1"]} as any];
+    // A re-evaluation must expose the current task even with an older score.
+    state.evaluations.push({questionId: "saved-1", value: 70, support: 64, method: "skill_v1", dimensions: [], points: [], findings: [], evaluatedAt: "2026-10-28T00:00:00Z"});
+    render(<ManagedKeywordTables tables={tables} generationEnabled onUseQuestions={vi.fn()} optimizationState={state}
+      onEvaluateQuestion={onEvaluateQuestion} onViewEvaluation={vi.fn()} onViewEvaluationTask={onViewEvaluationTask}
+      evaluationPending quotaAvailability={{industry: {available: false}}}/>);
+    fireEvent.click(screen.getByRole("button", {name: /已保存词条 162/}));
+    const details = screen.getByRole("button", {name: "查看评估详情：新推荐问题"});
+    expect(details).toHaveProperty("disabled", false);
+    expect(details.textContent).toContain("查看详情");
+    fireEvent.click(details);
+    expect(onViewEvaluationTask).toHaveBeenCalledWith("job-1");
+    expect(onEvaluateQuestion).not.toHaveBeenCalled();
+    expect(screen.getByRole("checkbox", {name: "选择新推荐问题"})).toHaveProperty("checked", false);
+    expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"})).toHaveProperty("disabled", true);
+  });
 });

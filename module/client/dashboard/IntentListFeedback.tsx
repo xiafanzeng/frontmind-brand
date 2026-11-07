@@ -1,5 +1,5 @@
 import {useEffect, useState} from "react";
-import {Clock3, LoaderCircle, RefreshCw} from "lucide-react";
+import {Check, Clock3, LoaderCircle, RefreshCw} from "lucide-react";
 import type {IntentSkillJob} from "../../contracts/intent-workbench";
 import "./intent-list-feedback.css";
 import IntentTaskControls from "./IntentTaskControls";
@@ -42,24 +42,29 @@ export function IntentListRefreshStatus() {
   return <span className="iw-list-refresh" role="status" aria-label="列表更新状态"><RefreshCw size={14} aria-hidden="true"/>正在更新</span>;
 }
 
-export function IntentListEvaluationStatus({job, uncertain, onViewTask, pending = false, onPause, onResume}: {
+export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewResult, pending = false, onPause, onResume}: {
   job: IntentSkillJob; uncertain: boolean; onViewTask: () => void;
+  onViewResult?: () => void;
   pending?: boolean; onPause?: () => void; onResume?: () => void;
 }) {
   const [now, setNow] = useState(Date.now());
   const created = Date.parse(job.createdAt ?? "");
+  const terminal = job.status === "succeeded" || job.status === "failed";
+  const finished = [Date.parse(job.result?.completedAt ?? ""), job.terminalObservedAt ?? NaN,
+    Date.parse(job.progress?.updatedAt ?? "")].find(Number.isFinite);
   useEffect(() => {
     if (!Number.isFinite(created)) return;
     setNow(Date.now());
+    if (terminal) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [job.id, created]);
-  const seconds = Math.max(0, Math.floor((now - created) / 1000));
+  }, [job.id, created, terminal]);
+  const seconds = Math.max(0, Math.floor(((terminal ? finished ?? now : now) - created) / 1000));
   const stage = job.progress?.stage;
   const unconfirmed = uncertain || job.status === "create_unknown";
   const paused = job.status === "paused";
   const completed = job.status === "succeeded";
-  const description = completed ? "结果已校验并保存，可查看当前任务。"
+  const description = completed ? "结果已校验并保存，可查看评估结果。"
     : paused ? "已中断模型执行，继续时沿用原任务上下文。"
     : job.status === "pausing" ? "正在等待模型停止执行"
     : job.status === "resuming" ? "正在恢复原任务的评估"
@@ -72,11 +77,11 @@ export function IntentListEvaluationStatus({job, uncertain, onViewTask, pending 
     : "任务执行中，详细阶段暂不可用";
   return <section className="iw-list-task" aria-label="问题评估任务">
     <div className="iw-list-task-main">
-      <span className="iw-list-task-icon"><LoaderCircle size={20} aria-hidden="true"/></span>
+      <span className="iw-list-task-icon">{completed ? <Check size={20} aria-hidden="true"/> : <LoaderCircle size={20} aria-hidden="true"/>}</span>
       <div className="iw-list-task-copy" role="status"><h3>{completed ? "评估已完成" : paused ? `评估已暂停 · ${job.questionIds.length} 条问题` : unconfirmed ? `评估任务待确认 · ${job.questionIds.length} 条问题` : job.kind === "plan" ? `正在生成优化方案 · ${job.questionIds.length} 条问题` : `正在评估 ${job.questionIds.length} 条问题`}</h3><p>{description}</p></div>
       <div className="iw-list-task-actions">
         {Number.isFinite(created) && <span className="iw-list-task-time"><Clock3 size={14} aria-hidden="true"/>已耗时 {Math.floor(seconds / 60)}分{seconds % 60}秒</span>}
-        <button type="button" onClick={onViewTask}>查看当前任务</button>
+        <button type="button" onClick={completed ? onViewResult ?? onViewTask : onViewTask}>{completed ? "查看评估结果" : "查看当前任务"}</button>
         <IntentTaskControls job={job} pending={pending} onPause={onPause} onResume={onResume}/>
       </div>
     </div>

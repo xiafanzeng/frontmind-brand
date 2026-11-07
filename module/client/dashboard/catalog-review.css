@@ -1,10 +1,10 @@
-/* A slightly lighter purple for the response-logic entry. */
+/* Match the shared primary action color shown in the approved reference. */
 .fm-brand-theme .iw-view-list .iw-catalog-actions .iw-answer-entry:not(:disabled) {
-  background: #9468c3;
+  background: var(--fm-brand-accent, #7542b0);
   color: #fff;
 }
 .fm-brand-theme .iw-view-list .iw-catalog-actions .iw-answer-entry:hover:not(:disabled) {
-  background: #895bb9;
+  background: var(--fm-brand-accent-strong, #572582);
 }
 /* Scoped to the approved catalog; shared typography and evaluation stay intact. */
 .fm-brand-theme .iw-view-list .iw-catalog-header {gap:24px;margin-bottom:26px}
@@ -83,9 +83,8 @@
 .fm-brand-theme .iw-view-list .iw-catalog-actions button {padding:10px 12px;min-width:0;height:44px;white-space:normal}
 .fm-brand-theme .iw-view-list .iw-catalog-actions .iw-answer-entry,
 .fm-brand-theme .iw-view-list .iw-catalog-actions .iw-plan-entry {grid-column:auto;min-height:44px}
-.fm-brand-theme .iw-view-list .iw-catalog-actions button:not(.iw-primary) {box-shadow:none;background:#fff;color:#667085;border-color:#e4e1e9}
+.fm-brand-theme .iw-view-list .iw-catalog-actions button:not(.iw-primary) {box-shadow:none;background:#fff;color:#4f485c;border-color:#e4e1e9}
 .fm-brand-theme .iw-view-list .iw-catalog-actions button:not(.iw-primary) {font-size:14px!important}
-.fm-brand-theme .iw-view-list .iw-catalog-actions button:not(.iw-primary):not(:disabled) {color:#4f485c}
 .fm-brand-theme .rl-single-page .rl-catalog-return {margin:0 0 18px}
 .fm-brand-theme .rl-single-page .rl-catalog-return button {font:inherit;font-size:13px;color:#81728d;padding:6px 0;border:0;background:transparent;box-shadow:none;cursor:pointer;min-height:36px}
 .fm-brand-theme .rl-single-page .rl-catalog-return button:hover {color:#7545a0}
@@ -142,3 +141,51 @@
 /* Question editing stays on an opaque white surface inside the portal. */
 .fm-brand-portal-theme.iw-question-modal {background:#fff!important}
 .fm-brand-portal-theme.iw-question-modal .iw-question-fields textarea {background:#fff!important}
+.fm-brand-portal-theme.iw-delete-modal {font-size:14px}
+.fm-brand-portal-theme.iw-delete-modal :is([data-slot="dialog-title"],[data-slot="dialog-description"],.iw-delete-question) {font-family:inherit!important;font-size:14px!important;font-weight:400!important;line-height:1.75!important;letter-spacing:normal}
+.fm-brand-portal-theme.iw-delete-modal [data-slot="dialog-title"] {padding-right:44px}
+.fm-brand-portal-theme.iw-delete-modal .iw-delete-question {margin:0;padding:12px 14px;border:1px solid #ddd5e5;border-radius:10px;background:#fff;color:#4f485c;white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow-y:auto}
+
+/* Portal placement keeps every scoring dimension above the evidence matrix. */
+.fm-brand-theme .iw-workbench .iw-evaluation-header {align-items:center;gap:24px;padding:22px 24px;margin-bottom:22px;background:#fff;border:1px solid #e8e2ed;border-left:3px solid #b59aca;border-radius:16px}
+.fm-brand-theme .iw-evaluation-question {display:flex;align-items:flex-start;gap:14px;flex:1;min-width:0}
+.fm-brand-theme .iw-question-mark {display:grid;place-items:center;flex-shrink:0;width:42px;height:42px;margin-top:2px;border-radius:12px;background:#f4eff8;color:#8053a3}
+.fm-brand-theme .iw-question-heading {min-width:0}
+.fm-brand-theme .iw-question-caption {display:block;margin-bottom:6px;font-size:14px;line-height:1.5;font-weight:500;color:#8053a3}
+.fm-brand-theme .iw-workbench .iw-evaluation-header h1 {font-size:22px;line-height:1.5;font-weight:600;letter-spacing:0;color:#252330;overflow-wrap:anywhere}
+.fm-brand-theme .iw-workbench .iw-evaluation-header p {margin:8px 0 0;font-size:14px;line-height:1.7;color:#7d7887}
+.fm-brand-theme .iw-question-navigation {display:flex;align-items:center;gap:10px;flex-shrink:0}
+.fm-brand-theme .iw-question-navigation .iw-tag {padding:6px 10px;background:#f7f4fa;color:#8053a3;border:1px solid #e9e2f0;border-radius:8px;font-size:14px}
+.fm-brand-theme .iw-question-navigation button {white-space:nowrap;font-size:14px}
+.fm-brand-theme .iw-workbench button.iw-dimensions-trigger {min-height:32px;padding:0;border:0;background:transparent;color:#7545a0;font-size:14px}
+.fm-brand-portal-theme.iw-dimensions-modal {display:flex!important;flex-direction:column;gap:0!important;padding:0!important;width:640px!important;max-width:calc(100vw - 24px)!important;max-height:calc(100dvh - 24px);background:#fff!important;border:1px solid #e5deec;border-radius:16px!important;overflow:hidden;color:#20232b;font-size:14px;box-shadow:0 20px 64px #25102b26;animation:none!important;transition:none!important}
+.iw-dimensions-handle {display:flex;align-items:center;gap:12px;padding:20px 22px;border-bottom:1px solid #eaecf0;cursor:grab;touch-action:none;user-select:none;flex-shrink:0}
+.iw-dimensions-handle:active {cursor:grabbing}
+.iw-dimensions-handle:focus-visible,.iw-dimensions-body:focus-visible {outline:2px solid #7545a0;outline-offset:-3px}
+.iw-dimensions-handle>div {flex:1;min-width:0;text-align:left}
+.iw-dimensions-handle h2 {font-size:18px!important;font-weight:600;line-height:1.5;margin:0}
+.iw-dimensions-handle p {font-size:13px!important;color:#667085!important;margin:5px 0 0;line-height:1.6}
+.iw-dimensions-grip {color:#98a2b3;flex-shrink:0}
+.iw-dimensions-modal button.iw-dimensions-close {padding:6px;min-width:36px;min-height:36px;flex-shrink:0;border:0;background:transparent;color:#667085;border-radius:8px}
+.iw-dimensions-modal button.iw-dimensions-close:hover {background:#f5f2f8;color:#7545a0}
+.iw-dimensions-body {overflow-y:auto;overscroll-behavior:contain;min-height:0;padding:6px 22px;flex:1}
+.iw-dimension {padding:16px 0;border-bottom:1px solid #eaecf0}
+.iw-dimension:last-child {border-bottom:0}
+.iw-dimension>div {display:flex;align-items:center;justify-content:space-between;gap:16px}
+.iw-dimension h3 {font-size:14px;font-weight:600;margin:0;line-height:1.7}
+.iw-dimension p {font-size:14px;line-height:1.8;color:#667085;margin:8px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.iw-dimensions-modal .iw-score.good {color:#16794f}
+.iw-dimensions-modal .iw-score.warn {color:#a86722}
+.iw-dimensions-modal .iw-score.bad {color:#b64d52}
+@media(max-width:600px) {
+  .fm-brand-theme .iw-workbench .iw-evaluation-header {align-items:stretch;flex-direction:column;padding:18px 16px;gap:16px}
+  .fm-brand-theme .iw-evaluation-question {gap:10px}
+  .fm-brand-theme .iw-question-mark {width:34px;height:34px;border-radius:10px}
+  .fm-brand-theme .iw-workbench .iw-evaluation-header h1 {font-size:18px;line-height:1.6}
+  .fm-brand-theme .iw-question-navigation {justify-content:flex-end}
+  .fm-brand-portal-theme.iw-dimensions-modal {max-width:calc(100vw - 40px)!important;max-height:calc(100dvh - 64px)}
+  .iw-dimensions-handle {padding:16px;gap:8px}
+  .iw-dimensions-handle h2 {font-size:16px!important}
+  .iw-dimensions-grip {display:none}
+  .iw-dimensions-body {padding:4px 16px}
+}

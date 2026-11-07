@@ -1,4 +1,5 @@
 import {act, cleanup, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
+import {useState} from "react";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import type {IntentWorkspace} from "../../contracts/intent-workbench";
 import {emptyIntentState} from "../../contracts/intent-workbench";
@@ -10,14 +11,26 @@ vi.mock("../host", () => ({
 }));
 vi.mock("@frontmind/module-ui/components/ui/dialog", () => ({
   Dialog: ({open, children}: any) => open ? children : null,
-  DialogContent: ({children}: any) => children, DialogHeader: ({children}: any) => children,
+  DialogContent: ({children, className, style, ref}: any) => <div role="dialog" className={className} style={style} ref={ref}>{children}</div>, DialogHeader: ({children}: any) => children,
   DialogTitle: ({children}: any) => children, DialogDescription: ({children}: any) => children,
   DialogFooter: ({children}: any) => children,
 }));
 vi.mock("@frontmind/module-ui/components/MarkdownRenderer", () => ({default: () => null}));
-vi.mock("./ManagedKeywordTables", () => ({default: ({onUseQuestions}: any) => <button onClick={() => onUseQuestions([{
-  tableId: "table", rowIndex: 0, question: "企业软件如何部署", category: "industry", dashboardRevision: 1,
-}])}>交接测试问题</button>}));
+vi.mock("./ManagedKeywordTables", () => ({default: ({onUseQuestions, onEvaluateQuestion, onViewEvaluationTask, optimizationState, evaluationPending}: any) => {
+  const [checked, setChecked] = useState(false);
+  const task = optimizationState?.jobs?.find((job: any) => !["succeeded", "failed"].includes(job.status));
+  return <>
+  <input type="checkbox" aria-label="测试词条选择" checked={checked} onChange={event => setChecked(event.target.checked)}/>
+  <button onClick={() => onUseQuestions([{
+    tableId: "table", rowIndex: 0, question: "企业软件如何部署", category: "industry", dashboardRevision: 1,
+  }])}>交接测试问题</button>
+  <button disabled={evaluationPending} onClick={() => onEvaluateQuestion({
+    tableId: "table", rowIndex: 0, question: "企业软件如何部署", category: "industry", dashboardRevision: 1,
+  })}>词条直接评估</button>
+  {task && <button onClick={() => onViewEvaluationTask(task.id)}>查看词条当前评估详情</button>}
+  <output aria-label="词条评估状态">{optimizationState?.evaluations[0]?.value ?? "尚无评分"}</output>
+</>;
+}}));
 vi.mock("./KnowledgeChangeComparison", () => ({default: () => null}));
 import IntentWorkbench from "./IntentWorkbench";
 
@@ -47,6 +60,130 @@ async function openCurrentTask() {
   fireEvent.click(await screen.findByRole("button", {name: "查看当前任务"}));
 }
 describe("优化工作台任务入口", () => {
+  it("词条开始评估后可反复查看同一任务并返回，完成后显示结果且保留来源选择", async () => {
+    const initial = workspace(), running = workspace("running");
+    running.state.jobs![0].progress = {stage: "analyzing", updatedAt: "2026-11-07T00:00:00Z",
+      events: [{id: "event-1", at: "2026-11-07T00:00:00Z", label: "当前词条任务已返回工具状态"}]};
+    const {api, finish} = pendingApi(initial);
+    vi.mocked(api.command).mockResolvedValue(running);
+    const onSectionChange = vi.fn();
+    render(<IntentWorkbench keywordProps={{} as any} api={api} onSectionChange={onSectionChange}/>);
+    await waitFor(() => expect(screen.getByRole("button", {name: "词条直接评估"})).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("checkbox", {name: "测试词条选择"}));
+    fireEvent.click(screen.getByRole("button", {name: "词条直接评估"}));
+    fireEvent.click(await screen.findByRole("button", {name: "查看词条当前评估详情"}));
+    expect(screen.getByRole("heading", {name: "实时任务动态"})).toBeTruthy();
+    expect(screen.getByText("当前词条任务已返回工具状态")).toBeTruthy();
+    expect(screen.queryByText("回答要点支撑矩阵")).toBeNull();
+    expect(api.waitForJob).toHaveBeenCalledTimes(1);
+    expect(api.waitForJob).toHaveBeenCalledWith("job-1", expect.any(Function), expect.any(AbortSignal));
+    fireEvent.click(screen.getByRole("button", {name: "返回已保存词条"}));
+    expect(screen.getByRole("checkbox", {name: "测试词条选择"})).toHaveProperty("checked", true);
+    fireEvent.click(screen.getByRole("button", {name: "查看词条当前评估详情"}));
+    await act(async () => finish(workspace("succeeded")));
+    await screen.findByText("回答要点支撑矩阵");
+    fireEvent.click(screen.getByRole("button", {name: "返回已保存词条"}));
+    expect(screen.getByRole("checkbox", {name: "测试词条选择"})).toHaveProperty("checked", true);
+    expect(screen.getByLabelText("词条评估状态").textContent).toBe("80");
+    expect(api.command).toHaveBeenCalledTimes(1);
+    expect(api.waitForJob).toHaveBeenCalledTimes(1);
+    expect(onSectionChange).not.toHaveBeenCalled();
+  });
+  it("来源词条可查看已暂停的原任务，不派发评估或启动新监听", async () => {
+    const {api} = pendingApi(workspace("paused"));
+    render(<IntentWorkbench keywordProps={{} as any} api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "查看词条当前评估详情"}));
+    expect(screen.getByRole("status", {name: "任务状态"}).textContent).toBe("已暂停");
+    fireEvent.click(screen.getByRole("button", {name: "返回已保存词条"}));
+    expect(screen.getByRole("button", {name: "查看词条当前评估详情"})).toBeTruthy();
+    expect(api.command).not.toHaveBeenCalled();
+    expect(api.waitForJob).not.toHaveBeenCalled();
+  });
+  it("词条直接评估按最新版本保存并派发一次，完成后留在来源页显示分数", async () => {
+    const initial = {...workspace(), revision: 7};
+    initial.state.questions = [];
+    const saved = {...initial, revision: 8, state: {...initial.state, questions: [{...question, id: "table:0"}]}};
+    const running = {...workspace("running"), revision: 9};
+    running.state.questions = saved.state.questions;
+    running.state.jobs![0].questionIds = ["table:0"];
+    let release!: (value: IntentWorkspace) => void;
+    let complete!: (value: IntentWorkspace) => void;
+    const read = new Promise<IntentWorkspace>(resolve => {release = resolve;});
+    const result = new Promise<IntentWorkspace>(resolve => {complete = resolve;});
+    const api: IntentWorkbenchApi = {
+      observe: vi.fn().mockResolvedValueOnce(initial).mockReturnValueOnce(read),
+      command: vi.fn().mockResolvedValueOnce(saved).mockResolvedValueOnce(running),
+      execute: vi.fn(), rollback: vi.fn(), waitForJob: vi.fn(() => result),
+    };
+    const onSectionChange = vi.fn();
+    render(<IntentWorkbench keywordProps={{} as any} api={api} onSectionChange={onSectionChange}/>);
+    const button = await screen.findByRole("button", {name: "词条直接评估"});
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await act(async () => release(initial));
+    await waitFor(() => expect(api.command).toHaveBeenCalledTimes(2));
+    expect(api.command).toHaveBeenNthCalledWith(1, expect.objectContaining({kind: "intake", expectedRevision: 7,
+      questions: [expect.objectContaining({id: "table:0", question: question.question, sourceRevision: 1})]}));
+    expect(api.command).toHaveBeenNthCalledWith(2, expect.objectContaining({kind: "evaluate", expectedRevision: 8,
+      questionIds: ["table:0"], clientRequestId: expect.any(String)}));
+    expect(screen.queryByRole("heading", {name: "优化问题"})).toBeNull();
+    expect(onSectionChange).not.toHaveBeenCalled();
+    const completed = {...running, revision: 10, state: {...running.state, jobs: [{...running.state.jobs![0], status: "succeeded" as const}],
+      evaluations: [{...workspace("succeeded").state.evaluations[0], questionId: "table:0"}]}};
+    await act(async () => complete(completed));
+    expect(screen.getByLabelText("词条评估状态").textContent).toBe("80");
+    expect(screen.getByRole("button", {name: "词条直接评估"})).toBeTruthy();
+    expect(api.command).toHaveBeenCalledTimes(2);
+    expect(onSectionChange).not.toHaveBeenCalled();
+  });
+  it("已有词条按来源坐标复用稳定问题编号，使用最新清单版本评估", async () => {
+    const initial = workspace();
+    const latest = {...initial, revision: 12};
+    latest.state.questions = [{...question, question: "修改后的原问题"}];
+    const running = {...workspace("running"), revision: 13};
+    const api: IntentWorkbenchApi = {observe: vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(latest),
+      command: vi.fn().mockResolvedValue(running), execute: vi.fn(), rollback: vi.fn()};
+    render(<IntentWorkbench keywordProps={{} as any} api={api}/>);
+    const button = await screen.findByRole("button", {name: "词条直接评估"});
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
+    fireEvent.click(button);
+    await waitFor(() => expect(api.command).toHaveBeenCalledTimes(1));
+    expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "evaluate", expectedRevision: 12, questionIds: ["q1"]}));
+  });
+  it("新读到已有评分或运行任务时不会重复提交评估", async () => {
+    const initial = workspace(), latest = workspace("succeeded");
+    const api: IntentWorkbenchApi = {observe: vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(latest),
+      command: vi.fn(), execute: vi.fn(), rollback: vi.fn()};
+    render(<IntentWorkbench keywordProps={{} as any} api={api}/>);
+    const button = await screen.findByRole("button", {name: "词条直接评估"});
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByLabelText("词条评估状态").textContent).toBe("80"));
+    expect(api.command).not.toHaveBeenCalled();
+    cleanup();
+    const busyApi: IntentWorkbenchApi = {...api, observe: vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(workspace("running"))};
+    render(<IntentWorkbench keywordProps={{} as any} api={busyApi}/>);
+    const busyButton = await screen.findByRole("button", {name: "词条直接评估"});
+    await waitFor(() => expect(busyButton).toHaveProperty("disabled", false));
+    fireEvent.click(busyButton);
+    await screen.findByText(/已有评估任务，请等待完成/);
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it("词条保存失败时不继续派发评估，来源页保留重试入口", async () => {
+    const initial = workspace();
+    initial.state.questions = [];
+    const api: IntentWorkbenchApi = {observe: vi.fn().mockResolvedValue(initial),
+      command: vi.fn().mockRejectedValue(new Error("保存失败")), execute: vi.fn(), rollback: vi.fn()};
+    render(<IntentWorkbench keywordProps={{} as any} api={api}/>);
+    const button = await screen.findByRole("button", {name: "词条直接评估"});
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
+    fireEvent.click(button);
+    await screen.findByText("保存失败");
+    expect(api.command).toHaveBeenCalledTimes(1);
+    expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "intake"}));
+    expect(button).toHaveProperty("disabled", false);
+  });
   it("默认最新加入优先，手动按两种分数升序，全量排序后分页并将未评估排在末尾", async () => {
     const initial = workspace("succeeded");
     initial.state.questions = Array.from({length: 12}, (_, index) => ({...question, id: `q${index}`, question: `排序问题${index}`}));
@@ -248,10 +385,32 @@ describe("优化工作台任务入口", () => {
     expect(screen.getByRole("heading", {name: "优化问题"}).compareDocumentPosition(feedback) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText("正在读取优化工作台…")).toBeNull();
     fireEvent.click(within(feedback).getByRole("button", {name: "查看当前任务"}));
-    expect(screen.getByRole("progressbar", {name: "评估阶段进度"})).toBeTruthy();
+    expect(screen.getByRole("log", {name: "实时任务动态"})).toBeTruthy();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryByRole("button", {name: "重新读取任务状态"})).toBeNull();
+    expect(screen.queryByText(/可以返回列表等待/)).toBeNull();
     await act(async () => finish(workspace("succeeded")));
     expect(screen.queryByRole("region", {name: "问题评估任务"})).toBeNull();
     expect(api.command).not.toHaveBeenCalled();
+  });
+  it("列表任务完成后右侧按钮直接打开已保存评估，返回保留选择且不再查询或评估", async () => {
+    const {api, finish} = pendingApi(workspace("running"));
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    await screen.findByRole("region", {name: "问题评估任务"});
+    fireEvent.click(screen.getByRole("checkbox", {name: `选择${question.question}`}));
+    await act(async () => finish(workspace("succeeded")));
+    const feedback = screen.getByRole("region", {name: "问题评估任务"});
+    expect(within(feedback).getByText("评估已完成")).toBeTruthy();
+    expect(within(feedback).queryByRole("button", {name: "查看当前任务"})).toBeNull();
+    fireEvent.click(within(feedback).getByRole("button", {name: "查看评估结果"}));
+    expect(screen.getByRole("heading", {name: question.question})).toBeTruthy();
+    expect(screen.getByText("回答要点支撑矩阵")).toBeTruthy();
+    expect(screen.queryByRole("log", {name: "实时任务动态"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
+    expect(screen.getByRole("checkbox", {name: `选择${question.question}`})).toHaveProperty("checked", true);
+    expect(api.observe).toHaveBeenCalledTimes(1);
+    expect(api.command).not.toHaveBeenCalled();
+    expect(api.waitForJob).toHaveBeenCalledTimes(1);
   });
   it("已有列表重新读取时仅显示轻提示，保留列表和筛选，结束后收起", async () => {
     const initial = workspace("failed");
@@ -341,7 +500,7 @@ describe("优化工作台任务入口", () => {
       command: vi.fn(), execute: vi.fn(), rollback: vi.fn(), waitForJob: vi.fn().mockRejectedValue(new TypeError("Load failed"))};
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     await openCurrentTask();
-    fireEvent.click(await screen.findByRole("button", {name: "重新读取任务状态"}));
+    fireEvent.click(await screen.findByRole("button", {name: "重新读取"}));
     await screen.findByRole("heading", {name: kind === "plan" ? "确认优化方案" : kind === "receipt" ? "优化执行完成" : question.question});
     expect(screen.queryByRole("progressbar", {name: "评估阶段进度"})).toBeNull();
     expect(api.command).not.toHaveBeenCalled();
@@ -357,14 +516,31 @@ describe("优化工作台任务入口", () => {
         throw new TypeError("Load failed");
       })};
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    await openCurrentTask();
-    const button = await screen.findByRole("button", {name: "查看评估结果"});
+    const feedback = await screen.findByRole("region", {name: "问题评估任务"});
+    const button = within(feedback).getByRole("button", {name: "查看评估结果"});
     await waitFor(() => expect(button).toHaveProperty("disabled", false));
-    expect(screen.getByRole("heading", {name: "评估已完成"})).toBeTruthy();
-    expect(screen.getByText("结果已校验并保存")).toBeTruthy();
+    expect(within(feedback).getByRole("heading", {name: "评估已完成"})).toBeTruthy();
     fireEvent.click(button);
     await screen.findByText("回答要点支撑矩阵");
     expect(screen.queryByRole("progressbar", {name: "评估阶段进度"})).toBeNull();
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it("完成事件保留旧评分时先补读本次结果，不把旧评分当作完成结果", async () => {
+    const initial = workspace("running");
+    initial.state.evaluations = [{...workspace("succeeded").state.evaluations[0], value: 30,
+      provenance: {operationId: "older-job"} as any}];
+    const completed = workspace("succeeded");
+    const api: IntentWorkbenchApi = {observe: vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(completed),
+      command: vi.fn(), execute: vi.fn(), rollback: vi.fn(),
+      waitForJob: vi.fn(async (_id, update) => {
+        update({...initial, state: {...initial.state, jobs: completed.state.jobs}});
+        throw new TypeError("Load failed");
+      })};
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: "查看评估结果"}));
+    await screen.findByText("回答要点支撑矩阵");
+    expect(document.querySelector(".iw-score-card strong")?.textContent).toContain("80");
+    expect(api.observe).toHaveBeenCalledTimes(2);
     expect(api.command).not.toHaveBeenCalled();
   });
   it("移除历史入口后重新打开仍能查看已保存评分和方案，不调用模型", async () => {
@@ -488,15 +664,15 @@ describe("优化工作台任务入口", () => {
     const {api, finish} = pendingApi(workspace("running"));
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     await openCurrentTask();
-    await screen.findByRole("heading", {name: "正在评估 1 条问题"});
+    await screen.findByRole("heading", {name: "实时任务动态"});
     expect(api.waitForJob).toHaveBeenCalledWith("job-1", expect.any(Function), expect.any(AbortSignal));
     expect(api.command).not.toHaveBeenCalled();
-    expect(screen.getByRole("progressbar", {name: "评估阶段进度"})).toHaveProperty("max", 4);
+    expect(screen.getByRole("log", {name: "实时任务动态"})).toBeTruthy();
     fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
     fireEvent.click(screen.getByRole("checkbox", {name: `选择${question.question}`}));
     expect(screen.getByRole("button", {name: "批量评估并优化（1）"})).toHaveProperty("disabled", true);
     fireEvent.click(screen.getByRole("button", {name: "查看当前任务"}));
-    expect(screen.getByRole("heading", {name: "正在评估 1 条问题"})).toBeTruthy();
+    expect(screen.getByRole("heading", {name: "实时任务动态"})).toBeTruthy();
     await act(async () => finish(workspace("succeeded")));
     await screen.findByText("回答要点支撑矩阵");
     expect(screen.getByRole("button", {name: "生成优化方案"})).toHaveProperty("disabled", false);
@@ -509,7 +685,7 @@ describe("优化工作台任务入口", () => {
     const button = screen.getByRole("button", {name: "批量评估并优化（1）"});
     expect(button).toHaveProperty("disabled", false);
     fireEvent.click(button);
-    await screen.findByRole("heading", {name: "正在评估 1 条问题"});
+    await screen.findByRole("heading", {name: "实时任务动态"});
     expect(api.command).toHaveBeenCalledTimes(1);
     expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "evaluate", questionIds: ["q1"]}));
     await act(async () => finish(workspace("succeeded")));
@@ -519,7 +695,7 @@ describe("优化工作台任务入口", () => {
     const {api, finish} = pendingApi(workspace("running", "plan"));
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     await openCurrentTask();
-    await screen.findByRole("heading", {name: "正在生成优化方案"});
+    await screen.findByRole("heading", {name: "实时任务动态"});
     const completed = workspace("succeeded", "plan");
     completed.state.plans = [{questionId: "q1", inputHash: "hash", actions: [{
       id: "action", kind: "todo", nodeId: null, title: "补充部署资料",
@@ -579,7 +755,7 @@ describe("优化工作台任务入口", () => {
     const {api, finish} = pendingApi(initial);
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     await openCurrentTask();
-    await screen.findByRole("progressbar");
+    await screen.findByRole("log", {name: "实时任务动态"});
     const update = vi.mocked(api.waitForJob!).mock.calls[0][1];
     const next = workspace("running");
     next.state.jobs![0].progress = {stage: "analyzing", updatedAt: "2026-10-27T00:00:00Z",
@@ -703,6 +879,31 @@ describe("优化工作台任务入口", () => {
       question: updated.state.questions[0].question, category: "industry", subdivision: "场景方案"});
     expect(screen.getByText(updated.state.questions[0].question)).toBeTruthy();
     expect(screen.getByRole("button", {name: "评估问题"})).toBeTruthy();
+    expect(api.execute).not.toHaveBeenCalled();
+  });
+  it("评分详情弹窗展示全部维度与说明，关闭后可以重新查看且不创建评估任务", async () => {
+    const initial = workspace("succeeded");
+    initial.state.evaluations[0].dimensions = ["意图明确度", "品牌关联度", "决策价值", "表达清晰度", "问题独特度", "知识支撑度"]
+      .map((label, index) => ({label, score: 60 + index * 5, reason: `评分说明${index + 1}`}));
+    const api: IntentWorkbenchApi = {observe: vi.fn(async () => initial), command: vi.fn(), execute: vi.fn(), rollback: vi.fn()};
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+    fireEvent.click(await screen.findByRole("button", {name: `查看评估：${question.question}`}));
+    const trigger = await screen.findByRole("button", {name: "查看 6 项评分维度"});
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog");
+    for (const dimension of initial.state.evaluations[0].dimensions) {
+      expect(within(dialog).getByRole("heading", {name: dimension.label})).toBeTruthy();
+      expect(within(dialog).getByText(dimension.reason)).toBeTruthy();
+      expect(within(dialog).getByText(String(dimension.score))).toBeTruthy();
+    }
+    fireEvent.click(within(dialog).getByRole("button", {name: "关闭评分详情"}));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).queryByRole("button", {name: "关闭"})).toBeNull();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", {name: "关闭评分详情"}));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.command).not.toHaveBeenCalled();
     expect(api.execute).not.toHaveBeenCalled();
   });
   it("删除必须确认，取消不写入，确认后清除选中项并保留历史入口", async () => {
