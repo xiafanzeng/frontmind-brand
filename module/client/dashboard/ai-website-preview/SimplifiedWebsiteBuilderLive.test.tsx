@@ -1612,11 +1612,16 @@ describe("redesigned live website builder setup", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("opens the real assistant trial on demand through the owner-only preview endpoint", async () => {
+  it.each([false, true])("opens the real assistant trial through the owner-only preview endpoint (project scope: %s)", async (scoped) => {
+    const buildPath = "/api/site-ops/builds/44444444-4444-4444-8444-444444444444";
+    const projectQuery = "enterpriseProjectId=77777777-7777-4777-8777-777777777777";
+    const embedSearch = scoped ? `?token=abc.def&${projectQuery}` : "?token=abc.def";
+    const previewPath = scoped ? `${buildPath}/preview` : "/api/frontmind/v2/siteops/builds/preview-1";
+    const previewUrl = scoped ? `${previewPath}/?${projectQuery}` : previewPath;
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
-        url: "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/embed-preview/?token=abc.def",
+        url: `${buildPath}/embed-preview/${embedSearch}`,
         bridgeToken: "bridge-token-1",
         expiresAt: Date.now() + 600_000,
       }),
@@ -1631,6 +1636,7 @@ describe("redesigned live website builder setup", () => {
       project: approved.project,
       builds: approved.builds.map((build) => ({
         ...build,
+        previewUrl,
         sourceUrl: "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/source.zip",
         knowledgeSnapshot: {
           id: KNOWLEDGE_COORDINATE.id,
@@ -1651,13 +1657,11 @@ describe("redesigned live website builder setup", () => {
 
       expect(screen.queryByTitle("真实构建预览")).toBeNull();
       expect(screen.getByRole("link", { name: "查看网站" }).getAttribute("href"))
-        .toBe("/api/frontmind/v2/siteops/builds/preview-1");
+        .toBe(previewUrl);
       fireEvent.click(screen.getByRole("button", { name: "试用 AI 助手" }));
       await waitFor(() => {
         const frame = screen.getByTitle("真实构建预览") as HTMLIFrameElement;
-        expect(frame.src).toContain(
-          "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/embed-preview/?token=abc.def",
-        );
+        expect(frame.getAttribute("src")).toBe(`${buildPath}/embed-preview/${embedSearch}`);
       });
       const toolbar = screen.getByTestId("website-embed-preview-toolbar");
       expect(toolbar.textContent).toContain("真实构建 v1");
@@ -1672,12 +1676,12 @@ describe("redesigned live website builder setup", () => {
       });
       await waitFor(() => {
         const frame = screen.getByTitle("真实构建预览") as HTMLIFrameElement;
-        expect(frame.src).toContain("/embed-preview/products/?token=");
+        expect(frame.getAttribute("src")).toBe(`${buildPath}/embed-preview/products/${embedSearch}`);
       });
 
       fireEvent.click(screen.getByRole("button", {name: /新窗口查看/}));
       expect(openMock).toHaveBeenCalledWith(
-        "/api/frontmind/v2/siteops/builds/preview-1/products/",
+        `${previewPath}/products/${scoped ? `?${projectQuery}` : ""}`,
         "_blank",
         "noopener",
       );

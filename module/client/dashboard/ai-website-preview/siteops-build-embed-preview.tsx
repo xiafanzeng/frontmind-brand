@@ -36,8 +36,7 @@ type BridgeReport = {
 
 type EmbedTokenState = {
   state: "loading" | "ready" | "failed";
-  base: string;
-  token: string;
+  url: string;
   bridgeToken: string;
   expiresAt: number;
 };
@@ -46,6 +45,21 @@ function embedPathForSlug(slug: string) {
   const normalized = slug.startsWith("/") ? slug.slice(1) : slug;
   if (!normalized || normalized === "/") return "";
   return normalized.endsWith("/") ? normalized : `${normalized}/`;
+}
+
+function previewUrlForSlug(base: string, slug: string) {
+  try {
+    const url = new URL(base, window.location.href);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    const directory = url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`;
+    url.pathname = directory + embedPathForSlug(slug);
+    if (url.origin === window.location.origin && !url.pathname.startsWith("//")) {
+      return `${url.pathname}${url.search}${url.hash}`;
+    }
+    return url.href;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -68,8 +82,7 @@ export function SiteOpsBuildEmbedPreview({
 }) {
   const [tokenState, setTokenState] = useState<EmbedTokenState>({
     state: "loading",
-    base: "",
-    token: "",
+    url: "",
     bridgeToken: "",
     expiresAt: 0,
   });
@@ -115,12 +128,17 @@ export function SiteOpsBuildEmbedPreview({
         ) {
           throw new Error("SITEOPS_EMBED_TOKEN_RESPONSE_INVALID");
         }
-        const separator = body.url.indexOf("?token=");
-        if (separator <= 0) throw new Error("SITEOPS_EMBED_TOKEN_URL_INVALID");
+        const url = new URL(body.url, window.location.href);
+        if (
+          url.origin !== window.location.origin ||
+          url.protocol !== window.location.protocol ||
+          !url.searchParams.get("token")
+        ) {
+          throw new Error("SITEOPS_EMBED_TOKEN_URL_INVALID");
+        }
         setTokenState({
           state: "ready",
-          base: body.url.slice(0, separator),
-          token: body.url.slice(separator + "?token=".length),
+          url: url.href,
           bridgeToken: body.bridgeToken,
           expiresAt: body.expiresAt,
         });
@@ -197,14 +215,12 @@ export function SiteOpsBuildEmbedPreview({
   }, [expectedTrialBinding, onTrialComplete, tokenState.bridgeToken]);
 
   const frameSrc = tokenState.state === "ready"
-    ? `${tokenState.base}${embedPathForSlug(routeSlug)}?token=${encodeURIComponent(tokenState.token)}`
+    ? previewUrlForSlug(tokenState.url, routeSlug)
     : "";
   const openInNewWindow = () => {
     if (!build.previewUrl) return;
-    const base = build.previewUrl.endsWith("/")
-      ? build.previewUrl
-      : `${build.previewUrl}/`;
-    window.open(`${base}${embedPathForSlug(routeSlug)}`, "_blank", "noopener");
+    const previewUrl = previewUrlForSlug(build.previewUrl, routeSlug);
+    if (previewUrl) window.open(previewUrl, "_blank", "noopener");
   };
 
   return (
@@ -267,9 +283,9 @@ export function SiteOpsBuildEmbedPreview({
             <small>重新载入会刷新访问签名，不会重新构建网站。</small>
           </div>
         )}
-        {tokenState.state === "ready" && (
+        {tokenState.state === "ready" && frameSrc && (
           <iframe
-            key={`${reloadSequence}:${tokenState.token}`}
+            key={`${reloadSequence}:${tokenState.url}`}
             ref={frameRef}
             src={frameSrc}
             title="真实构建预览"
