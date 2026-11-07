@@ -77,15 +77,32 @@
   justify-content: flex-end;
 }
 
-.sfp-workspace-actions {
+.sfp-workspace-bar {
+  align-items: center;
   box-sizing: border-box;
-  margin: -6px auto 18px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0 auto 18px;
   max-width: 1480px;
   width: 100%;
 }
 
+.sfp-workspace-bar .sfp-steps {
+  flex: 1 1 340px;
+  margin: 0;
+  min-width: 0;
+}
+
+.sfp-workspace-actions {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
 .sfp-workspace-actions .sfp-draft-state {
   margin: 0;
+  white-space: nowrap;
 }
 
 .sfp-view-website {
@@ -4227,11 +4244,13 @@
   align-items: center;
   color: var(--sfp-ink);
   display: inline-flex;
+  flex-shrink: 0;
   font-size: var(--sfp-type-body);
   font-weight: 600;
   gap: 8px;
   line-height: 1.5;
   min-width: 0;
+  white-space: nowrap;
 }
 
 .sfp-root[data-step="design"] .sfp-field-title::before {

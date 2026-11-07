@@ -2447,18 +2447,19 @@ export function SimplifiedWebsiteBuilderPreview({
       data-step={activeStep}
       data-testid={siteOps ? "website-builder-live-root" : undefined}
     >
-      <ol className="sfp-steps" aria-label="网站建设流程">
-        {steps.map((step) => (
-          <li key={step.id} className={step.id === activeStep ? "is-active" : completedSteps[step.id] ? "is-done" : ""} data-complete={completedSteps[step.id]}>
-            <button type="button" onClick={() => goTo(step.id)} aria-current={step.id === activeStep ? "step" : undefined}>
-              <span>{completedSteps[step.id] && step.id !== activeStep ? <Check size={16} /> : step.number}</span>
-              <span><strong>{step.label}</strong></span>
-            </button>
-          </li>
-        ))}
-      </ol>
+      <div className="sfp-workspace-bar">
+        <ol className="sfp-steps" aria-label="网站建设流程">
+          {steps.map((step) => (
+            <li key={step.id} className={step.id === activeStep ? "is-active" : completedSteps[step.id] ? "is-done" : ""} data-complete={completedSteps[step.id]}>
+              <button type="button" onClick={() => goTo(step.id)} aria-current={step.id === activeStep ? "step" : undefined}>
+                <span>{completedSteps[step.id] && step.id !== activeStep ? <Check size={16} /> : step.number}</span>
+                <span><strong>{step.label}</strong></span>
+              </button>
+            </li>
+          ))}
+        </ol>
 
-      <div className="sfp-heading-actions sfp-workspace-actions" role="group" aria-label="网站状态与操作">
+        <div className="sfp-heading-actions sfp-workspace-actions" role="group" aria-label="网站状态与操作">
         {siteOps && displayedBuild?.previewUrl && (
           <a className="sfp-button sfp-button--primary sfp-view-website" href={displayedBuild.previewUrl} target="_blank" rel="noopener noreferrer" title={`查看构建 v${displayedBuild.ordinal}（新窗口）`}>
             <ExternalLink size={16} /> 查看网站
@@ -2475,12 +2476,13 @@ export function SimplifiedWebsiteBuilderPreview({
                 ? LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus
                 : isConfirmed ? "草稿已确认" : "建设中"}
             </strong>
-            {(!siteOps || activeStep !== "design") && <small>
+            <small>
               {siteOps
                 ? `真实 SiteOps · 项目版本 ${liveObservation?.project.revision ?? "—"}`
                 : storageAvailable ? `本地草稿 · ${isConfirmed ? "草稿确认状态已保存" : "配置已自动保存"}` : "仅本次页面保存"}
-            </small>}
+            </small>
           </span>
+        </div>
         </div>
       </div>
 
