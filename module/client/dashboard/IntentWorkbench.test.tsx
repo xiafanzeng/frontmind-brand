@@ -47,6 +47,68 @@ async function openCurrentTask() {
   fireEvent.click(await screen.findByRole("button", {name: "查看当前任务"}));
 }
 describe("优化工作台任务入口", () => {
+  it("默认最新加入优先，手动按两种分数升序，全量排序后分页并将未评估排在末尾", async () => {
+    const initial = workspace("succeeded");
+    initial.state.questions = Array.from({length: 12}, (_, index) => ({...question, id: `q${index}`, question: `排序问题${index}`}));
+    const evaluation = initial.state.evaluations[0];
+    initial.state.evaluations = initial.state.questions.slice(1).map((item, position) => {
+      const index = position + 1;
+      return {...evaluation, questionId: item.id, value: index === 1 ? 0 : index <= 3 ? 20 : index * 3,
+        support: index === 1 ? 0 : index <= 3 ? 10 : index * 5};
+    });
+    const {api} = pendingApi(initial), onCatalogExit = vi.fn();
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}
+      catalogIntegration={{onOpenAnswer: vi.fn()}} onCatalogExit={onCatalogExit}/>);
+    await screen.findByText("排序问题11");
+    const ids = () => Array.from(document.querySelectorAll(".iw-catalog-table tbody tr")).map(row => row.getAttribute("data-question-id"));
+    expect(ids()).toEqual(["q11", "q10", "q9", "q8", "q7", "q6", "q5", "q4", "q3", "q2"]);
+    fireEvent.click(screen.getByRole("checkbox", {name: "选择排序问题11"}));
+    fireEvent.click(screen.getByRole("button", {name: "下一页"}));
+    expect(ids()).toEqual(["q1", "q0"]);
+    const supportSort = screen.getByRole("button", {name: "按知识支撑从低到高排列"});
+    fireEvent.click(supportSort);
+    expect(ids()).toEqual(["q1", "q3", "q2", "q4", "q5", "q6", "q7", "q8", "q9", "q10"]);
+    expect(supportSort.closest("th")?.getAttribute("aria-sort")).toBe("ascending");
+    expect(screen.queryByText("部分支撑")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "下一页"}));
+    expect(ids()).toEqual(["q11", "q0"]);
+    const valueSort = screen.getByRole("button", {name: "按问题价值从低到高排列"});
+    fireEvent.click(valueSort);
+    expect(ids()).toEqual(["q1", "q4", "q5", "q6", "q3", "q2", "q7", "q8", "q9", "q10"]);
+    expect(supportSort.closest("th")?.getAttribute("aria-sort")).toBe("none");
+    fireEvent.click(within(document.querySelector(".iw-catalog-table tbody tr") as HTMLElement).getByRole("button", {name: "进入应答逻辑"}));
+    expect(onCatalogExit).toHaveBeenCalledWith(expect.objectContaining({sort: "value", selected: ["q11"]}));
+    fireEvent.click(valueSort);
+    expect(ids()[0]).toBe("q11");
+    expect(screen.getByRole("checkbox", {name: "选择排序问题11"})).toHaveProperty("checked", true);
+    expect(initial.state.questions.map(item => item.id)).toEqual(Array.from({length: 12}, (_, index) => `q${index}`));
+    expect(api.command).not.toHaveBeenCalled();
+  });
+  it("从应答返回时恢复用户手动选择的分数排序", async () => {
+    const initial = workspace("succeeded");
+    initial.state.questions.push({...question, id: "q2", question: "新加入问题"});
+    initial.state.evaluations.push({...initial.state.evaluations[0], questionId: "q2", support: 90});
+    const {api} = pendingApi(initial);
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}
+      initialCatalogState={{search: "", category: "all", status: "all", sort: "support", page: 0, selected: [], expandedGaps: [], questionId: "q1"}}/>);
+    await screen.findByText(question.question);
+    expect(document.querySelector(".iw-catalog-table tbody tr")?.getAttribute("data-question-id")).toBe("q1");
+    expect(screen.getByRole("button", {name: "按知识支撑从低到高排列"}).getAttribute("aria-pressed")).toBe("true");
+  });
+  it("移除状态与类别筛选后忽略旧筛选值，应答返回状态保持全部", async () => {
+    const initial = workspace("succeeded");
+    const {api} = pendingApi(initial);
+    const onCatalogExit = vi.fn();
+    render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}
+      initialCatalogState={{search: "", category: "product_scenario", status: "missing", page: 0, selected: [], expandedGaps: [], questionId: "q1"}}
+      catalogIntegration={{onOpenAnswer: vi.fn()}} onCatalogExit={onCatalogExit}/>);
+    await screen.findByText(question.question);
+    expect(screen.queryByRole("combobox", {name: "问题状态"})).toBeNull();
+    expect(screen.queryByRole("combobox", {name: "问题分类"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "进入应答逻辑"}));
+    expect(onCatalogExit).toHaveBeenCalledWith(expect.objectContaining({category: "all", status: "all", questionId: "q1"}));
+    expect(api.command).not.toHaveBeenCalled();
+  });
   it("后台评估不锁住历史、应答和其他问题，完成不抢走正在编辑的方案", async () => {
     const initial = workspace("running");
     initial.state.jobs![0].questionsScope = "selected";
@@ -402,8 +464,8 @@ describe("优化工作台任务入口", () => {
     };
     const {api} = pendingApi(saved), onOpenAnswer = vi.fn();
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api} catalogIntegration={{onOpenAnswer}}/>);
-    const buttons = await screen.findAllByRole("button", {name: "查看优化方案"});
-    fireEvent.click(buttons[1]);
+    const secondRow = (await screen.findByText(second.question)).closest("tr")!;
+    fireEvent.click(within(secondRow).getByRole("button", {name: "查看优化方案"}));
     expect(screen.getByRole("heading", {name: second.question})).toBeTruthy();
     expect(screen.queryByRole("heading", {name: question.question})).toBeNull();
     expect(screen.getByRole("region", {name: `优化动作：方案-${second.question}`})).toBeTruthy();
@@ -412,7 +474,7 @@ describe("优化工作台任务入口", () => {
     expect(onOpenAnswer).toHaveBeenLastCalledWith(second);
     fireEvent.click(screen.getByRole("button", {name: "返回评估详情"}));
     fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
-    fireEvent.click(screen.getAllByRole("button", {name: "查看优化方案"})[0]);
+    fireEvent.click(within(screen.getByText(question.question).closest("tr")!).getByRole("button", {name: "查看优化方案"}));
     expect(screen.getByRole("heading", {name: question.question})).toBeTruthy();
     expect(screen.queryByRole("heading", {name: second.question})).toBeNull();
     fireEvent.click(screen.getByRole("button", {name: "返回评估详情"}));
@@ -503,7 +565,8 @@ describe("优化工作台任务入口", () => {
     await screen.findByRole("heading", {name: "正在评估 1 条问题"});
     fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
     await screen.findByText("已接收所选 1 条问题");
-    expect(screen.getByText("新加入")).toBeTruthy();
+    expect(document.querySelector('.iw-catalog-table tr[data-question-id="table:0"]')?.classList.contains("iw-new-row")).toBe(true);
+    expect(screen.queryByText("新加入")).toBeNull();
     expect(screen.getByRole("checkbox", {name: `选择${question.question}`})).toHaveProperty("checked", true);
     expect(screen.getByRole("columnheader", {name: "主要缺口"})).toBeTruthy();
     expect(onSectionChange).toHaveBeenCalledWith("list");
@@ -635,7 +698,7 @@ describe("优化工作台任务入口", () => {
     expect(screen.queryByRole("button", {name: "批量评估并优化（1）"})).toBeNull();
     expect(screen.queryByRole("button", {name: /历史记录/})).toBeNull();
   });
-  it("第二行生成方案只针对该问题，不沿用上一次查看的评分范围", async () => {
+  it("另一问题生成方案只针对该问题，不沿用上一次查看的评分范围", async () => {
     const saved = workspace("succeeded");
     saved.state.questions.push({...question, id: "q2", question: "第二个问题"});
     saved.state.evaluations.push({...saved.state.evaluations[0], questionId: "q2"});
@@ -643,7 +706,7 @@ describe("优化工作台任务入口", () => {
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     fireEvent.click(await screen.findByRole("button", {name: `查看评估：${question.question}`}));
     fireEvent.click(screen.getByRole("button", {name: "返回问题列表"}));
-    fireEvent.click(screen.getAllByRole("button", {name: "生成优化方案"})[1]);
+    fireEvent.click(within(screen.getByText("第二个问题").closest("tr")!).getByRole("button", {name: "生成优化方案"}));
     await waitFor(() => expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind: "plan", questionIds: ["q2"]})));
     expect(api.command).toHaveBeenCalledTimes(1);
     await act(async () => finish(saved));

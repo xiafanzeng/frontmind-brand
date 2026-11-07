@@ -17,7 +17,7 @@ import IntentTaskProgress from "./IntentTaskProgress";
 import {IntentListEvaluationStatus, IntentListInitialLoading, IntentListRefreshStatus} from "./IntentListFeedback";
 import {findCatalogQuestion} from "./intent-catalog-link";
 import {KEYWORD_CATEGORY_OPTIONS} from "@frontmind/module-ui/keyword-categories";
-import type {IntentCatalogViewState} from "./intent-catalog-view";
+import type {IntentCatalogViewState, IntentCatalogSort} from "./intent-catalog-view";
 import type {IntentQuestion} from "../../contracts/intent-workbench";
 
 type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge" | "progress" | "history" | "history-detail";
@@ -86,8 +86,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [index, setIndex] = useState(0);
   const [singleQueue, setSingleQueue] = useState<string[]>([]);
   const [search, setSearch] = useState(initialCatalogState?.search ?? "");
-  const [status, setStatus] = useState(initialCatalogState?.status ?? "all");
-  const [category, setCategory] = useState(initialCatalogState?.category ?? "all");
+  const [sort, setSort] = useState<IntentCatalogSort>(initialCatalogState?.sort ?? "newest");
   const [page, setPage] = useState(initialCatalogState?.page ?? 0);
   const [expandedGaps, setExpandedGaps] = useState<string[]>(initialCatalogState?.expandedGaps ?? []);
   const restoreCatalogFocus = useRef(initialCatalogState?.questionId);
@@ -255,13 +254,18 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const listEvaluation = view === "list" ? activeJob ?? workspace?.state.jobs?.find(item => item.id === progressJobId) : undefined;
   const refreshingList = view === "list" && Boolean(workspace) && pending && pendingRead && !activeJob;
   const receipt = receiptId ? workspace?.state.receipts.find(item => item.id === receiptId) : workspace?.state.receipts.at(-1);
-  const filtered = questions.filter(question => question.question.toLowerCase().includes(search.toLowerCase()) &&
-    (category === "all" || question.category === category) &&
-    (status === "all" || (["unevaluated", "supported", "partial", "missing"].includes(status) ? (() => {
-      const item = evaluations.find(item => item.questionId === question.id);
-      return (item ? item.support >= 80 ? "supported" : item.support >= 50 ? "partial" : "missing" : "unevaluated") === status;
-    })() : (catalogIntegration?.answerStatuses?.[question.id] ?? "unknown") === status)))
-    .sort((a, b) => Number(received.includes(b.id)) - Number(received.includes(a.id)));
+  // The ledger appends newly added questions; reverse that order for newest first.
+  const newestOrder = new Map(questions.map((question, position) => [question.id, position]));
+  const scoreByQuestion = new Map(evaluations.map(item => [item.questionId, item]));
+  const filtered = questions.filter(question => question.question.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => {
+      const newestFirst = newestOrder.get(b.id)! - newestOrder.get(a.id)!;
+      if (sort === "newest") return newestFirst;
+      const left = scoreByQuestion.get(a.id)?.[sort], right = scoreByQuestion.get(b.id)?.[sort];
+      // Unknown scores are not zero. Keep unevaluated questions after numeric scores.
+      if (left == null || right == null) return left == null && right == null ? newestFirst : left == null ? 1 : -1;
+      return left - right || newestFirst;
+    });
   const pageCount = Math.max(1, Math.ceil(filtered.length / 10));
   const currentPage = Math.min(page, pageCount - 1);
   const visible = filtered.slice(currentPage * 10, (currentPage + 1) * 10);
@@ -334,7 +338,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     const ids = [...new Set(incoming.map(item => findCatalogQuestion(item, data.state.questions)?.id).filter((id): id is string => Boolean(id)))];
     if (incoming.some(item => !findCatalogQuestion(item, data.state.questions))) {setError("所选词条未能完整关联，请重新读取后确认。"); return;}
     setReceived(ids); setSelected(ids); setScope(ids); setIndex(0); setExpanded([]); setSingleQueue([]);
-    setSearch(""); setCategory("all"); setStatus("all"); setPage(0); setIntake(null);
+    setSearch(""); setPage(0); setIntake(null);
     emittedSection.current = "list"; onSectionChange?.("list");
     const missing = ids.filter(id => !data.state.evaluations.some(item => item.questionId === id));
     if (data.state.jobs?.some(item => !["succeeded", "failed"].includes(item.status))) return;
@@ -460,7 +464,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       <IntentQuestionCatalog questions={questions} visible={visible} evaluations={evaluations} activeJob={activeJob} received={received} integration={{
         ...catalogIntegration,
         onOpenAnswer: catalogIntegration?.onOpenAnswer ? question => {
-          onCatalogExit?.({search, category, status, page: currentPage, selected, expandedGaps, questionId: question.id});
+          onCatalogExit?.({search, category: "all", status: "all", sort, page: currentPage, selected, expandedGaps, questionId: question.id});
           catalogIntegration.onOpenAnswer?.(question);
         } : undefined,
         onEditQuestion: catalogIntegration?.onEditQuestion ?? (question => openQuestionAction("edit", question)),
@@ -475,10 +479,10 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan} onGeneratePlan={id => void plan(false, [id])}
         historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setHistoryQuestionId(undefined); setView("history");}}
         expandedGaps={expandedGaps} onGapToggle={(id, open) => setExpandedGaps(ids => open ? ids.includes(id) ? ids : [...ids,id] : ids.filter(item => item !== id))}
-        search={search} category={category} status={status} selected={selected} pending={pending}
+        search={search} sort={sort} onSort={value => {setSort(value); setPage(0);}} selected={selected} pending={pending}
         mutationBlockedIds={activeJob ? activeJob.questionsScope === "selected" ? activeJob.questionIds : questions.map(question => question.id) : []}
         page={currentPage} pageCount={pageCount} total={filtered.length}
-        onSearch={value => {setSearch(value); setPage(0);}} onCategory={value => {setCategory(value); setPage(0);}} onStatus={value => {setStatus(value); setPage(0);}}
+        onSearch={value => {setSearch(value); setPage(0);}}
         onToggle={toggle} onClear={() => setSelected([])} onEvaluate={ids => void evaluate(ids)} onPage={setPage}
         onSelectPage={checked => setSelected(ids => checked ? [...new Set([...ids, ...visible.map(item => item.id)])] : ids.filter(id => !visible.some(item => item.id === id)))}/>
       {workspace.state.receipts.some(item => item.status === "running") && <div className="iw-sticky"><span>有执行尚未确认完成</span><button disabled={pending} onClick={() => {const runningReceipt = workspace.state.receipts.find(item => item.status === "running")!; setReceiptId(runningReceipt.id); setView("result"); void run(() => api.execute({expectedRevision: revision, clientRequestId: runningReceipt.id, questionIds: [...new Set(runningReceipt.changes.map(change => change.questionId))]}));}}>继续原执行</button></div>}

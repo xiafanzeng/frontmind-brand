@@ -45,7 +45,9 @@ describe("推荐保存与历史词库", () => {
     fireEvent.click(screen.getByRole("button", {name: /已保存词条 162/}));
     const score = screen.getByRole("button", {name: "查看评估：新推荐问题"});
     expect(score.textContent).toBe("价值70支撑64");
+    expect(screen.getByRole("checkbox", {name: "选择新推荐问题"})).toHaveProperty("checked", false);
     fireEvent.click(screen.getByRole("button", {name: "查看评估：新推荐问题"}));
     expect(onViewEvaluation).toHaveBeenCalledWith("saved-1");
+    expect(screen.getByRole("checkbox", {name: "选择新推荐问题"})).toHaveProperty("checked", false);
   });
 });
