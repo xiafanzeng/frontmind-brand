@@ -46,12 +46,14 @@ import { z } from "zod";
 
 import { siteContentPlanV2Schema } from "../../contracts/siteops-content-plan.js";
 import {
-  readSiteDesignPreferencesFromBrief,
+  siteBriefSchema,
   staticTemplateExecutionAdmissionEvidenceSchema,
 } from "../../contracts/siteops.js";
 import { openStaticTemplateCatalogVersionDist } from "./static-template-catalog.js";
 import { previewNavigationBridgeSource } from "./preview-routing.js";
-import { siteAssistantApiOrigin } from "./site-assistant-widget.js";
+import type { SiteAssistantBuildBinding } from "./site-assistant-binding.js";
+import { SITE_ASSISTANT_CONFIG_ASSET_PATH, siteAssistantApiOrigin } from "./site-assistant-widget.js";
+import { missingFeaturedRouteIds, projectSiteDesignRuntime, siteAssistantBootConfig } from "./site-design-runtime.js";
 import { customerVisibleStyleBatchStatusCondition } from "./visual-batch-visibility.js";
 
 const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
@@ -416,6 +418,7 @@ export async function createSandboxedPreviewDocument(input: {
   previewPrefix: string;
   previewRoutingMode?: SiteOpsPreviewRoutingMode;
   assistantBridge?: SiteOpsPreviewBridgeConfig;
+  assistantBinding?: SiteAssistantBuildBinding;
 }) {
   const files = new Map(
     Object.values(input.zip.files)
@@ -534,13 +537,18 @@ export async function createSandboxedPreviewDocument(input: {
         (await fileBytes(local)).toString("utf8"),
         local,
       );
-      const source = rewriteSiteOpsPreviewDocument({
+      let source = rewriteSiteOpsPreviewDocument({
         bytes: Buffer.from(embeddedSource, "utf8"),
         mimeType: "text/javascript; charset=utf-8",
         previewPrefix: input.previewPrefix,
         previewRoutingMode:
           input.previewRoutingMode ?? "legacy_static_literals",
       }).toString("utf8");
+      if (local === SITE_ASSISTANT_CONFIG_ASSET_PATH.slice(1) && input.assistantBinding) {
+        // Keep the archived config and update only its binding. Append after
+        // preview URL rewriting so the signed fields stay byte-for-byte intact.
+        source += `\nwindow.__FRONTMIND_ASSISTANT__.binding=${previewBootstrapJson(input.assistantBinding)};`;
+      }
       const attributes = `${before} ${after}`
         .replace(/\s(?:crossorigin|integrity)(?:=["'][^"']*["'])?/giu, "")
         .trim();
@@ -818,7 +826,7 @@ export function siteOpsPreviewBridgeToken(
   return sign(`frontmind.siteops-preview-bridge.v1\u0000${embedToken}`);
 }
 
-function bridgeConfigJson(input: SiteOpsPreviewBridgeConfig) {
+function previewBootstrapJson(input: SiteOpsPreviewBridgeConfig | SiteAssistantBuildBinding) {
   return JSON.stringify(input)
     .replaceAll("<", "\\u003c")
     .replaceAll(String.fromCharCode(0x2028), "\\u2028")
@@ -834,7 +842,7 @@ export function siteOpsPreviewBridgeScript(
   if (!/^[A-Za-z0-9_-]{16,64}$/u.test(nonce)) {
     throw new Error("SITEOPS_PREVIEW_NONCE_INVALID");
   }
-  return `<script nonce="${nonce}">window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__=${bridgeConfigJson(config)};</script>`;
+  return `<script nonce="${nonce}">window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__=${previewBootstrapJson(config)};</script>`;
 }
 
 async function frozenPreviewRouteEntries(input: {
@@ -1521,8 +1529,10 @@ async function sendOwnedBuildPreviewDocument(input: {
   // widget can report rendered answers (and their frozen build coordinates)
   // back to the embedding dashboard. Top-level previews never get it.
   let assistantBridge: SiteOpsPreviewBridgeConfig | undefined;
+  let assistantBinding: SiteAssistantBuildBinding | undefined;
   if (input.frame === "embed" && input.embedToken && typeof signEmbedPreviewToken === "function") {
-    const preferences = readSiteDesignPreferencesFromBrief(owned.build.brief);
+    const brief = siteBriefSchema.safeParse(owned.build.brief);
+    const preferences = brief.success ? brief.data.designPreferences : undefined;
     assistantBridge = {
       token: siteOpsPreviewBridgeToken(input.embedToken, signEmbedPreviewToken),
       buildId: owned.build.id,
@@ -1531,6 +1541,16 @@ async function sendOwnedBuildPreviewDocument(input: {
       designRevision: preferences?.designRevision ?? null,
       draftHash: preferences?.draftHash ?? null,
     };
+    // Older archives can lack a binding. Mint it for this authorized preview
+    // from the owned build's frozen design and knowledge coordinates.
+    if (brief.success && preferences &&
+        !missingFeaturedRouteIds(preferences, brief.data.routes.map((route) => route.id)).length) {
+      assistantBinding = siteAssistantBootConfig(
+        siteAssistantApiOrigin(),
+        projectSiteDesignRuntime(brief.data),
+        owned.build,
+      ).binding;
+    }
   }
   const document = await createSandboxedPreviewDocument({
     zip,
@@ -1541,6 +1561,7 @@ async function sendOwnedBuildPreviewDocument(input: {
         ? "canonical_pathname"
         : "legacy_static_literals",
     assistantBridge,
+    assistantBinding,
   });
   input.res.setHeader("Cache-Control", "private, no-store, max-age=0");
   input.res.setHeader("Content-Type", "text/html; charset=utf-8");
