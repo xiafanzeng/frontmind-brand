@@ -255,8 +255,20 @@ function terminalSiteOpsOperationProjection(
   locked: Pick<Claimed, "result" | "providerOperationId" | "providerTaskId">,
   result: SiteOpsProviderResult,
 ) {
+  const stored = locked.result;
+  const projected = result.result ?? stored;
+  // Checkpoint completion reconstructs the artifact result from its bindings.
+  // Keep the consumed recovery permission and original verdict from the row.
+  const recovery = stored?.stagedDocumentViewRecovery;
   return {
-    result: result.result ?? locked.result,
+    result: recovery === undefined
+      ? projected
+      : {
+          ...projected,
+          existingTaskOnly: stored?.existingTaskOnly,
+          stagedDocumentViewRecovery: recovery,
+          nativeRejectedCandidateV1: stored?.nativeRejectedCandidateV1,
+        },
     providerOperationId:
       result.providerOperationId ?? locked.providerOperationId,
     providerTaskId: result.providerTaskId ?? locked.providerTaskId,

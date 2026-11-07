@@ -19,11 +19,13 @@ import { reserveSiteOpsQuota } from "./quota-service.js";
 import {
   existingTaskOnlyBoundFallback,
   existingTaskOnlyRecoveryState,
+  existingTaskOnlyStagedDocumentViewRecoveryState,
 } from "./manus-provider.js";
 
 const RECOVERABLE_PUBLIC_ERROR_CODE = "FRONTMIND_BUILD_SERVICE_UNAVAILABLE";
 const RECOVERABLE_PROVIDER_SYNC_CODE =
   "FRONTMIND_BUILD_RECONCILIATION_REQUIRED";
+const STAGED_DOCUMENT_VIEW_FAILURE_CODE = "BUILD_PRIMARY_RENDER_FAILED";
 
 export class SiteOpsBuildReconciliationError extends Error {
   constructor(public readonly code: string) {
@@ -54,7 +56,10 @@ type ReconciliationBuild = Pick<
   | "status"
   | "errorCode"
   | "createdAt"
->;
+> & Partial<Pick<
+  typeof siteBuilds.$inferSelect,
+  "workflowVersion" | "contentPlanLocalAssetId" | "contentPlanSha256"
+>>;
 
 type ReconciliationOperation = Pick<
   typeof siteOperations.$inferSelect,
@@ -104,7 +109,7 @@ export type PreparedExistingManusBuildReconciliation = {
   projectId: string;
   userId: number;
   taskId: string;
-  quotaPeriodId: string;
+  quotaPeriodId: string | null;
   knowledgeSnapshotId: string;
   previousProjectRevision: number;
   previousProjectStatus: "failed" | "attention_required";
@@ -114,7 +119,9 @@ export type PreparedExistingManusBuildReconciliation = {
   recoveryState: Record<string, unknown>;
   recoveryErrorCode:
     | typeof RECOVERABLE_PUBLIC_ERROR_CODE
-    | typeof RECOVERABLE_PROVIDER_SYNC_CODE;
+    | typeof RECOVERABLE_PROVIDER_SYNC_CODE
+    | typeof STAGED_DOCUMENT_VIEW_FAILURE_CODE;
+  stagedPlan: { localAssetId: string; sha256: string } | null;
   boundFallback: {
     contract: { id: string; sha256: string };
     source: { id: string; sha256: string };
@@ -167,6 +174,7 @@ function buildMatchesBoundFallback(
  */
 export function prepareExistingManusBuildReconciliation(
   snapshot: ExistingManusBuildReconciliationSnapshot,
+  now = new Date(),
 ): PreparedExistingManusBuildReconciliation {
   const { build, operation, project, turn } = snapshot;
 
@@ -189,16 +197,54 @@ export function prepareExistingManusBuildReconciliation(
     reject("SITEOPS_RECONCILE_PROVIDER_TASK_MISMATCH");
   }
 
+  const stagedRevalidation =
+    operation.kind === "build_revision" &&
+    build.workflowVersion === "2.9.0" &&
+    Boolean(build.parentBuildId) &&
+    operation.status === "failed" &&
+    build.status === "failed" &&
+    project.status === "failed" &&
+    operation.errorCode === STAGED_DOCUMENT_VIEW_FAILURE_CODE &&
+    build.errorCode === STAGED_DOCUMENT_VIEW_FAILURE_CODE;
+  let stagedPlan: PreparedExistingManusBuildReconciliation["stagedPlan"] = null;
+  if (stagedRevalidation) {
+    if (hasBoundArtifact(build)) {
+      reject("SITEOPS_RECONCILE_BUILD_ALREADY_HAS_ARTIFACTS");
+    }
+    if (!build.contentPlanLocalAssetId || !build.contentPlanSha256) {
+      reject("SITEOPS_RECONCILE_STAGED_PLAN_REQUIRED");
+    }
+    stagedPlan = {
+      localAssetId: build.contentPlanLocalAssetId,
+      sha256: build.contentPlanSha256,
+    };
+  }
+
   let recoveryState: Record<string, unknown>;
   try {
-    recoveryState = existingTaskOnlyRecoveryState({
-      result: operation.result,
-      taskId: operation.providerTaskId,
-    });
+    recoveryState = stagedPlan
+      ? existingTaskOnlyStagedDocumentViewRecoveryState({
+          result: operation.result,
+          taskId: operation.providerTaskId,
+          operationId: operation.id,
+          projectId: build.projectId,
+          userId: build.userId,
+          contentPlanLocalAssetId: stagedPlan.localAssetId,
+          contentPlanSha256: stagedPlan.sha256,
+          now,
+        })
+      : existingTaskOnlyRecoveryState({
+          result: operation.result,
+          taskId: operation.providerTaskId,
+        });
   } catch {
-    reject("SITEOPS_RECONCILE_NATIVE_REPAIR_STATE_REQUIRED");
+    reject(
+      stagedPlan
+        ? "SITEOPS_RECONCILE_STAGED_SOURCE_REVALIDATION_INVALID"
+        : "SITEOPS_RECONCILE_NATIVE_REPAIR_STATE_REQUIRED",
+    );
   }
-  const boundFallbackMarker = existingTaskOnlyBoundFallback(recoveryState);
+  const boundFallbackMarker = stagedPlan ? null : existingTaskOnlyBoundFallback(recoveryState);
   const boundFallback = boundFallbackMarker?.artifactBindings ?? null;
   const genericFailure =
     operation.status === "failed" &&
@@ -212,7 +258,7 @@ export function prepareExistingManusBuildReconciliation(
     project.status === "attention_required" &&
     operation.errorCode === RECOVERABLE_PROVIDER_SYNC_CODE &&
     build.errorCode === RECOVERABLE_PROVIDER_SYNC_CODE;
-  if (boundFallback ? !fallbackAttention : !genericFailure) {
+  if (boundFallback ? !fallbackAttention : !genericFailure && !stagedPlan) {
     reject("SITEOPS_RECONCILE_RECOVERABLE_TERMINAL_REQUIRED");
   }
   if (boundFallback) {
@@ -227,7 +273,7 @@ export function prepareExistingManusBuildReconciliation(
     if (!buildMatchesBoundFallback(build, boundFallback)) {
       reject("SITEOPS_RECONCILE_FALLBACK_ARTIFACT_MISMATCH");
     }
-  } else if (hasBoundArtifact(build)) {
+  } else if (!stagedPlan && hasBoundArtifact(build)) {
     reject("SITEOPS_RECONCILE_BUILD_ALREADY_HAS_ARTIFACTS");
   }
   if (
@@ -258,7 +304,11 @@ export function prepareExistingManusBuildReconciliation(
   ) {
     reject("SITEOPS_RECONCILE_PROJECT_REVISION_CHANGED");
   }
-  if (build.quotaState !== "released" || !build.quotaPeriodId) {
+  const unmeteredRevalidation =
+    stagedPlan !== null &&
+    build.quotaPeriodId === null &&
+    build.quotaState === null;
+  if (!unmeteredRevalidation && (build.quotaState !== "released" || !build.quotaPeriodId)) {
     reject("SITEOPS_RECONCILE_RELEASED_QUOTA_REQUIRED");
   }
 
@@ -279,9 +329,12 @@ export function prepareExistingManusBuildReconciliation(
       | "attention_required",
     expectedCurrentBuildId,
     recoveryState,
-    recoveryErrorCode: boundFallback
-      ? RECOVERABLE_PROVIDER_SYNC_CODE
-      : RECOVERABLE_PUBLIC_ERROR_CODE,
+    recoveryErrorCode: stagedPlan
+      ? STAGED_DOCUMENT_VIEW_FAILURE_CODE
+      : boundFallback
+        ? RECOVERABLE_PROVIDER_SYNC_CODE
+        : RECOVERABLE_PUBLIC_ERROR_CODE,
+    stagedPlan,
     boundFallback,
   };
 }
@@ -392,7 +445,7 @@ export type ExistingManusBuildReconciliationResult = {
   taskId: string;
   previousOperationStatus: "failed" | "attention_required";
   nextOperationStatus: "running";
-  quotaState: "reserved";
+  quotaState: "reserved" | null;
   existingTaskOnly: true;
 };
 
@@ -426,26 +479,28 @@ export function parseExistingManusBuildReconciliationArgs(args: string[]) {
 
 /**
  * Restore one failed native repair operation without making a provider call.
- * The worker is constrained by the persisted `existingTaskOnly` bit, so its
- * next provider interaction can only be GET detail/listMessages/file reads.
+ * The worker uses `existingTaskOnly` for provider reads and a stricter staged
+ * source marker for local document-view revalidation.
  */
 export async function reconcileExistingManusBuild(
   db: any,
   input: { buildId: string; now?: Date },
 ): Promise<ExistingManusBuildReconciliationResult> {
   return await db.transaction(async (tx: any) => {
-    const prepared = prepareExistingManusBuildReconciliation(
-      await loadReconciliationSnapshotForUpdate(tx, input.buildId),
-    );
+    const snapshot = await loadReconciliationSnapshotForUpdate(tx, input.buildId);
     const now = input.now ?? new Date();
+    const prepared = prepareExistingManusBuildReconciliation(snapshot, now);
+    const nextQuotaState = prepared.quotaPeriodId === null ? null : "reserved";
 
-    const selectedQuotaPeriod = await reserveSiteOpsQuota(tx, {
-      userId: prepared.userId,
-      quotaPool: "website_content_publish",
-      quotaPeriodIds: [prepared.quotaPeriodId],
-    });
-    if (selectedQuotaPeriod !== prepared.quotaPeriodId) {
-      reject("SITEOPS_RECONCILE_QUOTA_PERIOD_CHANGED");
+    if (prepared.quotaPeriodId !== null) {
+      const selectedQuotaPeriod = await reserveSiteOpsQuota(tx, {
+        userId: prepared.userId,
+        quotaPool: "website_content_publish",
+        quotaPeriodIds: [prepared.quotaPeriodId],
+      });
+      if (selectedQuotaPeriod !== prepared.quotaPeriodId) {
+        reject("SITEOPS_RECONCILE_QUOTA_PERIOD_CHANGED");
+      }
     }
 
     const operationUpdate = await tx
@@ -510,7 +565,7 @@ export async function reconcileExistingManusBuild(
       .update(siteBuilds)
       .set({
         status: prepared.boundFallback ? "qa_running" : "building",
-        quotaState: "reserved",
+        quotaState: nextQuotaState,
         errorCode: null,
         errorMessage: null,
         updatedAt: now,
@@ -520,11 +575,20 @@ export async function reconcileExistingManusBuild(
           eq(siteBuilds.id, prepared.buildId),
           eq(siteBuilds.projectId, prepared.projectId),
           eq(siteBuilds.status, prepared.previousBuildStatus),
-          eq(siteBuilds.quotaState, "released"),
-          eq(siteBuilds.quotaPeriodId, prepared.quotaPeriodId),
+          nullableCoordinate(
+            siteBuilds.quotaState,
+            nextQuotaState === null ? null : "released",
+          ),
+          nullableCoordinate(siteBuilds.quotaPeriodId, prepared.quotaPeriodId),
           eq(siteBuilds.upstreamManusTaskId, prepared.taskId),
           eq(siteBuilds.errorCode, prepared.recoveryErrorCode),
           ...artifactCoordinates,
+          ...(prepared.stagedPlan
+            ? [
+                eq(siteBuilds.contentPlanLocalAssetId, prepared.stagedPlan.localAssetId),
+                eq(siteBuilds.contentPlanSha256, prepared.stagedPlan.sha256),
+              ]
+            : []),
         ),
       );
     if (affectedRows(buildUpdate) !== 1) {
@@ -570,7 +634,7 @@ export async function reconcileExistingManusBuild(
       taskId: prepared.taskId,
       previousOperationStatus: prepared.previousOperationStatus,
       nextOperationStatus: "running",
-      quotaState: "reserved",
+      quotaState: nextQuotaState,
       existingTaskOnly: true,
     };
   });

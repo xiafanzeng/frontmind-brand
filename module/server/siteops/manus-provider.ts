@@ -62,6 +62,7 @@ import { Readable } from "node:stream";
 import { and, eq, gte, inArray, isNull, or } from "drizzle-orm";
 import JSZip from "jszip";
 import { z } from "zod";
+import { siteOpsArtifactIdForIdempotency as deriveSiteOpsArtifactId } from "./artifact-store.js";
 
 
 import {
@@ -789,6 +790,10 @@ const providerStateV2Schema = providerStateV1Schema
       .optional(),
     artifactStaging: formalBuildArtifactStagingSchema.optional(),
     existingTaskOnly: z.boolean().optional(),
+    stagedDocumentViewRecovery: z.object({
+      verdictSignature: z.string().regex(/^[a-f0-9]{64}$/u),
+      startedAt: z.string().datetime().optional(),
+    }).strict().optional(),
     fallbackPreviewFailureCount: z
       .number()
       .int()
@@ -2743,7 +2748,8 @@ function claimsNativeSourceCheckpoint(value: unknown) {
   );
   return Boolean(
     record &&
-      (record.nativeSourceStaging !== undefined ||
+      (record.stagedDocumentViewRecovery !== undefined ||
+        record.nativeSourceStaging !== undefined ||
         (!fallbackRetryState &&
           ["archive_validated", "compile_started"].includes(
             String(record.buildCheckpoint ?? ""),
@@ -2796,6 +2802,7 @@ export function existingTaskOnlyRecoveryState(input: {
   const boundFallback =
     state.schemaVersion === 2 && state.fallbackPreview?.status === "bound";
   if (
+    (state.schemaVersion === 2 && state.stagedDocumentViewRecovery) ||
     (!boundFallback && state.stage !== "native_repair_pending") ||
     (boundFallback &&
       state.stage !== "native_repair_pending" &&
@@ -2817,6 +2824,109 @@ export function existingTaskOnlyRecoveryState(input: {
     providerTaskNotFoundCount: undefined,
     providerLastReadFailure: undefined,
     providerSyncStartedAt: undefined,
+  });
+}
+
+type StagedDocumentViewRecoveryCoordinates = {
+  taskId: string;
+  operationId: string;
+  projectId: string;
+  userId: number;
+  contentPlanLocalAssetId: string;
+  contentPlanSha256: string;
+  now?: Date;
+};
+
+function stagedDocumentViewRejection(
+  state: ProviderStateV2,
+  input: StagedDocumentViewRecoveryCoordinates,
+) {
+  const verdict = state.nativeRejectedCandidateV1;
+  const staging = state.nativeSourceStaging;
+  const receipt = staging?.receipt;
+  const runtime = state.nativeSourceRuntimeCoordinates;
+  const attempt = state.nativeRepairAttempt;
+  if (
+    state.stage !== "native_repair_pending" ||
+    state.buildPhase !== "compiling" ||
+    state.buildCheckpoint !== "compile_started" ||
+    state.nativeSourceContractVersion !== 2 ||
+    state.nativeRepairInput ||
+    state.fallbackPreview ||
+    state.artifactStaging ||
+    state.taskId !== input.taskId ||
+    attempt === undefined ||
+    attempt < 1 ||
+    !state.nativeSourceAttachmentIdentity ||
+    !runtime ||
+    !staging ||
+    !receipt ||
+    !("runtimeContractVersion" in receipt) ||
+    verdict?.errorCode !== "NATIVE_BUILD_DOCUMENT_VIEW_INVALID"
+  ) return null;
+
+  const operationToken = `siteops-native-source:${input.operationId}:${attempt}`;
+  const expectedAssetId = deriveSiteOpsArtifactId({
+    userId: input.userId,
+    projectId: input.projectId,
+    kind: "site-source-staging",
+    idempotencyKey: `native-source:${operationToken}`,
+  });
+  const now = (input.now ?? new Date()).getTime();
+  if (
+    !Number.isFinite(now) ||
+    Date.parse(verdict.rejectedAt) > now ||
+    Date.parse(staging.expiresAt) <= now ||
+    state.phaseOperationToken !== operationToken ||
+    !nativeSourceAttachmentScopeMatches(state.nativeSourceAttachmentScope, {
+      taskId: input.taskId,
+      repairAttempt: attempt,
+      operationToken,
+    }) ||
+    staging.assetId !== expectedAssetId ||
+    staging.taskId !== input.taskId ||
+    staging.repairAttempt !== attempt ||
+    staging.sha256 !== receipt.archiveSha256 ||
+    receipt.operationToken !== operationToken ||
+    receipt.executionBaselineSha256 !== receipt.baseSourceSha256 ||
+    receipt.runtimeContractVersion !== runtime.contractVersion ||
+    receipt.runtimeContractSha256 !== runtime.contractSha256 ||
+    receipt.executionShellSha256 !== runtime.executionShellSha256 ||
+    receipt.preflightVersion !== runtime.preflightVersion ||
+    receipt.preflightSha256 !== runtime.preflightSha256 ||
+    state.contentPlanLocalAssetId !== input.contentPlanLocalAssetId ||
+    state.contentPlanSha256 !== input.contentPlanSha256 ||
+    receipt.contentPlanSha256 !== input.contentPlanSha256 ||
+    state.nativeLastErrorSignature !== DOCUMENT_VIEW_BROWSER_AUDIT_UNAVAILABLE_SIGNATURE ||
+    !nativeRejectedCandidateMatches(verdict, {
+      taskId: input.taskId,
+      repairAttempt: attempt,
+      operationToken,
+      attachmentIdentity: state.nativeSourceAttachmentIdentity,
+      archiveSha256: staging.sha256,
+      validatorVersion: NATIVE_SOURCE_VALIDATOR_VERSION,
+    })
+  ) return null;
+
+  return verdict;
+}
+
+/** Admit only the same staged source rejected after a browser-audit failure.
+ * The CLI separately checks the failed revision and its project ownership. */
+export function existingTaskOnlyStagedDocumentViewRecoveryState(
+  input: StagedDocumentViewRecoveryCoordinates & { result: unknown },
+) {
+  const parsed = providerStateV2Schema.safeParse(input.result);
+  if (!parsed.success || parsed.data.existingTaskOnly || parsed.data.stagedDocumentViewRecovery) {
+    throw new Error("SITEOPS_RECONCILE_STAGED_DOCUMENT_VIEW_STATE_INVALID");
+  }
+  const state = parsed.data;
+  const verdict = stagedDocumentViewRejection(state, input);
+  if (!verdict) throw new Error("SITEOPS_RECONCILE_STAGED_DOCUMENT_VIEW_STATE_INVALID");
+  return transitionProviderState(state, {
+    stage: state.stage,
+    existingTaskOnly: true,
+    stagedDocumentViewRecovery: { verdictSignature: verdict.verdictSignature },
   });
 }
 
@@ -5074,6 +5184,24 @@ function nativeCompileSignature(error: NativeReactBuildError) {
     .digest("hex");
 }
 
+const DOCUMENT_VIEW_BROWSER_AUDIT_UNAVAILABLE_SIGNATURE = nativeCompileSignature(
+  new NativeReactBuildError("NATIVE_BUILD_DOCUMENT_VIEW_INVALID", [{
+    code: "DOCUMENT_VIEW_BROWSER_AUDIT_UNAVAILABLE",
+    file: null,
+    line: null,
+    column: null,
+  }]),
+);
+
+function stagedDocumentViewRecoveryUnavailable(state: ProviderState | null) {
+  return new SiteOpsManusFailure(
+    "FRONTMIND_BUILD_STAGED_SOURCE_IDENTITY_CONFLICT",
+    "原暂存源码的复验条件不再满足，已保留原任务记录。",
+    "attention_required",
+    state ?? undefined,
+  );
+}
+
 const NATIVE_SOURCE_OUTPUT_UNAVAILABLE_CODE =
   "SITEOPS_NATIVE_SOURCE_OUTPUT_UNAVAILABLE" as const;
 // Deliberately independent of provider status/event ids: once this delivery
@@ -5586,6 +5714,8 @@ async function handleNativeReactSiteBuild(input: {
   let client = input.client;
   const attempt = input.state?.nativeRepairAttempt ?? 0;
   let currentState = input.state;
+  const stagedDocumentViewRecovery =
+    input.state?.schemaVersion === 2 ? input.state.stagedDocumentViewRecovery : undefined;
   const operationToken = `siteops-native-source:${input.operation.id}:${attempt}`;
   let revisionSource: {
     bytes: Buffer;
@@ -6940,7 +7070,7 @@ async function handleNativeReactSiteBuild(input: {
   const materializeTrustedFallback = async (
     requestedReason: NativeTrustedFallbackReason,
   ): Promise<SiteOpsProviderResult | null> => {
-    if (dynamicInformationArchitecture) return null;
+    if (stagedDocumentViewRecovery || dynamicInformationArchitecture) return null;
     // 2.8 owns no host-rendered approximation of the selected full Template.
     // Keep the immutable visual reference and let the normal recoverable
     // retry/reset state surface instead of sending V7 through the V6
@@ -7848,7 +7978,11 @@ async function handleNativeReactSiteBuild(input: {
     });
   } catch (error) {
     if (error instanceof SiteOpsManusFailure) throw error;
+    if (stagedDocumentViewRecovery) throw stagedDocumentViewRecoveryUnavailable(currentState);
     return pending(providerStateV2(currentState), taskId, "qa_running", 10_000);
+  }
+  if (stagedDocumentViewRecovery && !offlineResume) {
+    throw stagedDocumentViewRecoveryUnavailable(currentState);
   }
   if (!offlineResume && input.state?.stage === "native_repair_send_unknown") {
     let reconciled: Awaited<ReturnType<typeof pollEvents>>;
@@ -8275,6 +8409,7 @@ async function handleNativeReactSiteBuild(input: {
       ? currentState.nativeSourceAttachmentIdentity
       : undefined);
   if (
+    !stagedDocumentViewRecovery &&
     rejectedAttachmentIdentity &&
     nativeRejectedCandidateMatches(rejectedCandidate, {
       taskId,
@@ -8495,6 +8630,9 @@ async function handleNativeReactSiteBuild(input: {
       }
     }
     if (!stagingExpiresAt || stagingExpiresAt.getTime() <= Date.now()) {
+      if (stagedDocumentViewRecovery) {
+        throw stagedDocumentViewRecoveryUnavailable(currentState);
+      }
       stagingExpiresAt = new Date(
         Date.now() + NATIVE_SOURCE_STAGING_RETENTION_MS,
       );
@@ -8522,28 +8660,31 @@ async function handleNativeReactSiteBuild(input: {
         );
       }
     }
-    currentState = transitionProviderState(currentState, {
-      stage: attempt > 0 ? "native_repair_pending" : "native_source_pending",
-      taskId,
-      buildPhase: "compiling",
-      buildCheckpoint: "archive_validated",
-      nativeSourceStaging: {
-        assetId: stagingAssetId,
-        sha256: validated.archiveSha256,
-        bytes: validated.sourceZip.length,
-        expiresAt: stagingExpiresAt.toISOString(),
+    if (!stagedDocumentViewRecovery) {
+      currentState = transitionProviderState(currentState, {
+        stage: attempt > 0 ? "native_repair_pending" : "native_source_pending",
         taskId,
-        repairAttempt: attempt,
-        receipt,
-      },
-    });
-    await persistOperationProgress(
-      input.db,
-      input.operation,
-      currentState,
-      taskId,
-    );
+        buildPhase: "compiling",
+        buildCheckpoint: "archive_validated",
+        nativeSourceStaging: {
+          assetId: stagingAssetId,
+          sha256: validated.archiveSha256,
+          bytes: validated.sourceZip.length,
+          expiresAt: stagingExpiresAt.toISOString(),
+          taskId,
+          repairAttempt: attempt,
+          receipt,
+        },
+      });
+      await persistOperationProgress(
+        input.db,
+        input.operation,
+        currentState,
+        taskId,
+      );
+    }
   } catch (error) {
+    if (stagedDocumentViewRecovery) throw error;
     if (error instanceof NativeReactSourceError) {
       if (
         currentState?.schemaVersion === 2 &&
@@ -8687,12 +8828,25 @@ async function handleNativeReactSiteBuild(input: {
   }
   let materialized: MaterializedNativeReactSite;
   const materializationStartedAt = Date.now();
+  if (
+    stagedDocumentViewRecovery &&
+    (!offlineResume || offlineResume.expiresAt.getTime() <= materializationStartedAt)
+  ) {
+    throw stagedDocumentViewRecoveryUnavailable(currentState);
+  }
   try {
     currentState = transitionProviderState(currentState, {
       stage: attempt > 0 ? "native_repair_pending" : "native_source_pending",
       taskId,
       buildPhase: "compiling",
       buildCheckpoint: "compile_started",
+      ...(stagedDocumentViewRecovery ? {
+        // Consume the one-time permission before starting the host renderer.
+        stagedDocumentViewRecovery: {
+          ...stagedDocumentViewRecovery,
+          startedAt: new Date(materializationStartedAt).toISOString(),
+        },
+      } : {}),
     });
     await persistOperationProgress(
       input.db,
@@ -8747,6 +8901,24 @@ async function handleNativeReactSiteBuild(input: {
     });
     await input.assertExecutionActive();
   } catch (error) {
+    if (stagedDocumentViewRecovery) {
+      if (input.signal.aborted || (error instanceof Error &&
+        /^SITEOPS_OPERATION_LEASE_(?:LOST|EXPIRED)$/u.test(error.message))) throw error;
+      console.warn("[siteops-manus] staged_document_view_revalidation_failed", {
+        operationId: input.operation.id,
+        buildId: input.context.build.id,
+        code: safeProviderInternalCode(error),
+        diagnosticCodes: error instanceof NativeReactBuildError
+          ? error.diagnostics.slice(0, 8).map((diagnostic) => diagnostic.code)
+          : [],
+      });
+      throw new SiteOpsManusFailure(
+        "BUILD_PRIMARY_RENDER_FAILED",
+        "已暂存源码未通过本次宿主复验，原拒绝记录已保留。",
+        "failed",
+        providerStateV2(currentState),
+      );
+    }
     if (
       error instanceof NativeReactBuildError &&
       [
@@ -8862,7 +9034,9 @@ async function handleNativeReactSiteBuild(input: {
     // 10 s pending forever (e.g. SITE_DESIGN_FEATURED_ROUTE_MISSING). Log the
     // error identity and bound the retries so builds end in a visible state.
     const unclassifiedStreak =
-      (currentState?.nativeUnclassifiedFailureCount ?? 0) + 1;
+      (currentState?.schemaVersion === 2
+        ? (currentState.nativeUnclassifiedFailureCount ?? 0)
+        : 0) + 1;
     console.error("[siteops-manus] materialize_unclassified_failure", {
       operationId: input.operation.id,
       buildId: input.context.build.id,
@@ -8928,6 +9102,16 @@ async function handleNativeReactSiteBuild(input: {
       input.assertExecutionActive,
     );
   } catch (error) {
+    if (stagedDocumentViewRecovery) {
+      if (input.signal.aborted || (error instanceof Error &&
+        /^SITEOPS_OPERATION_LEASE_(?:LOST|EXPIRED)$/u.test(error.message))) throw error;
+      throw new SiteOpsManusFailure(
+        "BUILD_ARTIFACT_PERSIST_FAILED",
+        "已通过宿主复验，但无法保存构建产物，原拒绝记录已保留。",
+        "failed",
+        providerStateV2(currentState),
+      );
+    }
     if (
       error instanceof z.ZodError ||
       error instanceof SiteOpsMaterializationError ||
@@ -9085,6 +9269,11 @@ async function handleNativeReactSiteBuild(input: {
       },
       artifactBindings,
       artifactStaging,
+      ...(stagedDocumentViewRecovery ? {
+        existingTaskOnly: true,
+        stagedDocumentViewRecovery: currentState.stagedDocumentViewRecovery,
+        nativeRejectedCandidateV1: currentState.nativeRejectedCandidateV1,
+      } : {}),
     },
     message: completedSiteBuildMessage(),
   };
@@ -9940,8 +10129,13 @@ export function createManusSiteOpsProviderHandler(
           "attention_required",
         );
       }
+      const stagedRecoveryRequested =
+        rawProviderStateRecord(operation.result)?.stagedDocumentViewRecovery !== undefined;
       let clientPromise: Promise<DashboardAgentClient> | null = null;
       const getClient = () => {
+        // Even a malformed or expired recovery must never fall through to the
+        // ordinary provider poll, credential lookup or task mutation paths.
+        if (stagedRecoveryRequested) throw stagedDocumentViewRecoveryUnavailable(null);
         clientPromise ??= assertFrozenCredential(
           input,
           operation.userId,
@@ -9979,6 +10173,9 @@ export function createManusSiteOpsProviderHandler(
         };
       }
       const state = parsedState.success ? parsedState.data : null;
+      if (stagedRecoveryRequested && operation.kind !== "build_revision") {
+        throw stagedDocumentViewRecoveryUnavailable(state);
+      }
 
       if (operation.kind === "social_package") {
         const client = await getClient();
@@ -10242,6 +10439,35 @@ export function createManusSiteOpsProviderHandler(
             NATIVE_SOURCE_OFFLINE_RESUME_CHECKPOINTS.has(state.buildCheckpoint),
         );
       const context = await loadBuildContext(db, operation);
+      if (stagedRecoveryRequested) {
+        const recoveryState = state?.schemaVersion === 2 ? state : null;
+        const marker = recoveryState?.stagedDocumentViewRecovery;
+        const { contentPlanLocalAssetId, contentPlanSha256 } = context.build;
+        if (
+          !marker ||
+          marker.startedAt ||
+          !recoveryState?.existingTaskOnly ||
+          context.build.workflowVersion !== SITEOPS_MATERIALIZER_V2_9.frontMindVersion ||
+          !context.build.parentBuildId ||
+          !operation.providerTaskId ||
+          context.build.upstreamManusTaskId !== operation.providerTaskId ||
+          !contentPlanLocalAssetId ||
+          !contentPlanSha256
+        ) {
+          throw stagedDocumentViewRecoveryUnavailable(state);
+        }
+        const verdict = stagedDocumentViewRejection(recoveryState, {
+          taskId: operation.providerTaskId,
+          operationId: operation.id,
+          userId: operation.userId,
+          projectId: operation.projectId,
+          contentPlanLocalAssetId,
+          contentPlanSha256,
+        });
+        if (verdict?.verdictSignature !== marker.verdictSignature) {
+          throw stagedDocumentViewRecoveryUnavailable(state);
+        }
+      }
       const hostOwnedContentBuild = usesHostOwnedContentDraft(
         context.build.workflowVersion,
       );
