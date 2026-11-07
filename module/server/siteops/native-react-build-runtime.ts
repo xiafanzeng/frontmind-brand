@@ -2220,9 +2220,8 @@ async function runBrowserQaStrict(input: {
   let contentReceipt: NativeContentReceiptV1 | null = null;
   const contentPlanSnapshots: NativeContentPlanDomSnapshot[] = [];
   const renderedUserMedia = new Set<string>();
-  try {
-    assertNotAborted(input.abortSignal);
-    const browser = await chromium.launch({
+  const launchQaBrowser = () =>
+    chromium.launch({
       headless: true,
       chromiumSandbox: false,
       args: ["--disable-background-networking", "--disable-sync"],
@@ -2233,6 +2232,9 @@ async function runBrowserQaStrict(input: {
         PATH: path.dirname(process.execPath),
       },
     });
+  try {
+    assertNotAborted(input.abortSignal);
+    const browser = await launchQaBrowser();
     try {
       browserAvailable = true;
       const context = await browser.newContext({
@@ -3248,7 +3250,7 @@ async function runBrowserQaStrict(input: {
           }
         }
       };
-      for (const [routeIndex, route] of input.routes.entries()) {
+      for (const route of input.routes) {
         if (privatePreviewQa) {
           await navigateAndAssertRendered(route, false, false);
         }
@@ -3259,26 +3261,6 @@ async function runBrowserQaStrict(input: {
         );
         if (input.contentPlan) contentPlanSnapshots.push(snapshot);
         await auditDocumentViewRoute(route);
-        if (routeIndex >= 3) continue;
-        const axe = await new AxeBuilder({ page })
-          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-          .analyze();
-        for (const violation of axe.violations.filter((value) =>
-          ["critical", "serious"].includes(value.impact ?? ""),
-        )) {
-          axeViolationCount += 1;
-          axeViolationIds.add(violation.id);
-        }
-      }
-      if (input.contentPlan) {
-        if (!input.contentPlanSha256) {
-          throwContentPlanInvalid("CONTENT_PLAN_SHA_REQUIRED");
-        }
-        contentReceipt = auditSiteContentPlanRenderedRoutes({
-          plan: input.contentPlan,
-          contentPlanSha256: input.contentPlanSha256,
-          snapshots: contentPlanSnapshots,
-        });
       }
       const missingUserMedia = input.requiredUserMedia.filter(
         (asset) => !renderedUserMedia.has(asset.publicPath),
@@ -3293,6 +3275,36 @@ async function runBrowserQaStrict(input: {
             column: null,
           })),
         );
+      }
+      await navigateAndAssertRendered("/", privatePreviewQa, false);
+      screenshots.push({
+        path: "screenshots/home-1440.png",
+        bytes: Buffer.from(
+          await page.screenshot({ fullPage: true, type: "png" }),
+        ),
+      });
+      await page.setViewportSize({ width: 390, height: 844 });
+      for (const route of input.routes) {
+        assertNotAborted(input.abortSignal);
+        await navigateAndAssertRendered(route, privatePreviewQa, false);
+        await auditDocumentViewRoute(route);
+      }
+      await navigateAndAssertRendered("/", privatePreviewQa, false);
+      screenshots.push({
+        path: "screenshots/home-390.png",
+        bytes: Buffer.from(
+          await page.screenshot({ fullPage: true, type: "png" }),
+        ),
+      });
+      if (input.contentPlan) {
+        if (!input.contentPlanSha256) {
+          throwContentPlanInvalid("CONTENT_PLAN_SHA_REQUIRED");
+        }
+        contentReceipt = auditSiteContentPlanRenderedRoutes({
+          plan: input.contentPlan,
+          contentPlanSha256: input.contentPlanSha256,
+          snapshots: contentPlanSnapshots,
+        });
       }
       const missingKnowledgeMedia = input.requiredKnowledgeMedia.flatMap(
         (asset) =>
@@ -3314,27 +3326,6 @@ async function runBrowserQaStrict(input: {
           })),
         );
       }
-      await page.setViewportSize({ width: 1440, height: 1000 });
-      await navigateAndAssertRendered("/", privatePreviewQa, false);
-      screenshots.push({
-        path: "screenshots/home-1440.png",
-        bytes: Buffer.from(
-          await page.screenshot({ fullPage: true, type: "png" }),
-        ),
-      });
-      await page.setViewportSize({ width: 390, height: 844 });
-      for (const route of input.routes) {
-        assertNotAborted(input.abortSignal);
-        await navigateAndAssertRendered(route, privatePreviewQa, false);
-        await auditDocumentViewRoute(route);
-      }
-      await navigateAndAssertRendered("/", privatePreviewQa, false);
-      screenshots.push({
-        path: "screenshots/home-390.png",
-        bytes: Buffer.from(
-          await page.screenshot({ fullPage: true, type: "png" }),
-        ),
-      });
     } finally {
       await browser.close().catch(() => undefined);
     }
@@ -3415,6 +3406,49 @@ async function runBrowserQaStrict(input: {
         code: "NATIVE_BROWSER_QA_UNAVAILABLE",
         checkId: "browser:runtime",
       });
+    }
+  }
+  // Axe is advisory and can exhaust a constrained Chromium renderer. Run it
+  // after both required viewports have passed, in a separate browser lifetime.
+  if (browserAvailable && !input.abortSignal?.aborted) {
+    try {
+      const browser = await launchQaBrowser();
+      try {
+        const context = await browser.newContext({
+          viewport: { width: 1440, height: 1000 },
+          reducedMotion: "reduce",
+          serviceWorkers: "block",
+        });
+        const page = await context.newPage();
+        await page.route("**/*", (route) =>
+          new URL(route.request().url()).origin === origin
+            ? route.continue()
+            : route.abort("blockedbyclient"),
+        );
+        for (const route of input.routes.slice(0, 3)) {
+          if (input.abortSignal?.aborted) break;
+          const browserPath = privatePreviewQa
+            ? `${privatePreviewPrefix}${route.slice(1)}`
+            : route;
+          const response = await page.goto(`${origin}${browserPath}`, {
+            waitUntil: "networkidle",
+            timeout: 15_000,
+          });
+          if (!response?.ok()) throw new Error("NATIVE_AXE_ROUTE_UNAVAILABLE");
+          const axe = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+            .analyze();
+          for (const violation of axe.violations) {
+            if (violation.impact !== "critical" && violation.impact !== "serious") continue;
+            axeViolationCount += 1;
+            axeViolationIds.add(violation.id);
+          }
+        }
+      } finally {
+        await browser.close().catch(() => undefined);
+      }
+    } catch {
+      warnings.push({ phase: "browser_qa", code: "NATIVE_AXE_UNAVAILABLE", checkId: "axe:runtime" });
     }
   }
   for (const violationId of [...axeViolationIds].sort()) {
