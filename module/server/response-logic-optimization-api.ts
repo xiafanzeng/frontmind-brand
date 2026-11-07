@@ -1,3 +1,4 @@
+import {buildOptimizationReview} from "../contracts/response-logic-change-review.js";
 import {responseLogicPublicExecution} from "./response-logic-public-execution.js";
 import { createHash } from "node:crypto";
 import { Router, type Response } from "express";
@@ -107,6 +108,7 @@ const optimizationStartInputSchema = z
 const optimizationStatusQuerySchema = z
   .object({
     progress: z.literal("1").optional(),
+    review: z.literal("1").optional(),
     questionId: z.string().trim().min(1).max(191),
     expectedRevision: z.coerce.number().int().positive(),
     judgeTaskId: z.string().trim().min(1).max(255),
@@ -289,7 +291,7 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
   router.get("/recovery", async (request, res) => {
     res.setHeader("Cache-Control", "no-store");
     try {
-      const parsed = optimizationStatusQuerySchema.omit({progress: true}).safeParse(request.query);
+      const parsed = optimizationStatusQuerySchema.omit({progress: true, review: true}).safeParse(request.query);
       if (!parsed.success) { judgeError(res, 400, "INVALID_RESPONSE_LOGIC_OPTIMIZATION_INPUT", "优化恢复查询格式不完整"); return; }
       const ctx = await resolveContext(request as unknown as CoreRequest, res, parsed.data.questionId, parsed.data.expectedRevision);
       if (!ctx) return;
@@ -604,6 +606,7 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
           evaluatedAt: new Date().toISOString(),
           optimization: schemaResult.data,
         }),
+        ...(parsed.data.review === "1" ? {review: buildOptimizationReview(logic, schemaResult.data)} : {}),
         ...progress,
       });
     } catch (error) {

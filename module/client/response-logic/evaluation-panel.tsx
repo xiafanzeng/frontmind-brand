@@ -117,7 +117,7 @@ export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeRe
     :{label:"暂无待处理问题",tone:"ok" as const};
   return <section className="rl-eval-root" aria-label="应答逻辑评估">
     <div className="rl-eval-back"><button type="button" className="rl-eval-back-button" onClick={onBack}>← 返回应答逻辑详情</button></div>
-    <header className="rl-eval-heading"><div><h2>应答逻辑评估 · {question}</h2></div></header>
+    <header className="rl-eval-heading"><div><h2>应答逻辑评估</h2></div></header>
     <WorkbenchSteps step={1}/>
     {judgePhase!=="idle"&&judgePhase!=="completed"&&<TaskStageCard flow="judge" phase={judgePhase} taskId={judgeTaskId} execution={judgeExecution} error={judgeError} errorCode={judgeErrorCode} onRetry={onRetry} retryLabel="重新发起评估" onResume={onResume} failureActions={onRegenerate ? <div className="rl-regenerate-actions">{onRetry && <button type="button" onClick={onRetry}>重新发起评估</button>}<RegenerateButton onClick={onRegenerate} disabled={regenerateDisabled}/></div> : undefined}/>}
     {judgePhase==="idle"&&<div className="rl-eval-main"><div className="rl-eval-grid"><WorkbenchCard title="尚未评估"><p className="rl-eval-score-description">当前应答逻辑尚未发起 LLM 语义评估。</p></WorkbenchCard></div></div>}
@@ -148,7 +148,7 @@ export function ResponseLogicEvaluationPanel({question,intent,judgePhase,judgeRe
             <p><b>修改建议</b>{item.suggestion}</p>
           </div>
         </details>)}</div>:<p className="rl-dx-empty">当前四维评估未发现待处理问题。</p>}
-        <div className="rl-eval-diagnosis-method">数据来源：{dataSourceLabel ?? "LLM 语义评估（异步模型任务）"}<br/>评分基于本次问题、应答和知识依据；刷新可读取原评估，内容变更后需重新评估。</div></aside>
+        </aside>
     </div>
     <div className="rl-eval-actions"><span>优化建议需人工审核后采用；采用为本地预览状态，不写入服务器。</span><button type="button" className="rl-eval-outline" onClick={onBack}>返回详情</button><button type="button" className="rl-eval-primary" onClick={onOptimize}>生成优化方案 →</button></div>
     </>;})()}

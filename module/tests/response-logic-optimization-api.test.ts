@@ -6,6 +6,8 @@ import { createResponseLogicOptimizationRouter, optimizerSkillDirectoryCandidate
 import type { CoreRequest, CredentialHandle } from "../server/response-logic-core-ports";
 import type { ResponseLogicRecordDto } from "../contracts/response-logic";
 import { fingerprintLogic } from "../contracts/response-logic-evaluation";
+import {buildOptimizationReview} from "../contracts/response-logic-change-review";
+import {optimizationEnvelopeSchema} from "../contracts/response-logic-optimization";
 import { judgeOutputSchema, type JudgeOutput } from "../contracts/response-logic-judge";
 import { optimizationOutputSchema, verifyOptimizationEvidence, verifyOptimizedDraftStructure, type OptimizationOutput } from "../contracts/response-logic-optimization";
 
@@ -222,6 +224,37 @@ const postStart = (url: string, body: unknown, judgeTaskId: string = JUDGE_TASK_
 
 const getStatus = (url: string, taskId: string, query = `questionId=q1&expectedRevision=5&judgeTaskId=${JUDGE_TASK_ID}`) =>
   fetch(`${url}/api/response-logic/optimization/tasks/${taskId}/status?${query}`);
+
+describe("opt-in verified change review",()=>{
+  const query=`questionId=q1&expectedRevision=5&judgeTaskId=${JUDGE_TASK_ID}&review=1`;
+  const optimizerEvents=[optimizationEvent(JSON.stringify(validOptimization)),optimizationStopped];
+  it("returns exact real differences only on opt-in, preserving old strict clients and avoiding writes",async()=>{
+    const {url,effects}=await makeApp({optimizerEvents});
+    const legacy=await (await getStatus(url,OPT_TASK_ID)).json();
+    expect(optimizationEnvelopeSchema.safeParse(legacy).success).toBe(true);
+    expect(legacy.review).toBeUndefined();
+    const response=await getStatus(url,OPT_TASK_ID,query);
+    expect(response.status).toBe(200);
+    const current=await response.json();
+    expect(current.optimization).toEqual(validOptimization);
+    expect(current.review).toEqual(buildOptimizationReview(logic,validOptimization));
+    expect(effects).toEqual({uploads:0,creates:0,bindings:0,lookups:0});
+  });
+  it.each([{authenticated:false},{taskOwned:false},{record:null}])("does not expose review for denied context: %j",async denial=>{
+    const {url}=await makeApp({...denial,optimizerEvents});
+    const response=await getStatus(url,OPT_TASK_ID,query);
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect((await response.json()).review).toBeUndefined();
+  });
+  it("retains revision and evidence validation before projecting",async()=>{
+    const {url}=await makeApp({optimizerEvents});
+    expect((await getStatus(url,OPT_TASK_ID,query.replace("Revision=5","Revision=4"))).status).toBe(409);
+    const invalid={...validOptimization,changes:[{field:"concern",summary:"无效",evidence:[{source:"draft",excerpt:"不存在的证据",supports:"不能通过"}]}]};
+    const bad=await makeApp({optimizerEvents:[optimizationEvent(JSON.stringify(invalid)),optimizationStopped]});
+    const response=await getStatus(bad.url,OPT_TASK_ID,query);
+    expect(response.status).toBe(422);expect((await response.json()).review).toBeUndefined();
+  });
+});
 
 describe("optimizer read-only recovery", () => {
   const recover = (url: string, revision = 5) => fetch(`${url}/api/response-logic/optimization/recovery?questionId=q1&expectedRevision=${revision}&judgeTaskId=${JUDGE_TASK_ID}`);

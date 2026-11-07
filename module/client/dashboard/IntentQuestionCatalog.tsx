@@ -1,7 +1,7 @@
 import {type ReactNode} from "react";
-import {Search} from "lucide-react";
-import {keywordCategoryLabel, keywordCategoryKey} from "@frontmind/module-ui/keyword-categories";
+import {Search, ChevronRight, ArrowDown, ArrowDownUp} from "lucide-react";
 import type {IntentQuestion, IntentEvaluation, IntentSkillJob} from "../../contracts/intent-workbench";
+import type {IntentCatalogSort} from "./intent-catalog-view";
 
 /** Supplied by the intent owner's host; this module only owns the evaluation entry. */
 export type IntentCatalogIntegration = {
@@ -13,19 +13,18 @@ export type IntentCatalogIntegration = {
   onDeleteQuestion?: (question: IntentQuestion) => void;
 };
 export const answerStatusLabel = (status?: string) => status === "published" ? "已有正式应答" : status === "pending" ? "待制作应答" : "暂未同步";
-function categoryTone(category: string) {
-  if (category.trim().toLowerCase() === 'brand_monitoring' || category === '品牌监测') return 'slate';
-  const key = keywordCategoryKey(category);
-  return key ? ({industry:'clay',competitor_comparison:'ochre',reputation:'mauve',product_scenario:'sage'} as const)[key] : 'neutral';
+function CatalogCell({children, secondary}: {children: ReactNode; secondary?: ReactNode}) {
+  return <div className="iw-catalog-cell"><div className="iw-catalog-primary">{children}</div><div className={`iw-catalog-secondary${secondary ? "" : " iw-catalog-secondary-empty"}`}>{secondary}</div></div>;
 }
-export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, category, status, selected, pending, page, pageCount, total, savedPlanIds,
-  onSearch, onCategory, onStatus, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
+export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, sort = "newest", onSort, selected, pending, page, pageCount, total, savedPlanIds,
+  onSearch, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
   evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; received: string[];
-  search: string; category: string; status: string; selected: string[]; pending: boolean;
+  search: string; selected: string[]; pending: boolean;
+  sort?: IntentCatalogSort; onSort?: (sort: IntentCatalogSort) => void;
   page: number; pageCount: number; total: number;
   savedPlanIds: string[]; onViewPlan: (id: string) => void; onGeneratePlan: (id: string) => void;
-  onSearch: (value: string) => void; onCategory: (value: string) => void; onStatus: (value: string) => void;
+  onSearch: (value: string) => void;
   onToggle: (id: string) => void; onSelectPage: (checked: boolean) => void; onClear: () => void;
   onEvaluate: (ids: string[]) => void; onPage: (page: number) => void;
   onHistory: () => void; historyCount: number;
@@ -33,32 +32,49 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
   mutationBlockedIds?: string[];
   expandedGaps?: string[]; onGapToggle?: (id: string, open: boolean) => void;
 }) {
-  const categories = [...new Set(questions.map(question => question.category))];
+  const scoreHeader = (field: "value" | "support", label: string) => <th aria-sort={sort === field ? "ascending" : "none"}>
+    <button className="iw-catalog-sort" type="button" aria-label={`按${label}从低到高排列`} aria-pressed={sort === field}
+      title={sort === field ? "已按分数从低到高排列，再点恢复最新加入优先" : "按分数从低到高排列"}
+      onClick={() => onSort?.(sort === field ? "newest" : field)}>
+      {label}{sort === field ? <ArrowDown size={14} aria-hidden="true"/> : <ArrowDownUp size={14} aria-hidden="true"/>}
+    </button>
+  </th>;
   return <>
     <header className="iw-header iw-catalog-header">
       <div>{headerStatus ? <div className="iw-catalog-title-row"><h1>优化问题</h1>{headerStatus}</div> : <h1>优化问题</h1>}</div>
       <div className="iw-header-tools">
         <label className="iw-search"><Search size={17}/><input aria-label="搜索优化问题" placeholder="搜索问题" value={search} onChange={event => onSearch(event.target.value)}/></label>
-        <select aria-label="问题分类" value={category} onChange={event => onCategory(event.target.value)}><option value="all">全部类别</option>{categories.map(value => <option key={value} value={value}>{keywordCategoryLabel(value) || value}</option>)}</select>
-        <select aria-label="问题状态" value={status} onChange={event => onStatus(event.target.value)}><option value="all">全部状态</option><option value="unevaluated">待评估</option><option value="supported">充分支撑</option><option value="partial">部分支撑</option><option value="missing">未支撑</option><option value="published">已有正式应答</option><option value="pending">待制作应答</option><option value="unknown">暂未同步</option></select>
         {integration?.onAddQuestion && <button className="iw-primary" onClick={integration.onAddQuestion}>新增问题</button>}
       </div>
     </header>
     {taskFeedback}
     {received.length > 0 && <div className="iw-handoff-banner" role="status"><div><strong>已接收所选 {received.length} 条问题</strong><p>{activeJob?.kind === "evaluate" && received.some(id => activeJob.questionIds.includes(id)) ? "问题价值正在评估；完成后可查看知识支撑并批量生成方案。" : received.every(id => evaluations.some(item => item.questionId === id)) ? "问题评估已完成，可复用已有结果并生成优化方案。" : "问题已加入清单，可继续评估问题价值与知识支撑。"}</p></div></div>}
     <section className="iw-panel iw-table-wrap iw-catalog-table"><table>
-      <thead><tr><th><input type="checkbox" aria-label="选择当前页问题" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => onSelectPage(event.target.checked)}/></th><th>候选问题</th><th>问题价值</th><th>知识支撑</th><th>主要缺口</th><th>操作</th></tr></thead>
+      <colgroup><col className="iw-catalog-col-select"/><col className="iw-catalog-col-question"/><col className="iw-catalog-col-value"/><col className="iw-catalog-col-support"/><col className="iw-catalog-col-gaps"/><col className="iw-catalog-col-actions"/></colgroup>
+      <thead><tr><th><input type="checkbox" aria-label="选择当前页问题" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => onSelectPage(event.target.checked)}/></th><th>候选问题</th>{scoreHeader("value", "问题价值")}{scoreHeader("support", "知识支撑")}<th>主要缺口</th><th>操作</th></tr></thead>
       <tbody>{visible.map(question => {
         const evaluation = evaluations.find(item => item.questionId === question.id);
         const evaluating = activeJob?.kind === "evaluate" && activeJob.questionIds.includes(question.id);
         const gaps = evaluation?.points.filter(point => point.status !== "supported");
-        const support = !evaluation ? undefined : evaluation.support >= 80 ? "supported" : evaluation.support >= 50 ? "partial" : "missing";
-        return <tr key={question.id} data-question-id={question.id} className={`${selected.includes(question.id) ? "selected" : ""} ${received.includes(question.id) ? "iw-new-row" : ""}`}>
-        <td><input type="checkbox" aria-label={`选择${question.question}`} checked={selected.includes(question.id)} onChange={() => onToggle(question.id)}/></td>
-        <td><b>{question.question}</b> {received.includes(question.id) && <span className="iw-tag">新加入</span>}<p className="iw-evidence"><span className="iw-catalog-category" data-category={question.category} data-tone={categoryTone(question.category)}>{keywordCategoryLabel(question.category) || question.category}</span></p></td>
-        <td>{evaluating ? "评估中…" : evaluation ? <button className="iw-score-link" disabled={pending} aria-label={`查看评估：${question.question}`} onClick={() => onEvaluate([question.id])}><strong className={evaluation.value >= 80 ? "good" : "warn"}>{evaluation.value} / 100</strong></button> : "待评估"}</td>
-        <td>{evaluating ? "评估中…" : evaluation ? <><button className="iw-score-link" disabled={pending} aria-label={`查看知识支撑：${question.question}`} onClick={() => onEvaluate([question.id])}><strong>{evaluation.support} / 100</strong></button><p><span className={`iw-tag ${support}`}>{support === "supported" ? "较充分" : support === "partial" ? "部分支撑" : "支撑不足"}</span></p></> : "待评估"}</td>
-        <td>{evaluating ? "正在检查知识依据" : !gaps ? "评估后显示" : gaps.length ? <><span className={`iw-tag ${gaps[0].status}`}>{gaps[0].title}</span>{gaps.length > 1 && <details className="iw-catalog-gaps" open={onGapToggle ? expandedGaps.includes(question.id) : undefined} onToggle={event => onGapToggle?.(question.id, event.currentTarget.open)}><summary><span className="iw-gap-expand">展开其余 {gaps.length - 1} 项</span><span className="iw-gap-collapse">收起</span></summary><ul>{gaps.slice(1).map((point,index) => <li key={`${index}-${point.title}`}>{point.title}</li>)}</ul></details>}</> : "暂无关键缺口"}</td>
+        return <tr key={question.id} data-question-id={question.id} className={`${selected.includes(question.id) ? "selected" : ""} ${received.includes(question.id) ? "iw-new-row" : ""}`}
+          aria-selected={selected.includes(question.id)} tabIndex={0}
+          onClick={event => {
+            if ((event.target as Element).closest("button, input, label, a, select, textarea, summary, [role=button]")) return;
+            onToggle(question.id);
+          }}
+          onKeyDown={event => {
+            if (event.target !== event.currentTarget || (event.key !== " " && event.key !== "Enter")) return;
+            event.preventDefault();
+            onToggle(question.id);
+          }}>
+        <td><CatalogCell><input type="checkbox" aria-label={`选择${question.question}`} checked={selected.includes(question.id)} onChange={() => onToggle(question.id)}/></CatalogCell></td>
+        <td><CatalogCell><b>{question.question}</b></CatalogCell></td>
+        <td><CatalogCell>{evaluating ? "评估中…" : evaluation ? <button className="iw-score-link" disabled={pending} aria-label={`查看评估：${question.question}`} onClick={() => onEvaluate([question.id])}><strong className={evaluation.value >= 80 ? "good" : "warn"}>{evaluation.value} / 100</strong></button> : "待评估"}</CatalogCell></td>
+        <td><CatalogCell>{evaluating ? "评估中…" : evaluation ? <button className="iw-score-link" disabled={pending} aria-label={`查看知识支撑：${question.question}`} onClick={() => onEvaluate([question.id])}><strong>{evaluation.support} / 100</strong></button> : "待评估"}</CatalogCell></td>
+        <td><CatalogCell>{evaluating ? "正在检查知识依据" : !gaps ? "评估后显示" : gaps.length ? <details className="iw-catalog-gaps" open={onGapToggle ? expandedGaps.includes(question.id) : undefined} onToggle={event => onGapToggle?.(question.id, event.currentTarget.open)}>
+          <summary><span className="iw-gap-summary-text"><span className="iw-gap-title" title={gaps[0].title}>{gaps[0].title}</span>{gaps.length > 1 && <span className="iw-gap-suffix">等</span>}</span><ChevronRight size={15} aria-hidden="true"/></summary>
+          <ul>{gaps.map((point,index) => <li key={`${index}-${point.title}`}><span className="iw-gap-index" aria-hidden="true">{String(index + 1).padStart(2,"0")}</span><span>{point.title}</span></li>)}</ul>
+        </details> : "暂无关键缺口"}</CatalogCell></td>
         <td><div className="iw-catalog-actions">
           <button className="iw-primary iw-answer-entry" disabled={pending || !integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
           {savedPlanIds.includes(question.id)

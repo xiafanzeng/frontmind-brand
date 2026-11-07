@@ -79,7 +79,8 @@ describe("standalone response-logic navigation (integration)", () => {
 
     const search = await screen.findByRole("textbox", {name:"搜索优化问题"});
     fireEvent.change(search,{target:{value:"隆鼻"}});
-    fireEvent.change(screen.getByRole("combobox", {name:"问题分类"}),{target:{value:"产品场景词"}});
+    expect(screen.queryByRole("combobox", {name:"问题分类"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name:"按知识支撑从低到高排列"}));
     fireEvent.click(screen.getByRole("checkbox",{name:`选择${seedQuestion.question}`}));
     const enter = await screen.findByRole("button", { name: "进入应答逻辑" });
     expect((enter as HTMLButtonElement).disabled).toBe(false);
@@ -93,7 +94,8 @@ describe("standalone response-logic navigation (integration)", () => {
     await waitFor(() => expect(window.location.search).toBe("?view=intent"));
     expect(await screen.findByRole("button", { name: `查看评估：${seedQuestion.question}` })).toBeTruthy();
     expect(screen.getByRole("textbox", {name:"搜索优化问题"})).toHaveProperty("value","隆鼻");
-    expect(screen.getByRole("combobox", {name:"问题分类"})).toHaveProperty("value","产品场景词");
+    expect(screen.queryByRole("combobox", {name:"问题分类"})).toBeNull();
+    expect(screen.getByRole("button", {name:"按知识支撑从低到高排列"}).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("checkbox", {name:`选择${seedQuestion.question}`})).toHaveProperty("checked",true);
   });
 
