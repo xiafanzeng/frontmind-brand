@@ -106,7 +106,9 @@ describe("ModuleWorkspace redesigned live routes", () => {
         />,
       );
       const boundary = view.container.querySelector(".fm-brand-theme");
-      expect(boundary?.getAttribute("data-brand-page")).toBe(page);
+      const visiblePage = page === "response-logic" ? "intent" : page;
+      expect(boundary?.getAttribute("data-brand-page")).toBe(visiblePage);
+      if (page === "response-logic") expect(boundary?.querySelector('[data-testid="intent-surface"]')).toBeTruthy();
       view.unmount();
     }
   });
