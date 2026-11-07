@@ -168,6 +168,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     catch (error) {throw new IntentWorkbenchError("MODEL_UNAVAILABLE", error instanceof IntentSkillRuntimeError ? error.message : "当前模型服务不可用，请检查服务权限与 API 配置", 503);}
     const data = await knowledge();
     if (!data.nodes.length) throw new IntentWorkbenchError("KNOWLEDGE_MISSING", "请先生成品牌知识库");
+    if (kind === "plan" && !data.nodes.some(node => node.editable))
+      throw new IntentWorkbenchError("KNOWLEDGE_READ_ONLY", "当前知识库没有可编辑节点，请先打开知识库确认可编辑版本");
     if (Buffer.byteLength(JSON.stringify(data.nodes), "utf8") > 6 * 1024 * 1024)
       throw new IntentWorkbenchError("KNOWLEDGE_LIMIT", "当前知识库过大，请缩小知识范围后评估");
     let reserved!: IntentSkillJob;
@@ -615,7 +617,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         }
         if (!plan) throw new IntentWorkbenchError("PLAN_MISSING", "请先生成方案");
         plan.actions = knowledgeOnlyIntentPlan(plan).actions;
-        if (!plan.actions.length) throw new IntentWorkbenchError("PLAN_REGENERATION_REQUIRED", "旧方案仅包含题干修改，请重新生成知识库优化方案");
+        if (!plan.actions.length) throw new IntentWorkbenchError("PLAN_REGENERATION_REQUIRED", "旧方案不包含正文修改，请重新生成知识库优化方案");
         for (const edit of input.actions) {
           const action = plan.actions.find(item => item.id === edit.id);
           if (!action) throw new IntentWorkbenchError("ACTION_MISSING", "方案动作不存在");
@@ -656,11 +658,13 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         if (!source || source.knowledgeHash !== intentHash(executionKnowledge.nodes) || source.questionsHash !== questionsHash(source, ledger.state))
           throw new IntentWorkbenchError("PLAN_STALE", "方案依据的知识或问题已变化，请重新生成方案");
         const safe = knowledgeOnlyIntentPlan(plan);
-        if (!safe.actions.length) throw new IntentWorkbenchError("PLAN_REGENERATION_REQUIRED", "旧方案仅包含题干修改，请重新生成知识库优化方案");
+        if (!safe.actions.length) throw new IntentWorkbenchError("PLAN_REGENERATION_REQUIRED", "旧方案不包含正文修改，请重新生成知识库优化方案");
         return safe;
       });
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({questionId: plan.questionId, action: structuredClone(action), status: "pending" as const})));
       if (!changes.length) throw new IntentWorkbenchError("EMPTY_PLAN", "请至少选择一项动作");
+      if (changes.some(change => change.action.kind === "node" && change.action.before.trim() === change.action.after.trim()))
+        throw new IntentWorkbenchError("EMPTY_NODE_CHANGE", "选中的正文修改与原文相同，请修改内容或取消采纳该动作");
       const nodeIds = changes.filter(change => change.action.kind === "node").map(change => change.action.nodeId);
       if (new Set(nodeIds).size !== nodeIds.length) throw new IntentWorkbenchError("NODE_CONFLICT", "多个方案修改同一知识节点，请分别执行并重新生成方案");
       ledger.state.receipts.push({id: input.clientRequestId, status: "running", createdAt: new Date().toISOString(), changes,
@@ -697,6 +701,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
               expectedResetRevision: details.coordinates.resetRevision, contentMarkdown: change.action.after,
             });
           }
+          const savedNode = (await knowledge()).nodes.find(item => item.id === change.action.nodeId);
+          if (!savedNode || savedNode.content !== change.action.after)
+            throw new IntentWorkbenchError("NODE_WRITE_UNCONFIRMED", "尚未确认正文已写入知识库，请重新读取后核对");
         }
       } catch (error) {
         failure = error instanceof IntentWorkbenchError ? error.message : "节点保存未完成，原文已保留；请重新读取知识库";
@@ -708,12 +715,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         if (!failure && change.action.kind === "question") {
           failure = "已拦截旧方案的题干修改；知识优化必须保持原问题不变";
         }
-        if (!failure && change.action.kind === "todo") {
-          const todoId = `${receipt.id}:${change.action.id}`;
-          if (!ledger.state.todos.some(todo => todo.id === todoId)) ledger.state.todos.push({
-            id: todoId, questionId: change.questionId, title: change.action.after, status: "pending", source: "",
-          });
-        }
+        if (!failure && change.action.kind === "todo") failure = "旧资料待办动作不再执行，请重新生成正文修改方案";
         target.status = failure ? "failed" : "succeeded"; target.error = failure;
       });
     }

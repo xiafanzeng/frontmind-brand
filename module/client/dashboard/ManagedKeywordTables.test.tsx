@@ -15,7 +15,7 @@ import ManagedKeywordTables from "./ManagedKeywordTables";
 afterEach(cleanup);
 const tables = [
   {id: "legacy", title: "品牌全域词库", columns: ["问题", "核心词分类"], rows: Array.from({length: 160}, (_, i) => [`历史问题${i}`, "行业排名词"])},
-  {id: "question-template-api:v1", title: "已保存的推荐问题", columns: ["问题", "核心词分类"], rows: [["新推荐问题", "行业排名词"], ["第二条推荐问题", "美誉舆情词"]]},
+  {id: "question-template-api:v1", title: "已保存的推荐问题", columns: ["问题", "核心词", "核心词分类", "问题细分", "热度", "企业名称", "核心词来源"], rows: [["新推荐问题", "品牌选择", "行业排名词", "", "680", "台心医院", "category"], ["第二条推荐问题", "品牌资质", "美誉舆情词", "", "649", "台心医院", "brand"]]},
 ];
 describe("推荐保存与历史词库", () => {
   it("已保存词条合并展示来源，历史保留160条并分页，选择交接实际推荐坐标", () => {
@@ -30,11 +30,14 @@ describe("推荐保存与历史词库", () => {
     expect(onUseQuestions).toHaveBeenCalledWith([{question: "新推荐问题", category: "industry", tableId: "question-template-api:v1", rowIndex: 0}]);
     expect(screen.getByText("历史问题0")).toBeTruthy();
     expect(screen.queryByText("历史问题20")).toBeNull();
-    expect(screen.getByText("1 / 8 页")).toBeTruthy();
+    expect(screen.getByText("1 / 9 页")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", {name: "下一页"})[0]);
     expect(screen.getByText("历史问题20")).toBeTruthy();
     expect(screen.queryByText("历史问题0")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "上一页"}));
     expect(screen.getByRole("checkbox", {name: "选择新推荐问题"})).toHaveProperty("checked", true);
+    expect(screen.getAllByRole("table")).toHaveLength(1);
+    expect(screen.queryByText(/条词条$/)).toBeNull();
   });
   it("来源词条被优化改写后仍能找到已有评分并直接查看", () => {
     const state = emptyIntentState(), onViewEvaluation = vi.fn();
@@ -129,3 +132,19 @@ describe("推荐保存与历史词库", () => {
     expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"}).textContent).toBe("评估问题");
   });
 });
+
+ it("选择与评估处于独立列，查看评分不会切换选择", () => {
+  const state = emptyIntentState(), onViewEvaluation = vi.fn();
+  state.questions.push({id:"saved-1",question:"新推荐问题",tableId:"question-template-api:v1",rowIndex:0,category:"industry",subdivision:"",sourceRevision:6});
+  state.evaluations.push({questionId:"saved-1",value:70,support:64,method:"skill_v1",dimensions:[],points:[],findings:[],evaluatedAt:"2026-10-28T00:00:00Z"});
+  render(<ManagedKeywordTables tables={tables} generationEnabled onUseQuestions={vi.fn()} optimizationState={state} onViewEvaluation={onViewEvaluation}/>);
+  fireEvent.click(screen.getByRole("button", {name:/已保存词条 162/}));
+  expect(screen.getAllByRole("columnheader", {name:"选择"}).length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("columnheader", {name:"评估"}).length).toBeGreaterThan(0);
+  const checkbox = screen.getByRole("checkbox", {name:"选择新推荐问题"});
+  const evaluation = screen.getByRole("button", {name:"查看评估：新推荐问题"});
+  expect(checkbox.closest("td")).not.toBe(evaluation.closest("td"));
+  fireEvent.click(evaluation);
+  expect(checkbox).toHaveProperty("checked", false);
+  expect(onViewEvaluation).toHaveBeenCalledWith("saved-1");
+ });

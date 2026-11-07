@@ -1,3 +1,4 @@
+import {readPreviewCatalog} from "./keyword-preview";
 import {createIntentPlan, emptyIntentState, evaluateIntent, knowledgeOnlyIntentPlan, type IntentWorkspace, type IntentState, type IntentNode, type IntentQuestion} from "../module/contracts/intent-workbench";
 import type {IntentWorkbenchApi} from "../module/client/dashboard/intent-workbench-api";
 import {updateIntentQuestionSchema, deleteIntentQuestionSchema, mutateIntentQuestion} from "../module/contracts/intent-question-mutations";
@@ -8,14 +9,72 @@ const demoNodes: IntentNode[] = [
   {id: "repair", title: "双眼皮修复项目", branch: "眼部项目", verified: false, editable: true, content: "# 双眼皮修复项目\n\n双眼皮修复需评估医生经验、瘢痕和组织条件。适用人群与选择标准应以面诊为准。修复风险与案例限制资料待核验。"},
 ];
 export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
-  const key = `frontmind:intent-preview:v1:${scope}`;
+  const reviewMode = new URLSearchParams(window.location.search).get("review") === "question-ui";
+  const key = `frontmind:intent-preview:v1:${scope}${reviewMode ? ":question-ui" : ""}`;
   let memory: IntentWorkspace = {revision: 0, state: emptyIntentState(), nodes: structuredClone(demoNodes), preview: true};
   try {const stored = localStorage.getItem(key); if (stored) {const data = JSON.parse(stored); if (data.state?.version === 1 && data.preview === true) memory = data;}} catch {}
+  if (reviewMode && !memory.state.questions.length) {
+    const questions = ["隆鼻材料应该怎么选", "东莞整形美容医院哪家好", "东莞双眼皮修复医院哪家专业", "隆鼻术后应该如何护理", "整形医院的资质怎么核验", "不同隆鼻材料的费用有什么区别"];
+    memory.state.questions = questions.map((question, rowIndex) => ({id:`local-brand:${rowIndex}`, question,
+      category: [1, 2].includes(rowIndex) ? "industry" : rowIndex === 4 ? "reputation" : "product_scenario",
+      subdivision:"", tableId:"local-brand", rowIndex, sourceRevision:1}));
+    memory.state.evaluations = memory.state.questions.map(question => evaluateIntent(question, memory.nodes, memory.state.questions));
+    memory.state.jobs = [{id:"question-ui-review",taskId:"question-ui-review",kind:"evaluate",questionIds:memory.state.questions.map(question=>question.id),
+      status:"running",createdAt:new Date().toISOString(),inputHash:"preview",knowledgeHash:"preview",questionsHash:"preview",
+      credentialId:"preview",credentialVersion:0,skillHash:"preview",model:"local-preview"}];
+  }
+  function ensureCompanyFixtures() {
+    const catalog = readPreviewCatalog(scope);
+    for (const question of memory.state.questions) {
+      const table = catalog.tables.find(table => table.id === question.tableId);
+      const brandIndex = table?.columns.indexOf("企业名称") ?? -1;
+      const brand = brandIndex >= 0 ? String(table?.rows[question.rowIndex]?.[brandIndex] ?? "").trim() : "";
+      if (!brand) continue;
+      const id = `preview-company:${brand}`;
+      if (memory.nodes.some(node => node.id === id)) continue;
+      memory.nodes.push({id, title: `${brand}企业资料`, branch: "品牌信息", verified: true, editable: true,
+        content: `# ${brand}企业资料\n\n这是用于界面预览的合成知识库，企业名称为${brand}。\n\n## 品牌与服务资料\n\n品牌介绍、机构资质、团队信息和服务流程可按公开来源逐项核验；具体服务范围、费用及适用条件以正式确认信息为准。\n\n## 信息使用边界\n\n本地示例不代表该企业的真实资质、服务或评价；未核验的信息不得作为确定结论。`});
+    }
+  }
   const snapshot = () => structuredClone(memory);
   const persist = () => {memory.revision++; localStorage.setItem(key, JSON.stringify(memory)); return snapshot();};
   const check = (revision: number) => {if (revision !== memory.revision) throw new Error("清单已更新，请重新读取");};
   return {
     async observe() {return snapshot();},
+    async waitForJob(jobId, onUpdate, signal) {
+      const findJob=()=>memory.state.jobs?.find(item=>item.id===jobId);
+      for (const [stage,label] of [["analyzing","正在分析问题与知识依据"],["validating","正在整理评估和优化动作"],["completed","处理完成"]] as const) {
+        await new Promise(resolve=>window.setTimeout(resolve,500));
+        if(signal?.aborted)throw new DOMException("Preview cancelled","AbortError");
+        const job=findJob();
+        if(!job)throw new Error("本地任务不存在");
+        if(job.status==="paused"||job.status==="succeeded")return snapshot();
+        const at=new Date().toISOString();
+        job.progress={stage,updatedAt:at,events:[...(job.progress?.events??[]),{id:crypto.randomUUID(),label,at}]};
+        if(stage==="completed"){
+          for(const id of job.questionIds){
+            const question=memory.state.questions.find(item=>item.id===id);
+            if(!question)continue;
+            const evaluation=evaluateIntent(question,memory.nodes,memory.state.questions);
+            evaluation.provenance={operationId:job.id,inputHash:job.inputHash,skillHash:job.skillHash,model:job.model};
+            memory.state.evaluations=[...memory.state.evaluations.filter(item=>item.questionId!==id),evaluation];
+            if(job.kind==="plan")memory.state.plans=[...memory.state.plans.filter(item=>item.questionId!==id),{...createIntentPlan(question,evaluation,memory.nodes),inputHash:job.inputHash}];
+          }
+          job.status="succeeded";
+          job.result={completedAt:at,questions:structuredClone(memory.state.questions.filter(item=>job.questionIds.includes(item.id))),
+            evaluations:structuredClone(memory.state.evaluations.filter(item=>job.questionIds.includes(item.questionId))),
+            plans:structuredClone(memory.state.plans.filter(item=>job.questionIds.includes(item.questionId)))};
+        }
+        const current=persist();onUpdate(current);
+      }
+      return snapshot();
+    },
+    async control({jobId,action}) {
+      const job=memory.state.jobs?.find(item=>item.id===jobId);
+      if(!job||["succeeded","failed"].includes(job.status))throw new Error("任务已结束或不存在");
+      job.status=action==="pause"?"paused":"running";
+      return persist();
+    },
     async command(value) {
       const input = value as any; check(input.expectedRevision);
       if (input.kind === "update-question" || input.kind === "delete-question") {
@@ -24,6 +83,17 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       }
       if (input.kind === "intake") for (const question of input.questions as IntentQuestion[]) {
         if (!memory.state.questions.some(item => item.id === question.id || item.question === question.question)) memory.state.questions.push(structuredClone(question));
+      }
+      if (input.kind === "evaluate" || input.kind === "plan") ensureCompanyFixtures();
+      if ((input.kind === "evaluate" || input.kind === "plan") && input.clientRequestId) {
+        if(memory.state.jobs?.some(job=>job.id===input.clientRequestId))return snapshot();
+        if(memory.state.jobs?.some(job=>!["succeeded","failed"].includes(job.status)))throw new Error("已有评估任务，请先完成或继续当前任务");
+        memory.state.jobs??=[];
+        const at=new Date().toISOString();
+        memory.state.jobs.push({id:input.clientRequestId,taskId:input.clientRequestId,kind:input.kind,questionIds:[...input.questionIds],status:"running",
+          createdAt:at,inputHash:`preview:${memory.revision}`,knowledgeHash:"preview",questionsHash:"preview",credentialId:"preview",credentialVersion:0,
+          skillHash:"preview",model:"local-mock",progress:{stage:"submitted",updatedAt:at,events:[{id:crypto.randomUUID(),label:"任务已提交",at}]}});
+        return persist();
       }
       if (input.kind === "evaluate" || input.kind === "plan") for (const id of input.questionIds as string[]) {
         const question = memory.state.questions.find(item => item.id === id)!;
@@ -46,7 +116,8 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       check(input.expectedRevision);
       const plans = memory.state.plans.filter(plan => input.questionIds.includes(plan.questionId)).map(knowledgeOnlyIntentPlan);
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({action: structuredClone(action), questionId: plan.questionId, status: "pending" as const})));
-      if (!changes.length) throw new Error("请至少选择一项动作");
+      if (!changes.length) throw new Error("请先生成并勾选知识库正文修改方案");
+      if (changes.some(change => change.action.kind === "node" && change.action.before.trim() === change.action.after.trim()))throw new Error("选中的正文修改与原文相同，请修改内容或取消采纳该动作");
       const nodeIds = changes.filter(change => change.action.kind === "node").map(change => change.action.nodeId);
       if (new Set(nodeIds).size !== nodeIds.length) throw new Error("多个方案修改同一节点，请分别执行");
       const receipt: IntentState["receipts"][number] = {id: input.clientRequestId, status: "running", createdAt: new Date().toISOString(), before: structuredClone(memory.state.evaluations.filter(item => input.questionIds.includes(item.questionId))), after: [], changes};
@@ -57,7 +128,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
           const node = memory.nodes.find(item => item.id === action.nodeId)!;
           if (node.content !== action.before) {change.status = "failed"; change.error = "节点已有后续修改"; continue;}
           node.content = action.after; node.verified = false;
-        } else memory.state.todos.push({id: `${receipt.id}:${action.id}`, questionId: change.questionId, title: action.after, source: "", status: "pending"});
+        } else {change.status="failed";change.error="仅执行知识库正文修改";continue;}
         change.status = "succeeded";
       }
       receipt.after = memory.state.questions.filter(question => input.questionIds.includes(question.id)).map(question => evaluateIntent(question, memory.nodes, memory.state.questions));

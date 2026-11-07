@@ -636,10 +636,10 @@
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-row-selected .keyword-selection-label {border-color:#cdb6df;background:#eee3f7;color:#64338b;font-weight:600}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-label:has(input:focus-visible) {outline:2px solid #7545a0;outline-offset:3px}
 .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-row-disabled .keyword-selection-label {opacity:.55;cursor:default}
-.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button{display:inline-flex;align-items:center;justify-content:flex-start;gap:9px;height:36px;min-height:36px;margin-top:8px;padding:0 10px;border:1px solid #e4dceb;border-radius:8px;background:#faf8fc;color:#645171;font-size:13px;line-height:18px;text-decoration:none;box-shadow:none;transform:none;cursor:pointer;transition:background-color .15s,border-color .15s}
-.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:hover:not(:disabled){background:#f2edf7;border-color:#c5b0d6;box-shadow:none;transform:none}
-.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:active:not(:disabled){background:#eae1f2;box-shadow:none;transform:none}
-.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-evaluation-button:focus-visible{outline:2px solid #7545a0;outline-offset:3px}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell .keyword-evaluation-button{display:inline-flex;align-items:center;justify-content:flex-start;gap:9px;height:36px;min-height:36px;margin-top:8px;padding:0 10px;border:1px solid #e4dceb;border-radius:8px;background:#faf8fc;color:#645171;font-size:13px;line-height:18px;text-decoration:none;box-shadow:none;transform:none;cursor:pointer;transition:background-color .15s,border-color .15s}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell .keyword-evaluation-button:hover:not(:disabled){background:#f2edf7;border-color:#c5b0d6;box-shadow:none;transform:none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell .keyword-evaluation-button:active:not(:disabled){background:#eae1f2;box-shadow:none;transform:none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell .keyword-evaluation-button:focus-visible{outline:2px solid #7545a0;outline-offset:3px}
 .keyword-evaluation-button .keyword-evaluation-metric{display:inline-flex;align-items:baseline;gap:5px}
 .keyword-evaluation-button .keyword-evaluation-metric>span{font-size:12px;color:#7b6f86}
 .keyword-evaluation-button .keyword-evaluation-metric>strong{font-size:14px;font-weight:600;color:#493754;font-variant-numeric:tabular-nums}
@@ -698,4 +698,55 @@
   margin-left: auto;
   margin-right: auto;
   justify-content: center;
+}
+
+/* Selection and evaluation remain separate, independently operable columns. */
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-table .keyword-selection-cell {width:64px;min-width:64px;text-align:center}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-selection-cell .keyword-selection-label {display:inline-flex;width:auto;min-height:32px;padding:8px;border:0;background:transparent}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell {min-width:190px;white-space:nowrap}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell .keyword-evaluation-button {margin-top:0}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-evaluation-cell small {color:#716a80;font-size:12px}
+
+/* Flat navigation and toolbar keep saved questions as the main surface. */
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs {
+  display: flex;
+  justify-content: flex-start;
+  gap: 24px;
+  margin: 0 0 24px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid #e9e5ef;
+  border-radius: 0;
+  background: transparent;
+}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button {
+  position: relative;
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 46px;
+  padding: 10px 2px 13px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #89818f;
+  font-size: 14px;
+  font-weight: 500;
+}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button[aria-pressed="true"] {background: transparent;color: #7545a0;box-shadow: none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button[aria-pressed="true"]::after {content: "";position: absolute;bottom: -1px;left: 0;right: 0;height: 3px;border-radius: 3px 3px 0 0;background: #8452aa}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs button b {display: inline-block;margin-left: 6px;padding: 1px 7px;border-radius: 6px;background: #f0ebf6;color: #815a9f;font-size: 11px;line-height: 18px;font-weight: 600}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions {justify-content: flex-end;gap: 12px;margin: 0 0 12px;padding: 0;border: 0;border-radius: 0;background: transparent;box-shadow: none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions button {min-height: 36px;padding: 7px 14px;border-radius: 9px;font-size: 13px;box-shadow: none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .saas-toolbar.keyword-toolbar-saas {gap: 16px;margin: 0 0 18px;padding: 0;border: 0;border-radius: 0;background: transparent;box-shadow: none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .saas-search {border: 1px solid #ebe7f0;border-radius: 10px;background: #faf9fc;min-height: 42px}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .filter-item select {min-height: 40px;padding: 8px 28px 8px 12px;border: 1px solid #ebe7f0;border-radius: 9px;background-color: #fff;font-size: 13px}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .filter-item label {font-size: 12px;color: #918899}
+.fm-brand-theme .iw-workbench.iw-view-universe > .iw-header h1 {font-size: 28px;line-height: 1.4;letter-spacing: -.5px}
+.fm-brand-theme .iw-workbench.iw-view-universe > .iw-header p {font-size: 13px;color: #8d8596}
+@media(max-width:640px) {
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .qt-source-tabs {gap: 22px}
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .filter-group {gap: 10px}
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions {align-items: flex-start}
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions>div {flex: 1;justify-content: flex-end}
 }

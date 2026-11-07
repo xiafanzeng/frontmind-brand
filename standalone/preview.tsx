@@ -1,3 +1,4 @@
+import {readPreviewKnowledge} from './knowledge-preview';
 import {useState} from 'react';
 import type {BrandConversationClient} from '../module/client/conversation-runtime';
 import type {Conversation} from '../module/client/conversation-types';
@@ -5,23 +6,17 @@ import type {RpcCall} from './api';
 import {previewKnowledgeSnapshot,previewKnowledgeProgress} from './preview-data';
 import {SimplifiedWebsiteBuilderPreview} from '../module/client/dashboard/ai-website-preview/SimplifiedWebsiteBuilderPreview';
 import type {SiteOpsObservationV1} from '../module/contracts/siteops-contract';
-const keywordTables=[{id:'local-brand',title:'品牌全域词库',description:'原型交互合成开发样例',columns:['问题','主分类','问题细分'],rows:[
- ['隆鼻材料应该怎么选','product_scenario','场景方案'],
- ['东莞整形美容医院哪家好','industry','采购决策'],
- ['东莞双眼皮修复医院哪家专业','industry','信任验证'],
- ['隆鼻术后应该如何护理','product_scenario','售后合作'],
- ['整形医院的资质怎么核验','reputation','信任验证'],
- ['不同隆鼻材料的费用有什么区别','product_scenario','采购决策'],
-]}];
-export const previewRpc:RpcCall=async(path,_input,mutation)=>{
- if(mutation)throw new Error('本地预览不执行后台任务；请到开发子域名验收。');
- if(path==='workspace.knowledge')return {snapshot:previewKnowledgeSnapshot};
- if(path==='workspace.knowledgeProgress')return {progress:previewKnowledgeProgress};
- if(path==='workspace.knowledgeReset.status')return {revision:0,hasKnowledge:true,canReset:false,unavailableReason:'本地预览不重置真实数据'};
- if(path==='workspace.dashboard')return {revision:1,payload:{keywordTables}};
- if(path==='workspace.brandQuestionUniverse.observe')return {reason:'本地预览不生成词库',canStart:false,knowledgeSnapshotId:previewKnowledgeSnapshot.id,dashboardRevision:1,operation:null};
- throw new Error(`本地预览未连接业务接口：${path}`);
-};
+import {readPreviewCatalog} from './keyword-preview';
+export function createPreviewRpc(scope:string):RpcCall{return async(path,_input,mutation)=>{
+ if(mutation)throw new Error('此本地预览操作尚未实现。');
+ if(path==='workspace.knowledge')return {snapshot:(await readPreviewKnowledge(scope)).snapshot};
+ if(path==='workspace.knowledgeProgress')return {progress:(await readPreviewKnowledge(scope)).progress};
+ if(path==='workspace.knowledgeReset.status')return {revision:0,hasKnowledge:true,canReset:false,unavailableReason:'本地示例知识库'};
+ const catalog=readPreviewCatalog(scope);
+ if(path==='workspace.dashboard')return {revision:catalog.revision,payload:{keywordTables:catalog.tables}};
+ if(path==='workspace.brandQuestionUniverse.observe')return {reason:'可直接推荐并保存词条',canStart:false,knowledgeSnapshotId:previewKnowledgeSnapshot.id,dashboardRevision:catalog.revision,operation:null};
+ throw new Error(`本地预览未实现接口：${path}`);
+};}
 export function previewConversations():BrandConversationClient{
  const records:{knowledge:Conversation[];enterprise_qa:Conversation[]}={knowledge:[],enterprise_qa:[{id:'preview-qa',title:'企业问答示例',purpose:'enterprise_qa',workbenchAgentId:'enterprise-qa',createdAt:Date.now(),updatedAt:Date.now(),status:'completed',messages:[{id:'preview-user',role:'user',content:'请介绍示例企业的主要服务。',timestamp:Date.now()},{id:'preview-answer',role:'assistant',content:'这是用于预览的合成回答。真实企业问答会读取当前工作区已发布的知识版本，并保留回答与引用。',timestamp:Date.now()}]}]};
  return {list:async purpose=>structuredClone(records[purpose]),sync:async(purpose,conversations,deleted=[])=>{const patch=new Map(conversations.map(item=>[item.id,item]));records[purpose]=[...records[purpose].filter(item=>!patch.has(item.id)&&!deleted.includes(item.id)),...conversations];},observe:async()=>{throw new Error('本地预览不读取线上任务');}};

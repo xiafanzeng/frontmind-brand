@@ -60,7 +60,7 @@ it("只保存所选问题，保留分类，失败可重试并刷新正式词库"
  expect(onSaved).toHaveBeenCalledTimes(1);
  expect(screen.queryByRole("status")).toBeNull();
  expect(JSON.parse(scope.fetch.mock.calls[3][1].body)).toEqual({brand:"东莞台心医院",questions:[{question:"如何选择综合医院？",coreWord:"综合医院",category:"category",mainCategory:"industry",heat:null}]});
- fireEvent.click(screen.getByRole("tab",{name:"1. 核心词"}));
+ fireEvent.click(screen.getByRole("button",{name:"返回核心词"}));
  fireEvent.change(screen.getByLabelText("企业名称"),{target:{value:"其他医院"}});
  expect(screen.queryByRole("button",{name:/保存词条/})).toBeNull();
 });

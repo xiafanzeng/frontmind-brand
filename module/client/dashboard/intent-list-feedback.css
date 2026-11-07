@@ -39,3 +39,16 @@
   .iw-workbench .iw-list-task-actions { grid-column:1; justify-self:center; justify-content:center; width:auto; padding-left:0; gap:10px; }
   .iw-workbench .iw-list-task-actions button { min-height:44px; }
 }
+
+.iw-workbench .iw-list-task.iw-list-task--completed {padding:12px 16px;margin-bottom:18px;background:#faf8fc}
+.iw-workbench .iw-list-task--completed .iw-list-task-main {display:flex;justify-content:space-between;min-height:32px}
+.iw-workbench .iw-list-task--completed .iw-list-task-copy {grid-column:auto;flex:1;text-align:left}
+.iw-list-task--completed .iw-list-task-copy h3 {font-size:14px;text-align:left}
+.iw-list-task--completed .iw-list-task-actions button {min-height:32px;padding:6px 12px;font-size:13px}
+.iw-list-task--completed .iw-list-task-dismiss {display:inline-flex;align-items:center;justify-content:center;width:32px;padding:0;border:0;background:transparent;color:#7b6f86}
+
+@media(max-width:600px) {
+  .iw-workbench .iw-list-task--completed .iw-list-task-main {flex-wrap:wrap;gap:8px}
+  .iw-workbench .iw-list-task--completed .iw-list-task-copy {flex-basis:100%}
+  .iw-workbench .iw-list-task--completed .iw-list-task-actions {grid-column:auto;justify-content:flex-start;justify-self:start;width:100%;gap:8px}
+}

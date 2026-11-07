@@ -1,5 +1,5 @@
 import {useMemo, useState} from "react";
-import {FileText, Search} from "lucide-react";
+import {FileText, Search, ClipboardList} from "lucide-react";
 import type {IntentChange, IntentNode, IntentReceipt} from "../../contracts/intent-workbench";
 import KnowledgeChangeComparison from "./KnowledgeChangeComparison";
 
@@ -31,12 +31,17 @@ export default function KnowledgeChangesView({nodes, receipt, initialNodeId}: {
   if (!selected) {
     const failed = receipt?.changes.filter(change => change.action.kind === "node" && change.status === "failed") ?? [];
     const pending = receipt?.changes.some(change => change.action.kind === "node" && change.status === "pending");
-    return <section className="iw-panel" aria-label="知识库变更状态"><div className="iw-article">
-      <h2>{!receipt ? "暂无执行记录" : pending ? "知识库正文尚未写入" : failed.length ? "本次未成功修改知识库正文" : "本次未修改知识库正文"}</h2>
-      <p>{!receipt ? "请选择一条执行记录查看前后对比。" : pending ? "正文写入仍待确认，成功后才能查看前后 diff。" : failed.length ? "正文写入失败，未产生已成功写入的前后 diff。" : "此记录仅包含问题或资料待办操作，没有知识库正文写入记录，因此没有正文 diff。"}</p>
-      {failed.length > 0 && <ul>{failed.map(change => <li key={change.action.id}>{change.action.title}：{change.error ?? "写入未完成"}</li>)}</ul>}
-      {receipt && <p className="iw-method">问题操作 {receipt.changes.filter(change => change.action.kind === "question").length} 项 · 资料待办 {receipt.changes.filter(change => change.action.kind === "todo").length} 项。资料待办不会自动修改知识库正文。</p>}
-    </div></section>;
+    const todos = receipt?.changes.filter(change => change.action.kind === "todo" && ["succeeded", "reverted"].includes(change.status)) ?? [];
+    return <section className="iw-panel iw-knowledge-empty" aria-label="知识库变更状态">
+      <span className="iw-knowledge-empty-icon" aria-hidden="true"><FileText size={24}/></span>
+      <div className="iw-knowledge-empty-content">
+        <h2>{!receipt ? "暂无执行记录" : pending ? "知识库正文尚未写入" : failed.length ? "本次未成功修改知识库正文" : "本次未修改知识库正文"}</h2>
+        <p>{!receipt ? "执行优化后，可在这里查看正文前后差异。" : pending ? "正文正在写入，完成后即可查看变更。" : failed.length ? "正文写入未完成，请先处理下列问题。" : todos.length ? "本次执行只处理了资料待办，知识库正文尚未更新。" : "本次执行没有写入知识库正文。"}</p>
+        {failed.length > 0 && <ul className="iw-knowledge-failures">{failed.map(change => <li key={change.action.id}>{change.action.title}：{change.error ?? "写入未完成"}</li>)}</ul>}
+        {todos.length > 0 && <div className="iw-knowledge-followups"><h3><ClipboardList size={16}/>本次资料待办 <span>{todos.length}</span></h3><ul>{todos.map(change => <li key={change.action.id}><b>{change.action.title}</b><p>{change.action.after}</p></li>)}</ul></div>}
+        {receipt && <p className="iw-knowledge-empty-meta">问题操作 {receipt.changes.filter(change => change.action.kind === "question").length} 项 · 资料待办 {todos.length} 项 · 正文变更 0 项</p>}
+      </div>
+    </section>;
   }
 
   return <div className="iw-knowledge">

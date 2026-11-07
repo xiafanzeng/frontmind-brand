@@ -54,15 +54,12 @@ describe("standalone intent interaction adapter", () => {
     expect(data.nodes.map(node => node.content)).toEqual(beforeNodes.map(node => node.content));
     expect(data.state.receipts[0].status).toBe("reverted");
   });
-  it("keeps missing knowledge unresolved when only a source task is created", async () => {
-    const api = createIntentPreviewApi("todo");
-    let data = await prepare(api);
-    const before = data.state.evaluations.find(item => item.questionId === "q1")!.support;
-    data = await editPlan(api, data, "q1", ["todo"]);
-    data = await api.execute({expectedRevision: data.revision, clientRequestId: crypto.randomUUID(), questionIds: ["q1"]});
-    expect(data.state.todos).toHaveLength(1);
-    expect(data.state.todos[0].status).toBe("pending");
-    expect(data.state.evaluations.find(item => item.questionId === "q1")!.support).toBe(before);
+  it("确认方案只修改正文，缺失资料不创建任何待办", async () => {
+    const api=createIntentPreviewApi("body-only");const data=await prepare(api);
+    expect(data.state.plans.every(plan=>plan.actions.every(action=>action.kind==="node"))).toBe(true);
+    const executed=await api.execute({expectedRevision:data.revision,clientRequestId:crypto.randomUUID(),questionIds:["q1"]});
+    expect(executed.state.todos).toEqual([]);
+    expect(executed.state.receipts[0].changes.every(change=>change.action.kind==="node")).toBe(true);
   });
   it("rejects an undo after another execution modifies the same knowledge node", async () => {
     const api = createIntentPreviewApi("conflict");

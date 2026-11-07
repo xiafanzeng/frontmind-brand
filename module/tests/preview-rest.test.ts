@@ -1,0 +1,90 @@
+import {beforeEach,afterEach,expect,it,vi} from "vitest";
+import {createPreviewRestFetch} from "../../standalone/rest-preview";
+import {readPreviewCatalog} from "../../standalone/keyword-preview";
+import {createIntentPreviewApi} from "../../standalone/intent-preview";
+import {judgeEvaluationEnvelopeSchema} from "../contracts/response-logic-judge";
+import {optimizationEnvelopeSchema} from "../contracts/response-logic-optimization";
+import {responseLogicTaskStatusEnvelopeSchema,saveResponseLogicSchema} from "../contracts/response-logic";
+
+beforeEach(()=>{localStorage.clear();vi.useFakeTimers();});
+afterEach(()=>vi.useRealTimers());
+async function request(fetcher:ReturnType<typeof createPreviewRestFetch>,path:string,body?:unknown){
+  const pending=fetcher(`/api/modules/brand/${path}`,body===undefined?{}:{method:"POST",body:JSON.stringify(body)});
+  await vi.advanceTimersByTimeAsync(350);
+  return pending;
+}
+it("persists saved choices, deduplicates their identities and isolates workspaces",async()=>{
+  const fetcher=createPreviewRestFetch("one");
+  const questions=[{question:"台心医院服务范围如何核验？",mainCategory:"reputation"}];
+  const saved=await (await request(fetcher,"question-templates/save",{brand:"台心医院",questions})).json();
+  const duplicate=await (await request(fetcher,"question-templates/save",{brand:"台心医院",questions})).json();
+  expect(saved.added).toBe(1);expect(duplicate.added).toBe(0);
+  expect(duplicate.selections).toEqual(saved.selections);
+  expect(readPreviewCatalog("one").tables.flatMap(table=>table.rows)).toHaveLength(7);
+  expect(readPreviewCatalog("two").tables.flatMap(table=>table.rows)).toHaveLength(6);
+});
+it("returns protocol-valid answer generation, judge and optimization results, and persists publication",async()=>{
+  const fetcher=createPreviewRestFetch("answer");
+  const prefix="response-logic";
+  let result=await (await request(fetcher,prefix,saveResponseLogicSchema.parse({questionId:"q",question:"如何选择服务？",groupId:"brand",groupTitle:"品牌",intent:"",summary:"",draft:{concern:"",conclusion:"",facts:"",boundaries:"",pending:"",references:"",images:[]},conversationId:"conv"}))).json();
+  const generation=await (await request(fetcher,`${prefix}/start`,{questionId:"q",operationRevision:result.record.revision})).json();
+  await vi.advanceTimersByTimeAsync(1000);
+  const status=await (await request(fetcher,`${prefix}/tasks/${generation.task.id}/status?questionId=q`)).json();
+  expect(responseLogicTaskStatusEnvelopeSchema.safeParse(status).success).toBe(true);
+  result=await (await request(fetcher,`${prefix}/adopt-result`,{questionId:"q",taskId:generation.task.id,resultId:status.resultId,operationRevision:result.record.revision})).json();
+  const {conversationId: _conversationId,...backgroundSave}=result.record;
+  const unchanged=await (await request(fetcher,prefix,{...backgroundSave,expectedRevision:result.record.revision})).json();
+  expect(unchanged.record.revision).toBe(result.record.revision);
+  const judge=await (await request(fetcher,`${prefix}/evaluation/judge`,{questionId:"q",expectedRevision:result.record.revision})).json();
+  await vi.advanceTimersByTimeAsync(1000);
+  const judged=await (await request(fetcher,`${prefix}/evaluation/judge/tasks/${judge.taskId}/status?questionId=q`)).json();
+  expect(judgeEvaluationEnvelopeSchema.safeParse(judged).success).toBe(true);
+  const optimize=await (await request(fetcher,`${prefix}/optimization`,{questionId:"q",expectedRevision:result.record.revision,judgeTaskId:judge.taskId})).json();
+  await vi.advanceTimersByTimeAsync(1000);
+  const {review,...optimized}=await (await request(fetcher,`${prefix}/optimization/tasks/${optimize.taskId}/status?questionId=q`)).json();
+  expect(optimizationEnvelopeSchema.safeParse(optimized).success).toBe(true);expect(review.version).toBe(1);
+  const publication={...result.record,expectedRevision:result.record.revision,publish:true,publicationRequestId:crypto.randomUUID()};
+  const published=await (await request(fetcher,prefix,publication)).json();
+  const replay=await (await request(fetcher,prefix,publication)).json();
+  expect(replay.record).toEqual(published.record);expect(published.record.confirmed.version).toBe(1);
+  const refreshed=await (await request(createPreviewRestFetch("answer"),prefix)).json();
+  expect(refreshed.records[0].confirmed).toEqual(published.record.confirmed);
+  const regenerated=await (await request(fetcher,`${prefix}/regeneration`,{questionId:"q",expectedRevision:published.record.revision})).json();
+  expect(Object.keys(regenerated).sort()).toEqual(["attempt","recordRevision","taskId"]);
+  await vi.advanceTimersByTimeAsync(1000);
+  const candidate=await (await request(fetcher,`${prefix}/regeneration/tasks/${regenerated.taskId}/status?questionId=q`)).json();
+  expect(candidate.status).toBe("completed");expect(candidate.structuredDraft.conclusion).toContain("如何选择服务");
+});
+it("supports pause and resume of the same evaluation task without prematurely producing scores",async()=>{
+  const api=createIntentPreviewApi("pause");
+  let data=await api.command({kind:"intake",expectedRevision:0,questions:[{id:"q",question:"医疗服务如何选择",category:"industry",tableId:"test",rowIndex:0,sourceRevision:1}]});
+  data=await api.command({kind:"evaluate",expectedRevision:data.revision,questionIds:["q"],clientRequestId:"job"});
+  const updates=vi.fn();const pending=api.waitForJob!("job",updates);
+  await api.control!({jobId:"job",action:"pause"});
+  await vi.advanceTimersByTimeAsync(500);data=await pending;
+  expect(data.state.jobs![0].status).toBe("paused");expect(data.state.evaluations).toHaveLength(0);
+  await api.control!({jobId:"job",action:"resume"});
+  const resumed=api.waitForJob!("job",updates);await vi.advanceTimersByTimeAsync(1500);data=await resumed;
+  expect(data.state.jobs![0].status).toBe("succeeded");expect(data.state.evaluations).toHaveLength(1);
+  expect(data.state.jobs).toHaveLength(1);
+});
+it("rejects unsupported endpoints and aborts locally without calling a network transport",async()=>{
+  const fetchSpy=vi.spyOn(globalThis,"fetch").mockRejectedValue(new Error("unexpected network"));
+  const fetcher=createPreviewRestFetch("safety");
+  expect((await request(fetcher,"unsupported")).status).toBe(404);
+  const controller=new AbortController();controller.abort();
+  await expect(fetcher("/api/modules/brand/question-templates/save",{signal:controller.signal})).rejects.toMatchObject({name:"AbortError"});
+  expect(fetchSpy).not.toHaveBeenCalled();fetchSpy.mockRestore();
+});
+it("keeps uploaded reference materials local and supports binding and removing them",async()=>{
+  vi.useRealTimers();
+  const fetcher=createPreviewRestFetch("materials");
+  const file=new File(["本地合成参考材料"],"参考.txt",{type:"text/plain"});
+  const uploaded=await (await fetcher("/api/frontmind/v2/assets",{method:"POST",headers:{"X-FrontMind-Filename":encodeURIComponent(file.name),"X-FrontMind-Mime":file.type},body:file})).json();
+  const send=async(path:string,body:unknown)=>(await fetcher(`/api/modules/brand/response-logic${path}`,{method:"POST",body:JSON.stringify(body)})).json();
+  let result=await send("",{questionId:"q",question:"如何选择服务？",groupId:"brand",groupTitle:"品牌",intent:"",summary:"",draft:{concern:"",conclusion:"",facts:"",boundaries:"",pending:"",references:"",images:[]}});
+  result=await send("/materials",{questionId:"q",expectedRevision:result.record.revision,addAssetIds:[uploaded.localAssetId],removeAssetIds:[]});
+  expect(result.record.draft.attachments[0].filename).toBe(file.name);
+  result=await send("/materials",{questionId:"q",expectedRevision:result.record.revision,addAssetIds:[],removeAssetIds:[uploaded.localAssetId]});
+  expect(result.record.draft.attachments).toHaveLength(0);
+});
