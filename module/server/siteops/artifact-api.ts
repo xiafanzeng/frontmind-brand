@@ -400,19 +400,14 @@ function previewNavigationBridge(input: {
   return `<script nonce="${input.nonce}">${previewNavigationBridgeSource(input.previewPrefix)}</script>`;
 }
 
-function injectPreviewNavigationBridge(input: {
-  html: string;
-  nonce: string;
-  previewPrefix: string;
-}) {
-  const bridge = previewNavigationBridge(input);
-  if (/<head\b[^>]*>/iu.test(input.html)) {
-    return input.html.replace(/<head\b[^>]*>/iu, (head) => `${head}${bridge}`);
+function prependPreviewScript(html: string, script: string) {
+  if (/<head\b[^>]*>/iu.test(html)) {
+    return html.replace(/<head\b[^>]*>/iu, (head) => `${head}${script}`);
   }
-  if (/<body\b[^>]*>/iu.test(input.html)) {
-    return input.html.replace(/<body\b[^>]*>/iu, (body) => `${bridge}${body}`);
+  if (/<body\b[^>]*>/iu.test(html)) {
+    return html.replace(/<body\b[^>]*>/iu, (body) => `${script}${body}`);
   }
-  return `${bridge}${input.html}`;
+  return `${script}${html}`;
 }
 
 export async function createSandboxedPreviewDocument(input: {
@@ -420,6 +415,7 @@ export async function createSandboxedPreviewDocument(input: {
   entryName: string;
   previewPrefix: string;
   previewRoutingMode?: SiteOpsPreviewRoutingMode;
+  assistantBridge?: SiteOpsPreviewBridgeConfig;
 }) {
   const files = new Map(
     Object.values(input.zip.files)
@@ -511,11 +507,10 @@ export async function createSandboxedPreviewDocument(input: {
       "",
     )
     .replace(/<base\b[^>]*>/giu, "");
-  html = injectPreviewNavigationBridge({
-    html,
+  html = prependPreviewScript(html, previewNavigationBridge({
     nonce,
     previewPrefix: input.previewPrefix,
-  });
+  }));
   html = await replaceAsync(
     html,
     /<link\b(?=[^>]*\brel=["']stylesheet["'])[^>]*\bhref=["']([^"']+)["'][^>]*>/giu,
@@ -608,6 +603,11 @@ export async function createSandboxedPreviewDocument(input: {
       return `href${equals}${quote}${scoped}${quote}`;
     },
   );
+  if (input.assistantBridge) {
+    // Archived classic scripts run immediately when inlined, even with defer.
+    // Initialize the bridge before the assistant captures it.
+    html = prependPreviewScript(html, siteOpsPreviewBridgeScript(nonce, input.assistantBridge));
+  }
   return { bytes: Buffer.from(html, "utf8"), nonce };
 }
 
@@ -1517,6 +1517,21 @@ async function sendOwnedBuildPreviewDocument(input: {
   if (mode && (mode & 0o170000) === 0o120000) {
     throw new Error("SITEOPS_DIST_SYMLINK_REJECTED");
   }
+  // Embed documents carry the trusted preview bridge so the real assistant
+  // widget can report rendered answers (and their frozen build coordinates)
+  // back to the embedding dashboard. Top-level previews never get it.
+  let assistantBridge: SiteOpsPreviewBridgeConfig | undefined;
+  if (input.frame === "embed" && input.embedToken && typeof signEmbedPreviewToken === "function") {
+    const preferences = readSiteDesignPreferencesFromBrief(owned.build.brief);
+    assistantBridge = {
+      token: siteOpsPreviewBridgeToken(input.embedToken, signEmbedPreviewToken),
+      buildId: owned.build.id,
+      knowledgeSnapshotId: owned.build.knowledgeSnapshotId,
+      knowledgeArchiveHash: owned.build.knowledgeArchiveHash,
+      designRevision: preferences?.designRevision ?? null,
+      draftHash: preferences?.draftHash ?? null,
+    };
+  }
   const document = await createSandboxedPreviewDocument({
     zip,
     entryName: entry.name,
@@ -1525,30 +1540,8 @@ async function sendOwnedBuildPreviewDocument(input: {
       owned.build.workflowVersion === "2.9.0"
         ? "canonical_pathname"
         : "legacy_static_literals",
+    assistantBridge,
   });
-  // Embed documents carry the trusted preview bridge so the real assistant
-  // widget can report rendered answers (and their frozen build coordinates)
-  // back to the embedding dashboard. Top-level previews never get it.
-  let documentBytes = document.bytes;
-  if (input.frame === "embed" && input.embedToken && typeof signEmbedPreviewToken === "function") {
-    const preferences = readSiteDesignPreferencesFromBrief(owned.build.brief);
-    const bridgeScript = siteOpsPreviewBridgeScript(document.nonce, {
-      token: siteOpsPreviewBridgeToken(input.embedToken, signEmbedPreviewToken),
-      buildId: owned.build.id,
-      knowledgeSnapshotId: owned.build.knowledgeSnapshotId,
-      knowledgeArchiveHash: owned.build.knowledgeArchiveHash,
-      designRevision: preferences?.designRevision ?? null,
-      draftHash: preferences?.draftHash ?? null,
-    });
-    const html = document.bytes.toString("utf8");
-    const headClose = html.search(/<\/head>/iu);
-    documentBytes = Buffer.from(
-      headClose >= 0
-        ? html.slice(0, headClose) + bridgeScript + html.slice(headClose)
-        : bridgeScript + html,
-      "utf8",
-    );
-  }
   input.res.setHeader("Cache-Control", "private, no-store, max-age=0");
   input.res.setHeader("Content-Type", "text/html; charset=utf-8");
   input.res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
@@ -1578,8 +1571,8 @@ async function sendOwnedBuildPreviewDocument(input: {
       }),
     );
   }
-  input.res.setHeader("Content-Length", String(documentBytes.length));
-  input.res.send(documentBytes);
+  input.res.setHeader("Content-Length", String(document.bytes.length));
+  input.res.send(document.bytes);
 }
 
 siteOpsArtifactApi.get("/builds/:buildId/preview/*", async (req, res) => {
