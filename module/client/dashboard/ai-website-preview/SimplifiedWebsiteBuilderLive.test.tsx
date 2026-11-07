@@ -2143,7 +2143,9 @@ describe("redesigned live website builder setup", () => {
     const approved = approvedBuildWithDesignPreferences();
     const onAction = vi.fn(async () => undefined);
     const onSaveDesignPreferences = vi.fn(async () => approved);
-    const onSubmitRevision = vi.fn(async () => undefined);
+    const onSubmitRevision = vi.fn(async (
+      _input: Parameters<NonNullable<SiteOpsConversationPanelProps["onSubmitRevision"]>>[0],
+    ) => undefined);
     const onStepChange = vi.fn();
     render(
       <SimplifiedWebsiteBuilderPreview
