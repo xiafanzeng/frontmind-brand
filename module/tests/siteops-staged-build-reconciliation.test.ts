@@ -67,7 +67,10 @@ function meteredLegacySnapshot() {
 }
 
 beforeEach(() => {
-  mocks.stagedRecovery.mockReset().mockReturnValue({ existingTaskOnly: true, stagedOnly: true });
+  mocks.stagedRecovery.mockReset().mockReturnValue({
+    recoveryState: { existingTaskOnly: true, stagedOnly: true },
+    resumedConsumedRecovery: false,
+  });
   mocks.legacyRecovery.mockReset().mockReturnValue({ existingTaskOnly: true });
   mocks.reserveQuota.mockReset().mockResolvedValue("quota-period");
 });
@@ -116,6 +119,16 @@ describe("staged source build reconciliation eligibility", () => {
     mocks.stagedRecovery.mockImplementation(() => { throw new Error("STAGING_EXPIRED"); });
     expect(() => prepareExistingManusBuildReconciliation(snapshot(), now)).toThrow("SITEOPS_RECONCILE_STAGED_SOURCE_REVALIDATION_INVALID");
     expect(mocks.legacyRecovery).not.toHaveBeenCalled();
+  });
+
+  it.each([12, 14])("rejects an admitted consumed recovery at unexpected project revision %i", (revision) => {
+    mocks.stagedRecovery.mockReturnValue({
+      recoveryState: { existingTaskOnly: true, stagedOnly: true },
+      resumedConsumedRecovery: true,
+    });
+    const saved = snapshot();
+    saved.project.revision = revision;
+    expect(() => prepareExistingManusBuildReconciliation(saved, now)).toThrow("SITEOPS_RECONCILE_PROJECT_REVISION_CHANGED");
   });
 });
 
@@ -174,6 +187,20 @@ function transaction(saved: ReturnType<typeof snapshot>, affected: number[] = []
 }
 
 describe("staged source reconciliation writes", () => {
+  it("requires exactly one additional terminal revision for an admitted consumed recovery", async () => {
+    const recoveryState = { existingTaskOnly: true, stagedOnly: true };
+    mocks.stagedRecovery.mockReturnValue({ recoveryState, resumedConsumedRecovery: true });
+    const saved = snapshot();
+    saved.project.revision += 1;
+    const { db, updates } = transaction(saved);
+
+    await reconcileExistingManusBuild(db, { buildId: "build-id", now });
+
+    expect(updates[0].values.result).toEqual(recoveryState);
+    expect(updates[2].condition.params).toEqual(["project-id", 7, "failed", 13, "parent-id", "snapshot-id"]);
+    expect(mocks.reserveQuota).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       scope: "enterprise",

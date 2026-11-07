@@ -87,10 +87,15 @@ function rejectedSourceState() {
 describe("one-time staged document-view revalidation", () => {
   it("retains the original rejection and prevents reopening the admitted operation", () => {
     const result = rejectedSourceState();
-    const recovered = existingTaskOnlyStagedDocumentViewRecoveryState({ ...coordinates, result });
+    const { recoveryState: recovered, resumedConsumedRecovery } =
+      existingTaskOnlyStagedDocumentViewRecoveryState({ ...coordinates, result });
+    expect(resumedConsumedRecovery).toBe(false);
     expect(recovered).toMatchObject({
       existingTaskOnly: true,
-      stagedDocumentViewRecovery: { verdictSignature: result.nativeRejectedCandidateV1.verdictSignature },
+      stagedDocumentViewRecovery: {
+        verdictSignature: result.nativeRejectedCandidateV1.verdictSignature,
+        validatorVersion: "isolated-route-context-v1",
+      },
       nativeRejectedCandidateV1: result.nativeRejectedCandidateV1,
       nativeSourceStaging: result.nativeSourceStaging,
     });
@@ -99,6 +104,61 @@ describe("one-time staged document-view revalidation", () => {
       .toThrow("SITEOPS_RECONCILE_STAGED_DOCUMENT_VIEW_STATE_INVALID");
     expect(() => existingTaskOnlyRecoveryState({ taskId: coordinates.taskId, result: recovered }))
       .toThrow("SITEOPS_RECONCILE_NATIVE_REPAIR_STATE_REQUIRED");
+  });
+
+  it("issues one current permission for a consumed legacy recovery", () => {
+    const rejected = rejectedSourceState();
+    const legacyStartedAt = "2026-11-07T11:00:00Z";
+    const result = {
+      ...rejected,
+      existingTaskOnly: true,
+      stagedDocumentViewRecovery: {
+        verdictSignature: rejected.nativeRejectedCandidateV1.verdictSignature,
+        startedAt: legacyStartedAt,
+      },
+    };
+    const { recoveryState, resumedConsumedRecovery } =
+      existingTaskOnlyStagedDocumentViewRecoveryState({ ...coordinates, result });
+    expect(resumedConsumedRecovery).toBe(true);
+    expect(recoveryState.stagedDocumentViewRecovery).toEqual({
+      verdictSignature: rejected.nativeRejectedCandidateV1.verdictSignature,
+      validatorVersion: "isolated-route-context-v1",
+      previousStartedAt: legacyStartedAt,
+    });
+    expect(recoveryState.nativeRejectedCandidateV1).toEqual(rejected.nativeRejectedCandidateV1);
+    expect(recoveryState.nativeSourceStaging).toEqual(rejected.nativeSourceStaging);
+    expect(() => existingTaskOnlyStagedDocumentViewRecoveryState({
+      ...coordinates,
+      result: {
+        ...recoveryState,
+        stagedDocumentViewRecovery: {
+          ...recoveryState.stagedDocumentViewRecovery,
+          startedAt: "2026-11-07T11:30:00Z",
+        },
+      },
+    })).toThrow("SITEOPS_RECONCILE_STAGED_DOCUMENT_VIEW_STATE_INVALID");
+  });
+
+  it.each([
+    ["unused legacy permission", true, undefined, undefined],
+    ["missing existing-task guard", false, "2026-11-07T11:00:00Z", undefined],
+    ["start before rejection", true, "2026-11-07T09:00:00Z", undefined],
+    ["start at rejection", true, "2026-11-07T10:00:00Z", undefined],
+    ["start at reconciliation", true, "2026-11-07T12:00:00Z", undefined],
+    ["start in future", true, "2026-11-07T13:00:00Z", undefined],
+    ["mismatched marker verdict", true, "2026-11-07T11:00:00Z", "1".repeat(64)],
+  ] as const)("refuses legacy recovery with %s", (_reason, existingTaskOnly, startedAt, verdictSignature) => {
+    const rejected = rejectedSourceState();
+    const result = {
+      ...rejected,
+      existingTaskOnly,
+      stagedDocumentViewRecovery: {
+        verdictSignature: verdictSignature ?? rejected.nativeRejectedCandidateV1.verdictSignature,
+        startedAt,
+      },
+    };
+    expect(() => existingTaskOnlyStagedDocumentViewRecoveryState({ ...coordinates, result }))
+      .toThrow("SITEOPS_RECONCILE_STAGED_DOCUMENT_VIEW_STATE_INVALID");
   });
 
   it.each([

@@ -2237,66 +2237,79 @@ async function runBrowserQaStrict(input: {
     const browser = await launchQaBrowser();
     try {
       browserAvailable = true;
-      const context = await browser.newContext({
-        viewport: { width: 1440, height: 1000 },
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-      });
-      const page = await context.newPage();
+      let page: Page;
       const renderedKnowledgeMedia = new Set<string>();
       const runtimeFailureCodes = new Set<NativeBrowserRuntimeFailureCode>();
       let externalRequestDetected = false;
       let cspViolationDetected = false;
       let popupDetected = false;
       let auditedDocumentViewTriggers = 0;
-      page.on("pageerror", () => {
-        runtimeFailureCodes.add("NATIVE_BROWSER_PAGE_ERROR");
-      });
-      page.on("popup", (popup) => {
-        popupDetected = true;
-        void popup.close().catch(() => undefined);
-      });
-      await page.exposeBinding("__frontmindNativeConsoleError", () => {
-        runtimeFailureCodes.add("NATIVE_BROWSER_CONSOLE_ERROR");
-      });
-      await page.exposeBinding("__frontmindNativePolicyViolation", () => {
-        cspViolationDetected = true;
-      });
-      if (privatePreviewQa) {
-        await page.addInitScript({
-          content: `if(location.pathname.startsWith(${JSON.stringify(privatePreviewPrefix)})){${previewNavigationBridgeSource(privatePreviewPrefix)}}`,
+      const withQaPage = async (
+        viewport: { width: number; height: number },
+        run: () => Promise<void>,
+      ) => {
+        // Close each context so document dialogs and decoded media from earlier
+        // routes do not compete with the next route in a bounded worker.
+        assertNotAborted(input.abortSignal);
+        const context = await browser.newContext({
+          viewport,
+          reducedMotion: "reduce",
+          serviceWorkers: "block",
         });
-      }
-      await page.addInitScript(() => {
-        const scope = globalThis as typeof globalThis & {
-          __frontmindNativeConsoleError: () => Promise<void>;
-          __frontmindNativePolicyViolation: () => Promise<void>;
-        };
-        const originalConsoleError = console.error.bind(console);
-        console.error = (...args: unknown[]) => {
-          void scope.__frontmindNativeConsoleError();
-          originalConsoleError(...args);
-        };
-        document.addEventListener("securitypolicyviolation", (event) => {
-          const blocked = event.blockedURI;
-          if (
-            /^(?:https?:)?\/\//iu.test(blocked) &&
-            new URL(blocked, window.location.href).origin !==
-              window.location.origin
-          ) {
-            void scope.__frontmindNativePolicyViolation();
+        try {
+          page = await context.newPage();
+          page.on("pageerror", () => {
+            runtimeFailureCodes.add("NATIVE_BROWSER_PAGE_ERROR");
+          });
+          page.on("popup", (popup) => {
+            popupDetected = true;
+            void popup.close().catch(() => undefined);
+          });
+          await page.exposeBinding("__frontmindNativeConsoleError", () => {
+            runtimeFailureCodes.add("NATIVE_BROWSER_CONSOLE_ERROR");
+          });
+          await page.exposeBinding("__frontmindNativePolicyViolation", () => {
+            cspViolationDetected = true;
+          });
+          if (privatePreviewQa) {
+            await page.addInitScript({
+              content: `if(location.pathname.startsWith(${JSON.stringify(privatePreviewPrefix)})){${previewNavigationBridgeSource(privatePreviewPrefix)}}`,
+            });
           }
-        });
-      });
-      await page.route("**/*", async (route) => {
-        const requestUrl = new URL(route.request().url());
-        if (requestUrl.origin !== origin) {
-          externalRequestDetected = true;
-          await route.abort("blockedbyclient");
-          return;
+          await page.addInitScript(() => {
+            const scope = globalThis as typeof globalThis & {
+              __frontmindNativeConsoleError: () => Promise<void>;
+              __frontmindNativePolicyViolation: () => Promise<void>;
+            };
+            const originalConsoleError = console.error.bind(console);
+            console.error = (...args: unknown[]) => {
+              void scope.__frontmindNativeConsoleError();
+              originalConsoleError(...args);
+            };
+            document.addEventListener("securitypolicyviolation", (event) => {
+              const blocked = event.blockedURI;
+              if (
+                /^(?:https?:)?\/\//iu.test(blocked) &&
+                new URL(blocked, window.location.href).origin !== window.location.origin
+              ) {
+                void scope.__frontmindNativePolicyViolation();
+              }
+            });
+          });
+          await context.route("**/*", async (route) => {
+            const requestUrl = new URL(route.request().url());
+            if (requestUrl.origin !== origin) {
+              externalRequestDetected = true;
+              await route.abort("blockedbyclient");
+              return;
+            }
+            await route.continue();
+          });
+          await run();
+        } finally {
+          await context.close().catch(() => undefined);
         }
-        await route.continue();
-      });
+      };
       const navigateAndAssertRendered = async (
         route: string,
         usePrivatePreviewPath: boolean,
@@ -3250,17 +3263,16 @@ async function runBrowserQaStrict(input: {
           }
         }
       };
+      const desktopViewport = { width: 1440, height: 1000 };
       for (const route of input.routes) {
-        if (privatePreviewQa) {
-          await navigateAndAssertRendered(route, false, false);
-        }
-        const snapshot = await navigateAndAssertRendered(
-          route,
-          privatePreviewQa,
-          true,
-        );
-        if (input.contentPlan) contentPlanSnapshots.push(snapshot);
-        await auditDocumentViewRoute(route);
+        await withQaPage(desktopViewport, async () => {
+          if (privatePreviewQa) {
+            await navigateAndAssertRendered(route, false, false);
+          }
+          const snapshot = await navigateAndAssertRendered(route, privatePreviewQa, true);
+          if (input.contentPlan) contentPlanSnapshots.push(snapshot);
+          await auditDocumentViewRoute(route);
+        });
       }
       const missingUserMedia = input.requiredUserMedia.filter(
         (asset) => !renderedUserMedia.has(asset.publicPath),
@@ -3276,26 +3288,23 @@ async function runBrowserQaStrict(input: {
           })),
         );
       }
-      await navigateAndAssertRendered("/", privatePreviewQa, false);
-      screenshots.push({
-        path: "screenshots/home-1440.png",
-        bytes: Buffer.from(
-          await page.screenshot({ fullPage: true, type: "png" }),
-        ),
-      });
-      await page.setViewportSize({ width: 390, height: 844 });
+      const captureHomepage = (viewport: { width: number; height: number }) =>
+        withQaPage(viewport, async () => {
+          await navigateAndAssertRendered("/", privatePreviewQa, false);
+          screenshots.push({
+            path: `screenshots/home-${viewport.width}.png`,
+            bytes: Buffer.from(await page.screenshot({ fullPage: true, type: "png" })),
+          });
+        });
+      await captureHomepage(desktopViewport);
+      const mobileViewport = { width: 390, height: 844 };
       for (const route of input.routes) {
-        assertNotAborted(input.abortSignal);
-        await navigateAndAssertRendered(route, privatePreviewQa, false);
-        await auditDocumentViewRoute(route);
+        await withQaPage(mobileViewport, async () => {
+          await navigateAndAssertRendered(route, privatePreviewQa, false);
+          await auditDocumentViewRoute(route);
+        });
       }
-      await navigateAndAssertRendered("/", privatePreviewQa, false);
-      screenshots.push({
-        path: "screenshots/home-390.png",
-        bytes: Buffer.from(
-          await page.screenshot({ fullPage: true, type: "png" }),
-        ),
-      });
+      await captureHomepage(mobileViewport);
       if (input.contentPlan) {
         if (!input.contentPlanSha256) {
           throwContentPlanInvalid("CONTENT_PLAN_SHA_REQUIRED");
