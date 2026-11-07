@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { createHmac } from "node:crypto";
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   buildSiteOpsEmbedPreviewToken,
+  createSandboxedPreviewDocument,
   sandboxedPreviewContentSecurityPolicy,
   siteOpsPreviewBridgeScript,
   siteOpsPreviewBridgeToken,
@@ -143,6 +145,30 @@ describe("site ops embed preview tokens", () => {
       .toBe(siteOpsPreviewBridgeToken(token, signWithSecret));
     expect(siteOpsPreviewBridgeToken(token, signWithSecret))
       .not.toBe(siteOpsPreviewBridgeToken(`${token}x`, signWithSecret));
+  });
+
+  it("initializes the trial bridge before the archived assistant script runs", async () => {
+    const zip = new JSZip();
+    const assistantStartup = "window.bridgeAtStartup = window.__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__;";
+    zip.file("index.html", '<!doctype html><html><head><script defer src="/assistant.js"></script></head><body></body></html>');
+    zip.file("assistant.js", assistantStartup);
+    const input = { zip, entryName: "index.html", previewPrefix: "/build/preview/" };
+    const assistantBridge = {
+      token: "bridge",
+      buildId: "44444444-4444-4444-8444-444444444444",
+      knowledgeSnapshotId: "22222222-2222-4222-8222-222222222222",
+      knowledgeArchiveHash: "a".repeat(64),
+      designRevision: 4,
+      draftHash: "d".repeat(64),
+    };
+    const embed = await createSandboxedPreviewDocument({ ...input, assistantBridge });
+    const html = embed.bytes.toString("utf8");
+    const bootstrap = siteOpsPreviewBridgeScript(embed.nonce, assistantBridge);
+    expect(html).toContain(`<head>${bootstrap}`);
+    expect(html).toContain(`<script nonce="${embed.nonce}" defer>${assistantStartup}</script>`);
+
+    const standalone = await createSandboxedPreviewDocument(input);
+    expect(standalone.bytes.toString("utf8")).not.toContain("__FRONTMIND_SITEOPS_PREVIEW_BRIDGE__=");
   });
 
   it("escapes the bridge bootstrap for a nonce-scoped inline script", () => {
