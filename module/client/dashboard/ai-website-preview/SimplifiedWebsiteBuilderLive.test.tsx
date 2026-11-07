@@ -2139,6 +2139,36 @@ describe("redesigned live website builder setup", () => {
     expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
   });
 
+  it("rebuilds an approved website from the synced draft without revision requirements", async () => {
+    const approved = approvedBuildWithDesignPreferences();
+    const onAction = vi.fn(async () => undefined);
+    const onSaveDesignPreferences = vi.fn(async () => approved);
+    const onSubmitRevision = vi.fn(async () => undefined);
+    const onStepChange = vi.fn();
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{ observation: approved, onAction, onSaveDesignPreferences, onSubmitRevision }}
+        onStepChange={onStepChange}
+        storageScope="live:7:rebuild-without-requirements"
+      />,
+    );
+    await waitFor(() =>
+      expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站"),
+    );
+    expect(screen.getByRole("button", { name: "进入建设评估" })).toBeTruthy();
+    const rebuild = screen.getByTestId("website-rebuild-submit") as HTMLButtonElement;
+    expect(rebuild.disabled).toBe(false);
+    fireEvent.click(rebuild);
+    await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
+    const revision = onSubmitRevision.mock.calls[0]?.[0];
+    expect(revision?.text).toBe(buildLiveSiteOpsRevisionMessage());
+    expect(revision?.files).toEqual([]);
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onStepChange).not.toHaveBeenCalledWith("evaluation");
+  });
+
   it("submits an existing real build revision without selecting or publishing again", async () => {
     const approved = liveBuildObservation("approved");
     const events: string[] = [];
