@@ -9,7 +9,7 @@ vi.mock("@frontmind/module-ui/lib/utils", async original => ({ ...await original
 const base = () => ({ scopeKey:"task-a", live:true, assistantName:"企业助手", question:"支持部署吗？", answer:"", answerKey:"", sources:[], busy:false, running:false, canStop:true, canEdit:true, canSubmit:true, input:"部署问题", inputRef:createRef<HTMLTextAreaElement>(), onInput:vi.fn(), onSubmit:vi.fn(async () => {}), onStop:vi.fn(async () => true), onEvidence:vi.fn(), starterQuestions:{ current:{ id:"server-current", questions:[...DEFAULT_RAG_STARTER_QUESTIONS] }, revision:1 } });
 const phase = () => document.querySelector(".rag-chat-response")?.getAttribute("data-phase");
 const deferred = <T,>() => { let resolve!: (value:T) => void; const promise = new Promise<T>(r => {resolve=r;}); return {promise,resolve}; };
-beforeEach(() => { vi.useFakeTimers(); vi.mocked(copyToClipboard).mockReset(); vi.mocked(copyToClipboard).mockResolvedValue(true); localStorage.clear(); vi.stubGlobal("matchMedia",vi.fn(() => ({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()}))); });
+beforeEach(() => { vi.mocked(copyToClipboard).mockReset(); vi.mocked(copyToClipboard).mockResolvedValue(true); localStorage.clear(); vi.stubGlobal("matchMedia",vi.fn(() => ({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()}))); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 function ControlledChat(props: Parameters<typeof RagChat>[0]) {
   const [input, setInput] = useState(props.input);
@@ -42,6 +42,7 @@ function RunningStarterChat({ onFollowup }: { onFollowup: (text: string) => Prom
   }} />;
 }
 describe("RAG chat presentation", () => {
+  describe("starter basics", () => {
   it("greets a blank live conversation and sends a fallback starter only once", async () => {
     const request = deferred<void>();
     const props = { ...base(), question: "", input: "", onSubmit: vi.fn(() => request.promise) };
@@ -180,7 +181,12 @@ describe("RAG chat presentation", () => {
     expect(within(welcome).getByRole("button", { name: "我可以先了解哪些核心信息？" })).toBeTruthy();
   });
 
+  });
+
+  describe("starter draft editor", () => {
+
   it("uses the standard answer toolbar for the preview welcome instead of a separate entry button", async () => {
+    vi.useFakeTimers();
     const edit = vi.fn();
     render(<RagChat {...base()} live={false} question="" input="" onEditAnswer={edit} />);
     const tools = screen.getByRole("group", { name: "回答操作" });
@@ -194,7 +200,6 @@ describe("RAG chat presentation", () => {
   });
 
   it("keeps confirmed starters usable while editing and confirming a generated draft", async () => {
-    vi.useRealTimers();
     const confirm = vi.fn(async () => true);
     const regenerate = vi.fn(async () => true);
     const onSubmit = vi.fn(async () => {});
@@ -219,6 +224,7 @@ describe("RAG chat presentation", () => {
   });
 
   it("keeps the popover open and reports a generated-draft cancellation failure inside it", () => {
+    vi.useFakeTimers();
     const discard = vi.fn(() => { throw new Error("取消失败"); });
     render(<RagChat {...base()} question="" input="" starterQuestions={{
       current: { id: "current-1", questions: ["当前问题一？", "当前问题二？", "当前问题三？"] },
@@ -235,7 +241,6 @@ describe("RAG chat presentation", () => {
   });
 
   it("discards a stale starter edit when a newer draft revision arrives", () => {
-    vi.useRealTimers();
     const confirm = vi.fn(async () => true);
     const original = {
       current: { id: "current-1", questions: ["当前问题一？", "当前问题二？", "当前问题三？"] },
@@ -257,6 +262,10 @@ describe("RAG chat presentation", () => {
     expect(within(settings).getByText("迟到草稿一？")).toBeTruthy();
     expect(confirm).not.toHaveBeenCalled();
   });
+
+  });
+
+  describe("answer identity history", () => {
 
   it("keeps every historical answer's frozen assistant identity independent", () => {
     const view = render(<RagChat {...base()} assistantName="当前企业 AI 助手" answer="当前回答" answerKey="current" previousTurns={[
@@ -289,7 +298,11 @@ describe("RAG chat presentation", () => {
     view.rerender(<RagChat {...base()} answer="当前回答" answerKey="current" />);
     expect(screen.queryByRole("button", { name: "编辑回答" })).toBeNull();
   });
+  });
+
+  describe("answer interactions", () => {
   it("renders safe Markdown and copies the original complete response with two-second feedback", async () => {
+    vi.useFakeTimers();
     const answer = '**部署说明**\n\n- 支持私有化\n- 请先确认环境\n\n[资料](https://example.com)\n\n```js\nconst value = 1;\n```\n\n|条件|说明|\n|---|---|\n|网络|内网|\n\n<script>alert(1)</script>';
     const view=render(<RagChat {...base()} answer={answer} answerKey="a1" />);
     expect(screen.getByText("部署说明").tagName).toBe("STRONG"); expect(screen.getAllByRole("listitem")).toHaveLength(2);
@@ -299,6 +312,7 @@ describe("RAG chat presentation", () => {
     act(() => vi.advanceTimersByTime(2000)); expect(screen.getByRole("button",{name:"复制回答"})).toBeTruthy();
   });
   it("animates only a new response after waiting and keeps references functional", () => {
+    vi.useFakeTimers();
     const props=base(); const view=render(<RagChat {...props} answer="历史回答" answerKey="old" />); expect(phase()).toBe("ready");
     view.rerender(<RagChat {...props} busy running />); expect(screen.getByTestId("rag-chat-wait").textContent).toBe("正在处理…");
     view.rerender(<RagChat {...props} answer="新回答" answerKey="new" sources={[{id:"s1",title:"企业资料"}]} />); expect(phase()).toBe("leaving");
@@ -308,6 +322,7 @@ describe("RAG chat presentation", () => {
     view.rerender(<RagChat {...props} answer="新回答" answerKey="new" input="下一条草稿" />); expect(phase()).toBe("ready");
   });
   it("cancels animations on a conversation switch and does not animate restored answers", () => {
+    vi.useFakeTimers();
     const props=base(); const view=render(<RagChat {...props} busy running />);
     view.rerender(<RagChat {...props} answer="新回答" answerKey="a1" />); expect(phase()).toBe("leaving");
     view.rerender(<RagChat {...props} scopeKey="task-b" question="另一个问题" answer="历史回答" answerKey="b1" />);
@@ -396,6 +411,7 @@ describe("RAG chat presentation", () => {
   });
 
   it("keeps headers free of elapsed timers while retaining persisted completion times", () => {
+    vi.useFakeTimers();
     const props={...base(),busy:true,running:true,startedAt:Date.now()}; const view=render(<RagChat {...props} />);
     act(() => vi.advanceTimersByTime(1500)); expect(screen.queryByLabelText(/本轮回答耗时/)).toBeNull();
     view.rerender(<RagChat {...props} busy={false} running={false} answer="回答" answerKey="a1" durationMs={1900} />);
@@ -435,6 +451,10 @@ describe("RAG chat presentation", () => {
     expect(current.getAttribute("data-selected")).toBe("true");
     expect(history.hasAttribute("data-selected")).toBe(false);
   });
+
+  });
+
+  describe("queue reliability", () => {
 
   it("keeps example conversations readable and disables all composer submission paths", async () => {
     const props={...base(),live:false,answer:"示例回答",answerKey:"sample",readOnly:true};
@@ -559,6 +579,7 @@ describe("RAG chat presentation", () => {
   });
 
   it("shows only real public activity while waiting and removes it after the answer transition", () => {
+    vi.useFakeTimers();
     const props={...base(),busy:true,running:true,turnKey:"turn-a"};
     const view=render(<RagChat {...props} activity={[
       {id:"read-1",label:"读取文件",status:"completed"},
@@ -578,4 +599,5 @@ describe("RAG chat presentation", () => {
     expect(screen.queryByTestId("rag-chat-wait")).toBeNull();
   });
 
+  });
 });
