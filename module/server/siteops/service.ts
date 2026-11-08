@@ -241,6 +241,7 @@ import {
   imageMimeByExtension,
   isSupportedImageBytes,
 } from "../knowledge-archive-image-validation.js";
+import { SITEOPS_REVISION_INPUT_MAX_BYTES } from "./manus-provider.js";
 import {
   createSiteDesignRecommendation,
   type SiteDesignRecommendationSourceDocument,
@@ -3981,6 +3982,14 @@ const SITEOPS_REVISION_WORKFLOW_VERSION = "2.9.0";
 const SITEOPS_REVISION_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 const SITEOPS_UNBOUND_INPUT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
+/** Reference documents ride the same frozen-media pipeline with 0×0 dimensions. */
+const siteOpsRevisionDocumentMimeByExtension = {
+  ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+} as const;
+
 type FrozenSiteOpsRevisionInputAsset = {
   id: string;
   sourceAssetId: string;
@@ -4044,7 +4053,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
   if (!project?.knowledgeInputEpochId) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "当前任务不支持带图片修改，请重置后重新生成官网。",
+      "当前任务不支持带附件修改，请重置后重新生成官网。",
       409,
     );
   }
@@ -4061,7 +4070,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
   ) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "图片只能在首轮官网预览生成后加入修改版本。",
+      "附件只能在首轮官网预览生成后加入修改版本。",
       409,
     );
   }
@@ -4088,7 +4097,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
   ) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "当前预览不支持带图片修改，请重置后重新生成官网。",
+      "当前预览不支持带附件修改，请重置后重新生成官网。",
       409,
     );
   }
@@ -4114,7 +4123,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
     if (!sourceRows[0]) {
       throw new SiteOpsServiceError(
         "FORBIDDEN",
-        "图片不存在、已过期或不属于当前建站任务，请重新上传。",
+        "附件不存在、已过期或不属于当前建站任务，请重新上传。",
         403,
       );
     }
@@ -4128,44 +4137,81 @@ async function freezeSiteOpsRevisionInputAssets(input: {
     } catch {
       throw new SiteOpsServiceError(
         "FORBIDDEN",
-        "图片不存在、已过期或不属于当前账号，请重新上传。",
+        "附件不存在、已过期或不属于当前账号，请重新上传。",
         403,
       );
     }
     const extension = path.extname(resolved.filename).toLowerCase();
-    const mimeType = imageMimeByExtension[extension];
-    if (
-      !mimeType ||
-      ![".png", ".jpg", ".jpeg", ".webp"].includes(extension) ||
-      resolved.mimeType.toLowerCase() !== mimeType
-    ) {
+    const documentMime =
+      siteOpsRevisionDocumentMimeByExtension[
+        extension as keyof typeof siteOpsRevisionDocumentMimeByExtension
+      ];
+    const imageMime = imageMimeByExtension[extension as keyof typeof imageMimeByExtension];
+    if (!imageMime && !documentMime) {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
-        "仅支持 PNG、JPEG 或 WebP 图片。",
+        "仅支持 PNG、JPEG、WebP 图片，或 PDF、DOCX、TXT、Markdown 文档。",
         400,
       );
     }
+    if (imageMime && resolved.mimeType.toLowerCase() !== imageMime) {
+      throw new SiteOpsServiceError(
+        "INVALID_INPUT",
+        "图片格式与扩展名不一致，请重新上传。",
+        400,
+      );
+    }
+    if (documentMime && resolved.mimeType.toLowerCase() !== documentMime) {
+      throw new SiteOpsServiceError(
+        "INVALID_INPUT",
+        "文档类型与扩展名不一致，请重新上传。",
+        400,
+      );
+    }
+    const mimeType = (imageMime ?? documentMime)!;
+    const isDocument = Boolean(documentMime);
     const bytes = await revisionInputBytes(resolved.stream, resolved.sizeBytes);
     totalInputBytes += bytes.length;
     if (totalInputBytes > 32 * 1024 * 1024) {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
-        "本次图片总大小不能超过 32 MiB。",
+        "本次附件总大小不能超过 32 MiB。",
         400,
       );
     }
-    if (!isSupportedImageBytes(extension, bytes)) {
+    if (bytes.length > (isDocument ? SITEOPS_REVISION_INPUT_MAX_BYTES : SITEOPS_REVISION_IMAGE_MAX_BYTES)) {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
-        "图片格式与内容不一致，请重新上传。",
+        isDocument
+          ? "单个文档不能超过 10 MiB。"
+          : "单张图片不能超过 8 MiB。",
         400,
       );
     }
-    const dimensions = await decodedRasterImageDimensions(extension, bytes);
-    if (!dimensions) {
+    let width = 0;
+    let height = 0;
+    if (!isDocument) {
+      if (!isSupportedImageBytes(extension, bytes)) {
+        throw new SiteOpsServiceError(
+          "INVALID_INPUT",
+          "图片格式与内容不一致，请重新上传。",
+          400,
+        );
+      }
+      const dimensions = await decodedRasterImageDimensions(extension, bytes);
+      if (!dimensions) {
+        throw new SiteOpsServiceError(
+          "INVALID_INPUT",
+          "图片无法安全解码或像素尺寸过大。",
+          400,
+        );
+      }
+      width = dimensions.width;
+      height = dimensions.height;
+    } else if (extension === ".pdf" && bytes.subarray(0, 5).toString("latin1") !== "%PDF-") {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
-        "图片无法安全解码或像素尺寸过大。",
+        "PDF 文档内容无效，请重新上传。",
         400,
       );
     }
@@ -4173,7 +4219,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
     if (resolved.sha256 && resolved.sha256.toLowerCase() !== contentSha256) {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
-        "图片完整性校验失败，请重新上传。",
+        "附件完整性校验失败，请重新上传。",
         400,
       );
     }
@@ -4182,7 +4228,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
     if (publicPaths.has(publicPath)) {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
-        "请移除内容重复的图片后再提交。",
+        "请移除内容重复的附件后再提交。",
         400,
       );
     }
@@ -4194,7 +4240,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
       filename: `frontmind-user-media-${contentSha256}${publicExtension}`,
       mimeType,
       buffer: bytes,
-      maxBytes: SITEOPS_REVISION_IMAGE_MAX_BYTES,
+      maxBytes: SITEOPS_REVISION_INPUT_MAX_BYTES,
       idempotencyKey: `${input.clientRequestId}:${sourceAssetId}:${contentSha256}`,
       retainUntil: new Date(Date.now() + SITEOPS_UNBOUND_INPUT_RETENTION_MS),
     });
@@ -4207,8 +4253,8 @@ async function freezeSiteOpsRevisionInputAssets(input: {
       mimeType,
       sizeBytes: bytes.length,
       contentSha256,
-      width: dimensions.width,
-      height: dimensions.height,
+      width,
+      height,
       publicPath,
       siteOpsKnowledgeInputEpochId: knowledgeInputEpochId,
       taskStartedAt: project.currentTaskStartedAt,

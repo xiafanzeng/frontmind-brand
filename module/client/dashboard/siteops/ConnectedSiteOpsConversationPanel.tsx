@@ -888,7 +888,7 @@ export default function ConnectedSiteOpsConversationPanel({
       const clientRequestId = attempt.clientRequestId;
       sendMessageMutation.reset();
       setSubmissionNotice(
-        input.files.length > 0 ? "正在安全上传图片…" : "正在提交修改要求…",
+        input.files.length > 0 ? "正在安全上传附件…" : "正在提交修改要求…",
       );
 
       const uploadAtIndex = (file: File, index: number) => {
@@ -906,7 +906,7 @@ export default function ConnectedSiteOpsConversationPanel({
         }
         const contentSha256 = attempt.contentSha256s[index];
         if (!contentSha256) {
-          throw new Error("图片完整性坐标缺失，请重新选择图片。");
+          throw new Error("附件完整性坐标缺失，请重新选择文件。");
         }
         let tracked: Promise<Awaited<ReturnType<typeof uploadChatLocalAsset>>>;
         tracked = uploadChatLocalAsset(
@@ -922,7 +922,7 @@ export default function ConnectedSiteOpsConversationPanel({
         )
           .then((receipt) => {
             if (!receipt.fileId.startsWith("asset_")) {
-              throw new Error("图片没有完成安全留存，请重新上传。");
+              throw new Error("附件没有完成安全留存，请重新上传。");
             }
             attempt.localAssetIds.set(index, receipt.fileId);
             return receipt;
@@ -939,7 +939,7 @@ export default function ConnectedSiteOpsConversationPanel({
       const receipts = await Promise.all(input.files.map(uploadAtIndex));
       const localAssetIds = receipts.map((receipt) => receipt.fileId);
       if (localAssetIds.some((id) => !id.startsWith("asset_"))) {
-        throw new Error("图片没有完成安全留存，请重新上传。");
+        throw new Error("附件没有完成安全留存，请重新上传。");
       }
       const updatedObservation = await sendMessageMutation.mutateAsync({
         conversationId: currentObservation.project.conversationId,
