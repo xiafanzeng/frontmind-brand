@@ -10,8 +10,8 @@ beforeEach(() => {
   created = vi.fn((file: File) => `blob:${file.name}`);
   revoked = vi.fn();
   vi.stubGlobal("URL", class extends NativeURL {
-    static createObjectURL = created;
-    static revokeObjectURL = revoked;
+    static createObjectURL = created as unknown as typeof NativeURL.createObjectURL;
+    static revokeObjectURL = revoked as unknown as typeof NativeURL.revokeObjectURL;
   });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });

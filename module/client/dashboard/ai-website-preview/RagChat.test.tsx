@@ -11,7 +11,10 @@ const phase = () => document.querySelector(".rag-chat-response")?.getAttribute("
 const deferred = <T,>() => { let resolve!: (value:T) => void; const promise = new Promise<T>(r => {resolve=r;}); return {promise,resolve}; };
 // The immutable image builder is deliberately resource-bounded; animation
 // and act() flushes there run several times slower than a developer machine.
-vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
+// The immutable image builder is deliberately resource-bounded; animation
+// and act() flushes there run several times slower than a developer machine.
+// Staying above the worker RPC default also extends that timeout window.
+vi.setConfig({ testTimeout: 90000, hookTimeout: 30000 });
 beforeEach(() => { vi.mocked(copyToClipboard).mockReset(); vi.mocked(copyToClipboard).mockResolvedValue(true); localStorage.clear(); vi.stubGlobal("matchMedia",vi.fn(() => ({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()}))); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 function ControlledChat(props: Parameters<typeof RagChat>[0]) {
