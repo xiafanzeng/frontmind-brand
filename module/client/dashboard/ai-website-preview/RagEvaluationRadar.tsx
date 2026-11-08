@@ -56,6 +56,8 @@ const markerState = (d: EvaluationDimension | undefined, emptyQuestion = false) 
       : "is-known";
 
 const checkLabels = { met: "满足", partial: "部分满足", unmet: "不满足", undetermined: "待核验", not_applicable: "不适用" };
+const checkNote = (check: { earned: number | null; status: keyof typeof checkLabels; exclusionReason: string }) =>
+  check.earned !== null ? null : check.status === "not_applicable" ? check.exclusionReason : "待补证，不计为零分";
 
 export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = false, revealKey: externalRevealKey = "" }: {
   dimensions: EvaluationDimension[];
@@ -121,8 +123,9 @@ export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = fals
   const detailTexts = detail ? [
     detailLabel ?? detail.label,
     ...(checks ? checks.flatMap(check => [
-      `${check.label} · ${checkLabels[check.status]}`,
-      check.earned === null ? check.status === "not_applicable" ? check.exclusionReason : "待补证，不计为零分" : `${format(check.earned)} / ${check.weight} 原始分`,
+      check.label,
+      checkLabels[check.status],
+      checkNote(check),
       check.rationale,
     ]) : [detail.summary]),
     ...(normalizedForExclusions ? ["本维存在预先冻结的不适用项，维度分按其余适用项归一计算。"] : []),
@@ -202,22 +205,31 @@ export function RagEvaluationRadar({ dimensions, judgments, emptyQuestion = fals
     <div className={`rag-radar-detail-shell${selected && detail ? " is-open" : ""}`} aria-hidden={!selected}>
       <div className="rag-radar-detail-shell__inner">
         {!emptyQuestion && detail && <section ref={detailRevealRef} id={`${id}-detail`} className="rag-radar-detail" aria-label={`${detailLabel}详情`}>
-          <div key={renderedDetailId} className="rag-radar-detail__content"><h3>{revealDetailText(detailLabel ?? detail.label)}</h3>
-          {checks ? checks.map(check => <article key={check.id}>
-            <strong>{revealDetailText(`${check.label} · ${checkLabels[check.status]}`)}</strong>
-            <small>{revealDetailText(check.earned === null ? check.status === "not_applicable" ? check.exclusionReason : "待补证，不计为零分" : `${format(check.earned)} / ${check.weight} 原始分`)}</small>
+          <header className="rag-radar-detail__header">
+            <h3>{revealDetailText(detailLabel ?? detail.label)}</h3>
+            <strong className={`rag-radar-detail-score${detail.score === null ? " is-unavailable" : ""}`} aria-label={detailScoreLabel}>
+              {detail.score === null
+                ? <span>{detailScoreLabel}</span>
+                : <><span className={`rag-radar-detail-score__earned${detail.score === 0 ? " is-zero" : ""}`} data-testid="rag-radar-detail-earned" aria-hidden="true">{formatDetailScore(detail.score * detailScoreProgress)}</span><span className="rag-radar-detail-score__maximum" aria-hidden="true">/{format(detail.maxScore)}</span></>}
+            </strong>
+          </header>
+          <div key={renderedDetailId} className="rag-radar-detail__content">
+          {checks ? checks.map(check => <article key={check.id} className="rag-radar-detail__check">
+            <div className="rag-radar-detail__check-heading">
+              <strong className="rag-radar-detail__check-title">{revealDetailText(check.label)}</strong>
+              <span className={`rag-radar-detail__check-status is-${check.status}`}>
+                <i className="rag-evaluation-status-orb" aria-hidden="true" />
+                <span>{revealDetailText(checkLabels[check.status])}</span>
+              </span>
+            </div>
+            {checkNote(check) && <p className="rag-radar-detail__note">{revealDetailText(checkNote(check)!)}</p>}
             <p>{revealDetailText(check.rationale)}</p>
           </article>) : <p>{revealDetailText(detail.summary)}</p>}
           {normalizedForExclusions && <p className="rag-muted">{revealDetailText("本维存在预先冻结的不适用项，维度分按其余适用项归一计算。")}</p>}
-          {judgments?.findings.filter(f => f.dimensionIds.includes(detail.id as typeof f.dimensionIds[number])).map(f => <article key={f.id}>
+          {judgments?.findings.filter(f => f.dimensionIds.includes(detail.id as typeof f.dimensionIds[number])).map(f => <article key={f.id} className="rag-radar-detail__finding">
             <strong>{revealDetailText(f.summary)}</strong><p>{revealDetailText(f.impact)}</p>
             {f.claimIds.map(claimId => { const statement = judgments.claims.find(c => c.id === claimId)?.statement; return statement ? <blockquote key={claimId}>{revealDetailText(statement)}</blockquote> : null; })}
           </article>)}</div>
-          <strong className={`rag-radar-detail-score${detail.score === null ? " is-unavailable" : ""}`} aria-label={detailScoreLabel}>
-            {detail.score === null
-              ? <span>{detailScoreLabel}</span>
-              : <><span className={`rag-radar-detail-score__earned${detail.score === 0 ? " is-zero" : ""}`} data-testid="rag-radar-detail-earned" aria-hidden="true">{formatDetailScore(detail.score * detailScoreProgress)}</span><span className="rag-radar-detail-score__maximum" aria-hidden="true">/{format(detail.maxScore)}</span></>}
-          </strong>
         </section>}
       </div>
     </div>

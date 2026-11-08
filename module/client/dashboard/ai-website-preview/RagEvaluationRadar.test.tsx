@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RagEvaluationRadar } from "./RagEvaluationRadar";
 import { RAG_DIMENSIONS } from "./rag-evaluation";
 import type { EvaluationDimension } from "./evaluation-skill-contract";
+import type { EnterpriseRagChecklistJudgeOutput } from "../../../contracts/enterprise-rag-evaluation-run";
+import { createRagChecklist, scoreRagChecklist } from "../../../contracts/enterprise-rag-checklist";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -16,6 +18,32 @@ const dimensions = (): EvaluationDimension[] => RAG_DIMENSIONS.map(d => ({
   summary: "明确缺陷及对应影响",
   evidenceIds: ["合成来源段落1"],
 }));
+
+const checklistJudgments = (): EnterpriseRagChecklistJudgeOutput => {
+  const checklist = createRagChecklist("医院地址是什么？", "query");
+  const checks = checklist.checks.map((check, index) => ({
+    id: check.id,
+    status: index === 0 ? "met" as const : "partial" as const,
+    rationale: index === 0 ? "核心问题已直接回答。" : "仍有一项细节可以补充。",
+    evidenceIds: ["claim-1"],
+  }));
+  const scored = scoreRagChecklist(checklist, checks);
+  return {
+    schemaVersion: 3,
+    operationToken: "evaluation-operation-1",
+    inputHash: "f".repeat(64),
+    checklist,
+    checks,
+    dimensions: scored.dimensions.map(dimension => ({
+      id: dimension.id,
+      level: dimension.score === null ? null : 4 * dimension.score / dimension.maxScore,
+      rationale: dimension.summary,
+      evidenceIds: dimension.evidenceIds,
+    })),
+    findings: [],
+    claims: [],
+  } as unknown as EnterpriseRagChecklistJudgeOutput;
+};
 
 describe("five-layer transparent-center accessible radar", () => {
   it("uses five unlabeled rings, a real center cutout, and static compact labels", () => {
@@ -76,6 +104,30 @@ describe("five-layer transparent-center accessible radar", () => {
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(shell?.classList.contains("is-open")).toBe(false);
     expect(shell?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("keeps the title and score in one header and presents compact semantic checklist states", () => {
+    render(<RagEvaluationRadar dimensions={dimensions()} judgments={checklistJudgments()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /需求满足 90%/ }));
+    const heading = screen.getByRole("heading", { name: "需求满足" });
+    const score = screen.getByLabelText("18.0 / 20");
+    const header = heading.closest(".rag-radar-detail__header");
+    expect(header).toBeTruthy();
+    expect(score.parentElement).toBe(header);
+
+    const detail = document.querySelector(".rag-radar-detail")!;
+    expect(detail.textContent).not.toContain("原始分");
+    expect(detail.textContent).not.toContain("· 满足");
+    const items = [...detail.querySelectorAll(".rag-radar-detail__check")];
+    expect(items).toHaveLength(2);
+    expect(items[0]?.querySelector(".rag-radar-detail__check-title")?.textContent).toContain("回应核心目标");
+    const statuses = [...detail.querySelectorAll(".rag-radar-detail__check-status")];
+    expect(statuses[0]?.classList.contains("is-met")).toBe(true);
+    expect(statuses[0]?.querySelector(".rag-evaluation-status-orb")).toBeTruthy();
+    expect(statuses[0]?.textContent).toContain("满足");
+    expect(statuses[1]?.classList.contains("is-partial")).toBe(true);
+    expect(statuses[1]?.textContent).toContain("部分满足");
   });
 
   it("reveals a classic earned-over-maximum score and never exposes internal evidence IDs", () => {

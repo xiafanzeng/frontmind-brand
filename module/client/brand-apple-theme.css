@@ -1896,6 +1896,13 @@
   border-radius: var(--fm-brand-radius-card);
 }
 
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar-detail {
+  padding: 16px;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar-area {
   fill: rgba(117, 66, 176, 0.12);
   stroke: var(--fm-brand-accent);
