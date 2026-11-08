@@ -613,6 +613,54 @@ describe("优化模型持久化任务", () => {
     expect(result.state.jobs?.[0].error).toContain("自动修复后仍未通过");
     expect(result.state.evaluations).toEqual([]);
   });
+  it("上游无任何模型输出即异常时自动重排队一次，到期后重新派发并发布结果", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.client.listAllMessages.mockResolvedValue([]); h.latestState.mockReturnValue("failed");
+    const requeued = await h.service.poll();
+    const job = requeued.state.jobs?.[0]!;
+    expect(job.status).toBe("queued");
+    expect(job.autoRetry?.scheduledAt).toBeGreaterThan(Date.now());
+    expect(job.error).toBeUndefined();
+    expect(job.progress?.events.at(-1)?.label).toContain("自动重新提交");
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    await h.service.poll();
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    h.ledger().state.jobs![0]!.autoRetry!.scheduledAt = Date.now() - 1;
+    h.latestState.mockReturnValue("running");
+    const redispatched = await h.service.poll();
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
+    expect(redispatched.state.jobs?.[0].status).toBe("running");
+    expect(redispatched.state.jobs?.[0].autoRetry).toBeDefined();
+    h.send();
+    const completed = await h.service.poll();
+    expect(completed.state.jobs?.[0].status).toBe("succeeded");
+    expect(completed.state.evaluations.length).toBe(1);
+  });
+  it("自动重试仍无模型输出则终态失败，不再重复派发", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.client.listAllMessages.mockResolvedValue([]); h.latestState.mockReturnValue("failed");
+    expect((await h.service.poll()).state.jobs?.[0].status).toBe("queued");
+    h.ledger().state.jobs![0]!.autoRetry!.scheduledAt = Date.now() - 1;
+    expect((await h.service.poll()).state.jobs?.[0].status).toBe("running");
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
+    const failed = await h.service.poll();
+    expect(failed.state.jobs?.[0].status).toBe("failed");
+    expect(failed.state.jobs?.[0].error).toContain("已自动重新提交一次");
+    expect(failed.state.evaluations).toEqual([]);
+    await h.service.poll();
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
+  });
+  it("模型已有输出后的上游异常不自动重试，保持原终态失败", async () => {
+    const h = harness(); await h.intake(); await h.service.command(h.request);
+    h.client.listAllMessages.mockResolvedValue([{id: "m1", timestamp: Date.now(), type: "assistant_message",
+      assistant_message: {content: "开始处理"}}]);
+    h.latestState.mockReturnValue("failed");
+    const failed = await h.service.poll();
+    expect(failed.state.jobs?.[0].status).toBe("failed");
+    expect(failed.state.jobs?.[0].autoRetry).toBeUndefined();
+    expect(failed.state.jobs?.[0].error).toBe("模型执行异常，未写入评分；请查看该任务的执行错误后重试");
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+  });
   it("任务处理中禁止开启另一个模型任务，仍可加入其他问题", async () => {
     const h = harness(); await h.intake(); const state = await h.service.command(h.request);
     await expect(h.service.command({...h.request, expectedRevision: state.revision, clientRequestId: "00000000-0000-4000-8000-000000000002"})).rejects.toThrow("等待当前");
@@ -722,8 +770,10 @@ describe("优化模型持久化任务", () => {
     for (const state of ["failed", "error", "cancelled"]) {
       const h = harness(); await h.intake(); await h.service.command(h.request); h.latestState.mockReturnValue(state);
       const result = await h.service.poll();
-      expect(result.state.jobs?.[0].status).toBe("failed");
-      expect(result.state.jobs?.[0].error).not.toBe("模型任务失败，请检查账户任务记录");
+      // 取消保持终态失败；无模型输出的 failed/error 现在改为一次延迟自动重派
+      //（重新排队），两种路径都不触发结果修复消息。
+      expect(result.state.jobs?.[0].status).toBe(state === "cancelled" ? "failed" : "queued");
+      expect(result.state.jobs?.[0].error ?? "").not.toBe("模型任务失败，请检查账户任务记录");
       expect(h.client.sendMessage).not.toHaveBeenCalled();
     }
   });

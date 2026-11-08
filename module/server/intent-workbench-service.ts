@@ -205,12 +205,16 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       if (original.status !== "paused") await advanceControl(original);
       return;
     }
+    // A scheduled auto-retry re-dispatches only after its delay; polling
+    // before then must not consume the 30-minute task budget early.
+    if (original.status === "queued" && original.autoRetry?.scheduledAt && Date.now() < original.autoRetry.scheduledAt) return;
     if ((!activeJob(original) && !recoverableJob(original)) || (original.lease?.expiresAt ?? 0) > Date.now()) return;
     const owner = randomUUID();
     let job: IntentSkillJob | undefined;
     await locked(undefined, async (_tx, ledger) => {
       const current = ledger.state.jobs?.find(j => j.id === original.id);
       if (!current || (!activeJob(current) && !recoverableJob(current)) || (current.lease?.expiresAt ?? 0) > Date.now()) return;
+      if (current.status === "queued" && current.autoRetry?.scheduledAt && Date.now() < current.autoRetry.scheduledAt) return;
       // A late result must never replace a newer evaluation of the same question.
       if (recoverableJob(current) && ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
         .some(later => later.questionIds.some(id => current.questionIds.includes(id)))) return;
@@ -351,8 +355,34 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       // Old timeout failures may only retrieve an existing result, never dispatch.
       if (phase === "failed" && !legacyFailure(job)) return;
       const state = model.latestManusV2TaskState(events) ?? (await client.taskDetail(providerTaskId)).status;
-      if (["error", "failed", "cancelled"].includes(state))
-        throw new IntentSkillRuntimeError(state === "cancelled" ? "模型任务已取消，未写入评分" : "模型执行异常，未写入评分；请查看该任务的执行错误后重试");
+      if (["error", "failed", "cancelled"].includes(state)) {
+        // An upstream task that died before producing any model output is a
+        // transient infra failure (e.g. HTTP 503 model_not_found on both the
+        // primary and fallback models). One delayed automatic re-dispatch of
+        // the same immutable input absorbs provider blips. Tasks the model
+        // actually worked on, cancellations and second failures stay terminal.
+        const modelWorked = events.some(event => ["assistant_message", "tool_call", "tool_result", "tool_use", "structured_output_result"].includes(event.type));
+        if (state !== "cancelled" && !modelWorked && !job.autoRetry && !job.repair && !job.continuation) {
+          const retryEventId = digest(`auto-retry:${job.id}`);
+          await locked(undefined, async (tx, ledger) => {
+            const current = ledger.state.jobs!.find(j => j.id === job!.id)!;
+            if (current.lease?.owner !== owner || current.lease.expiresAt < Date.now()) throw new IntentSkillRuntimeError("任务执行权已变化");
+            current.autoRetry = {scheduledAt: Date.now() + 120_000, reason: state};
+            current.status = "queued";
+            delete current.error; delete current.terminalObservedAt; delete current.createClaimedAt;
+            progress = {stage: "preparing", updatedAt: new Date().toISOString(),
+              events: [...(progress?.events ?? []).filter(item => item.id !== retryEventId),
+                {id: retryEventId, label: "模型服务瞬时异常，稍后自动重新提交", at: new Date().toISOString()}].slice(-24)};
+            current.progress = progress;
+            await tx.update(model.agentOperations).set({status: "queued", errorCode: null, updatedAt: new Date()}).where(eq(model.agentOperations.id, job!.id));
+            await tx.update(model.agentTasks).set({providerState: "queued", providerTaskId: null, updatedAt: new Date()}).where(eq(model.agentTasks.id, job!.taskId));
+          });
+          return;
+        }
+        throw new IntentSkillRuntimeError(state === "cancelled" ? "模型任务已取消，未写入评分" :
+          job.autoRetry ? "模型服务再次执行异常（已自动重新提交一次），未写入评分；请稍后重试，或检查账户任务记录" :
+          "模型执行异常，未写入评分；请查看该任务的执行错误后重试");
+      }
       if (["finished", "completed", "stopped"].includes(state)) {
         const final = model.orderManusV2EventsByProviderRank(events, "newest_first")
           .find(event => event.type === "assistant_message" && typeof (event.assistant_message as any)?.content === "string" && (event.assistant_message as any).content.trim());

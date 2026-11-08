@@ -55,6 +55,7 @@ export type IntentSkillJob = {
   credentialId: string; credentialVersion: number; skillHash: string; model: string;
   receiptId?: string; error?: string; lease?: {owner: string; expiresAt: number};
   createClaimedAt?: number;
+  autoRetry?: {scheduledAt: number; reason: string};
   terminalObservedAt?: number;
   control?: {
     action: "pause" | "resume"; intentId: string; claimedAt: number;
