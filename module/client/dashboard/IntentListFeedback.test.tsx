@@ -1,7 +1,7 @@
 import {act, cleanup, fireEvent, render, screen} from "@testing-library/react";
 import {afterEach, describe, expect, it, vi} from "vitest";
 import type {IntentSkillJob} from "../../contracts/intent-workbench";
-import {IntentListEvaluationStatus} from "./IntentListFeedback";
+import {IntentTaskTray, IntentListEvaluationStatus} from "./IntentListFeedback";
 
 afterEach(() => {cleanup(); vi.useRealTimers();});
 const task = (patch: Partial<IntentSkillJob> = {}): IntentSkillJob => ({
@@ -101,4 +101,17 @@ describe("评估任务完成状态", () => {
     expect(screen.getByText("已耗时 1分0秒")).toBeTruthy();
     expect(vi.getTimerCount()).toBe(0);
   });
+});
+
+it("任务区默认折叠，展开状态跨进度更新保留，折叠不触发任务控制",()=>{
+  const pause=vi.fn();const jobs=[task(),task({id:"paused",status:"paused"}),task({id:"failed",status:"failed"})];
+  const children=<button onClick={pause}>暂停独立任务</button>;
+  const view=render(<IntentTaskTray jobs={jobs}>{children}</IntentTaskTray>);
+  const tray=view.container.querySelector("details")!,summary=tray.querySelector("summary")!;
+  expect(tray.open).toBe(false);
+  expect(summary.textContent).toContain("进行中 1");expect(summary.textContent).toContain("已暂停 1");expect(summary.textContent).toContain("需处理 1");
+  fireEvent.click(summary);expect(tray.open).toBe(true);
+  view.rerender(<IntentTaskTray jobs={[...jobs,task({id:"another"})]}>{children}</IntentTaskTray>);
+  expect(tray.open).toBe(true);expect(summary.textContent).toContain("进行中 2");
+  fireEvent.click(summary);expect(tray.open).toBe(false);expect(pause).not.toHaveBeenCalled();
 });

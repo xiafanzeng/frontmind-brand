@@ -15,7 +15,7 @@ import {navigate} from "wouter/use-browser-location";
 import IntentQuestionCatalog, {type IntentCatalogIntegration} from "./IntentQuestionCatalog";
 import IntentTaskProgress from "./IntentTaskProgress";
 import IntentIntakeFeedback, {type IntentIntakeFeedbackState} from "./IntentIntakeFeedback";
-import {IntentListEvaluationStatus, IntentListInitialLoading, IntentListRefreshStatus} from "./IntentListFeedback";
+import {IntentTaskTray, IntentListEvaluationStatus, IntentListInitialLoading, IntentListRefreshStatus} from "./IntentListFeedback";
 import {findCatalogQuestion} from "./intent-catalog-link";
 import type {IntentCatalogViewState, IntentCatalogSort} from "./intent-catalog-view";
 import type {IntentQuestion} from "../../contracts/intent-workbench";
@@ -888,7 +888,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         onDeleteQuestion: catalogIntegration?.onDeleteQuestion ?? (question => void deleteQuestionNow(question)),
       }}
         headerStatus={refreshingList ? <IntentListRefreshStatus/> : undefined}
-        taskFeedback={listTasks.length ? <div className="iw-list-tasks" aria-label="当前优化任务">{listTasks.map(job => <IntentListEvaluationStatus key={job.id}
+        taskFeedback={listTasks.length ? <IntentTaskTray jobs={listTasks} attentionIds={Object.keys(taskErrors).filter(id=>Boolean(taskErrors[id]))}>{listTasks.map(job => <IntentListEvaluationStatus key={job.id}
           job={job} uncertain={Boolean(taskErrors[job.id])} pending={pending && !pendingRead}
           taskError={taskErrors[job.id]} onRefresh={()=>void run(()=>api.observe(),undefined,false,undefined,true,[],job.id)}
           questionLabel={job.questionIds.map(id => questions.find(question => question.id === id)?.question ?? "历史问题").join("；")}
@@ -901,7 +901,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
             else {setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail");}
           }}
           onPause={api.control ? () => void controlJob("pause", job.id) : undefined} onResume={api.control ? () => void controlJob("resume", job.id) : undefined}
-          onViewTask={() => openTaskDetails(job.id, "list")}/>)}</div> : undefined}
+          onViewTask={() => openTaskDetails(job.id, "list")}/>)}</IntentTaskTray> : undefined}
         savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan} onGeneratePlan={id => void plan(false, [id])}
         historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setHistoryQuestionId(undefined); navigateView("history");}}
         expandedGaps={expandedGaps} onGapToggle={(id, open) => setExpandedGaps(ids => open ? ids.includes(id) ? ids : [...ids,id] : ids.filter(item => item !== id))}

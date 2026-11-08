@@ -1,5 +1,5 @@
-import {useEffect, useRef, useState} from "react";
-import {Clock3, LoaderCircle, RefreshCw, X} from "lucide-react";
+import {useEffect, useRef, useState, type ReactNode} from "react";
+import {ChevronDown, Clock3, LoaderCircle, RefreshCw, X} from "lucide-react";
 import type {IntentSkillJob} from "../../contracts/intent-workbench";
 import "./intent-list-feedback.css";
 import IntentTaskControls from "./IntentTaskControls";
@@ -85,4 +85,24 @@ export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewRe
     </div>
     {!completed && (taskError||job.control?.error) && <p className="iw-list-task-note" role="alert">{taskError??job.control?.error}{taskError&&onRefresh&&<button disabled={pending} onClick={onRefresh}>重新读取</button>}</p>}
   </section>;
+}
+
+/** Keep task children mounted while folded: observation and completion timers continue. */
+export function IntentTaskTray({jobs,attentionIds=[],children}:{jobs:IntentSkillJob[];attentionIds?:string[];children:ReactNode}) {
+  const needsAttention=(job:IntentSkillJob)=>job.status==="failed"||job.status==="create_unknown"||Boolean(job.control?.error)||attentionIds.includes(job.id);
+  const attention=jobs.filter(needsAttention).length;
+  const paused=jobs.filter(job=>job.status==="paused"&&!needsAttention(job)).length;
+  const complete=jobs.filter(job=>job.status==="succeeded"&&!needsAttention(job)).length;
+  const running=jobs.length-attention-paused-complete;
+  return <details className="iw-list-tasks iw-task-tray" aria-label="当前优化任务">
+    <summary className="iw-task-tray-summary">
+      <strong>后台任务 <span className="iw-task-tray-count">{jobs.length}</span></strong>
+      <span className="iw-task-tray-status" aria-live="polite">
+        {running>0&&<span>进行中 {running}</span>}{paused>0&&<span>已暂停 {paused}</span>}
+        {attention>0&&<span className="iw-task-tray-attention">需处理 {attention}</span>}{complete>0&&<span>已完成 {complete}</span>}
+      </span>
+      <span className="iw-task-tray-toggle"><span className="iw-task-tray-expand">展开</span><span className="iw-task-tray-collapse">收起</span><ChevronDown size={16}/></span>
+    </summary>
+    <div className="iw-task-tray-content">{children}</div>
+  </details>;
 }
