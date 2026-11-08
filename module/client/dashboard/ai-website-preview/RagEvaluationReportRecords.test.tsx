@@ -2,6 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnterpriseRagEvaluationHistoryDto, EnterpriseRagEvaluationRunDto } from "../../../contracts/enterprise-rag-evaluation-run";
 import { liveEnterpriseRagEvaluationApi } from "../enterprise-rag-evaluation-api";
+import { liveEnterpriseRagHumanReviewApi } from "../enterprise-rag-human-review-api";
+import type { EnterpriseRagHumanReviewDto } from "../../../contracts/enterprise-rag-human-review";
 import { RagEvaluationReportRecords } from "./RagEvaluationReportRecords";
 import { RAG_DIMENSIONS, RAG_GATES } from "./rag-evaluation";
 import { enterpriseRagHistoryStorageKey, type RagReviewRecord } from "./rag-review-history";
@@ -18,7 +20,28 @@ function run(id = "operation-1", task = "task-1"): EnterpriseRagEvaluationRunDto
   } };
 }
 
-beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockRejectedValue(new Error("must never start")); vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] }); });
+function formalReview(id = "review-1"): EnterpriseRagHumanReviewDto {
+  const record = manual(id);
+  return {
+    id,
+    clientRequestId: `request-${id}`,
+    operationId: "operation-1",
+    reportId: "report-operation-1",
+    reviewer: { userId: 7, displayName: record.reviewer },
+    createdAt: record.time,
+    supersedesReviewId: null,
+    snapshot: { question: record.question, answer: record.answer, need: record.need, knowledgeVersion: record.knowledgeVersion },
+    humanVerdict: "improve",
+    humanScore: 75,
+    alignment: "human_more_negative",
+    status: "pending_analysis",
+    dimensions: record.dimensions,
+    gates: record.gates,
+    diff: { alignment: "human_more_negative", dimensions: [{ id: "intent", aiLevel: 4, humanLevel: 3 }], gates: [] },
+  };
+}
+
+beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); vi.spyOn(liveEnterpriseRagEvaluationApi, "start").mockRejectedValue(new Error("must never start")); vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: null, history: [] }); vi.spyOn(liveEnterpriseRagHumanReviewApi, "list").mockResolvedValue([]); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("report records", () => {
@@ -59,13 +82,38 @@ describe("report records", () => {
   });
 
   it("loads server records read-only, deduplicates them and exposes recorded evidence", async () => {
+    const migratedDuplicate = manual("review-1");
+    migratedDuplicate.id = "legacy-migrated-copy";
+    localStorage.setItem(enterpriseRagHistoryStorageKey("live:a"), JSON.stringify([
+      migratedDuplicate,
+      manual("legacy-only", "rag-eval-1.3", "2026-11-05T01:00:00.000Z"),
+    ]));
     vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: run(), history: [run()] });
+    vi.mocked(liveEnterpriseRagHumanReviewApi.list).mockResolvedValue([formalReview()]);
     render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
     await waitFor(() => expect(screen.getAllByTestId("rag-report-automatic-record")).toHaveLength(1));
+    await waitFor(() => expect(screen.getAllByTestId("rag-report-manual-record")).toHaveLength(2));
     expect(screen.getByText("报告记录的陈述")).toBeTruthy();
     expect(screen.getByText("q-hash")).toBeTruthy();
+    const manualRecords = screen.getAllByTestId("rag-report-manual-record");
+    expect(manualRecords[0].textContent).toContain("完整原文review-1");
+    expect(manualRecords[1].textContent).toContain("完整原文legacy-only");
+    expect(screen.queryByText(/来自当前浏览器/)).toBeNull();
     expect(liveEnterpriseRagEvaluationApi.latest).toHaveBeenCalledWith(coordinate);
+    expect(liveEnterpriseRagHumanReviewApi.list).toHaveBeenCalledWith("operation-1");
     expect(liveEnterpriseRagEvaluationApi.start).not.toHaveBeenCalled();
+  });
+
+  it("shows the server-frozen human score and verdict without replacing them with a client recalculation", async () => {
+    vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: run(), history: [] });
+    const saved = { ...formalReview(), humanScore: 12, humanVerdict: "usable" as const };
+    vi.mocked(liveEnterpriseRagHumanReviewApi.list).mockResolvedValue([saved]);
+    render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
+    await waitFor(() => expect(screen.getByTestId("rag-report-manual-record")).toBeTruthy());
+    const summary = screen.getByTestId("rag-report-manual-record").querySelector("summary")!;
+    expect(summary.textContent).toContain("12 / 100");
+    expect(summary.textContent).toContain("良好");
+    expect(summary.textContent).not.toContain("待改进");
   });
 
   it("rejects records from another answer", async () => {
