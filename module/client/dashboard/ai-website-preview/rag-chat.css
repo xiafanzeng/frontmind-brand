@@ -44,6 +44,15 @@
 .rag-eval-root .rag-chat-welcome { display:grid; gap:10px; min-width:0; color:var(--sfp-ink); line-height:1.65; }
 .rag-eval-root .rag-chat-welcome-copy { margin:0; }
 .rag-eval-root .rag-chat-welcome-copy.is-entrance { animation:rag-chat-starter-enter 400ms cubic-bezier(.25,.1,.25,1) both; }
+.rag-eval-root .rag-chat-welcome-skeleton__body { display:grid; gap:10px; min-width:0; padding:2px 0 4px; }
+.rag-eval-root .rag-chat-welcome-skeleton__line { position:relative; display:block; max-width:100%; overflow:hidden; border-radius:999px; background:#e5e5e7; }
+.rag-eval-root .rag-chat-welcome-skeleton__line::after { position:absolute; inset:0; content:""; background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.72) 50%,transparent 100%); transform:translateX(-110%); animation:rag-chat-skeleton-sweep 1.6s ease-in-out infinite; }
+.rag-eval-root .rag-chat-welcome-skeleton__line.is-title { width:min(42%,220px); height:16px; margin-bottom:2px; }
+.rag-eval-root .rag-chat-welcome-skeleton__line.is-copy { width:min(76%,420px); height:16px; margin-bottom:2px; }
+.rag-eval-root .rag-chat-welcome-skeleton__line:is(.is-question-one,.is-question-two,.is-question-three) { height:32px; border-radius:9px; }
+.rag-eval-root .rag-chat-welcome-skeleton__line.is-question-one { width:min(58%,320px); }
+.rag-eval-root .rag-chat-welcome-skeleton__line.is-question-two { width:min(74%,410px); }
+.rag-eval-root .rag-chat-welcome-skeleton__line.is-question-three { width:min(66%,360px); }
 .rag-eval-root .rag-chat-starters { display:grid; gap:10px; min-width:0; }
 .rag-eval-root .rag-chat-starters__questions { display:flex; flex-wrap:wrap; align-items:flex-start; gap:8px; }
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-chat-starters__questions > button,
@@ -60,10 +69,12 @@
 .rag-eval-root .rag-chat-starters--remaining { margin-top:16px; padding-top:16px; border-top:.5px solid var(--sfp-line); }
 @keyframes rag-chat-starter-enter { from { opacity:0; transform:translateX(-8px); } to { opacity:var(--rag-starter-opacity, 1); transform:translateX(0); } }
 @keyframes rag-chat-user-message-send { from { opacity:0; transform:translateY(8px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
+@keyframes rag-chat-skeleton-sweep { from { transform:translateX(-110%); } to { transform:translateX(110%); } }
 @media (prefers-reduced-motion:reduce) {
   .rag-eval-root .rag-chat-welcome-copy.is-entrance,
   .rag-eval-root .rag-chat-starters__questions.is-entrance > button,
   .rag-eval-root .erag-user-message.rag-chat-user-message--sent { animation:none; }
+  .rag-eval-root .rag-chat-welcome-skeleton__line::after { display:none; animation:none; }
 }
 .rag-eval-root .rag-chat-starters__draft { display:grid; gap:8px; padding-top:16px; border-top:.5px solid var(--sfp-line); }
 .rag-eval-root .rag-chat-starters__draft > p,

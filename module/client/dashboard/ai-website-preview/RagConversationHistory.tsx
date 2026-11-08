@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Check, History, LoaderCircle, Square, SquareCheckBig, SquarePen, Trash2 } from "lucide-react";
+import { History, LoaderCircle, Square, SquareCheckBig, SquarePen, Trash2 } from "lucide-react";
 import type { ConversationDeleteResult } from "../../host";
 import "./rag-conversation-history.css";
 
@@ -261,7 +261,8 @@ export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSel
               const deleting = allDeleting.has(item.id);
               const selectedItem = selected.has(item.id);
               const failure = failures.get(item.id);
-              return <li className={`rag-conversation-popover__item${failure ? " has-error" : ""}`} key={item.id}>
+              const active = activeId === item.id && !staged.has(item.id) && !deleting && !failure;
+              return <li className={`rag-conversation-popover__item${failure ? " has-error" : ""}`} data-active={active || undefined} key={item.id}>
                 {staged.has(item.id) ? <div className="rag-conversation-popover__staged">
                   <span className="rag-conversation-popover__staged-title">{item.title || "未命名对话"}</span>
                   <button ref={node => { if (node) undoRefs.current.set(item.id, node); else undoRefs.current.delete(item.id); }} type="button" aria-label={`撤销删除${item.title || "未命名对话"}`} onClick={() => undo(item.id)}>撤销</button>
@@ -269,7 +270,7 @@ export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSel
                   {multiSelect && <button type="button" role="checkbox" aria-checked={selectedItem} aria-label={`选择${item.title || "未命名对话"}`} className="rag-conversation-popover__selector" disabled={!canStage || item.disabled || item.deletingDisabled || deleting || pending.includes(item.id)} onClick={() => void select(item.id)}>{selectedItem ? <SquareCheckBig size={18} aria-hidden="true" /> : <Square size={18} aria-hidden="true" />}</button>}
                   <button type="button" className="rag-conversation-popover__choice" aria-label={item.title || "未命名对话"} aria-current={activeId === item.id ? "true" : undefined} disabled={navigationDisabled || item.disabled || deleting} title={item.disabled ? "对话运行中，暂不能切换" : undefined} onClick={() => void select(item.id)}>
                     <span className="rag-conversation-popover__copy"><span className="rag-conversation-popover__title">{item.title || "未命名对话"}</span>{item.subtitle && <span className="rag-conversation-popover__subtitle">{item.subtitle}</span>}{failure && <span className="rag-conversation-popover__failure">{failure}</span>}</span>
-                    {deleting ? <LoaderCircle className="rag-conversation-popover__row-loading" size={16} aria-label="删除中" /> : activeId === item.id && <Check className="rag-conversation-popover__check" size={16} aria-hidden="true" />}
+                    {deleting && <LoaderCircle className="rag-conversation-popover__row-loading" size={16} aria-label="删除中" />}
                   </button>
                   {!multiSelect && <button ref={node => { if (node) removeRefs.current.set(item.id, node); else removeRefs.current.delete(item.id); }} type="button" className="rag-conversation-popover__remove" disabled={!canStage || item.disabled || item.deletingDisabled || deleting || pending.includes(item.id)} aria-label={`${failure ? "重试删除" : "删除"}${item.title || "未命名对话"}`} title={item.deletingDisabled ? "对话运行中" : pending.includes(item.id) ? "删除结果尚未确认" : failure ? "重试" : "删除对话"} onClick={() => stage(item.id)}>{failure ? <span>重试</span> : <Trash2 size={16} strokeWidth={1.7} aria-hidden="true" />}</button>}
                 </>}
@@ -279,7 +280,7 @@ export function RagConversationHistory({ scopeKey, items, activeId, onNew, onSel
           {multiSelect && <div className="rag-conversation-popover__selection-bar"><span>已选 {selected.size} 条</span><button type="button" onClick={() => updateSelected(new Set())} disabled={!selected.size}>取消选择</button><button type="button" className="is-delete" onClick={stageSelected} disabled={!selected.size}>删除所选</button></div>}
           {examples.length > 0 && <section className="rag-conversation-popover__examples" aria-label="预览问答">
             <h4>预览问答</h4><ul className="rag-conversation-popover__list">
-              {examples.map(item => <li key={item.id} className="rag-conversation-popover__item"><button type="button" className="rag-conversation-popover__choice" aria-current={activeExampleId === item.id ? "true" : undefined} disabled={navigationDisabled || multiSelect} onClick={() => void selectExample(item.id)}><span className="rag-conversation-popover__copy"><span className="rag-conversation-popover__title">{item.title}</span><span className="rag-conversation-popover__subtitle">示例</span></span>{activeExampleId === item.id && <Check size={16} aria-hidden="true" />}</button></li>)}
+              {examples.map(item => <li key={item.id} className="rag-conversation-popover__item" data-active={activeExampleId === item.id || undefined}><button type="button" className="rag-conversation-popover__choice" aria-current={activeExampleId === item.id ? "true" : undefined} disabled={navigationDisabled || multiSelect} onClick={() => void selectExample(item.id)}><span className="rag-conversation-popover__copy"><span className="rag-conversation-popover__title">{item.title}</span><span className="rag-conversation-popover__subtitle">示例</span></span></button></li>)}
             </ul>
           </section>}
         </Popover.Content>

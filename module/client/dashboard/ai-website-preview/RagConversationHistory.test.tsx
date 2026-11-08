@@ -63,6 +63,8 @@ describe("conversation history", () => {
     expect(within(section).queryByRole("button", { name: /^删除/ })).toBeNull();
     const active = within(section).getByRole("button", { name: "能力介绍示例 示例" });
     expect(active.getAttribute("aria-current")).toBe("true");
+    expect(active.closest("li")?.getAttribute("data-active")).toBe("true");
+    expect(active.querySelector("svg")).toBeNull();
     const next = within(section).getByRole("button", { name: "风险判断示例 示例" });
     expect((next as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(next);
@@ -126,7 +128,10 @@ describe("conversation history", () => {
     expect(callbacks.onOpen).toHaveBeenCalledTimes(1);
     expect(callbacks.onSelect).not.toHaveBeenCalled();
     expect(callbacks.onDelete).not.toHaveBeenCalled();
-    expect(within(dialog).getByRole("button", { name: "企业能力介绍" }).getAttribute("aria-current")).toBe("true");
+    const active = within(dialog).getByRole("button", { name: "企业能力介绍" });
+    expect(active.getAttribute("aria-current")).toBe("true");
+    expect(active.closest("li")?.getAttribute("data-active")).toBe("true");
+    expect(active.querySelector("svg")).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "部署要求" }));
     await waitFor(() => expect(callbacks.onSelect).toHaveBeenCalledWith("two"));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
@@ -147,6 +152,18 @@ describe("conversation history", () => {
     expect(callbacks.onDelete).not.toHaveBeenCalled();
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledWith("two"));
+  });
+
+  it("lets staged deletion override the active-row background while preserving selection semantics", async () => {
+    const callbacks = props();
+    render(<RagConversationHistory {...callbacks} />);
+    const dialog = await open();
+    const active = within(dialog).getByRole("button", { name: "企业能力介绍" });
+    expect(active.closest("li")?.getAttribute("data-active")).toBe("true");
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除企业能力介绍" }));
+    const staged = within(dialog).getByRole("button", { name: "撤销删除企业能力介绍" });
+    expect(staged.closest("li")?.hasAttribute("data-active")).toBe(false);
+    expect(within(dialog).queryByRole("button", { name: "企业能力介绍" })).toBeNull();
   });
 
   it("turns multi-selection into reversible visual changes and ignores selection alone", async () => {

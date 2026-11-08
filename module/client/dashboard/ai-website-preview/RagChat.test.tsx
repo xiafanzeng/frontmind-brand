@@ -81,24 +81,53 @@ describe("RAG chat presentation", () => {
     expect(screen.getByRole("button", { name: "可以简单介绍一下你们吗？" })).toBeTruthy();
   });
 
-  it("uses only server starter data in live mode and disables management until it is readable", () => {
+  it("uses a welcome skeleton while starter identity loads, then exposes the first server draft", () => {
     const manage = vi.fn(async () => true);
     const props = { ...base(), question: "", input: "", onConfirmStarterQuestions: manage, onRegenerateStarterQuestions: manage };
-    const view = render(<RagChat {...props} starterQuestions={{ current: null, loading: true, revision: 0 }} />);
-    expect(screen.getByRole("status").textContent).toBe("正在读取预设问题…");
+    const view = render(<RagChat {...props} welcomeLoading starterQuestions={{ current: null, phase: "initial_loading", loading: true, revision: 0 }} />);
+    expect(screen.getByRole("article", { name: "正在加载企业助手" }).getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("article", { name: "企业助手欢迎" })).toBeNull();
+    expect(screen.queryByText(/你好！我是/)).toBeNull();
     expect(screen.queryByRole("button", { name: DEFAULT_RAG_STARTER_QUESTIONS[0] })).toBeNull();
-    expect(screen.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByRole("button", { name: "设置预设问题" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "输入企业 RAG 问题" })).toBeTruthy();
+    expect(ragChatStyles).toContain("@keyframes rag-chat-skeleton-sweep { from { transform:translateX(-110%); } to { transform:translateX(110%); } }");
+    expect(ragChatStyles).toContain(".rag-chat-welcome-skeleton__line::after { display:none; animation:none; }");
 
-    view.rerender(<RagChat {...props} starterQuestions={{ current: null, error: "预设问题读取失败。", revision: 0 }} />);
-    expect(screen.getByRole("alert").textContent).toBe("预设问题读取失败。");
-    expect(screen.queryByRole("button", { name: DEFAULT_RAG_STARTER_QUESTIONS[0] })).toBeNull();
-    expect(screen.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(true);
+    const firstDraft = ["草稿问题一？", "草稿问题二？", "草稿问题三？"];
+    view.rerender(<RagChat {...props} assistantName="东莞台心医院 AI 助手" starterQuestions={{
+      current: null,
+      draft: { id: "first-draft", questions: firstDraft },
+      phase: "activating_initial",
+      revision: 1,
+    }} />);
+    expect(screen.queryByRole("article", { name: "正在加载企业助手" })).toBeNull();
+    expect(screen.getByText("东莞台心医院 AI 助手")).toBeTruthy();
+    expect(screen.getByRole("button", { name: firstDraft[0] })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
+    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    expect(within(settings).getByText("首次问题已生成，正在自动启用。")).toBeTruthy();
+    expect((within(settings).getByRole("button", { name: "编辑问题" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(settings, { key: "Escape" });
 
     const serverQuestions = ["服务端问题一？", "服务端问题二？", "服务端问题三？"];
-    view.rerender(<RagChat {...props} starterQuestions={{ current: { id: "server-2", questions: serverQuestions }, revision: 2 }} />);
+    view.rerender(<RagChat {...props} starterQuestions={{ current: { id: "server-2", questions: serverQuestions }, phase: "ready", revision: 2 }} />);
     expect(screen.getByRole("button", { name: serverQuestions[0] })).toBeTruthy();
     expect(screen.queryByRole("button", { name: DEFAULT_RAG_STARTER_QUESTIONS[0] })).toBeNull();
     expect(screen.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("keeps starter failures inside the still-openable settings popover", () => {
+    const manage = vi.fn(async () => true);
+    render(<RagChat {...base()} question="" input="" starterQuestions={{ current: null, phase: "error", error: "预设问题生成失败。", revision: 0 }} onRegenerateStarterQuestions={manage} />);
+    expect(screen.queryByText("暂无可用的预设问题。")).toBeNull();
+    const trigger = screen.getByRole("button", { name: "设置预设问题" });
+    expect((trigger as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(trigger);
+    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    expect(within(settings).getByRole("alert").textContent).toBe("预设问题生成失败。");
+    expect((within(settings).getByRole("button", { name: "换一批" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("remounts the welcome entrance when switching between blank conversation scopes", () => {

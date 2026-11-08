@@ -16,6 +16,13 @@ export class RagStarterQuestionsApiError extends Error {
   }
 }
 
+export type RagStarterQuestionsPhase =
+  | "initial_loading"
+  | "generating"
+  | "activating_initial"
+  | "ready"
+  | "error";
+
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -92,13 +99,20 @@ export const liveRagStarterQuestionsApi = {
 };
 
 /** Optional state wrapper; callers may also use liveRagStarterQuestionsApi directly. */
-export function useRagStarterQuestions(enabled = true) {
+export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
   const [data, setData] = useState<RagStarterQuestionsDto | null>(null);
   const [loading, setLoading] = useState(enabled);
+  const [initialLoading, setInitialLoading] = useState(enabled);
+  const [autoGenerating, setAutoGenerating] = useState(false);
+  const [autoActivating, setAutoActivating] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const generation = useRef(0);
+  const observed = useRef(false);
   const conflicted = useRef(false);
   const mutating = useRef(false);
+  const mutationOwner = useRef(0);
+  const automaticGenerationAttempt = useRef<string | null>(null);
+  const automaticActivationAttempt = useRef<string | null>(null);
   const regenerationRequest = useRef<{
     id: string;
     revision: number;
@@ -112,11 +126,20 @@ export function useRagStarterQuestions(enabled = true) {
     setLoading(true);
     try {
       const next = await liveRagStarterQuestionsApi.read();
-      if (current === generation.current) { setData(next); setError(null); }
+      if (current === generation.current) {
+        observed.current = true;
+        setInitialLoading(false);
+        setData(next);
+        setError(null);
+      }
       return next;
     } catch (cause) {
       const next = cause instanceof Error ? cause : new Error("预设问题读取失败。");
-      if (current === generation.current) setError(next);
+      if (current === generation.current) {
+        observed.current = true;
+        setInitialLoading(false);
+        setError(next);
+      }
       throw next;
     } finally {
       if (current === generation.current) setLoading(false);
@@ -124,7 +147,8 @@ export function useRagStarterQuestions(enabled = true) {
   }, []);
   const reload = useCallback(() => readLatest(true), [readLatest]);
   useEffect(() => {
-    if (!enabled) { setLoading(false); return; }
+    if (!enabled) { setLoading(false); setInitialLoading(false); return; }
+    if (!observed.current) setInitialLoading(true);
     void reload().catch(() => undefined);
     return () => { generation.current += 1; };
   }, [enabled, reload]);
@@ -162,7 +186,10 @@ export function useRagStarterQuestions(enabled = true) {
   const mutate = useCallback(async (run: (current: RagStarterQuestionsDto) => Promise<RagStarterQuestionsDto>) => {
     if (!data) throw new RagStarterQuestionsApiError("预设问题尚未读取完成。", "STARTER_NOT_READY", 409);
     const current = ++generation.current;
+    mutationOwner.current = current;
     mutating.current = true;
+    setAutoGenerating(false);
+    setAutoActivating(false);
     setLoading(true);
     try {
       const next = await run(data);
@@ -187,13 +214,118 @@ export function useRagStarterQuestions(enabled = true) {
       if (current === generation.current && !conflictRefreshed) setError(next);
       throw next;
     } finally {
-      mutating.current = false;
+      if (mutationOwner.current === current) mutating.current = false;
       if (current === generation.current) setLoading(false);
     }
   }, [data]);
+  useEffect(() => {
+    const draft = data?.draft;
+    if (!enabled || !autoInitialize || !draft || data?.current || automaticActivationAttempt.current === draft.id || mutating.current) return;
+    automaticActivationAttempt.current = draft.id;
+    const snapshot = data;
+    const current = ++generation.current;
+    mutationOwner.current = current;
+    mutating.current = true;
+    setLoading(true);
+    setAutoActivating(true);
+    setError(null);
+    void liveRagStarterQuestionsApi.confirm({ ...snapshot, questions: draft.questions }).then(next => {
+      if (current !== generation.current) return;
+      conflicted.current = false;
+      setData(next);
+      setError(null);
+    }).catch(async cause => {
+      if (current !== generation.current) return;
+      const next = cause instanceof Error ? cause : new Error("预设问题启用失败。");
+      try {
+        const latest = await liveRagStarterQuestionsApi.read();
+        if (current !== generation.current) return;
+        setData(latest);
+        const activated = latest.current?.id === draft.id && !latest.draft;
+        setError(activated ? null : next);
+        conflicted.current = false;
+      } catch {
+        if (current === generation.current) setError(next);
+      }
+    }).finally(() => {
+      if (mutationOwner.current !== current) return;
+      mutating.current = false;
+      setAutoActivating(false);
+      if (current === generation.current) setLoading(false);
+    });
+  }, [autoInitialize, data, enabled]);
+  useEffect(() => {
+    if (!enabled || !autoInitialize || initialLoading || !data?.knowledgeBase || data.current || data.draft ||
+        data.pending || data.error || error || mutating.current) return;
+    const attemptKey = data.knowledgeBase.id;
+    if (automaticGenerationAttempt.current === attemptKey) return;
+    automaticGenerationAttempt.current = attemptKey;
+    const request = regenerationRequest.current ?? {
+      id: globalThis.crypto.randomUUID(),
+      revision: data.revision,
+      currentId: null,
+      draftId: null,
+      pendingSetId: data.pendingSetId ?? null,
+    };
+    regenerationRequest.current = request;
+    const snapshot = data;
+    const current = ++generation.current;
+    mutationOwner.current = current;
+    mutating.current = true;
+    setLoading(true);
+    setAutoGenerating(true);
+    setError(null);
+    void liveRagStarterQuestionsApi.regenerate({ ...snapshot, clientRequestId: request.id }).then(next => {
+      if (current !== generation.current) return;
+      regenerationRequest.current = null;
+      conflicted.current = false;
+      setData(next);
+      setError(null);
+    }).catch(async cause => {
+      if (current !== generation.current) return;
+      const next = cause instanceof Error ? cause : new Error("预设问题生成失败。");
+      if (next instanceof RagStarterQuestionsApiError && next.status !== 409) {
+        setError(next);
+        return;
+      }
+      try {
+        const latest = await liveRagStarterQuestionsApi.read();
+        if (current !== generation.current) return;
+        setData(latest);
+        const accepted = Boolean(latest.current || latest.draft || latest.pending || latest.error);
+        if (accepted) {
+          regenerationRequest.current = null;
+          setError(null);
+        } else setError(next);
+        conflicted.current = false;
+      } catch {
+        if (current === generation.current) setError(next);
+      }
+    }).finally(() => {
+      if (mutationOwner.current !== current) return;
+      mutating.current = false;
+      setAutoGenerating(false);
+      if (current === generation.current) setLoading(false);
+    });
+  }, [autoInitialize, data, enabled, error, initialLoading]);
+  const automaticGenerationRequired = Boolean(
+    autoInitialize && data?.knowledgeBase && !data.current && !data.draft &&
+    !data.pending && !data.error && !error,
+  );
+  const phase: RagStarterQuestionsPhase = initialLoading
+    ? "initial_loading"
+    : autoActivating
+      ? "activating_initial"
+      : autoGenerating || data?.pending || automaticGenerationRequired
+        ? "generating"
+        : error || data?.error
+          ? "error"
+          : "ready";
   return {
     data,
     loading,
+    initialLoading,
+    phase,
     error,
     reload,
     confirm: (questions: string[]) => mutate((current) =>
