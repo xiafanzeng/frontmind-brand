@@ -23,8 +23,16 @@ const ragRadar = readFileSync(
   resolve(process.cwd(), "client/dashboard/ai-website-preview/RagEvaluationRadar.tsx"),
   "utf8",
 );
+const evaluationRadar = readFileSync(
+  resolve(process.cwd(), "client/dashboard/ai-website-preview/EvaluationRadar.tsx"),
+  "utf8",
+);
 const ragEvaluationCss = readFileSync(
   resolve(process.cwd(), "client/dashboard/ai-website-preview/rag-evaluation-ui.css"),
+  "utf8",
+);
+const ragEvidenceTopicsCss = readFileSync(
+  resolve(process.cwd(), "client/dashboard/ai-website-preview/rag-evidence-topics.css"),
   "utf8",
 );
 const ragChatCss = readFileSync(
@@ -320,8 +328,8 @@ describe("Brand Apple theme contract", () => {
     expect(ragEvaluationCss).toContain(".rag-eval-root .rag-radar-point-control {");
     expect(ragEvaluationCss).toContain("width:44px");
     expect(ragEvaluationCss).toContain("height:44px");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-radar-point-control { width:36px; height:36px; min-height:36px; }");
-    expect(ragRadar).toContain("const RADAR_MIN_CONTROL_RADIUS = 42;");
+    expect(ragEvaluationCss).not.toContain("width:36px; height:36px; min-height:36px;");
+    expect(evaluationRadar).toContain("EVALUATION_RADAR_MIN_CONTROL_RADIUS = 42;");
     expect(ragEvaluationCss).toContain(".rag-radar-point-control[aria-expanded=true]");
     expect(css).toContain(".rag-radar-point-control:hover:not(:disabled)");
     expect(css).not.toContain(".rag-radar-label:hover:not(:disabled)");
@@ -350,12 +358,12 @@ describe("Brand Apple theme contract", () => {
     expect(ragChatCss).toMatch(/@media \(prefers-reduced-motion:reduce\)[\s\S]*\.erag-user-message\.rag-chat-user-message--sent \{ animation:none; \}/);
   });
 
-  it("uses five transparent-center radar levels and distinct marker states", () => {
+  it("uses an enterprise-scoped construction-style radar detail contract", () => {
     expect(ragEvaluationCss).toContain("--rag-radar-score-muted:var(--sfp-muted,#6b7280);");
     expect(ragEvaluationCss).toContain(".rag-radar-detail-score__earned.is-zero { color:var(--rag-radar-score-muted); }");
     expect(ragEvaluationCss).toContain(".rag-radar-detail-score__maximum { color:var(--rag-radar-score-muted);");
-    expect(ragRadar).toContain("const RADAR_INNER_RADIUS = 20;");
-    expect(ragRadar).toContain("[20, 40, 60, 80, 100]");
+    expect(evaluationRadar).toContain("EVALUATION_RADAR_INNER_RADIUS = 20;");
+    expect(evaluationRadar).toContain("[20, 40, 60, 80, 100]");
     expect(ragRadar).not.toContain("rag-radar-tick");
     expect(ragRadar).toContain("rag-radar-center-cutout");
     expect(ragEvaluationCss).toContain(".rag-radar-point-marker.is-zero");
@@ -365,16 +373,38 @@ describe("Brand Apple theme contract", () => {
     expect(css).toContain("background: rgba(174, 174, 178, 0.16);");
     expect(ragEvaluationCss).toContain(".rag-radar-point-marker.is-pending");
     expect(ragEvaluationCss).toContain(".rag-radar-point-marker.is-not-applicable");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-radar-detail__header { display:flex; align-items:center; justify-content:space-between; gap:8px;");
-    expect(ragEvaluationCss).toContain("padding-bottom:14px; border-bottom:.5px solid var(--sfp-line,#e5e5ed);");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-radar-detail h3 { min-width:0; margin:0; font-size:16px; font-weight:400;");
-    expect(ragEvaluationCss).toContain("line-height:1.35;");
-    expect(ragEvaluationCss).toContain(".rag-radar-detail-score__earned { color:#7736a6; font-size:30px;");
-    expect(ragEvaluationCss).toMatch(/@media \(max-width:390px\)[\s\S]*\.rag-radar-detail-score__earned \{ font-size:22px; \}/);
-    expect(ragEvaluationCss).toMatch(/@media \(max-width:320px\)[\s\S]*\.rag-radar-detail-score__earned \{ font-size:18px; \}/);
-    expect(ragEvaluationCss).toContain(".rag-radar-detail__check-status .rag-evaluation-status-orb { flex:none; width:14px; height:14px; }");
-    expect(ragEvaluationCss).toContain(".rag-eval-root .rag-radar-detail article { padding:0; border:0; }");
-    expect(css).toMatch(/\.rag-radar-detail \{[\s\S]*padding: 16px;[\s\S]*box-shadow: none;[\s\S]*-webkit-backdrop-filter: none;[\s\S]*backdrop-filter: none;/);
+    const enterpriseScope = '.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise';
+    expect(ragEvaluationCss).toContain(`${enterpriseScope} .rag-radar-detail--enterprise {`);
+    expect(ragEvaluationCss).toContain("padding:14px 16px 16px;");
+    expect(ragEvaluationCss).toContain("border:.5px solid rgba(0,0,0,.08);");
+    expect(ragEvaluationCss).toContain("border-radius:20px;");
+    expect(ragEvaluationCss).toContain("background:rgba(255,255,255,.72);");
+    expect(ragEvaluationCss).toContain("box-shadow:0 8px 24px rgba(29,29,31,.08);");
+    expect(ragEvaluationCss).toContain("backdrop-filter:blur(20px) saturate(180%);");
+    expect(ragEvaluationCss).toContain(`${enterpriseScope} .rag-radar-detail__header {`);
+    expect(ragEvaluationCss).toContain("grid-template-columns:minmax(0,1fr) auto;");
+    expect(ragEvaluationCss).toContain("gap:clamp(8px,3vw,12px);");
+    expect(ragEvaluationCss).toContain("padding-bottom:10px;");
+    expect(ragEvaluationCss).toContain("border-bottom:.5px solid var(--sfp-line,#e5e5ed);");
+    expect(ragEvaluationCss).toContain("font-size:16px;");
+    expect(ragEvaluationCss).toContain("font-weight:600;");
+    expect(ragEvaluationCss).toContain("font-size:clamp(18px,5.64vw,30px);");
+    expect(ragEvaluationCss).toContain(`${enterpriseScope} .rag-radar-detail__checks {`);
+    expect(ragEvaluationCss).toContain("gap:6px;");
+    expect(ragEvaluationCss).toContain(`${enterpriseScope} .rag-radar-detail__check {`);
+    expect(ragEvaluationCss).toContain("grid-template-columns:minmax(0,1fr) auto;");
+    expect(ragEvaluationCss).toContain("border:0;");
+    expect(ragEvaluationCss).toContain("font-size:15px;");
+    expect(ragEvaluationCss).toContain("font-size:13px;");
+    expect(ragEvaluationCss).toContain("flex:0 0 14px;");
+    expect(ragEvaluationCss).toContain("width:6px;");
+    expect(ragEvaluationCss).toContain("height:6px;");
+    expect(ragEvaluationCss).toContain("rag-enterprise-detail-overflow 300ms step-end forwards");
+    expect(ragEvaluationCss).toMatch(/@media \(prefers-reduced-motion:reduce\)[\s\S]*rag-radar--enterprise[\s\S]*animation:none; overflow:visible;/);
+    expect(ragRadar).toContain('className="rag-radar-detail rag-radar-detail--enterprise"');
+    expect(ragRadar).toContain('role="region"');
+    expect(css).not.toMatch(/\.rag-radar-detail \{[\s\S]*box-shadow: none;[\s\S]*backdrop-filter: none;/);
+    expect(ragEvidenceTopicsCss).not.toMatch(/rag-evidence-topic[^\{]*rag-radar-detail/);
   });
 
   it("uses compact content-width Apple metadata labels and black optimization field labels", () => {

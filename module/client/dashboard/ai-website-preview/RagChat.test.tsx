@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { copyToClipboard } from "@frontmind/module-ui/lib/utils";
-import { DEFAULT_RAG_STARTER_QUESTIONS, RagChat } from "./RagChat";
+import { DEFAULT_RAG_STARTER_QUESTIONS, RagChat, RagStarterSettings } from "./RagChat";
+import { RagAnswerWindows } from "./RagAnswerWindows";
 const ragChatStyles = readFileSync("client/dashboard/ai-website-preview/rag-chat.css", "utf8");
 vi.mock("@frontmind/module-ui/lib/utils", async original => ({ ...await original<object>(), copyToClipboard: vi.fn(async () => true) }));
 const base = () => ({ scopeKey:"task-a", live:true, assistantName:"企业助手", question:"支持部署吗？", answer:"", answerKey:"", sources:[], busy:false, running:false, canStop:true, canEdit:true, canSubmit:true, input:"部署问题", inputRef:createRef<HTMLTextAreaElement>(), onInput:vi.fn(), onSubmit:vi.fn(async () => {}), onStop:vi.fn(async () => true), onEvidence:vi.fn(), starterQuestions:{ current:{ id:"server-current", questions:[...DEFAULT_RAG_STARTER_QUESTIONS] }, revision:1 } });
@@ -46,6 +47,31 @@ function RunningStarterChat({ onFollowup }: { onFollowup: (text: string) => Prom
     setRunning(true);
     return true;
   }} />;
+}
+function StarterSettingsChat(props: Parameters<typeof RagChat>[0]) {
+  const [open, setOpen] = useState(false);
+  return <>
+    <RagChat {...props} onOpenStarterSettings={() => setOpen(true)} starterSettingsOpen={open} />
+    <RagAnswerWindows
+      panels={open ? ["starter"] : []}
+      activePanel={open ? "starter" : null}
+      onActivate={() => setOpen(true)}
+      onClose={() => setOpen(false)}
+      titles={{ evidence: "回答依据", improve: "优化方案", review: "人工评审", answer: "回答编辑", starter: "预设问题" }}
+      availability={{ evidence: true, improve: true, review: true, answer: true, starter: true }}
+      renderBody={() => <RagStarterSettings
+        scopeKey={props.scopeKey}
+        live={props.live}
+        canEdit={props.canEdit}
+        starterQuestions={props.starterQuestions}
+        onConfirmStarterQuestions={props.onConfirmStarterQuestions}
+        onRegenerateStarterQuestions={props.onRegenerateStarterQuestions}
+        onDiscardStarterDraft={props.onDiscardStarterDraft}
+        onClose={() => setOpen(false)}
+      />}
+      renderFooter={() => null}
+    />
+  </>;
 }
 describe("RAG chat presentation", () => {
   describe("starter basics", () => {
@@ -90,7 +116,7 @@ describe("RAG chat presentation", () => {
   it("uses a welcome skeleton while starter identity loads, then exposes the first server draft", () => {
     const manage = vi.fn(async () => true);
     const props = { ...base(), question: "", input: "", onConfirmStarterQuestions: manage, onRegenerateStarterQuestions: manage };
-    const view = render(<RagChat {...props} welcomeLoading starterQuestions={{ current: null, phase: "initial_loading", loading: true, revision: 0 }} />);
+    const view = render(<StarterSettingsChat {...props} welcomeLoading starterQuestions={{ current: null, phase: "initial_loading", loading: true, revision: 0 }} />);
     expect(screen.getByRole("article", { name: "正在加载企业助手" }).getAttribute("aria-busy")).toBe("true");
     expect(screen.queryByRole("article", { name: "企业助手欢迎" })).toBeNull();
     expect(screen.queryByText(/你好！我是/)).toBeNull();
@@ -101,7 +127,7 @@ describe("RAG chat presentation", () => {
     expect(ragChatStyles).toContain(".rag-chat-welcome-skeleton__line::after { display:none; animation:none; }");
 
     const firstDraft = ["草稿问题一？", "草稿问题二？", "草稿问题三？"];
-    view.rerender(<RagChat {...props} assistantName="东莞台心医院 AI 助手" starterQuestions={{
+    view.rerender(<StarterSettingsChat {...props} assistantName="东莞台心医院 AI 助手" starterQuestions={{
       current: null,
       draft: { id: "first-draft", questions: firstDraft },
       phase: "activating_initial",
@@ -112,28 +138,39 @@ describe("RAG chat presentation", () => {
     expect(screen.getByRole("button", { name: firstDraft[0] })).toBeTruthy();
     expect(screen.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
-    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    const settings = screen.getByRole("dialog", { name: "预设问题" });
     expect(within(settings).getByText("首次问题已生成，正在自动启用。")).toBeTruthy();
     expect((within(settings).getByRole("button", { name: "编辑问题" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(settings, { key: "Escape" });
 
     const serverQuestions = ["服务端问题一？", "服务端问题二？", "服务端问题三？"];
-    view.rerender(<RagChat {...props} starterQuestions={{ current: { id: "server-2", questions: serverQuestions }, phase: "ready", revision: 2 }} />);
+    view.rerender(<StarterSettingsChat {...props} starterQuestions={{ current: { id: "server-2", questions: serverQuestions }, phase: "ready", revision: 2 }} />);
     expect(screen.getByRole("button", { name: serverQuestions[0] })).toBeTruthy();
     expect(screen.queryByRole("button", { name: DEFAULT_RAG_STARTER_QUESTIONS[0] })).toBeNull();
     expect(screen.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(false);
   });
 
-  it("keeps starter failures inside the still-openable settings popover", () => {
+  it("keeps starter failures inside the still-openable settings window", () => {
     const manage = vi.fn(async () => true);
-    render(<RagChat {...base()} question="" input="" starterQuestions={{ current: null, phase: "error", error: "预设问题生成失败。", revision: 0 }} onRegenerateStarterQuestions={manage} />);
+    render(<StarterSettingsChat {...base()} question="" input="" starterQuestions={{ current: null, phase: "error", error: "预设问题生成失败。", revision: 0 }} onRegenerateStarterQuestions={manage} />);
     expect(screen.queryByText("暂无可用的预设问题。")).toBeNull();
     const trigger = screen.getByRole("button", { name: "设置预设问题" });
     expect((trigger as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(trigger);
-    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    const settings = screen.getByRole("dialog", { name: "预设问题" });
     expect(within(settings).getByRole("alert").textContent).toBe("预设问题生成失败。");
     expect((within(settings).getByRole("button", { name: "换一批" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps the starter settings gesture attached while the welcome card finishes entering", () => {
+    render(<StarterSettingsChat {...base()} question="" input="" onRegenerateStarterQuestions={vi.fn(async () => true)} />);
+    const trigger = screen.getByRole("button", { name: "设置预设问题" });
+    const capturePointer = vi.fn();
+    Object.defineProperty(trigger, "setPointerCapture", { configurable: true, value: capturePointer });
+
+    fireEvent.pointerDown(trigger, { pointerId: 7 });
+
+    expect(capturePointer).toHaveBeenCalledOnce();
   });
 
   it("remounts the welcome entrance when switching between blank conversation scopes", () => {
@@ -238,7 +275,7 @@ describe("RAG chat presentation", () => {
     const confirm = vi.fn(async () => true);
     const regenerate = vi.fn(async () => true);
     const onSubmit = vi.fn(async () => {});
-    render(<RagChat {...base()} question="" input="" onSubmit={onSubmit} starterQuestions={{
+    render(<StarterSettingsChat {...base()} question="" input="" onSubmit={onSubmit} starterQuestions={{
       current: { id: "current-1", questions: ["当前问题一？", "当前问题二？", "当前问题三？"] },
       draft: { id: "draft-2", questions: ["草稿问题一？", "草稿问题二？", "草稿问题三？"] },
       revision: 2,
@@ -246,7 +283,12 @@ describe("RAG chat presentation", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "当前问题一？" })));
     expect(onSubmit).toHaveBeenCalledWith("当前问题一？");
     fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
-    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    const settings = screen.getByRole("dialog", { name: "预设问题" });
+    expect(settings.classList.contains("rag-drawer--starter")).toBe(true);
+    expect(ragChatStyles).toContain("min-height:32px; padding:3px 10px;");
+    expect(ragChatStyles).toContain("font-size:13px; font-weight:400; line-height:20px;");
+    expect(ragChatStyles).toContain("height:44px; transform:translateY(-50%);");
+    expect(ragChatStyles).toContain("column-gap:8px; row-gap:12px;");
     const draft = within(settings).getByRole("list", { name: "待确认的预设问题" });
     expect(within(draft).getByText("草稿问题一？")).toBeTruthy();
     expect(within(draft).queryByRole("button")).toBeNull();
@@ -258,16 +300,48 @@ describe("RAG chat presentation", () => {
     expect(confirm).toHaveBeenCalledWith(["人工修改问题一？", "草稿问题二？", "草稿问题三？"]);
   });
 
-  it("keeps the popover open and reports a generated-draft cancellation failure inside it", () => {
+  it("keeps starter mutations locked after the shared window closes and reopens", () => {
+    const current = { id: "current-1", questions: ["当前问题一？", "当前问题二？", "当前问题三？"] };
+    const draft = { id: "draft-2", questions: ["草稿问题一？", "草稿问题二？", "草稿问题三？"] };
+    const confirm = vi.fn(async () => true);
+    const regenerate = vi.fn(async () => true);
+    const discard = vi.fn(async () => true);
+    const props = {
+      ...base(), question: "", input: "",
+      starterQuestions: { current, draft, revision: 2 },
+      onConfirmStarterQuestions: confirm,
+      onRegenerateStarterQuestions: regenerate,
+      onDiscardStarterDraft: discard,
+    };
+    const view = render(<StarterSettingsChat {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
+    view.rerender(<StarterSettingsChat {...props} starterQuestions={{ ...props.starterQuestions, loading: true }} />);
+    let settings = screen.getByRole("dialog", { name: "预设问题" });
+    let actions = [...settings.querySelectorAll<HTMLButtonElement>(".rag-chat-starters__actions > button")];
+    expect(actions).toHaveLength(4);
+    expect(actions.every(button => button.disabled)).toBe(true);
+
+    fireEvent.keyDown(settings, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
+    settings = screen.getByRole("dialog", { name: "预设问题" });
+    actions = [...settings.querySelectorAll<HTMLButtonElement>(".rag-chat-starters__actions > button")];
+    expect(actions).toHaveLength(4);
+    expect(actions.every(button => button.disabled)).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(discard).not.toHaveBeenCalled();
+  });
+
+  it("keeps the window open and reports a generated-draft cancellation failure inside it", () => {
     vi.useFakeTimers();
     const discard = vi.fn(() => { throw new Error("取消失败"); });
-    render(<RagChat {...base()} question="" input="" starterQuestions={{
+    render(<StarterSettingsChat {...base()} question="" input="" starterQuestions={{
       current: { id: "current-1", questions: ["当前问题一？", "当前问题二？", "当前问题三？"] },
       draft: { id: "draft-2", questions: ["草稿问题一？", "草稿问题二？", "草稿问题三？"] },
       revision: 2,
     }} onDiscardStarterDraft={discard} />);
     fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
-    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    const settings = screen.getByRole("dialog", { name: "预设问题" });
     const cancel = within(settings).getByText("取消", { selector: "button" });
     fireEvent.click(cancel);
     expect(discard).toHaveBeenCalledTimes(1);
@@ -282,12 +356,12 @@ describe("RAG chat presentation", () => {
       draft: { id: "draft-1", questions: ["草稿问题一？", "草稿问题二？", "草稿问题三？"] },
       revision: 1,
     };
-    const view = render(<RagChat {...base()} question="" input="" starterQuestions={original} onConfirmStarterQuestions={confirm} />);
+    const view = render(<StarterSettingsChat {...base()} question="" input="" starterQuestions={original} onConfirmStarterQuestions={confirm} />);
     fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
-    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    const settings = screen.getByRole("dialog", { name: "预设问题" });
     fireEvent.click(within(settings).getByRole("button", { name: "编辑问题" }));
     fireEvent.change(within(settings).getByRole("textbox", { name: "问题 1" }), { target: { value: "我正在编辑的问题？" } });
-    view.rerender(<RagChat {...base()} question="" input="" starterQuestions={{
+    view.rerender(<StarterSettingsChat {...base()} question="" input="" starterQuestions={{
       ...original,
       draft: { id: "draft-late", questions: ["迟到草稿一？", "迟到草稿二？", "迟到草稿三？"] },
       pending: true,

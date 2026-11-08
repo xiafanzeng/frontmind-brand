@@ -3,8 +3,8 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it } from "vitest";
 import { RagAnswerWindows, type AnswerPanel } from "./RagAnswerWindows";
 
-const titles = { evidence: "回答依据", improve: "优化方案", review: "人工评审", answer: "录入待评估回答" };
-const availability = { evidence: true, improve: true, review: true, answer: true };
+const titles = { evidence: "回答依据", improve: "优化方案", review: "人工评审", answer: "录入待评估回答", starter: "预设问题" };
+const availability = { evidence: true, improve: true, review: true, answer: true, starter: true };
 const initialWidth = window.innerWidth;
 afterEach(() => { cleanup(); Object.defineProperty(window, "innerWidth", { configurable: true, value: initialWidth }); });
 
@@ -50,5 +50,14 @@ describe("answer editor window", () => {
     render(<Windows first="evidence" />);
     const nav = screen.getByRole("navigation", { name: "回答评估详情切换" });
     expect(within(nav).getAllByRole("button")).toHaveLength(3);
+  });
+
+  it("uses the shared mobile window without evaluation tabs for starter settings", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 320 });
+    render(<Windows first="starter" />);
+    const dialog = screen.getByRole("dialog", { name: "预设问题" });
+    expect(within(dialog).queryByRole("navigation", { name: "回答评估详情切换" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "关闭预设问题" }));
+    expect(screen.queryByRole("dialog", { name: "预设问题" })).toBeNull();
   });
 });

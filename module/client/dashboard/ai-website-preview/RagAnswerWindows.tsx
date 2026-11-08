@@ -3,7 +3,7 @@ import { Columns3, Maximize2, Minimize2, X } from "lucide-react";
 import { RagEntranceReadyContext } from "./RagEntranceContext";
 import "./rag-answer-windows.css";
 
-export type AnswerPanel = "evidence" | "improve" | "review" | "answer";
+export type AnswerPanel = "evidence" | "improve" | "review" | "answer" | "starter";
 export type AnswerWindowRect = { x: number; y: number; width: number; height: number };
 type Viewport = { width: number; height: number; offsetTop?: number };
 type WindowState = { rect: AnswerWindowRect; maximized: boolean; restore?: AnswerWindowRect };
@@ -25,8 +25,8 @@ export type RagAnswerWindowsProps = {
 };
 
 const DETAIL_PANEL_TYPES: AnswerPanel[] = ["evidence", "improve", "review"];
-const PANEL_TYPES: AnswerPanel[] = [...DETAIL_PANEL_TYPES, "answer"];
-const PANEL_LABELS: Record<AnswerPanel, string> = { evidence: "回答依据", improve: "优化方案", review: "人工评审", answer: "回答编辑" };
+const PANEL_TYPES: AnswerPanel[] = [...DETAIL_PANEL_TYPES, "answer", "starter"];
+const PANEL_LABELS: Record<AnswerPanel, string> = { evidence: "回答依据", improve: "优化方案", review: "人工评审", answer: "回答编辑", starter: "预设问题" };
 const EDGES: ResizeEdge[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 const FOCUSABLE = "button:not([disabled]),a[href],input:not([disabled]),textarea:not([disabled]),select:not([disabled]),summary,[tabindex]:not([tabindex='-1'])";
 const MARGIN = 16;
@@ -407,10 +407,10 @@ export function RagAnswerWindows({ panels, activePanel, onActivate, onClose, tit
             <div className="rag-answer-window__controls">
               {!mobile && <span title={canTile ? "并排窗口" : panels.length < 2 ? "打开两个以上窗口后可并排" : "当前空间不足以并排窗口"}><button type="button" aria-label="并排窗口" disabled={!canTile} onClick={tileWindows}><Columns3 size={16} aria-hidden="true" /></button></span>}
               <button type="button" aria-label={expanded ? "还原窗口" : "放大窗口"} title={expanded ? "还原窗口" : "放大窗口"} onClick={() => toggleMaximum(panel)}>{expanded ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}</button>
-              <button type="button" data-answer-window-close aria-label={panel === "answer" ? "关闭回答编辑" : "关闭评估面板"} title="关闭" onClick={() => closePanel(panel)}><X size={18} aria-hidden="true" /></button>
+              <button type="button" data-answer-window-close aria-label={panel === "answer" ? "关闭回答编辑" : panel === "starter" ? "关闭预设问题" : "关闭评估面板"} title="关闭" onClick={() => closePanel(panel)}><X size={18} aria-hidden="true" /></button>
             </div>
           </div>
-          {mobile && panel !== "answer" && <nav className="rag-answer-window__tabs" aria-label="回答评估详情切换">{DETAIL_PANEL_TYPES.map(type => <button type="button" key={type} aria-current={type === panel ? "page" : undefined} disabled={!availability[type]} onClick={() => activate(type)}>{PANEL_LABELS[type]}</button>)}</nav>}
+          {mobile && DETAIL_PANEL_TYPES.includes(panel) && <nav className="rag-answer-window__tabs" aria-label="回答评估详情切换">{DETAIL_PANEL_TYPES.map(type => <button type="button" key={type} aria-current={type === panel ? "page" : undefined} disabled={!availability[type]} onClick={() => activate(type)}>{PANEL_LABELS[type]}</button>)}</nav>}
         </header>
         <AnswerWindowContent panel={panel} ready={ready} renderBody={renderBody} renderFooter={renderFooter} />
         {!mobile && !saved.maximized && EDGES.map(edge => <div key={edge} className={`rag-answer-window__resize is-${edge}`} data-resize-edge={edge} aria-hidden="true" onPointerDown={event => beginWindowGesture(event, panel, edge)} onPointerMove={moveWindowGesture} onPointerUp={event => endWindowGesture(event)} onPointerCancel={event => endWindowGesture(event, true)} />)}

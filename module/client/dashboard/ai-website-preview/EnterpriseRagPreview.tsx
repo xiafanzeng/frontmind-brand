@@ -37,7 +37,7 @@ import { RagEvaluationGauge } from "./RagEvaluationGauge";
 import { RagEvaluationDisclosure } from "./RagEvaluationDisclosure";
 import { RagReviewEvidencePicker, RagReviewSelect } from "./RagReviewControls";
 import { buildReviewEvidenceOptions, type ReviewEvidenceOption } from "./rag-review-evidence";
-import { DEFAULT_RAG_STARTER_QUESTIONS, RagChat, type RagChatTurn, type RagChatFollowup, type RagStarterQuestions } from "./RagChat";
+import { DEFAULT_RAG_STARTER_QUESTIONS, RagChat, RagStarterSettings, type RagChatTurn, type RagChatFollowup, type RagStarterQuestions } from "./RagChat";
 import { presentRagSummary, presentEvaluationScore } from "./rag-report-presentation";
 import { RagConversationHistory, type RagConversationHistoryItem } from "./RagConversationHistory";
 import { useRagPreviewHistory, type RagPreviewConversationSnapshot } from "./useRagPreviewHistory";
@@ -1389,7 +1389,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
     setReviewer(""); setConfirmed(false);
     close("review");
   };
-  const drawerTitle = { review: "人工评审与计算", evidence: "回答依据与陈述核验", rules: "评分规则", improve: "优化方案", answer: "录入待评估回答", history: "评估记录" };
+  const drawerTitle = { review: "人工评审与计算", evidence: "回答依据与陈述核验", rules: "评分规则", improve: "优化方案", answer: "录入待评估回答", starter: "预设问题", history: "评估记录" };
   const currentReviewDiff = live ? reviewDiffPreview(formalReviewContext, reviewDimensions, reviewGates) : null;
   const visibleManualHistory: VisibleReviewRecord[] = dedupeRagReviewViews(
     live
@@ -1557,6 +1557,36 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   </>;
   const renderDrawerFooter = (panel: NonNullable<Drawer>) => panel === "evidence" || panel === "improve" ? null : panel === "review" ? exampleReadOnly ? null : <button className="sfp-button sfp-button--primary" disabled={!reviewDraftContext || !answer.trim() || !need.trim() || Boolean(!live && !reviewer.trim()) || !confirmed || formalReviewSubmitting || Boolean(live && (formalReviewLoading || (formalReviewContext && (!formalReviewContext.canReview || reviewDraftContext.reportId !== formalReviewContext.reportId))))} onClick={() => void saveReview()}>保存评审并计算</button> : panel === "answer" ? <button className="sfp-button sfp-button--primary" disabled={!questionEdit.trim() || !answerEdit.trim() || !needEdit.trim()} onClick={() => updateAnswer(answerEdit, needEdit, questionEdit)}>保存回答，重新评审</button> : <button className="sfp-button sfp-button--ghost" onClick={() => close()}>完成</button>;
 
+  const visibleStarterQuestions = live ? live.starterQuestions : previewStarterQuestions;
+  const canEditStarterQuestions = !exampleReadOnly && (live?.canCompose ?? true);
+  const confirmStarterQuestions = live ? live.onConfirmStarterQuestions : async (questions: string[]) => {
+    setPreviewStarterQuestions(current => ({
+      current: { id: `preview-current-${(current.revision ?? 0) + 1}`, questions: [...questions] },
+      draft: null,
+      revision: (current.revision ?? 0) + 1,
+    }));
+    return true;
+  };
+  const regenerateStarterQuestions = live ? live.onRegenerateStarterQuestions : async () => {
+    previewStarterBatch.current = (previewStarterBatch.current + 1) % PREVIEW_STARTER_DRAFTS.length;
+    setPreviewStarterQuestions(current => ({
+      ...current,
+      draft: { id: `preview-draft-${(current.revision ?? 0) + 1}`, questions: [...PREVIEW_STARTER_DRAFTS[previewStarterBatch.current]] },
+      revision: (current.revision ?? 0) + 1,
+    }));
+    return true;
+  };
+  const discardStarterDraft = live ? live.onDiscardStarterDraft : async () => {
+    setPreviewStarterQuestions(current => ({
+      ...current,
+      draft: null,
+      revision: (current.revision ?? 0) + 1,
+    }));
+    return true;
+  };
+  const starterSettingsAvailable = Boolean(confirmStarterQuestions || regenerateStarterQuestions || discardStarterDraft);
+  const starterSettingsScopeKey = live ? `${storageScopeKey ?? "live"}:${live.conversationId ?? "new"}:${live.taskId ?? "new"}` : `${storageScopeKey ?? "preview"}:${previewHistory.activeId}`;
+
   return <section className="sfp-root erag-root rag-eval-root" data-testid={live ? "enterprise-rag-live-root" : undefined}>
     <div ref={backgroundRef}>
       <header className="sfp-heading erag-heading" data-rag-entrance="heading">
@@ -1611,7 +1641,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
             <RagChat
               onEditAnswer={live ? undefined : openAnswer}
               previousTurns={exampleReadOnly ? [] : live ? live.previousTurns : previewPreviousTurns}
-              scopeKey={live ? `${storageScopeKey ?? "live"}:${live.conversationId ?? "new"}:${live.taskId ?? "new"}` : `${storageScopeKey ?? "preview"}:${previewHistory.activeId}`}
+              scopeKey={starterSettingsScopeKey}
               live={Boolean(live)}
               assistantName={assistantName}
               welcomeLoading={welcomeLoading}
@@ -1638,33 +1668,13 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
               onCancelFollowup={live ? live.onCancelFollowup : async id => { setPreviewQueues(old => ({ ...old, [previewQueueKey]: { ...previewQueue, items: previewQueue.items.filter(item => item.id !== id) } })); return true; }}
               onResumeFollowups={live ? live.onResumeFollowups : async () => { setPreviewQueues(old => ({ ...old, [previewQueueKey]: { ...previewQueue, paused: false } })); return true; }}
               onRetryFollowup={live?.onRetryFollowup}
-              starterQuestions={live ? live.starterQuestions : previewStarterQuestions}
-              onConfirmStarterQuestions={live ? live.onConfirmStarterQuestions : (async questions => {
-                setPreviewStarterQuestions(current => ({
-                  current: { id: `preview-current-${(current.revision ?? 0) + 1}`, questions: [...questions] },
-                  draft: null,
-                  revision: (current.revision ?? 0) + 1,
-                }));
-                return true;
-              })}
-              onRegenerateStarterQuestions={live ? live.onRegenerateStarterQuestions : (async () => {
-                previewStarterBatch.current = (previewStarterBatch.current + 1) % PREVIEW_STARTER_DRAFTS.length;
-                setPreviewStarterQuestions(current => ({
-                  ...current,
-                  draft: { id: `preview-draft-${(current.revision ?? 0) + 1}`, questions: [...PREVIEW_STARTER_DRAFTS[previewStarterBatch.current]] },
-                  revision: (current.revision ?? 0) + 1,
-                }));
-                return true;
-              })}
-              onDiscardStarterDraft={live ? live.onDiscardStarterDraft : (async () => {
-                setPreviewStarterQuestions(current => ({
-                  ...current,
-                  draft: null,
-                  revision: (current.revision ?? 0) + 1,
-                }));
-                return true;
-              })}
-              canEdit={!exampleReadOnly && (live?.canCompose ?? true)}
+              starterQuestions={visibleStarterQuestions}
+              onConfirmStarterQuestions={confirmStarterQuestions}
+              onRegenerateStarterQuestions={regenerateStarterQuestions}
+              onDiscardStarterDraft={discardStarterDraft}
+              onOpenStarterSettings={starterSettingsAvailable ? () => openAnswerPanel("starter", true) : undefined}
+              starterSettingsOpen={visibleAnswerPanels.includes("starter")}
+              canEdit={canEditStarterQuestions}
               canSubmit={!exampleReadOnly && canAsk && !previewBusy}
               input={exampleReadOnly ? "" : input}
               inputRef={questionInputRef}
@@ -1748,11 +1758,20 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
       onActivate={openAnswerPanel}
       onClose={closeAnswerPanel}
       titles={drawerTitle}
-      availability={{ evidence: true, improve: !evaluationNotRequired && Boolean(answer.trim()) && !hasPerfectScore, review: !evaluationNotRequired && Boolean(answer.trim() && need.trim()), answer: !live }}
+      availability={{ evidence: true, improve: !evaluationNotRequired && Boolean(answer.trim()) && !hasPerfectScore, review: !evaluationNotRequired && Boolean(answer.trim() && need.trim()), answer: !live, starter: starterSettingsAvailable }}
       modalBlocked={drawer !== null}
       onModalChange={setSheetModal}
-      renderBody={renderDrawerBody}
-      renderFooter={renderDrawerFooter}
+      renderBody={panel => panel === "starter" ? <RagStarterSettings
+        scopeKey={starterSettingsScopeKey}
+        live={Boolean(live)}
+        canEdit={canEditStarterQuestions}
+        starterQuestions={visibleStarterQuestions}
+        onConfirmStarterQuestions={confirmStarterQuestions}
+        onRegenerateStarterQuestions={regenerateStarterQuestions}
+        onDiscardStarterDraft={discardStarterDraft}
+        onClose={() => closeAnswerPanel("starter")}
+      /> : renderDrawerBody(panel)}
+      renderFooter={panel => panel === "starter" ? null : renderDrawerFooter(panel)}
     />
     {drawer && <div className="rag-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}><aside ref={dialogRef} className={`rag-drawer rag-drawer--${drawer}`} role="dialog" aria-modal="true" aria-labelledby="rag-drawer-title" tabIndex={-1}><header><div><h2 id="rag-drawer-title">{drawerTitle[drawer]}</h2></div><button aria-label="关闭评估面板" onClick={() => close()}><X size={20} /></button></header><div className="rag-drawer-body">{renderDrawerBody(drawer)}</div><footer>{renderDrawerFooter(drawer)}</footer></aside></div>}
 

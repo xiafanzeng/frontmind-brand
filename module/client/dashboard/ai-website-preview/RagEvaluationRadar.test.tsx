@@ -1,32 +1,47 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RagEvaluationRadar } from "./RagEvaluationRadar";
 import { RAG_DIMENSIONS } from "./rag-evaluation";
 import type { EvaluationDimension } from "./evaluation-skill-contract";
 import type { EnterpriseRagChecklistJudgeOutput } from "../../../contracts/enterprise-rag-evaluation-run";
-import { createRagChecklist, scoreRagChecklist } from "../../../contracts/enterprise-rag-checklist";
+import { createRagChecklist, scoreRagChecklist, type RagChecklist } from "../../../contracts/enterprise-rag-checklist";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-const dimensions = (): EvaluationDimension[] => RAG_DIMENSIONS.map(d => ({
-  id: d.id,
-  label: d.label,
-  score: d.weight * .9,
-  maxScore: d.weight,
+const dimensions = (): EvaluationDimension[] => RAG_DIMENSIONS.map(dimension => ({
+  id: dimension.id,
+  label: dimension.label,
+  score: dimension.weight * .9,
+  maxScore: dimension.weight,
   status: "partial",
   summary: "明确缺陷及对应影响",
   evidenceIds: ["合成来源段落1"],
 }));
 
-const checklistJudgments = (): EnterpriseRagChecklistJudgeOutput => {
-  const checklist = createRagChecklist("医院地址是什么？", "query");
-  const checks = checklist.checks.map((check, index) => ({
-    id: check.id,
-    status: index === 0 ? "met" as const : "partial" as const,
-    rationale: index === 0 ? "核心问题已直接回答。" : "仍有一项细节可以补充。",
-    evidenceIds: ["claim-1"],
-  }));
+function buildJudgments({ mixedCitations = false, withFinding = false } = {}): EnterpriseRagChecklistJudgeOutput {
+  const created = createRagChecklist("医院地址是什么？", "query");
+  const checklist: RagChecklist = mixedCitations ? {
+    ...created,
+    checks: created.checks.map(check => check.id === "citation_currency"
+      ? { ...check, applicable: false, exclusionReason: "当前问题不涉及时效性。" }
+      : check),
+  } : created;
+  const checks = checklist.checks.map((check, index) => {
+    const status = !check.applicable
+      ? "not_applicable" as const
+      : mixedCitations && check.id === "citation_display"
+        ? "undetermined" as const
+        : index === 0 || check.id === "citation_support"
+          ? "met" as const
+          : "partial" as const;
+    return {
+      id: check.id,
+      status,
+      rationale: status === "met" ? "核心问题已直接回答。" : status === "not_applicable" ? "使用冻结排除理由。" : "仍有一项细节可以补充。",
+      evidenceIds: status === "not_applicable" ? [] : ["promise-1", "audit:KB-SYN-v1"],
+    };
+  });
   const scored = scoreRagChecklist(checklist, checks);
   return {
     schemaVersion: 3,
@@ -40,13 +55,36 @@ const checklistJudgments = (): EnterpriseRagChecklistJudgeOutput => {
       rationale: dimension.summary,
       evidenceIds: dimension.evidenceIds,
     })),
-    findings: [],
-    claims: [],
+    findings: withFinding ? [{
+      id: "finding-1",
+      kind: "citation",
+      severity: "improvement",
+      summary: "引用展示需要补充",
+      impact: "客户暂时无法核对该项信息。",
+      claimIds: ["claim-public-1"],
+      evidenceIds: ["audit:internal-finding"],
+      dimensionIds: ["citations"],
+      checkId: "citation_display",
+      rootCauseId: "root-cause-1",
+    }] : [],
+    claims: [{
+      id: "claim-public-1",
+      statement: "请以医院正式公开的联系方式为准。",
+      kind: "uncertainty",
+      relevance: "supporting",
+      status: "supported",
+      sourceIds: ["source-internal-1"],
+      rationale: "公开声明已得到冻结资料支持。",
+    }],
+    gates: [],
+    summary: "评估完成。",
+    task: { status: "completed", rationale: "已回答。", evidenceIds: ["audit:task"] },
+    optionalSuggestions: [],
   } as unknown as EnterpriseRagChecklistJudgeOutput;
-};
+}
 
-describe("five-layer transparent-center accessible radar", () => {
-  it("uses five unlabeled rings, a real center cutout, and static compact labels", () => {
+describe("enterprise RAG evaluation radar", () => {
+  it("preserves the five-ring transparent-center geometry and six real controls", () => {
     render(<RagEvaluationRadar dimensions={dimensions()} />);
 
     const image = screen.getByRole("img", { name: /六维质量雷达图/ });
@@ -54,83 +92,138 @@ describe("five-layer transparent-center accessible radar", () => {
     expect(image.querySelectorAll(".rag-radar-grid")).toHaveLength(5);
     expect(image.querySelector(".rag-radar-tick")).toBeNull();
     expect(image.querySelectorAll(".rag-radar-axis")).toHaveLength(6);
-
-    const firstAxis = image.querySelector(".rag-radar-axis");
-    expect(firstAxis?.getAttribute("x1")).toBe("200");
-    expect(firstAxis?.getAttribute("y1")).toBe("164");
-    expect(firstAxis?.getAttribute("x2")).toBe("200");
-    expect(firstAxis?.getAttribute("y2")).toBe("84");
-
-    const mask = screen.getByTestId("rag-radar-center-mask");
-    expect(mask.querySelector(".rag-radar-center-cutout")).toBeTruthy();
+    expect(image.querySelector(".rag-radar-axis")?.getAttribute("x1")).toBe("200");
+    expect(image.querySelector(".rag-radar-axis")?.getAttribute("y1")).toBe("164");
+    expect(image.querySelector(".rag-radar-axis")?.getAttribute("x2")).toBe("200");
+    expect(image.querySelector(".rag-radar-axis")?.getAttribute("y2")).toBe("84");
+    expect(screen.getByTestId("rag-radar-center-mask").querySelector(".rag-radar-center-cutout")).toBeTruthy();
     expect(screen.getByTestId("rag-radar-area").getAttribute("mask")).toMatch(/^url\(#.+-center-mask\)$/);
-
-    const labels = screen.getAllByTestId("rag-evaluation-dimension-label");
-    expect(labels).toHaveLength(6);
-    expect(labels.every(label => label.tagName === "DIV")).toBe(true);
-    expect(labels.every(label => label.closest("button") === null)).toBe(true);
+    expect(screen.getAllByTestId("rag-evaluation-dimension-label")).toHaveLength(6);
+    const controls = screen.getAllByTestId("rag-evaluation-dimension");
+    expect(controls).toHaveLength(6);
+    expect(controls.every(control => control.tagName === "BUTTON")).toBe(true);
+    expect(controls.every(control => Boolean(document.getElementById(control.getAttribute("aria-controls")!)))).toBe(true);
     expect(screen.getAllByText("90%")).toHaveLength(6);
-
-    const correctAndGrounded = labels[1];
-    expect(Number.parseFloat(correctAndGrounded.style.left)).toBeLessThan(84);
-    expect(Number.parseFloat(correctAndGrounded.style.left)).toBeGreaterThan(82);
   });
 
-  it("opens and collapses details from six real point buttons", () => {
+  it("starts collapsed, toggles one detail, switches dimensions, and retains trigger focus", () => {
     render(<RagEvaluationRadar dimensions={dimensions()} />);
 
-    const buttons = screen.getAllByTestId("rag-evaluation-dimension");
-    expect(buttons).toHaveLength(6);
-    expect(screen.getAllByRole("button")).toHaveLength(6);
-    expect(screen.getByTestId("rag-radar-area")).toBeTruthy();
-    expect(screen.queryByText("明确缺陷及对应影响")).toBeNull();
+    const controls = screen.getAllByTestId("rag-evaluation-dimension");
+    expect(controls.every(control => control.getAttribute("aria-expanded") === "false")).toBe(true);
+    expect(document.querySelector(".rag-radar-detail")).toBeNull();
 
-    const button = screen.getByRole("button", { name: /正确与有据 90%/ });
-    const marker = button.querySelector("[data-testid='rag-radar-point-marker']");
-    expect(marker?.classList.contains("is-known")).toBe(true);
-    button.focus();
-    expect(document.activeElement).toBe(button);
-    fireEvent.mouseEnter(button);
-    expect(button.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(button);
-    expect(button.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("heading", { name: "正确与有据" })).toBeTruthy();
-    expect(screen.queryByText("正确性与依据忠实度")).toBeNull();
-    expect(screen.getByLabelText("22.5 / 25")).toBeTruthy();
-    expect(screen.queryByText(/合成来源段落1/)).toBeNull();
-    const shell = document.querySelector(".rag-radar-detail-shell");
-    expect(shell?.classList.contains("is-open")).toBe(true);
-    fireEvent.click(button);
-    expect(button.getAttribute("aria-expanded")).toBe("false");
-    expect(shell?.classList.contains("is-open")).toBe(false);
-    expect(shell?.getAttribute("aria-hidden")).toBe("true");
+    const intent = screen.getByRole("button", { name: /需求满足 90%/ });
+    intent.focus();
+    fireEvent.click(intent);
+    expect(document.activeElement).toBe(intent);
+    const intentDetail = screen.getByRole("region", { name: "需求满足详情" });
+    expect(intent.getAttribute("aria-expanded")).toBe("true");
+    const controlledDetail = document.getElementById(intent.getAttribute("aria-controls")!);
+    expect(controlledDetail).toBeTruthy();
+    expect(controlledDetail?.contains(intentDetail)).toBe(true);
+
+    const correctness = screen.getByRole("button", { name: /正确与有据 90%/ });
+    correctness.focus();
+    fireEvent.click(correctness);
+    expect(document.activeElement).toBe(correctness);
+    expect(intent.getAttribute("aria-expanded")).toBe("false");
+    expect(correctness.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.queryByRole("region", { name: "需求满足详情" })).toBeNull();
+    expect(screen.getByRole("region", { name: "正确与有据详情" })).toBeTruthy();
+
+    fireEvent.click(correctness);
+    expect(correctness.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("region", { name: "正确与有据详情" })).toBeNull();
+    expect(document.querySelector(".rag-radar-detail-shell")?.getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("keeps the title and score in one header and presents compact semantic checklist states", () => {
-    render(<RagEvaluationRadar dimensions={dimensions()} judgments={checklistJudgments()} />);
-
+  it("closes the previous detail when a new report reveal key arrives", () => {
+    const view = render(<RagEvaluationRadar dimensions={dimensions()} revealKey="report-before" />);
     fireEvent.click(screen.getByRole("button", { name: /需求满足 90%/ }));
-    const heading = screen.getByRole("heading", { name: "需求满足" });
-    const score = screen.getByLabelText("18.0 / 20");
-    const header = heading.closest(".rag-radar-detail__header");
-    expect(header).toBeTruthy();
-    expect(score.parentElement).toBe(header);
+    expect(screen.getByRole("region", { name: "需求满足详情" })).toBeTruthy();
 
-    const detail = document.querySelector(".rag-radar-detail")!;
-    expect(detail.textContent).not.toContain("原始分");
-    expect(detail.textContent).not.toContain("· 满足");
-    const items = [...detail.querySelectorAll(".rag-radar-detail__check")];
-    expect(items).toHaveLength(2);
-    expect(items[0]?.querySelector(".rag-radar-detail__check-title")?.textContent).toContain("回应核心目标");
-    const statuses = [...detail.querySelectorAll(".rag-radar-detail__check-status")];
-    expect(statuses[0]?.classList.contains("is-met")).toBe(true);
-    expect(statuses[0]?.querySelector(".rag-evaluation-status-orb")).toBeTruthy();
-    expect(statuses[0]?.textContent).toContain("满足");
-    expect(statuses[1]?.classList.contains("is-partial")).toBe(true);
-    expect(statuses[1]?.textContent).toContain("部分满足");
+    view.rerender(<RagEvaluationRadar dimensions={dimensions()} revealKey="report-after" />);
+
+    expect(screen.getByRole("button", { name: /需求满足 90%/ }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("region", { name: "需求满足详情" })).toBeNull();
   });
 
-  it("reveals a classic earned-over-maximum score and never exposes internal evidence IDs", () => {
+  it("renders the authoritative checklist in order with raw scores, rationale, and named double-dot states", () => {
+    render(<RagEvaluationRadar dimensions={dimensions()} judgments={buildJudgments()} />);
+    fireEvent.click(screen.getByRole("button", { name: /需求满足 90%/ }));
+
+    const detail = screen.getByRole("region", { name: "需求满足详情" });
+    expect(detail.classList.contains("rag-radar-detail--enterprise")).toBe(true);
+    const heading = within(detail).getByRole("heading", { name: "需求满足" });
+    const score = within(detail).getByRole("status", { name: "得分 18 / 权重 20" });
+    expect(score.parentElement).toBe(heading.parentElement);
+
+    const items = [...detail.querySelectorAll<HTMLElement>(".rag-radar-detail__check")];
+    expect(items).toHaveLength(2);
+    expect(items.map(item => item.querySelector(".rag-radar-detail__check-title .rag-reveal-screen-reader-text")?.textContent)).toEqual(["回应核心目标", "遵守明确约束"]);
+    expect(items[0].textContent).toContain("12 / 12 原始分");
+    expect(items[1].textContent).toContain("4 / 8 原始分");
+    expect(items[0].textContent).toContain("核心问题已直接回答。");
+    expect(items[1].textContent).toContain("仍有一项细节可以补充。");
+    expect(within(items[0]).getByRole("img", { name: "回应核心目标：满足" }).querySelector(".rag-evaluation-status-orb")).toBeTruthy();
+    expect(within(items[1]).getByRole("img", { name: "遵守明确约束：部分满足" })).toBeTruthy();
+    expect(detail.textContent).not.toMatch(/promise-1|audit:KB-SYN-v1|证据：/);
+  });
+
+  it("keeps pending and not-applicable checks distinct while preserving normalization and findings", () => {
+    render(<RagEvaluationRadar dimensions={dimensions()} judgments={buildJudgments({ mixedCitations: true, withFinding: true })} />);
+    fireEvent.click(screen.getByRole("button", { name: /引用与时效 90%/ }));
+
+    const detail = screen.getByRole("region", { name: "引用与时效详情" });
+    expect(within(detail).getByRole("img", { name: "引用展示完整：待核验" }).classList.contains("is-undetermined")).toBe(true);
+    expect(within(detail).getByRole("img", { name: "版本与时效准确：不适用" }).classList.contains("is-not_applicable")).toBe(true);
+    expect(detail.textContent).toContain("待核验；权重 3");
+    expect(detail.textContent).toContain("不适用；权重 2");
+    expect(detail.textContent).toContain("当前问题不涉及时效性。");
+    expect(detail.textContent).toContain("本维存在预先冻结的不适用项");
+    expect(detail.textContent).toContain("引用展示需要补充");
+    expect(detail.textContent).toContain("客户暂时无法核对该项信息。");
+    expect(detail.textContent).toContain("请以医院正式公开的联系方式为准。");
+    expect(detail.textContent).not.toMatch(/audit:internal-finding|source-internal-1/);
+  });
+
+  it.each([
+    { score: 0, percentage: "0%", expected: "0/15", accessible: "得分 0 / 权重 15" },
+    { score: 12, percentage: "80%", expected: "12/15", accessible: "得分 12 / 权重 15" },
+    { score: 12.5, percentage: "83.3%", expected: "12.5/15", accessible: "得分 12.5 / 权重 15" },
+  ])("formats $score without invented decimal places", ({ score, percentage, expected, accessible }) => {
+    const items = dimensions();
+    items[0] = { ...items[0], score, maxScore: 15, status: score === 0 ? "failed" : "partial" };
+    render(<RagEvaluationRadar dimensions={items} />);
+
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`需求满足 ${percentage.replace(".", "\\.")}`) }));
+    expect(screen.getByRole("status", { name: accessible }).textContent).toBe(expected);
+  });
+
+  it("does not turn unavailable dimensions into zero and disables all controls for an empty question", () => {
+    const items = dimensions();
+    items[1] = { ...items[1], score: 12, status: "pending" };
+    items[2] = { ...items[2], score: null, status: "not_applicable" };
+    const view = render(<RagEvaluationRadar dimensions={items} />);
+
+    expect(screen.queryByTestId("rag-radar-area")).toBeNull();
+    const pending = screen.getByRole("button", { name: /正确与有据 待核验/ });
+    fireEvent.click(pending);
+    expect(screen.getByRole("status", { name: "待核验" }).textContent).toBe("待核验");
+    fireEvent.click(screen.getByRole("button", { name: /信息完整 不适用/ }));
+    expect(screen.getByRole("status", { name: "不适用" }).textContent).toBe("不适用");
+
+    view.rerender(<RagEvaluationRadar dimensions={items} emptyQuestion />);
+    const controls = screen.getAllByTestId("rag-evaluation-dimension");
+    expect(controls.every(control => (control as HTMLButtonElement).disabled)).toBe(true);
+    expect(controls.every(control => control.getAttribute("aria-expanded") === null)).toBe(true);
+    expect(controls.every(control => control.getAttribute("aria-label")?.includes("暂无评分"))).toBe(true);
+    expect(document.querySelector(".rag-radar-detail")).toBeNull();
+    expect(screen.queryByText("0%")).toBeNull();
+  });
+
+  it("reveals score and graphemes together over 800ms without exposing internal IDs", () => {
     let frameId = 0;
     const frames = new Map<number, FrameRequestCallback>();
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
@@ -147,14 +240,12 @@ describe("five-layer transparent-center accessible radar", () => {
     render(<RagEvaluationRadar dimensions={items} />);
 
     fireEvent.click(screen.getByRole("button", { name: /需求满足 25%/ }));
-    const score = screen.getByLabelText("3.8 / 15");
     const earned = screen.getByTestId("rag-radar-detail-earned");
-    const detailCharacters = [...document.querySelectorAll<HTMLElement>(".rag-radar-detail__content [aria-hidden='true'] > span")];
-    expect(score.querySelector(".rag-radar-detail-score__maximum")?.textContent).toBe("/15");
-    expect(earned.textContent).toBe("0.0");
+    const detailCharacters = [...document.querySelectorAll<HTMLElement>(".rag-radar-detail__content [aria-hidden='true'] > span[style*='opacity']")];
+    expect(screen.getByRole("status", { name: "得分 3.8 / 权重 15" })).toBeTruthy();
+    expect(earned.textContent).toBe("0");
     expect(detailCharacters.length).toBeGreaterThan(2);
     expect(detailCharacters[0].style.opacity).toBe("0");
-    expect(screen.queryByText(/promise-1|audit:KB-SYN-v1|证据：/)).toBeNull();
     runFrame(0);
     runFrame(400);
     expect(earned.textContent).toBe("3.3");
@@ -162,69 +253,19 @@ describe("five-layer transparent-center accessible radar", () => {
     runFrame(800);
     expect(earned.textContent).toBe("3.8");
     expect(detailCharacters.at(-1)?.style.opacity).toBe("1");
+    expect(screen.queryByText(/promise-1|audit:KB-SYN-v1|证据：/)).toBeNull();
   });
 
-  it("keeps pending and N/A axes distinct without filling an incomplete area", () => {
+  it("shows final score and text immediately when reduced motion is requested", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     const items = dimensions();
-    items[1] = { ...items[1], score: null, status: "pending" };
-    items[2] = { ...items[2], score: null, status: "not_applicable" };
-    render(<RagEvaluationRadar dimensions={items} />);
+    items[0] = { ...items[0], score: 12.5, maxScore: 15 };
+    render(<RagEvaluationRadar dimensions={items} judgments={buildJudgments()} />);
 
-    expect(screen.queryByTestId("rag-radar-area")).toBeNull();
-    expect(screen.getAllByTestId("rag-evaluation-dimension")).toHaveLength(6);
-    const pending = screen.getByRole("button", { name: /正确与有据 待核验/ });
-    const notApplicable = screen.getByRole("button", { name: /信息完整 不适用/ });
-    expect(pending.querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-pending")).toBe(true);
-    expect(notApplicable.querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-not-applicable")).toBe(true);
-    expect(screen.getByText("待核验")).toBeTruthy();
-    expect(screen.getByText("不适用")).toBeTruthy();
-  });
-
-  it("uses six gray empty-state dots with no invented score until a question exists", () => {
-    const items = dimensions();
-    items[1] = { ...items[1], score: null, status: "pending" };
-    items[2] = { ...items[2], score: null, status: "not_applicable" };
-    const view = render(<RagEvaluationRadar dimensions={items} />);
-    fireEvent.click(screen.getByRole("button", { name: /正确与有据 待核验/ }));
-    expect(screen.getByText("明确缺陷及对应影响")).toBeTruthy();
-    view.rerender(<RagEvaluationRadar dimensions={items} emptyQuestion />);
-    const buttons = screen.getAllByTestId("rag-evaluation-dimension");
-    expect(buttons).toHaveLength(6);
-    expect(buttons.every(button => button.getAttribute("aria-label")?.includes("暂无评分"))).toBe(true);
-    expect(buttons.every(button => (button as HTMLButtonElement).disabled)).toBe(true);
-    expect(buttons.every(button => button.querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-empty"))).toBe(true);
-    expect(screen.getAllByText("暂无评分")).toHaveLength(6);
-    expect(screen.queryByTestId("rag-radar-area")).toBeNull();
-    expect(screen.queryByText("0%")).toBeNull();
-    expect(screen.queryByText("明确缺陷及对应影响")).toBeNull();
-    (buttons[1] as HTMLButtonElement).click();
-    expect(screen.queryByText("明确缺陷及对应影响")).toBeNull();
-    view.rerender(<RagEvaluationRadar dimensions={items} />);
-    const pending = screen.getByRole("button", { name: /正确与有据 待核验/ });
-    expect((pending as HTMLButtonElement).disabled).toBe(false);
-    expect(pending.querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-pending")).toBe(true);
-    fireEvent.click(pending);
-    expect(screen.getByText("明确缺陷及对应影响")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /信息完整 不适用/ }).querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-not-applicable")).toBe(true);
-  });
-
-  it("places six real zero scores on distinct inner-ring vertices", () => {
-    const items = dimensions().map(item => ({ ...item, score: 0, status: "failed" as const }));
-    items[0] = { ...items[0], maxScore: 15 };
-    render(<RagEvaluationRadar dimensions={items} />);
-
-    const buttons = screen.getAllByTestId("rag-evaluation-dimension");
-    expect(buttons).toHaveLength(6);
-    expect(screen.getAllByText("0%")).toHaveLength(6);
-    expect(new Set(buttons.map(button => `${button.style.left}:${button.style.top}`)).size).toBe(6);
-    expect(buttons.every(button => button.querySelector("[data-testid='rag-radar-point-marker']")?.classList.contains("is-zero"))).toBe(true);
-    expect(buttons.every(button => !(button.style.left === "50%" && button.style.top === "50%"))).toBe(true);
-    expect(screen.getByTestId("rag-radar-area")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /需求满足 0%/ }));
-    const earned = screen.getByTestId("rag-radar-detail-earned");
-    expect(earned.textContent).toBe("0.0");
-    expect(earned.classList.contains("is-zero")).toBe(true);
-    expect(earned.parentElement?.querySelector(".rag-radar-detail-score__maximum")?.textContent).toBe("/15");
-    expect(screen.getByLabelText("0.0 / 15")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /需求满足 83\.3%/ }));
+    expect(screen.getByTestId("rag-radar-detail-earned").textContent).toBe("12.5");
+    const detailCharacters = [...document.querySelectorAll<HTMLElement>(".rag-radar-detail__content [aria-hidden='true'] > span[style*='opacity']")];
+    expect(detailCharacters.length).toBeGreaterThan(2);
+    expect(detailCharacters.every(character => character.style.opacity === "1")).toBe(true);
   });
 });

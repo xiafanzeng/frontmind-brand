@@ -62,8 +62,7 @@
 
 .rag-eval-root .rag-evidence-topic .rag-gate-card,
 .rag-eval-root .rag-evidence-topic .rag-provenance,
-.rag-eval-root .rag-evidence-topic .rag-radar-detail,
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--evidence .rag-evidence-topic :is(.rag-gate-card, .rag-provenance, .rag-radar-detail) {
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-drawer--evidence .rag-evidence-topic :is(.rag-gate-card, .rag-provenance) {
   padding: 16px;
   border: .5px solid var(--rag-list-border);
   border-radius: var(--rag-list-radius);
