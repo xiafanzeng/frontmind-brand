@@ -186,4 +186,3 @@ describe("standalone website evaluation preview", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
-
