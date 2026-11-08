@@ -171,10 +171,10 @@ describe("judge client", () => {
 
 describe("judgeContextKey", () => {
   it("produces distinct keys for different contexts", () => {
-    const a = judgeContextKey("q1", 3, "fp-a");
-    const b = judgeContextKey("q2", 3, "fp-a");
-    const c = judgeContextKey("q1", 4, "fp-a");
-    const d = judgeContextKey("q1", 3, "fp-b");
+    const a = judgeContextKey("q1", "fp-a");
+    const b = judgeContextKey("q2", "fp-a");
+    const c = judgeContextKey("q1", "fp-a", "Q1");
+    const d = judgeContextKey("q1", "fp-b");
     expect(new Set([a, b, c, d]).size).toBe(4);
   });
 });

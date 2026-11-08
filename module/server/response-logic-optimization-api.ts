@@ -115,10 +115,19 @@ const optimizationStatusQuerySchema = z
   })
   .strict();
 
+/**
+ * Idempotency key binds the optimization task to its CONTENT inputs:
+ * user + question + draft fingerprint + the judge task it builds on + skill
+ * version + knowledge fingerprint (+ current question text). The record
+ * revision is deliberately NOT part of the key: re-publishing byte-identical
+ * content bumps the revision without changing the optimization input, and the
+ * completed optimizer task must be reusable instead of re-dispatched. When
+ * the draft really changes, the judge fingerprint changes with it, so the
+ * optimizer naturally re-runs on top of a fresh evaluation.
+ */
 function optimizationIdempotencyKey(input: {
   userId: number;
   questionId: string;
-  recordRevision: number;
   sourceFingerprint: string;
   judgeTaskId: string;
   skillContentHash: string;
@@ -128,10 +137,9 @@ function optimizationIdempotencyKey(input: {
   return createHash("sha256")
     .update(
       JSON.stringify([
-        "frontmind-response-logic-optimizer-v1",
+        "frontmind-response-logic-optimizer-v2",
         input.userId,
         input.questionId,
-        input.recordRevision,
         input.sourceFingerprint,
         input.judgeTaskId,
         input.skillContentHash,
@@ -305,7 +313,7 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
       const skill = await buildOptimizerSkillArchive();
       const key = optimizationIdempotencyKey({
         userId: ctx.workspaceUserId, questionId: parsed.data.questionId,
-        recordRevision: ctx.record.revision, sourceFingerprint: ctx.fingerprint,
+        sourceFingerprint: ctx.fingerprint,
         judgeTaskId: parsed.data.judgeTaskId, skillContentHash: skill.contentHash,
         knowledgeFingerprint: knowledgeFingerprintOf(snapshot),
         questionHash: brandQuestionHash(ctx.record.question, ctx.record.intent ?? ""),
@@ -450,7 +458,6 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
       const idemKey = optimizationIdempotencyKey({
         userId: workspaceUserId,
         questionId: parsed.data.questionId,
-        recordRevision: record.revision,
         sourceFingerprint: fingerprint,
         judgeTaskId: parsed.data.judgeTaskId,
         skillContentHash: skillArchive.contentHash,
@@ -464,6 +471,43 @@ export function createResponseLogicOptimizationRouter(core: JudgeCore): import("
         intentId: idemKey,
         rateLimitScope: `managed-user:${workspaceUserId}`,
       });
+
+      // Repeated dispatch with identical context follows the existing task
+      // instead of paying for another model run (same contract as the judge
+      // start endpoint). Failed tasks are not reused: a fresh dispatch is the
+      // retry path for them.
+      if (client.findCreatedTask) {
+        const existing = (await client.findCreatedTask({
+          title: `FrontMind optimizer ${idemKey.slice(0, 24)}`,
+          operationToken: idemKey,
+        })).unique;
+        if (existing && existing.status !== "error") {
+          try {
+            await core.recordUpstreamResource({
+              userId: workspaceUserId,
+              apiCredentialId: requestCredential.id,
+              kind: "task",
+              upstreamId: existing.id,
+            });
+          } catch (bindingError) {
+            console.error("[Response Logic Optimization] task binding pending:", {
+              taskId: existing.id,
+              error: safeErrorForOptimizationLog(bindingError),
+            });
+          }
+          res.setHeader("Cache-Control", "no-store");
+          res.json({
+            taskId: existing.id,
+            status: "running",
+            recordRevision: record.revision,
+            sourceFingerprint: fingerprint,
+            judgeTaskId: parsed.data.judgeTaskId,
+            knowledgeFingerprint,
+            optimizerVersion: "1",
+          });
+          return;
+        }
+      }
 
       const attachments: Array<{ file_id: string; filename: string }> = [];
       const skillUpload = await client.uploadFile({ filename: skillFilename, bytes: skillArchive.bytes, contentType: "application/zip" });

@@ -61,7 +61,6 @@ export function useJudgeEvaluation(input: {
   const contextKey =
     judgeContextKey(
       input.questionId,
-      input.recordRevision,
       input.sourceFingerprint,
       input.questionBasis,
     ) + (input.recordIdentity ? `:record:${input.recordIdentity}` : "");

@@ -140,13 +140,15 @@ export async function pollJudgeTask(input: {
  * Context key binding a judge task to its origin context. The optional
  * question basis (current question text + intent) extends the binding: a
  * question edited elsewhere produces a different key, so the client state
- * machine drops the old result instead of showing it as current.
+ * machine drops the old result instead of showing it as current. The record
+ * revision is intentionally absent: re-publishing identical content keeps the
+ * key (and the reused judge task) current, matching the server idempotency
+ * key; only real content changes rotate it.
  */
 export function judgeContextKey(
   questionId: string,
-  revision: number,
   fingerprint: string,
   questionBasis?: string,
 ): string {
-  return `${questionId}:${revision}:${fingerprint}${questionBasis !== undefined ? `:${questionBasis}` : ""}`;
+  return `${questionId}:${fingerprint}${questionBasis !== undefined ? `:${questionBasis}` : ""}`;
 }

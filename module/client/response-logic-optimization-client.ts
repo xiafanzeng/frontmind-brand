@@ -142,16 +142,17 @@ export async function pollOptimizationTask(input: {
 }
 
 /**
- * Context key binding an optimization task to its original question +
- * revision + draft fingerprint + judge task. Matches the server-side binding
- * (the start endpoint re-verifies the judge task against exactly this context).
+ * Context key binding an optimization task to its original question + draft
+ * fingerprint + judge task. Matches the server-side binding (the start
+ * endpoint re-verifies the judge task against exactly this context). The
+ * record revision is intentionally absent: re-publishing identical content
+ * keeps the key current so the reused optimizer task stays attached.
  */
 export function optimizationContextKey(
   questionId: string,
-  revision: number,
   fingerprint: string,
   judgeTaskId: string,
   questionBasis?: string,
 ): string {
-  return `${questionId}:${revision}:${fingerprint}:${judgeTaskId}${questionBasis !== undefined ? `:${questionBasis}` : ""}`;
+  return `${questionId}:${fingerprint}:${judgeTaskId}${questionBasis !== undefined ? `:${questionBasis}` : ""}`;
 }

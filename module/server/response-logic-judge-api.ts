@@ -101,15 +101,18 @@ export function judgeError(res: Response, status: number, code: string, message:
 }
 
 /**
- * Idempotency key binds the task to the FULL evaluation context:
- * user + question + record revision + draft fingerprint + skill version +
- * knowledge fingerprint. Any context change (draft edit, knowledge update,
- * skill upgrade) produces a different key, preventing stale task reuse.
+ * Idempotency key binds the task to the CONTENT evaluation context:
+ * user + question + draft fingerprint + skill version + knowledge fingerprint
+ * (+ current question text). Any content change (draft edit, knowledge
+ * update, skill upgrade, question edit) produces a different key, preventing
+ * stale task reuse. The record revision is deliberately NOT part of the key:
+ * saving or re-publishing byte-identical content bumps the revision without
+ * changing the evaluation input, and must reuse the existing task instead of
+ * paying for another model run.
  */
 function judgeIdempotencyKey(input: {
   userId: number;
   questionId: string;
-  recordRevision: number;
   sourceFingerprint: string;
   skillContentHash: string;
   knowledgeFingerprint: string;
@@ -118,10 +121,9 @@ function judgeIdempotencyKey(input: {
   return createHash("sha256")
     .update(
       JSON.stringify([
-        "frontmind-response-logic-judge-v2",
+        "frontmind-response-logic-judge-v3",
         input.userId,
         input.questionId,
-        input.recordRevision,
         input.sourceFingerprint,
         input.skillContentHash,
         input.knowledgeFingerprint,
@@ -637,7 +639,7 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
       const skill = await buildJudgeSkillArchive();
       const contextKey = judgeIdempotencyKey({
         userId: ctx.workspaceUserId, questionId: parsed.data.questionId,
-        recordRevision: ctx.record.revision, sourceFingerprint: ctx.fingerprint,
+        sourceFingerprint: ctx.fingerprint,
         skillContentHash: skill.contentHash,
         knowledgeFingerprint: snapshot ? createHash("sha256").update(snapshot.documents.map(doc => doc.content).join("\n"), "utf8").digest("hex") : "none",
         questionHash: brandQuestionHash(ctx.record.question, ctx.record.intent ?? ""),
@@ -761,7 +763,6 @@ export function createResponseLogicJudgeRouter(core: JudgeCore): import("express
       const contextIdempotencyKey = judgeIdempotencyKey({
         userId: workspaceUserId,
         questionId: parsed.data.questionId,
-        recordRevision: record.revision,
         sourceFingerprint: fingerprint,
         skillContentHash: skillArchive.contentHash,
         knowledgeFingerprint,

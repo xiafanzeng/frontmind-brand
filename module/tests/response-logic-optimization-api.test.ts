@@ -354,6 +354,41 @@ describe("optimization API: POST / (start)", () => {
     expect(turnInput.outputContract).toEqual(expect.objectContaining({ noScores: true, candidateOnly: true }));
   });
 
+  it("returns the existing optimizer task on a repeated dispatch, including after a content-identical re-publish", async () => {
+    const tasks = new Map<string, {id: string; status: string}>();
+    const first = await makeApp({ tasks });
+    const res1 = await postStart(first.url, undefined);
+    expect(res1.status).toBe(200);
+    expect((await res1.json()).taskId).toBe(OPT_TASK_ID);
+    expect(first.effects.creates).toBe(1);
+    // The user re-published identical content: revision advanced (5 → 9),
+    // draft fingerprint and judge task unchanged.
+    const second = await makeApp({ tasks, record: { ...baseRecord, revision: 9 } });
+    const res2 = await postStart(second.url, { questionId: "q1", expectedRevision: 9, judgeTaskId: JUDGE_TASK_ID });
+    expect(res2.status).toBe(200);
+    const body2 = await res2.json();
+    expect(body2.taskId).toBe(OPT_TASK_ID); // reused: no second model dispatch
+    expect(body2.judgeTaskId).toBe(JUDGE_TASK_ID);
+    expect(body2.recordRevision).toBe(9);
+    expect(second.effects.creates).toBe(0);
+    expect(second.effects.uploads).toBe(0);
+  });
+
+  it("does not reuse a failed optimizer task (a fresh dispatch is the retry)", async () => {
+    const tasks = new Map<string, {id: string; status: string}>([["seed", {id: "opt-errored", status: "error"}]]);
+    // Seed under the real key by dispatching once, then marking it failed.
+    const first = await makeApp({ tasks });
+    await postStart(first.url, undefined);
+    const key = [...tasks.keys()].find(k => k !== "seed")!;
+    tasks.set(key, {id: "opt-errored", status: "error"});
+    const second = await makeApp({ tasks });
+    const res = await postStart(second.url, undefined);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.taskId).toBe(OPT_TASK_ID); // a brand-new task was created
+    expect(second.effects.creates).toBe(1);
+  });
+
   it("rejects a judge task that does not belong to the account", async () => {
     const { url } = await makeApp({ judgeTaskOwned: false });
     const res = await postStart(url);
