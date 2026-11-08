@@ -124,6 +124,8 @@ export type IntentWorkspace = {
   preview: boolean;
   /** Current server snapshot, used to distinguish usable drafts from historical plans. */
   knowledgeHash?: string;
+  /** Version 2 accepts entity snapshots independently of background ledger progress. */
+  commandVersion?: number;
 };
 export const emptyIntentState = (): IntentState => ({
   version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [], jobs: [], dismissedHostQuestionIds: [],

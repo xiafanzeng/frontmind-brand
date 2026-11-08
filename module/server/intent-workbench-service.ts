@@ -142,7 +142,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       });
       ledger = await readLedger(db);
     }
-    return {...ledger, nodes: data.nodes, knowledgeHash:intentHash(data.nodes), preview: false};
+    return {...ledger, nodes: data.nodes, knowledgeHash:intentHash(data.nodes), commandVersion:2, preview: false};
   }
   const activeJob = (job: IntentSkillJob) => !["succeeded", "failed"].includes(job.status);
   // Host-wide source revisions and row positions can change when another

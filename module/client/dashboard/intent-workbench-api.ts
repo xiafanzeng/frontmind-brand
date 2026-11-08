@@ -1,5 +1,6 @@
 import {captureWorkspaceRestOperation, forkWorkspaceRestOperation} from "../lib/workspace-rest-scope";
 import type {IntentWorkspace, IntentSkillJob} from "../../contracts/intent-workbench";
+import {findSavedIntentPlan,intentPlanSnapshot,intentQuestionSnapshot} from "../../contracts/intent-workbench";
 export interface IntentWorkbenchApi {
   observe(): Promise<IntentWorkspace>;
   command(input: unknown): Promise<IntentWorkspace>;
@@ -48,6 +49,26 @@ async function requestOnce(path: string, input: unknown, operation: ReturnType<t
   return value as IntentWorkspace;
 }
 async function request(path: string, input?: unknown, operation = captureWorkspaceRestOperation()) {
+  const guarded=input&&typeof input==="object"?input as Record<string,unknown>:undefined;
+  if(guarded&&(guarded.expectedQuestions||guarded.expectedPlan||guarded.expectedPlans)){
+    const current=await request("",undefined,operation);
+    if((current.commandVersion??1)<2){
+      // Rolling upgrades/local live previews can still reach the old strict API.
+      // Check the same entity snapshot, then retain that server's global CAS.
+      const stable=(value:unknown):string=>JSON.stringify(value,(_key,item)=>item&&typeof item==="object"&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
+      if(Array.isArray(guarded.expectedQuestions)&&guarded.expectedQuestions.some((expected:any)=>{
+        const question=current.state.questions.find(item=>item.id===expected.id);
+        return !question||stable(intentQuestionSnapshot(question))!==stable(expected);
+      }))throw new Error("所选问题已修改，请重新读取并确认后再提交。");
+      const plans=guarded.expectedPlans??(guarded.expectedPlan?[guarded.expectedPlan]:[]);
+      if(Array.isArray(plans)&&plans.some((expected:any)=>{
+        const plan=findSavedIntentPlan(current.state,expected.questionId);
+        return !plan||stable(intentPlanSnapshot(plan))!==stable(expected);
+      }))throw new Error("所选方案已修改，请重新读取并核对；草稿已保留。");
+      const {expectedQuestions:_questions,expectedPlan:_plan,expectedPlans:_plans,...legacy}=guarded;
+      input={...legacy,expectedRevision:current.revision};
+    }
+  }
   for (let attempt = 0; ; attempt++) {
     try {return await requestOnce(path, input, operation);}
     catch (cause) {
