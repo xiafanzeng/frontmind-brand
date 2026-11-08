@@ -484,11 +484,20 @@ describe("WebsiteEvaluationWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "评估历史" }));
     const dialog = screen.getByRole("dialog", { name: "评估历史" });
     const rows = dialog.querySelectorAll(".wev-history-row");
-    expect(rows[0].textContent).toContain("2026/11/08 13:30:45");
+    const expectedCurrentTime = new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(Date.parse("2026-11-08T13:30:45+08:00"));
+    expect(rows[0].textContent).toContain(expectedCurrentTime);
     expect(rows[0].textContent).toContain("0/100");
     expect(rows[0].textContent).toContain("当前");
     const currentTime = rows[0].querySelector(".wev-history-time");
-    expect(currentTime?.querySelector("time")?.textContent).toBe("2026/11/08 13:30:45");
+    expect(currentTime?.querySelector("time")?.textContent).toBe(expectedCurrentTime);
     expect(currentTime?.querySelector(".wev-history-current")?.textContent).toBe("当前");
     expect(rows[0].querySelector(".wev-history-row__action .wev-history-current")).toBeNull();
     const reportLink = within(dialog).getAllByText("查看报告")[0].closest("a");
