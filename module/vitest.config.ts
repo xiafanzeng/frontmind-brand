@@ -15,5 +15,9 @@ export default defineConfig({
       "tests/standalone-routes.test.ts",
     ],
     pool: "forks",
+    // The immutable image builder is intentionally resource-bounded. Keeping
+    // one worker avoids fork RPC starvation while retaining process isolation.
+    maxWorkers: 1,
+    minWorkers: 1,
   },
 });
