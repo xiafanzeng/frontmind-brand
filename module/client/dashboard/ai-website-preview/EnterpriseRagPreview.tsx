@@ -28,7 +28,7 @@ import { RagEvaluationGauge } from "./RagEvaluationGauge";
 import { RagEvaluationDisclosure } from "./RagEvaluationDisclosure";
 import { RagReviewEvidencePicker, RagReviewSelect } from "./RagReviewControls";
 import { buildReviewEvidenceOptions, type ReviewEvidenceOption } from "./rag-review-evidence";
-import { RagChat, type RagChatTurn, type RagChatFollowup } from "./RagChat";
+import { DEFAULT_RAG_STARTER_QUESTIONS, RagChat, type RagChatTurn, type RagChatFollowup, type RagStarterQuestions } from "./RagChat";
 import { presentRagSummary, presentEvaluationScore } from "./rag-report-presentation";
 import { RagConversationHistory, type RagConversationHistoryItem } from "./RagConversationHistory";
 import { useRagPreviewHistory, type RagPreviewConversationSnapshot } from "./useRagPreviewHistory";
@@ -52,6 +52,7 @@ import {
   ragPreviewFixturesEnabled,
   type RagPreviewFixtures,
 } from "./rag-preview-fixture-loader";
+import type { ConversationDeleteResult } from "../../host";
 export { enterpriseRagHistoryStorageKey } from "./rag-review-history";
 
 export type EnterpriseRagLiveRuntime = {
@@ -98,8 +99,9 @@ export type EnterpriseRagLiveRuntime = {
     error?: string | null;
     busy?: boolean;
     deletingId?: string | null;
+    deletingIds?: string[];
     onSelect: (id: string) => void | boolean | Promise<void | boolean>;
-    onDelete: (id: string) => void | boolean | Promise<void | boolean>;
+    onDelete: (id: string) => ConversationDeleteResult | Promise<ConversationDeleteResult>;
     onOpen?: () => void;
   };
   question: string;
@@ -115,6 +117,8 @@ export type EnterpriseRagLiveRuntime = {
   }>;
   busy: boolean;
   running: boolean;
+  canStop?: boolean;
+  stopCapabilityReason?: string | null;
   runningTurnId?: string;
   steeringSupported?: boolean;
   activity?: RagChatActivity[];
@@ -136,6 +140,7 @@ export type EnterpriseRagLiveRuntime = {
   starterQuestions?: {
     current?: { id: string; questions: string[] } | null;
     draft?: { id: string; questions: string[] } | null;
+    loading?: boolean;
     pending?: boolean;
     error?: string | null;
     revision?: number;
@@ -160,6 +165,10 @@ type ReviewDraftContext = { ownerKey: string; scopeKey: string; question: string
 type ReviewDraft = ReviewDraftContext & { dimensions: DimensionJudgment[]; gates: GateJudgment[]; reviewer: string; confirmed: boolean };
 const AUTOMATIC_REQUEST_KEY = "frontmind-rag-evaluation-request-v1";
 const AUTOMATIC_SUBMITTED_NOTICE = "自动评估已提交；离开页面后任务仍会继续，重新打开可恢复进度。";
+const PREVIEW_STARTER_DRAFTS = [
+  ["如何核对回答引用的企业资料？", "怎样判断回答是否真正满足客户需求？", "哪里可以查看评分规则和评估记录？"],
+  ["当前回答使用了哪个知识版本？", "如何根据回答依据继续追问？", "发现回答不完整时可以怎样改进？"],
+] as const;
 const shortLabels = ["需求满足", "正确与有据", "信息完整", "引用与时效", "清晰可行动", "边界与安全"];
 const levels = ["不满足", "少量满足", "部分满足", "基本满足", "充分满足"];
 const dimensionActions: Record<DimensionId, string> = {
@@ -287,6 +296,12 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   const [previewAnswerIdentity, setPreviewAnswerIdentity] = useState(initialPreview?.previewAnswerIdentity ?? `authored:${crypto.randomUUID()}`);
   const [previewPreviousTurns, setPreviewPreviousTurns] = useState(initialPreview?.previousTurns ?? []);
   const [input, setInput] = useState(initialPreview?.input ?? "");
+  const [previewStarterQuestions, setPreviewStarterQuestions] = useState<RagStarterQuestions>(() => ({
+    current: { id: "preview-current-1", questions: [...DEFAULT_RAG_STARTER_QUESTIONS] },
+    draft: { id: "preview-draft-1", questions: [...PREVIEW_STARTER_DRAFTS[0]] },
+    revision: 1,
+  }));
+  const previewStarterBatch = useRef(0);
   const inputRevision = useRef(0);
   const liveInputOwner = useRef({ scope: storageScopeKey, conversation: live?.conversationId, adoptedFrom: live?.draftAdoptedFrom });
   liveInputOwner.current = { scope: storageScopeKey, conversation: live?.conversationId, adoptedFrom: live?.draftAdoptedFrom };
@@ -340,6 +355,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   const [automaticLoadingState, setAutomaticLoading] = useState(false);
   const [automaticStartingState, setAutomaticStarting] = useState(false);
   const [automaticErrorState, setAutomaticError] = useState("");
+  const [automaticErrorKindState, setAutomaticErrorKind] = useState<"read" | "start" | "run" | null>(null);
   const [automaticDataOwner, setAutomaticDataOwner] = useState("");
   const automaticMounted = useRef(true);
   const automaticRequestToken = useRef(0);
@@ -492,6 +508,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   const automaticLoading = automaticMatchesCurrent && automaticLoadingState;
   const automaticStarting = automaticMatchesCurrent && automaticStartingState;
   const automaticError = automaticMatchesCurrent ? automaticErrorState : "";
+  const automaticErrorKind = automaticMatchesCurrent ? automaticErrorKindState : null;
   const automaticState = automaticMatchesCurrent ? automaticLifecycleState : null;
   useEffect(() => {
     automaticMounted.current = true;
@@ -511,6 +528,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
     setAutomaticDataOwner(ownerKey);
     if (automaticDataOwner !== ownerKey) { setAutomaticRun(null); setAutomaticHistory([]); }
     setAutomaticError("");
+    setAutomaticErrorKind(null);
     setAutomaticAdmissionBlocked(false);
     setAutomaticLifecycleState(null);
     setAutomaticStarting(false);
@@ -541,6 +559,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
             ? latest.error?.message ?? "自动评估失败，请重新发起评估。"
             : automaticAdmission?.status === "blocked" ? "评估暂未开始，请稍后重试读取。" : "",
         );
+        setAutomaticErrorKind(latest?.status === "failed" ? "run" : automaticAdmission?.status === "blocked" ? "read" : null);
         const requestKey = automaticRequestStorageKey(
           automaticCoordinate.sourceQaTaskId,
           automaticCoordinate.turnId,
@@ -563,6 +582,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
         setAutomaticError(
           error instanceof Error ? error.message : "自动评估记录读取失败，请稍后重试。",
         );
+        setAutomaticErrorKind("read");
       })
       .finally(() => {
         if (isCurrent()) setAutomaticLoading(false);
@@ -612,6 +632,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
                 ? next.error?.message ?? "自动评估失败，请重新发起评估。"
                 : "",
             );
+            setAutomaticErrorKind(next.status === "failed" ? "run" : null);
             if (terminalEvaluationStatuses.has(next.status)) setNotice("");
             if (!terminalEvaluationStatuses.has(next.status)) poll();
           })
@@ -620,6 +641,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
             setAutomaticError(
               error instanceof Error ? error.message : "自动评估状态读取失败，请稍后重试。",
             );
+            setAutomaticErrorKind("read");
             poll();
           });
       }, 2_500);
@@ -741,18 +763,35 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   const assistantName = live
     ? liveCompanyName ? `${liveCompanyName} AI 助手` : "企业知识助手"
     : previewFixtures.assistantName;
-  const knowledgeGateMessage = !live ? null
-    : live.refreshFailed && live.knowledgeBase
-      ? "知识库状态暂时刷新失败，当前继续使用已确认的知识版本。"
-      : knowledgeLoading
-        ? "正在确认知识库、模型与服务状态。"
-        : live.failed
-          ? "暂时无法读取知识库状态。"
+  const knowledgePresentation = !live
+    ? { kind: "preview" as const, label: `知识版本：${knowledgeVersion}`, canView: true, canOpen: false, canRetry: false, detail: null }
+    : knowledgeLoading
+      ? { kind: "loading" as const, label: "正在确认知识库、模型与服务状态。", canView: false, canOpen: true, canRetry: true, detail: null }
+      : !live.knowledgeBase && historicalKnowledge
+        ? { kind: "historical_unknown" as const, label: "知识版本：历史任务知识版本未知", canView: false, canOpen: false, canRetry: true, detail: null }
+        : live.failed && !live.knowledgeBase
+          ? { kind: "read_failed" as const, label: "暂时无法读取知识库状态。", canView: false, canOpen: false, canRetry: true, detail: null }
           : !live.knowledgeBase
-            ? historicalKnowledge ? "此历史任务的知识版本不可用。" : "尚未发布可用知识库。"
+            ? { kind: "current_missing" as const, label: "尚未发布可用知识库", canView: false, canOpen: true, canRetry: true, detail: null }
             : live.configured !== true || live.providerLabel === "未配置"
-              ? "企业问答模型或服务尚未配置。"
-              : null;
+              ? { kind: "provider_missing" as const, label: "企业问答模型或服务尚未配置。", canView: true, canOpen: false, canRetry: true, detail: null }
+              : live.refreshFailed
+                ? {
+                    kind: "refresh_failed" as const,
+                    label: "知识库状态暂时刷新失败，当前继续使用已确认的知识版本。",
+                    canView: true,
+                    canOpen: false,
+                    canRetry: true,
+                    detail: null,
+                  }
+                : {
+                  kind: historicalKnowledge ? "frozen" as const : "current" as const,
+                  label: `${live.knowledgeBase.sourceFileName} · ${historicalKnowledge ? "本回答冻结" : "当前发布"} v${live.knowledgeBase.version}`,
+                  canView: true,
+                  canOpen: false,
+                  canRetry: false,
+                  detail: null,
+                };
   const canAsk = live?.canSend !== undefined ? live.canSend : live
     ? live.loaded &&
       !live.failed &&
@@ -883,6 +922,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
     setAutomaticDataOwner(ownerKey);
     setAutomaticStarting(true);
     setAutomaticError("");
+    setAutomaticErrorKind(null);
     const requestKey = automaticRequestStorageKey(
       automaticCoordinate.sourceQaTaskId,
       automaticCoordinate.turnId,
@@ -935,12 +975,14 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
         setAutomaticError(
           next.error?.message ?? "自动评估失败，请重新发起评估。",
         );
+        setAutomaticErrorKind("run");
       }
     } catch (error) {
       if (!isCurrent()) return;
       setAutomaticError(
         error instanceof Error ? error.message : "自动评估提交失败，请稍后重试。",
       );
+      setAutomaticErrorKind("start");
     } finally {
       if (isCurrent()) {
         automaticStartLock.current = null;
@@ -948,6 +990,20 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
       }
     }
   };
+
+  const rereadAutomaticEvaluation = () => {
+    expectedReadOwner.current = { key: automaticCoordinateKey, since: Date.now() };
+    setAutomaticReadVersion(value => value + 1);
+  };
+  const requestAutomaticRerun = () => {
+    if (!window.confirm("将为当前回答创建新的自动评估记录，可能占用模型额度；历史记录不会被覆盖。")) return;
+    void startAutomaticEvaluation();
+  };
+  const automaticRecoveryAction = automaticErrorKind === "start"
+    ? { label: "继续确认本次评估", run: () => void startAutomaticEvaluation() }
+    : automaticRun?.status === "failed" && automaticErrorKind !== "read"
+      ? { label: "重新发起评估", run: requestAutomaticRerun }
+      : { label: "重新读取状态", run: rereadAutomaticEvaluation };
 
   const selectCase = (item: RagCase) => {
     cancelPreview();
@@ -1078,7 +1134,10 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   const deletePreviewConversation = (id: string) => {
     if (previewBusy) return false;
     const result = previewHistory.remove(id);
-    if (result.wasActive) restorePreview(result.next);
+    if (result.wasActive) {
+      previewHistory.create();
+      restorePreview(null);
+    }
     return true;
   };
   const updateAnswer = (value: string, task: string, editedQuestion: string) => {
@@ -1266,17 +1325,32 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
 
   return <section className="sfp-root erag-root rag-eval-root" data-testid={live ? "enterprise-rag-live-root" : undefined}>
     <div ref={backgroundRef}>
+      <header className="sfp-heading erag-heading" data-rag-entrance="heading">
+        <div><h1>让回答真正满足用户需求</h1><p>用企业资料回答客户问题，核对回答依据，找到改进方向。</p></div>
+        <div className="rag-toolbar" role="group" aria-label="评估资料">{buildReportUrl ? <>
+          <a className="rag-report-link" href={buildReportUrl("rules", automaticCoordinate ?? undefined, exampleReadOnly ? activeCase?.id : undefined)} target="_blank" rel="noopener" aria-label="评分规则（在新标签页打开）">评分规则</a>
+          <a className="rag-report-link" href={buildReportUrl("records", automaticCoordinate ?? undefined, exampleReadOnly ? activeCase?.id : undefined)} target="_blank" rel="noopener" aria-label="评估记录（在新标签页打开）">评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</a>
+        </> : <>
+          <button onClick={() => setDrawer("rules")}>评分规则</button>
+          <button onClick={() => setDrawer("history")}>评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</button>
+        </>}</div>
+      </header>
       <div className="erag-layout">
         <div className="erag-left-column">
           <section className="sfp-panel erag-knowledge-card" data-rag-entrance="knowledge" data-rag-entrance-immediate={hasNewerPublication || undefined}><div className="erag-card-heading"><div><span className="erag-card-icon"><FileText size={18} /></span><strong>RAG 知识底座</strong></div></div>
             <div ref={knowledgeStatsRef} className="erag-stats" data-loading={knowledgeLoading || undefined} data-unavailable={knowledgeUnavailable || undefined}><div><strong className={knowledgeLoading ? "rag-waiting-text" : undefined}>{visibleKnowledgeValue(knowledgeValues[0])}</strong><small>{live && !exampleReadOnly ? historicalKnowledge ? "任务冻结快照" : "发布快照" : "知识集合"}</small></div><div><strong className={knowledgeLoading ? "rag-waiting-text" : undefined}>{visibleKnowledgeValue(knowledgeValues[1])}</strong><small>{live && !exampleReadOnly ? "知识文档" : "示例知识片段"}</small></div><div><strong className={knowledgeLoading ? "rag-waiting-text" : undefined}>{visibleKnowledgeValue(knowledgeValues[2])}</strong><small>当前来源</small></div></div>
-            <div className="rag-knowledge-row"><span>{(!exampleReadOnly && live?.knowledgeBase?.sourceFileName) || <>知识版本：{knowledgeVersion}</>}</span><button type="button" className="rag-knowledge-link" onClick={() => openAnswerPanel("evidence", true)}>查看知识与依据</button></div>
-            {knowledgeGateMessage && <div className="rag-knowledge-gate" role={live?.refreshFailed ? "alert" : "status"}>
-              <p>{knowledgeGateMessage}</p>
-              <div>
-                {!historicalKnowledge && <button type="button" className="rag-knowledge-link" onClick={() => live?.onOpenKnowledge()}>前往知识库</button>}
-                <button type="button" className="rag-knowledge-link" onClick={() => live?.onRetryKnowledge()}>重试加载</button>
-              </div>
+            <div className="rag-knowledge-row rag-knowledge-status-row" role={knowledgePresentation.kind === "read_failed" || knowledgePresentation.kind === "refresh_failed" ? "alert" : "status"}>
+              <span>{knowledgePresentation.label}</span>
+              {(knowledgePresentation.canView || knowledgePresentation.canOpen || knowledgePresentation.canRetry) && <div className="rag-knowledge-status-actions">
+                {knowledgePresentation.canView && <button type="button" className="rag-knowledge-link" onClick={() => openAnswerPanel("evidence", true)}>查看知识与依据</button>}
+                {knowledgePresentation.canOpen && <button type="button" className="rag-knowledge-link" onClick={() => live?.onOpenKnowledge()}>前往知识库</button>}
+                {knowledgePresentation.canRetry && <button type="button" className="rag-knowledge-link" onClick={() => live?.onRetryKnowledge()}>重试加载</button>}
+              </div>}
+            </div>
+            {knowledgePresentation.detail && <p className="rag-knowledge-refresh-note" role="alert">{knowledgePresentation.detail}</p>}
+            {hasNewerPublication && live?.knowledgeBase && live.currentKnowledgeBase && <div className="rag-knowledge-update" role="status">
+              <span>项目当前已发布 v{live.currentKnowledgeBase.version}；本回答仍使用冻结 v{live.knowledgeBase.version}。</span>
+              <button type="button" className="rag-knowledge-link" onClick={() => live.onStartNewConversation()}>使用新版新建问答</button>
             </div>}
           </section>
           <section className="sfp-panel erag-test-card" data-rag-entrance="chat" data-rag-entrance-immediate={Boolean(live?.busy) || undefined}><div className="erag-card-heading"><div><span className="erag-card-icon"><Bot size={18} /></span><strong>企业知识问答</strong></div><RagConversationHistory
@@ -1296,6 +1370,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
               loading={live?.conversationHistory?.loading}
               error={live?.conversationHistory?.error}
               deletingId={live?.conversationHistory?.deletingId}
+              deletingIds={live?.conversationHistory?.deletingIds}
               historyDisabled={Boolean(live && !live.conversationHistory)}
             /></div>
             {!live && !previewHistory.storageAvailable && <p className="rag-chat-error" role="status">本地对话暂时无法保存，当前页面内仍可查看。</p>}
@@ -1305,7 +1380,6 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
               scopeKey={live ? `${storageScopeKey ?? "live"}:${live.conversationId ?? "new"}:${live.taskId ?? "new"}` : `${storageScopeKey ?? "preview"}:${previewHistory.activeId}`}
               live={Boolean(live)}
               assistantName={assistantName}
-              knowledgeSource={chatKnowledgeBase}
               readOnly={exampleReadOnly}
               evaluationNotRequired={!exampleReadOnly && (live?.chat ? live.chat.evaluation === "not_required" : evaluationNotRequired)}
               selectedAnswerKey={exampleReadOnly ? `example:${activeCase?.id}` : live?.selectedAnswerKey}
@@ -1317,6 +1391,8 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
               sources={!exampleReadOnly && live?.chat ? live.chat.sources : currentSources}
               busy={Boolean(live?.busy) || previewBusy}
               running={Boolean(live?.running) || previewBusy}
+              canStop={live ? live.canStop : previewBusy}
+              stopCapabilityReason={live?.stopCapabilityReason}
               turnKey={live ? live.runningTurnId ?? live.questionId ?? "new" : previewAnswerIdentity}
               activity={live?.activity ?? previewActivity}
               steeringSupported={live ? live.steeringSupported : true}
@@ -1327,10 +1403,32 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
               onCancelFollowup={live ? live.onCancelFollowup : async id => { setPreviewQueues(old => ({ ...old, [previewQueueKey]: { ...previewQueue, items: previewQueue.items.filter(item => item.id !== id) } })); return true; }}
               onResumeFollowups={live ? live.onResumeFollowups : async () => { setPreviewQueues(old => ({ ...old, [previewQueueKey]: { ...previewQueue, paused: false } })); return true; }}
               onRetryFollowup={live?.onRetryFollowup}
-              starterQuestions={live?.starterQuestions}
-              onConfirmStarterQuestions={live?.onConfirmStarterQuestions}
-              onRegenerateStarterQuestions={live?.onRegenerateStarterQuestions}
-              onDiscardStarterDraft={live?.onDiscardStarterDraft}
+              starterQuestions={live ? live.starterQuestions : previewStarterQuestions}
+              onConfirmStarterQuestions={live ? live.onConfirmStarterQuestions : (async questions => {
+                setPreviewStarterQuestions(current => ({
+                  current: { id: `preview-current-${(current.revision ?? 0) + 1}`, questions: [...questions] },
+                  draft: null,
+                  revision: (current.revision ?? 0) + 1,
+                }));
+                return true;
+              })}
+              onRegenerateStarterQuestions={live ? live.onRegenerateStarterQuestions : (async () => {
+                previewStarterBatch.current = (previewStarterBatch.current + 1) % PREVIEW_STARTER_DRAFTS.length;
+                setPreviewStarterQuestions(current => ({
+                  ...current,
+                  draft: { id: `preview-draft-${(current.revision ?? 0) + 1}`, questions: [...PREVIEW_STARTER_DRAFTS[previewStarterBatch.current]] },
+                  revision: (current.revision ?? 0) + 1,
+                }));
+                return true;
+              })}
+              onDiscardStarterDraft={live ? live.onDiscardStarterDraft : (async () => {
+                setPreviewStarterQuestions(current => ({
+                  ...current,
+                  draft: null,
+                  revision: (current.revision ?? 0) + 1,
+                }));
+                return true;
+              })}
               canEdit={!exampleReadOnly && (live?.canCompose ?? true)}
               canSubmit={!exampleReadOnly && canAsk && !previewBusy}
               input={exampleReadOnly ? "" : input}
@@ -1345,21 +1443,12 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
         </div>
         <div className="erag-evaluation-column">
           <RagEntranceReadyContext value={entranceReady("quality")}>
-          <aside className="sfp-panel erag-evaluation-panel" data-rag-entrance="quality" data-rag-entrance-immediate={Boolean(live && (automaticBusy || automaticLoading || automaticRun?.status === "failed")) || undefined} role="region" aria-label="本轮回答质量">
+          <aside id="rag-quality-panel" className="sfp-panel erag-evaluation-panel" data-rag-entrance="quality" data-rag-entrance-immediate={Boolean(live && (automaticBusy || automaticLoading || automaticRun?.status === "failed")) || undefined} role="region" aria-label="本轮回答质量">
           <div className="erag-evaluation-panel__heading">
             <span className="erag-card-icon rag-evaluation-header-icon" aria-hidden="true" data-testid="rag-evaluation-header-icon">
               <ChartNoAxesColumnIncreasing size={18} />
             </span>
             <h2>本轮回答质量</h2>
-            <div className="rag-toolbar rag-evaluation-toolbar" role="group" aria-label="评估资料">
-              {buildReportUrl ? <>
-                <a className="rag-report-link" href={buildReportUrl("rules", automaticCoordinate ?? undefined, exampleReadOnly ? activeCase?.id : undefined)} target="_blank" rel="noopener" aria-label="评分规则（在新标签页打开）">评分规则</a>
-                <a className="rag-report-link" href={buildReportUrl("records", automaticCoordinate ?? undefined, exampleReadOnly ? activeCase?.id : undefined)} target="_blank" rel="noopener" aria-label="评估记录（在新标签页打开）">评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</a>
-              </> : <>
-                <button onClick={() => setDrawer("rules")}>评分规则</button>
-                <button onClick={() => setDrawer("history")}>评估记录 {recordedEvaluationCount > 0 ? `(${recordedEvaluationCount})` : ""}</button>
-              </>}
-            </div>
           </div>
           <div ref={overviewRef} className="rag-evaluation-overview" data-testid="rag-evaluation-overview" data-report-reveal-key={automaticReport?.reportId || undefined} data-layout={overviewStacked ? "stacked" : "side-by-side"} data-two-lines={summaryTwoLines ? "true" : "false"} data-waiting={evaluationWaiting || undefined}>
             <RagEvaluationGauge revealKey={automaticReport?.reportId} score={neutralEvaluation ? null : result.score} preciseScore={neutralEvaluation ? null : automaticReport ? automaticReport.result.score : calculatedResult.rawScore} unavailable={tone === "danger"} />
@@ -1369,7 +1458,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
                   <i className="rag-evaluation-status-orb" aria-hidden="true" data-testid="rag-evaluation-status-orb" style={{ opacity: neutralEvaluation ? 1 : revealOpacity(verdictRevealProgress, 0, verdictTitleText.length) }} />
                   <span className={`rag-evaluation-status-title-text${evaluationWaiting ? " rag-waiting-text" : ""}`} role={neutralEvaluation ? "status" : undefined}>{neutralEvaluation ? displayVerdictLabel : <RagProgressiveText graphemes={verdictTitleText} offset={0} total={verdictTitleText.length} progress={verdictRevealProgress} />}</span>
                 </h3>
-                <p className="rag-evaluation-summary-copy" data-testid="rag-evaluation-summary-copy">{neutralEvaluation ? evaluationSummary : <RagProgressiveText graphemes={verdictSummaryText} offset={0} total={verdictSummaryText.length} progress={verdictRevealProgress} />}{!automaticStarting && !automaticLoading && (evaluationFailed || automaticError) && <button className="rag-evaluation-read-retry" type="button" onClick={() => automaticRun?.status === "failed" ? void startAutomaticEvaluation() : (expectedReadOwner.current = { key: automaticCoordinateKey, since: Date.now() }, setAutomaticReadVersion(value => value + 1))}>重试</button>}</p>
+                <p className="rag-evaluation-summary-copy" data-testid="rag-evaluation-summary-copy">{neutralEvaluation ? evaluationSummary : <RagProgressiveText graphemes={verdictSummaryText} offset={0} total={verdictSummaryText.length} progress={verdictRevealProgress} />}{!automaticStarting && !automaticLoading && (evaluationFailed || automaticError) && !(automaticReport && automaticRun?.status === "failed") && <button className="rag-evaluation-read-retry" type="button" onClick={automaticRecoveryAction.run}>{automaticRecoveryAction.label}</button>}</p>
               </div>
             <div className="rag-evaluation-supporting-meta" data-testid="rag-evaluation-supporting-meta" style={neutralEvaluation ? { visibility: "hidden" } : undefined} aria-hidden={neutralEvaluation || undefined}>
               <div className="rag-status-row rag-evaluation-metrics" data-testid="rag-evaluation-metrics">
@@ -1382,6 +1471,8 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
             </div>
             </section>
           </div>
+
+          {automaticReport && automaticRun?.status === "failed" && <p className="rag-evaluation-latest-warning" role="status">最新复评未完成，继续显示上一次不可变报告。 <button type="button" className="rag-evaluation-read-retry" onClick={automaticRecoveryAction.run}>{automaticRecoveryAction.label}</button></p>}
 
           <RagEvaluationRadar emptyQuestion={neutralEvaluation} revealKey={automaticReport?.reportId} judgments={checklistJudgments} dimensions={radarDimensions} />
           <div className="rag-evaluation-actions" role="group" aria-label="回答评估详情">

@@ -19,6 +19,7 @@ it("recovers an empty question draft in a fresh runtime and can save or delete i
       records.set(value.id, structuredClone(stored));
     },
     delete: async (_request, id) => { records.delete(id); },
+    deleteConfirmed: async (_request, id) => { records.delete(id); return { ok: true }; },
   }));
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -35,6 +36,14 @@ it("recovers an empty question draft in a fresh runtime and can save or delete i
         body: JSON.stringify({ purpose, conversations, deletedIds }),
       });
       if (!response.ok) throw new Error(`Sync failed: ${response.status}`);
+    },
+    deleteConfirmed: async (purpose, id) => {
+      const response = await fetch(`${url}/conversations/delete-confirmed`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ purpose, id }),
+      });
+      if (!response.ok) throw new Error(`Delete failed: ${response.status}`);
+      return response.json();
     },
     observe: vi.fn(async () => { throw new Error("No provider call expected"); }),
   };

@@ -229,11 +229,9 @@ describe("Brand Apple theme contract", () => {
     const metrics = ragEvaluationCss.match(/\.rag-eval-root \.rag-evaluation-metrics \{([^}]*)\}/)?.[1];
     expect(metrics).toContain("font-size: 12px;");
     expect(metrics).toContain("line-height: 18px;");
-    expect(enterpriseRagPreview).not.toContain("让回答真正满足用户需求");
-    expect(enterpriseRagPreview).not.toContain("用企业资料回答客户问题，核对回答依据，找到改进方向。");
-    expect(enterpriseRagPreview).toContain('className="rag-toolbar rag-evaluation-toolbar"');
-    expect(ragEvaluationCss).toContain(".rag-eval-root .erag-evaluation-panel__heading > .rag-evaluation-toolbar {");
-    expect(ragEvaluationCss).toContain("margin: 0 0 0 auto;");
+    expect(enterpriseRagPreview).toContain("让回答真正满足用户需求");
+    expect(enterpriseRagPreview).toContain("用企业资料回答客户问题，核对回答依据，找到改进方向。");
+    expect(enterpriseRagPreview).toContain('className="rag-toolbar" role="group" aria-label="评估资料"');
     expect(ragEvaluationCss).toMatch(/@container sfp \(max-width:400px\) \{[\s\S]*?\.rag-eval-root \.rag-radar-label \{ width:68px; \}[\s\S]*?\}/);
     expect(enterpriseRagPreview).toContain('className="rag-evaluation-supporting-meta"');
     expect(enterpriseRagPreview).not.toContain('setProperty("--rag-evaluation-card-width"');
@@ -274,7 +272,7 @@ describe("Brand Apple theme contract", () => {
     expect(enterpriseRagPreview).toContain('className="sfp-button sfp-button--ghost rag-evaluation-action"');
     expect(actionStyles).toContain("white-space: nowrap;");
     const qualityPanel = enterpriseRagPreview.slice(
-      enterpriseRagPreview.indexOf('<aside className="sfp-panel erag-evaluation-panel'),
+      enterpriseRagPreview.indexOf('<aside id="rag-quality-panel" className="sfp-panel erag-evaluation-panel'),
       enterpriseRagPreview.indexOf('<section className="sfp-panel rag-task-panel'),
     );
     expect(qualityPanel).toContain('aria-label="回答评估详情"');

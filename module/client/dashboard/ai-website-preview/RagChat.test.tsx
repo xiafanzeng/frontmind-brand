@@ -1,10 +1,12 @@
 import { createRef, useEffect, useState } from "react";
+import { readFileSync } from "node:fs";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { copyToClipboard } from "@frontmind/module-ui/lib/utils";
-import { RagChat } from "./RagChat";
+import { DEFAULT_RAG_STARTER_QUESTIONS, RagChat } from "./RagChat";
+const ragChatStyles = readFileSync("client/dashboard/ai-website-preview/rag-chat.css", "utf8");
 vi.mock("@frontmind/module-ui/lib/utils", async original => ({ ...await original<object>(), copyToClipboard: vi.fn(async () => true) }));
-const base = () => ({ scopeKey:"task-a", live:true, assistantName:"企业助手", question:"支持部署吗？", answer:"", answerKey:"", sources:[], busy:false, running:false, canEdit:true, canSubmit:true, input:"部署问题", inputRef:createRef<HTMLTextAreaElement>(), onInput:vi.fn(), onSubmit:vi.fn(async () => {}), onStop:vi.fn(async () => true), onEvidence:vi.fn() });
+const base = () => ({ scopeKey:"task-a", live:true, assistantName:"企业助手", question:"支持部署吗？", answer:"", answerKey:"", sources:[], busy:false, running:false, canStop:true, canEdit:true, canSubmit:true, input:"部署问题", inputRef:createRef<HTMLTextAreaElement>(), onInput:vi.fn(), onSubmit:vi.fn(async () => {}), onStop:vi.fn(async () => true), onEvidence:vi.fn(), starterQuestions:{ current:{ id:"server-current", questions:[...DEFAULT_RAG_STARTER_QUESTIONS] }, revision:1 } });
 const phase = () => document.querySelector(".rag-chat-response")?.getAttribute("data-phase");
 const deferred = <T,>() => { let resolve!: (value:T) => void; const promise = new Promise<T>(r => {resolve=r;}); return {promise,resolve}; };
 beforeEach(() => { vi.useFakeTimers(); vi.mocked(copyToClipboard).mockReset(); vi.mocked(copyToClipboard).mockResolvedValue(true); localStorage.clear(); vi.stubGlobal("matchMedia",vi.fn(() => ({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()}))); });
@@ -49,7 +51,13 @@ describe("RAG chat presentation", () => {
     const tools = screen.getByRole("group", { name: "回答操作" });
     expect([...tools.querySelectorAll(":scope > button, :scope > .rag-chat-feedback > button")].map(item => item.getAttribute("aria-label"))).toEqual(["复制回答", "评价回答", "朗读"]);
     expect(tools.querySelector("time")).toBeTruthy();
+    expect(within(welcome).getByText(/你好！我是企业助手/).classList.contains("is-entrance")).toBe(true);
     expect(document.querySelector(".rag-chat-starters__questions")?.classList.contains("is-entrance")).toBe(true);
+    expect(ragChatStyles).toContain("from { opacity:0; transform:translateX(-8px); }");
+    expect(ragChatStyles).toContain("button:nth-child(1) { animation-delay:80ms; }");
+    expect(ragChatStyles).toContain("button:nth-child(3) { animation-delay:240ms; }");
+    expect(ragChatStyles).toContain(".rag-chat-welcome-copy.is-entrance,");
+    expect(ragChatStyles).toContain("animation:none;");
     const starter = screen.getByRole("button", { name: "可以简单介绍一下你们吗？" });
     fireEvent.click(starter); fireEvent.click(starter);
     expect(props.onSubmit).toHaveBeenCalledTimes(1);
@@ -59,15 +67,55 @@ describe("RAG chat presentation", () => {
     expect(screen.getByRole("button", { name: "你们主要提供哪些产品或服务？" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "我可以先了解哪些核心信息？" })).toBeTruthy();
     view.rerender(<RagChat {...props} scopeKey="task-a:conversation-1:task-1" question="可以简单介绍一下你们吗？" answer="这里是企业介绍。" answerKey="answer-1" />);
-    expect(screen.getByRole("article", { name: "企业助手欢迎" })).toBe(welcome);
-    expect(within(welcome).getByText(/你好！我是企业助手/)).toBeTruthy();
-    const remaining = within(welcome).getByRole("group", { name: "常见问题" });
+    const answerWelcome = screen.getByRole("article", { name: "企业助手欢迎" });
+    expect(answerWelcome).not.toBe(welcome);
+    expect(within(answerWelcome).getByText(/你好！我是企业助手/)).toBeTruthy();
+    expect(within(answerWelcome).getByText(/你好！我是企业助手/).classList.contains("is-entrance")).toBe(false);
+    const remaining = within(answerWelcome).getByRole("group", { name: "当前预设问题" });
     expect(within(remaining).getAllByRole("button")).toHaveLength(2);
     expect(remaining.classList.contains("is-entrance")).toBe(false);
     expect(screen.getByText("可以简单介绍一下你们吗？", { selector: ".erag-user-message" })).toBeTruthy();
     expect(screen.getByText("这里是企业介绍。")).toBeTruthy();
     view.rerender(<RagChat {...props} scopeKey="task-b" />);
     expect(screen.getByRole("button", { name: "可以简单介绍一下你们吗？" })).toBeTruthy();
+  });
+
+  it("uses only server starter data in live mode and disables management until it is readable", () => {
+    const manage = vi.fn(async () => true);
+    const props = { ...base(), question: "", input: "", onConfirmStarterQuestions: manage, onRegenerateStarterQuestions: manage };
+    const view = render(<RagChat {...props} starterQuestions={{ current: null, loading: true, revision: 0 }} />);
+    expect(screen.getByRole("status").textContent).toBe("正在读取预设问题…");
+    expect(screen.queryByRole("button", { name: DEFAULT_RAG_STARTER_QUESTIONS[0] })).toBeNull();
+    expect(screen.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(true);
+
+    view.rerender(<RagChat {...props} starterQuestions={{ current: null, error: "预设问题读取失败。", revision: 0 }} />);
+    expect(screen.getByRole("alert").textContent).toBe("预设问题读取失败。");
+    expect(screen.queryByRole("button", { name: DEFAULT_RAG_STARTER_QUESTIONS[0] })).toBeNull();
+    expect(screen.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(true);
+
+    const serverQuestions = ["服务端问题一？", "服务端问题二？", "服务端问题三？"];
+    view.rerender(<RagChat {...props} starterQuestions={{ current: { id: "server-2", questions: serverQuestions }, revision: 2 }} />);
+    expect(screen.getByRole("button", { name: serverQuestions[0] })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: DEFAULT_RAG_STARTER_QUESTIONS[0] })).toBeNull();
+    expect(screen.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("remounts the welcome entrance when switching between blank conversation scopes", () => {
+    const props = { ...base(), question: "", input: "" };
+    const view = render(<RagChat {...props} scopeKey="blank-a" />);
+    const firstWelcome = screen.getByRole("article", { name: "企业助手欢迎" });
+    const firstCopy = within(firstWelcome).getByText(/你好！我是企业助手/);
+    expect(firstCopy.classList.contains("is-entrance")).toBe(true);
+    view.rerender(<RagChat {...props} scopeKey="blank-b" />);
+    const secondWelcome = screen.getByRole("article", { name: "企业助手欢迎" });
+    expect(secondWelcome).not.toBe(firstWelcome);
+    expect(within(secondWelcome).getByText(/你好！我是企业助手/).classList.contains("is-entrance")).toBe(true);
+    expect(within(secondWelcome).getByRole("group", { name: "当前预设问题" }).classList.contains("is-entrance")).toBe(true);
+  });
+
+  it("keeps the default starter fixture limited to preview mode", () => {
+    render(<RagChat {...base()} live={false} question="" input="" starterQuestions={undefined} />);
+    expect(screen.getByRole("button", { name: DEFAULT_RAG_STARTER_QUESTIONS[0] })).toBeTruthy();
   });
 
   it("animates only a newly submitted composer question", async () => {
@@ -84,9 +132,11 @@ describe("RAG chat presentation", () => {
     render(<SendingChat changeScope historySwitch />);
     const welcome = screen.getByRole("article", { name: "企业助手欢迎" });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "发送问题" })));
-    expect(screen.getByRole("article", { name: "企业助手欢迎" })).toBe(welcome);
-    expect(within(welcome).getAllByRole("button", { name: /^(可以简单介绍一下你们吗？|你们主要提供哪些产品或服务？|我可以先了解哪些核心信息？)$/ })).toHaveLength(3);
-    expect(within(welcome).getByRole("group", { name: "回答操作" })).toBeTruthy();
+    const submittedWelcome = screen.getByRole("article", { name: "企业助手欢迎" });
+    expect(submittedWelcome).not.toBe(welcome);
+    expect(within(submittedWelcome).getByText(/你好！我是企业助手/).classList.contains("is-entrance")).toBe(false);
+    expect(within(submittedWelcome).getAllByRole("button", { name: /^(可以简单介绍一下你们吗？|你们主要提供哪些产品或服务？|我可以先了解哪些核心信息？)$/ })).toHaveLength(3);
+    expect(within(submittedWelcome).getByRole("group", { name: "回答操作" })).toBeTruthy();
     expect(screen.getByText("新的业务问题", { selector: "p.erag-user-message" }).classList.contains("rag-chat-user-message--sent")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "查看其他历史对话" }));
     expect(screen.queryByRole("article", { name: "企业助手欢迎" })).toBeNull();
@@ -138,12 +188,13 @@ describe("RAG chat presentation", () => {
     expect(screen.queryByRole("button", { name: "录入回答" })).toBeNull();
     expect(tools.querySelector("time")).toBeTruthy();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "复制回答" })));
-    expect(copyToClipboard).toHaveBeenCalledWith("你好！我是企业助手。你可以直接提问，或选择下面的问题开始。");
+    expect(copyToClipboard).toHaveBeenCalledWith("你好！我是企业助手，很高兴为你服务。");
     fireEvent.click(screen.getByRole("button", { name: "编辑回答" }));
     expect(edit).toHaveBeenCalledOnce();
   });
 
   it("keeps confirmed starters usable while editing and confirming a generated draft", async () => {
+    vi.useRealTimers();
     const confirm = vi.fn(async () => true);
     const regenerate = vi.fn(async () => true);
     const onSubmit = vi.fn(async () => {});
@@ -154,20 +205,37 @@ describe("RAG chat presentation", () => {
     }} onConfirmStarterQuestions={confirm} onRegenerateStarterQuestions={regenerate} />);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "当前问题一？" })));
     expect(onSubmit).toHaveBeenCalledWith("当前问题一？");
-    const draft = screen.getByRole("list", { name: "待确认的预设问题" });
+    fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
+    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    const draft = within(settings).getByRole("list", { name: "待确认的预设问题" });
     expect(within(draft).getByText("草稿问题一？")).toBeTruthy();
     expect(within(draft).queryByRole("button")).toBeNull();
     expect(screen.queryByRole("button", { name: "草稿问题一？" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "编辑问题" }));
-    const first = screen.getByRole("textbox", { name: "问题 1" });
+    fireEvent.click(within(settings).getByRole("button", { name: "编辑问题" }));
+    const first = within(settings).getByRole("textbox", { name: "问题 1" });
     fireEvent.change(first, { target: { value: "人工修改问题一？" } });
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "确认使用" })));
+    fireEvent.click(within(settings).getByRole("button", { name: "确认使用" }));
     expect(confirm).toHaveBeenCalledWith(["人工修改问题一？", "草稿问题二？", "草稿问题三？"]);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "换一批" })));
-    expect(regenerate).toHaveBeenCalledOnce();
   });
 
-  it("preserves in-progress starter edits when a late pending draft changes revision", async () => {
+  it("keeps the popover open and reports a generated-draft cancellation failure inside it", () => {
+    const discard = vi.fn(() => { throw new Error("取消失败"); });
+    render(<RagChat {...base()} question="" input="" starterQuestions={{
+      current: { id: "current-1", questions: ["当前问题一？", "当前问题二？", "当前问题三？"] },
+      draft: { id: "draft-2", questions: ["草稿问题一？", "草稿问题二？", "草稿问题三？"] },
+      revision: 2,
+    }} onDiscardStarterDraft={discard} />);
+    fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
+    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    const cancel = within(settings).getByText("取消", { selector: "button" });
+    fireEvent.click(cancel);
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(document.body.contains(settings)).toBe(true);
+    expect(settings.querySelector('[role="alert"]')?.textContent).toBe("草稿未能取消，请重试。");
+  });
+
+  it("discards a stale starter edit when a newer draft revision arrives", () => {
+    vi.useRealTimers();
     const confirm = vi.fn(async () => true);
     const original = {
       current: { id: "current-1", questions: ["当前问题一？", "当前问题二？", "当前问题三？"] },
@@ -175,17 +243,19 @@ describe("RAG chat presentation", () => {
       revision: 1,
     };
     const view = render(<RagChat {...base()} question="" input="" starterQuestions={original} onConfirmStarterQuestions={confirm} />);
-    fireEvent.click(screen.getByRole("button", { name: "编辑问题" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "问题 1" }), { target: { value: "我正在编辑的问题？" } });
+    fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
+    const settings = screen.getByRole("dialog", { name: "设置预设问题" });
+    fireEvent.click(within(settings).getByRole("button", { name: "编辑问题" }));
+    fireEvent.change(within(settings).getByRole("textbox", { name: "问题 1" }), { target: { value: "我正在编辑的问题？" } });
     view.rerender(<RagChat {...base()} question="" input="" starterQuestions={{
       ...original,
       draft: { id: "draft-late", questions: ["迟到草稿一？", "迟到草稿二？", "迟到草稿三？"] },
       pending: true,
       revision: 2,
     }} onConfirmStarterQuestions={confirm} />);
-    expect((screen.getByRole("textbox", { name: "问题 1" }) as HTMLInputElement).value).toBe("我正在编辑的问题？");
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "确认使用" })));
-    expect(confirm).toHaveBeenCalledWith(["我正在编辑的问题？", "草稿问题二？", "草稿问题三？"]);
+    expect(within(settings).queryByRole("textbox", { name: "问题 1" })).toBeNull();
+    expect(within(settings).getByText("迟到草稿一？")).toBeTruthy();
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("keeps every historical answer's frozen assistant identity independent", () => {
@@ -266,6 +336,17 @@ describe("RAG chat presentation", () => {
     await act(async () => stopping.resolve(false)); expect(screen.getByRole("alert").textContent).toContain("未能停止");
     const retry=vi.fn(async () => true); view.rerender(<RagChat {...props} onStop={retry} />); await act(async () => fireEvent.click(screen.getByRole("button",{name:"停止回答"})));
     view.rerender(<RagChat {...props} busy={false} running={false} onStop={retry} />); expect(screen.getByText("已停止回答。")).toBeTruthy(); expect(screen.queryByTestId("rag-chat-wait")).toBeNull();
+  });
+  it("fails closed when the running task has no confirmed stop capability", () => {
+    const onStop=vi.fn(async () => true);
+    const view=render(<RagChat {...base()} busy running input="" canStop={false} stopCapabilityReason="当前模型服务不支持停止回答。" onStop={onStop} />);
+    const unavailable=screen.getByRole("button",{name:"当前模型服务不支持停止回答。"});
+    expect(unavailable.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(unavailable);
+    expect(onStop).not.toHaveBeenCalled();
+    view.rerender(<RagChat {...base()} busy running input="" canStop={undefined} onStop={onStop} />);
+    expect(screen.getByRole("button",{name:"正在确认当前回答是否支持停止。"}).hasAttribute("disabled")).toBe(true);
+    expect(onStop).not.toHaveBeenCalled();
   });
   it("ignores stale asynchronous completion after switching conversations", async () => {
     const request=deferred<void>(); const props={...base(),onSubmit:vi.fn(() => request.promise)}; const view=render(<RagChat {...props} />);

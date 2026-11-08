@@ -137,7 +137,9 @@ describe("conversation history", () => {
     let dialog = await open();
     fireEvent.click(within(dialog).getByRole("button", { name: "删除部署要求" }));
     expect(callbacks.onDelete).not.toHaveBeenCalled();
-    expect(within(dialog).getByText("已删除")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "撤销删除部署要求" })).toBeTruthy();
+    expect(within(dialog).queryByText(/已删除|待删除/)).toBeNull();
+    expect(dialog.innerHTML).not.toMatch(/已删除|待删除/);
     expect(sessionStorage.length).toBe(0);
     fireEvent.click(within(dialog).getByRole("button", { name: "撤销删除部署要求" }));
     expect(within(dialog).getByRole("button", { name: "删除部署要求" })).toBeTruthy();
@@ -145,6 +147,63 @@ describe("conversation history", () => {
     expect(callbacks.onDelete).not.toHaveBeenCalled();
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledWith("two"));
+  });
+
+  it("turns multi-selection into reversible visual changes and ignores selection alone", async () => {
+    const callbacks = props();
+    render(<RagConversationHistory {...callbacks} />);
+    let dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "多选" }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "选择企业能力介绍" }));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(callbacks.onDelete).not.toHaveBeenCalled();
+    dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "多选" }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "选择企业能力介绍" }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "选择部署要求" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除所选" }));
+    expect(within(dialog).getByRole("button", { name: "撤销删除企业能力介绍" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "撤销删除部署要求" })).toBeTruthy();
+    expect(within(dialog).queryByText(/已删除|待删除/)).toBeNull();
+    expect(dialog.innerHTML).not.toMatch(/已删除|待删除/);
+    expect(callbacks.onDelete).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "撤销删除企业能力介绍" }));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledTimes(1));
+    expect(callbacks.onDelete).toHaveBeenCalledWith("two");
+  });
+
+  it("returns focus to the restored row action after undoing a multi-select stage", async () => {
+    const callbacks = props();
+    render(<RagConversationHistory {...callbacks} />);
+    const dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "多选" }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "选择企业能力介绍" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除所选" }));
+    expect(within(dialog).getByRole("button", { name: "多选" })).toBeTruthy();
+    const undo = within(dialog).getByRole("button", { name: "撤销删除企业能力介绍" });
+    fireEvent.click(undo);
+    const restored = await within(dialog).findByRole("button", { name: "删除企业能力介绍" });
+    await waitFor(() => expect(document.activeElement).toBe(restored));
+  });
+
+  it("submits at most three confirmed deletions concurrently", async () => {
+    const resolvers: Array<(value: boolean) => void> = [];
+    const callbacks = props();
+    callbacks.items = Array.from({ length: 5 }, (_, index) => ({ id: `item-${index}`, title: `对话${index}` }));
+    callbacks.onDelete.mockImplementation(() => new Promise<boolean>(resolve => { resolvers.push(resolve); }));
+    render(<RagConversationHistory {...callbacks} />);
+    const dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "多选" }));
+    for (const checkbox of within(dialog).getAllByRole("checkbox")) fireEvent.click(checkbox);
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除所选" }));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledTimes(3));
+    await act(async () => { resolvers.shift()?.(true); });
+    await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledTimes(4));
+    await act(async () => { while (resolvers.length) resolvers.shift()?.(true); });
+    await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledTimes(5));
+    await act(async () => { while (resolvers.length) resolvers.shift()?.(true); });
   });
 
   it("preserves failed deletions and reports them on reopen", async () => {
@@ -155,22 +214,59 @@ describe("conversation history", () => {
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledWith("two"));
     const reopened = await open();
-    expect((await within(reopened).findByRole("alert")).textContent).toContain("未能删除");
+    expect((await within(reopened).findByRole("alert")).textContent).toContain("未删除");
     expect(within(reopened).getByRole("button", { name: "部署要求" })).toBeTruthy();
-    expect(within(reopened).getByText(/删除未完成/)).toBeTruthy();
-    fireEvent.click(within(reopened).getByRole("button", { name: "取消待删除" }));
+    expect(within(reopened).getByText(/删除结果未确认/)).toBeTruthy();
+    fireEvent.click(within(reopened).getByRole("button", { name: "关闭提示" }));
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("switches away from a staged active conversation before deleting it", async () => {
+  it.each(["active_turn", "unanswered_dispatch", "pending_followup", "protected_resource", "sync_failed"] as const)("keeps confirmed %s failures out of recovery storage and exposes an in-place retry", async reason => {
+    const callbacks = props();
+    callbacks.onDelete.mockResolvedValue({ ok: false, reason, message: "该对话仍在回答中。" });
+    const view = render(<RagConversationHistory {...callbacks} />);
+    let dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除部署要求" }));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledWith("two"));
+    dialog = await open();
+    expect(within(dialog).getByText("该对话仍在回答中。")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "重试删除部署要求" })).toBeTruthy();
+    expect(within(dialog).queryByText(/删除结果未确认/)).toBeNull();
+    expect(sessionStorage.length).toBe(0);
+    view.unmount();
+    render(<RagConversationHistory {...props()} />);
+    const remounted = await open();
+    expect(within(remounted).queryByText(/删除结果未确认/)).toBeNull();
+  });
+
+  it("blocks staging a second batch while a submitted or uncertain batch remains", async () => {
+    let finish!: (value: boolean) => void;
+    const callbacks = props();
+    callbacks.onDelete.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    render(<RagConversationHistory {...callbacks} />);
+    let dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除企业能力介绍" }));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledTimes(1));
+    dialog = await open();
+    expect((within(dialog).getByRole("button", { name: "多选" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(dialog).getByRole("button", { name: "删除部署要求" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { finish(false); });
+    await waitFor(() => expect(within(dialog).getByText(/删除结果未确认/)).toBeTruthy());
+    expect((within(dialog).getByRole("button", { name: "多选" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(dialog).getByRole("button", { name: "删除部署要求" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(callbacks.onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the active conversation visible until confirmed deletion settles", async () => {
     const callbacks = props();
     render(<RagConversationHistory {...callbacks} />);
     const dialog = await open();
     fireEvent.click(within(dialog).getByRole("button", { name: "删除企业能力介绍" }));
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledWith("one"));
-    expect(callbacks.onSelect).toHaveBeenCalledWith("two");
-    expect(callbacks.onSelect.mock.invocationCallOrder[0]).toBeLessThan(callbacks.onDelete.mock.invocationCallOrder[0]);
+    expect(callbacks.onSelect).not.toHaveBeenCalled();
   });
 
   it("deletes a staged active conversation last when all available rows are staged", async () => {
@@ -182,7 +278,7 @@ describe("conversation history", () => {
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledTimes(2));
     expect(callbacks.onSelect).not.toHaveBeenCalled();
-    expect(callbacks.onDelete.mock.calls.map(call => call[0])).toEqual(["two", "one"]);
+    expect(new Set(callbacks.onDelete.mock.calls.map(call => call[0]))).toEqual(new Set(["one", "two"]));
   });
 
   it("selects the requested survivor before committing staged deletions", async () => {
@@ -222,9 +318,9 @@ describe("conversation history", () => {
     const nextCallbacks = props();
     render(<RagConversationHistory {...nextCallbacks} />);
     const reopened = await open();
-    expect(within(reopened).getByText(/删除未完成/)).toBeTruthy();
+    expect(within(reopened).getByText(/删除结果未确认/)).toBeTruthy();
     expect(nextCallbacks.onDelete).not.toHaveBeenCalled();
-    fireEvent.click(within(reopened).getByRole("button", { name: "取消待删除" }));
+    fireEvent.click(within(reopened).getByRole("button", { name: "关闭提示" }));
     expect(sessionStorage.length).toBe(0);
   });
 
@@ -232,11 +328,11 @@ describe("conversation history", () => {
     sessionStorage.setItem("frontmind-rag-pending-deletions-v1.test-scope", JSON.stringify(["one", "two"]));
     const callbacks = props();
     const view = render(<RagConversationHistory {...callbacks} items={[]} loading />);
-    expect(JSON.parse(sessionStorage.getItem("frontmind-rag-pending-deletions-v1.test-scope")!)).toEqual(["one", "two"]);
+    expect(JSON.parse(sessionStorage.getItem("frontmind-rag-pending-deletions-v2.test-scope")!).ids).toEqual(["one", "two"]);
     view.rerender(<RagConversationHistory {...callbacks} items={[items[1]]} />);
-    await waitFor(() => expect(JSON.parse(sessionStorage.getItem("frontmind-rag-pending-deletions-v1.test-scope")!)).toEqual(["two"]));
+    await waitFor(() => expect(JSON.parse(sessionStorage.getItem("frontmind-rag-pending-deletions-v2.test-scope")!).ids).toEqual(["two"]));
     const dialog = await open();
-    expect(within(dialog).getByText(/有 1 条对话删除未完成/)).toBeTruthy();
+    expect(within(dialog).getByText(/有 1 条删除结果未确认/)).toBeTruthy();
     expect(callbacks.onDelete).not.toHaveBeenCalled();
   });
 
@@ -245,8 +341,41 @@ describe("conversation history", () => {
     const callbacks = props();
     render(<RagConversationHistory {...callbacks} />);
     const dialog = await open();
-    expect(within(dialog).queryByText(/删除未完成/)).toBeNull();
+    expect(within(dialog).queryByText(/删除结果未确认/)).toBeNull();
     expect(callbacks.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("discards visual staging when the workspace scope changes", async () => {
+    const callbacks = props();
+    const view = render(<RagConversationHistory {...callbacks} scopeKey="scope-a" items={[{ id: "old", title: "旧空间对话" }]} />);
+    let dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除旧空间对话" }));
+    expect(within(dialog).getByRole("button", { name: "撤销删除旧空间对话" })).toBeTruthy();
+    view.rerender(<RagConversationHistory {...callbacks} scopeKey="scope-b" items={[{ id: "new", title: "新空间对话" }]} />);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
+    dialog = await open();
+    expect(within(dialog).getByRole("button", { name: "新空间对话" })).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: /撤销删除/ })).toBeNull();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(callbacks.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("keeps an old scope worker and recovery record out of the new scope UI", async () => {
+    let finish!: (value: boolean) => void;
+    const callbacks = props();
+    callbacks.onDelete.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    const view = render(<RagConversationHistory {...callbacks} scopeKey="scope-a" items={[{ id: "old", title: "旧空间对话" }]} />);
+    let dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除旧空间对话" }));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(callbacks.onDelete).toHaveBeenCalledWith("old"));
+    view.rerender(<RagConversationHistory {...callbacks} scopeKey="scope-b" items={[{ id: "new", title: "新空间对话" }]} />);
+    await act(async () => { finish(false); });
+    dialog = await open();
+    expect(within(dialog).getByRole("button", { name: "新空间对话" })).toBeTruthy();
+    expect(within(dialog).queryByText(/删除结果未确认/)).toBeNull();
+    expect(sessionStorage.getItem("frontmind-rag-pending-deletions-v2.scope-b")).toBeNull();
+    expect(JSON.parse(sessionStorage.getItem("frontmind-rag-pending-deletions-v2.scope-a")!).ids).toEqual(["old"]);
   });
 
   it("lets history open while busy but prevents changing or deleting running conversations", async () => {

@@ -71,6 +71,10 @@ export interface TaskResponse {
   object?: string;
   /** `cancelled` ends an intentional user stop, without declaring success. */
   status: "running" | "pending" | "completed" | "cancelled" | "error" | "failed";
+  /** Server-authoritative capability for the frozen provider/task state. */
+  canStop?: boolean;
+  /** Customer-safe explanation when stopping is unavailable. */
+  stopCapabilityReason?: string | null;
   model?: string;
   created_at?: string;
   metadata?: {

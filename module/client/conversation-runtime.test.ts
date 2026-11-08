@@ -83,4 +83,30 @@ describe('fixed brand business history',()=>{
   await act(async()=>{expect(await result.current.deleteConversation('qa-a')).toBe(false);});
   expect(result.current.activeConversation?.id).toBe('qa-a');expect(result.current.syncError).toBe('删除失败');runtime.dispose();
  });
+ it('uses the confirmed endpoint result and never removes a server-blocked conversation',async()=>{
+  const transport=client([conversation('qa-a')]);transport.deleteConfirmed=vi.fn(async()=>({ok:false as const,reason:'active_turn' as const,message:'该对话仍在回答中，请稍后再试。'}));
+  const runtime=createBrandConversationRuntime(transport,'enterprise_qa','test-workspace');const {result}=renderHook(()=>runtime.useConversation());await waitFor(()=>expect(result.current.hydrated).toBe(true));
+  await act(async()=>{expect(await result.current.deleteConversationConfirmed('qa-a')).toEqual({ok:false,reason:'active_turn',message:'该对话仍在回答中，请稍后再试。'});});
+  expect(transport.deleteConfirmed).toHaveBeenCalledWith('enterprise_qa','qa-a');
+  expect(vi.mocked(transport.sync).mock.calls.some(call=>call[2]?.includes('qa-a'))).toBe(false);
+  expect(result.current.activeConversation?.id).toBe('qa-a');expect(result.current.syncError).toContain('仍在回答');runtime.dispose();
+ });
+ it('runs confirmed delete transports concurrently without allowing the targets to be saved again',async()=>{
+  const transport=client([conversation('qa-a'),conversation('qa-b')]);
+  const releases=new Map<string,(result:{ok:true})=>void>();
+  transport.deleteConfirmed=vi.fn(async(_purpose,id)=>await new Promise<{ok:true}>(resolve=>{releases.set(id,resolve);}));
+  const runtime=createBrandConversationRuntime(transport,'enterprise_qa','test-workspace');
+  const {result}=renderHook(()=>runtime.useConversation());await waitFor(()=>expect(result.current.hydrated).toBe(true));
+  let first!:Promise<{ok:boolean}>;let second!:Promise<{ok:boolean}>;
+  act(()=>{first=result.current.deleteConversationConfirmed('qa-a');});
+  await waitFor(()=>expect(transport.deleteConfirmed).toHaveBeenCalledWith('enterprise_qa','qa-a'));
+  act(()=>{second=result.current.deleteConversationConfirmed('qa-b');});
+  await waitFor(()=>expect(transport.deleteConfirmed).toHaveBeenCalledTimes(2));
+  act(()=>result.current.updateTitle('qa-a','不应保存'));
+  await act(async()=>{expect(await result.current.flushConversation('qa-a')).toBe(false);});
+  expect(result.current.state.conversations.find(item=>item.id==='qa-a')?.title).toBe('企业问答');
+  expect(transport.sync).not.toHaveBeenCalled();
+  await act(async()=>{releases.get('qa-a')?.({ok:true});releases.get('qa-b')?.({ok:true});expect(await first).toEqual({ok:true});expect(await second).toEqual({ok:true});});
+  expect(result.current.state.conversations).toHaveLength(0);runtime.dispose();
+ });
 });

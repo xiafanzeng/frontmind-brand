@@ -50,6 +50,10 @@ function expectEmptyGauge() {
   expect(marker.getAttribute("fill")).toBe("#aeaeb2");
   expect(within(gauge).queryByRole("button")).toBeNull();
   expect(within(gauge).getByRole("img").getAttribute("aria-label")).toContain("待评估");
+  expect(screen.getAllByTestId("rag-radar-point-marker")).toHaveLength(6);
+  expect(screen.getAllByTestId("rag-radar-point-marker").every(item => item.classList.contains("is-empty"))).toBe(true);
+  expect(screen.getByTestId("rag-task-panel")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /查看(?:评估状态|本轮评分)/ })).toBeNull();
 }
 
 function expectUnavailableGauge() {
@@ -228,7 +232,7 @@ function openQualityDetails() {
 }
 
 function retryAutomaticEvaluationButton() {
-  return evaluation().getByRole("button", { name: "重试" });
+  return evaluation().getByRole("button", { name: /^(?:重新读取状态|重新发起评估|继续确认本次评估)$/ });
 }
 
 function failedAutomaticRun(taskId = "task-1", turnId = "turn-1"): EnterpriseRagEvaluationRunDto {
@@ -295,6 +299,7 @@ beforeEach(() => {
   Element.prototype.releasePointerCapture = vi.fn();
   window.localStorage.clear();
   window.sessionStorage.clear();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -307,14 +312,46 @@ afterEach(() => {
 
 describe("enterprise RAG evidence-based review UI", () => {
   it("uses a fixed knowledge-number loading state and reveals the loaded counts", () => {
-    const loading = liveRuntime({ loaded: false, failed: false, knowledgeBase: null, currentKnowledgeBase: null, sources: [] });
+    const openKnowledge = vi.fn();
+    const retryKnowledge = vi.fn();
+    const loading = liveRuntime({
+      loaded: false,
+      failed: false,
+      knowledgeBase: null,
+      currentKnowledgeBase: null,
+      sources: [],
+      onOpenKnowledge: openKnowledge,
+      onRetryKnowledge: retryKnowledge,
+    });
     const page = render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={loading} />);
     const stats = page.container.querySelector(".erag-stats")!;
+    const knowledge = within(page.container.querySelector(".erag-knowledge-card") as HTMLElement);
     expect(stats.getAttribute("data-loading")).toBe("true");
     expect([...stats.querySelectorAll("strong")].map(item => item.textContent)).toEqual(["—", "—", "—"]);
+    expect(page.container.querySelectorAll(".rag-knowledge-status-row")).toHaveLength(1);
+    expect(knowledge.getByText("正在确认知识库、模型与服务状态。")).toBeTruthy();
+    expect(knowledge.queryByText(/知识版本|尚未发布/)).toBeNull();
+    expect(knowledge.queryByRole("button", { name: "查看知识与依据" })).toBeNull();
+    fireEvent.click(knowledge.getByRole("button", { name: "前往知识库" }));
+    fireEvent.click(knowledge.getByRole("button", { name: "重试加载" }));
+    expect(openKnowledge).toHaveBeenCalledOnce();
+    expect(retryKnowledge).toHaveBeenCalledOnce();
     page.rerender(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime()} />);
     expect(stats.hasAttribute("data-loading")).toBe(false);
     expect([...stats.querySelectorAll("strong")].map(item => item.textContent)).toEqual(["1", "12", "0"]);
+    expect(knowledge.queryByText("正在确认知识库、模型与服务状态。")).toBeNull();
+    expect(knowledge.getByText("企业知识库.zip · 当前发布 v7")).toBeTruthy();
+    expect(knowledge.getByRole("button", { name: "查看知识与依据" })).toBeTruthy();
+  });
+
+  it("presents a knowledge refresh failure as one exclusive main status", () => {
+    const page = render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({ refreshFailed: true })} />);
+    const knowledge = within(page.container.querySelector(".erag-knowledge-card") as HTMLElement);
+    const message = "知识库状态暂时刷新失败，当前继续使用已确认的知识版本。";
+    expect(knowledge.getByText(message)).toBeTruthy();
+    expect(knowledge.getAllByRole("alert")).toHaveLength(1);
+    expect(knowledge.queryByText(/企业知识库\.zip.*当前发布 v7/)).toBeNull();
+    expect(page.container.querySelector(".rag-knowledge-refresh-note")).toBeNull();
   });
 
   it("keeps formal live free of synthetic examples and uses the frozen company identity", () => {
@@ -337,8 +374,10 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByText("企业知识问答")).toBeTruthy();
     expect(screen.queryByText("回答示例试用")).toBeNull();
     expect(screen.getByText("东莞台心医院 AI 助手")).toBeTruthy();
-    expect(screen.getAllByText(/东莞台心医院-knowledge-base\.zip/)).toHaveLength(2);
-    expect(screen.getByText(/当前基于.*东莞台心医院-knowledge-base\.zip/).textContent).toContain("v7");
+    expect(screen.getAllByText(/东莞台心医院-knowledge-base\.zip/)).toHaveLength(1);
+    expect(screen.getByText(/东莞台心医院-knowledge-base\.zip.*当前发布 v7/)).toBeTruthy();
+    expect(screen.getByText("你好！我是东莞台心医院 AI 助手，很高兴为你服务。")).toBeTruthy();
+    expect(screen.queryByText(/当前基于/)).toBeNull();
     expect(screen.queryByText(/FrontMind 企业助手/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "历史问答" }));
     const history = within(screen.getByRole("dialog", { name: "历史问答" }));
@@ -367,14 +406,34 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.queryByText(/历史回答的知识版本暂时无法读取/)).toBeNull();
   });
 
+  it("never leaks the preview starter fixture into a formal live runtime", () => {
+    const page = render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime()} />);
+    expect(screen.queryByRole("button", { name: "可以简单介绍一下你们吗？" })).toBeNull();
+    expect(screen.getByText("暂无可用的预设问题。")).toBeTruthy();
+
+    page.rerender(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
+      starterQuestions: { current: null, loading: true, revision: 0 },
+      onConfirmStarterQuestions: vi.fn(async () => true),
+      onRegenerateStarterQuestions: vi.fn(async () => true),
+    })} />);
+    expect(screen.queryByRole("button", { name: "可以简单介绍一下你们吗？" })).toBeNull();
+    const chat = within(screen.getByLabelText("企业助手问答"));
+    expect(chat.getByRole("status").textContent).toBe("正在读取预设问题…");
+    expect(chat.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(true);
+  });
+
   it("blocks formal input and starter actions until the real knowledge gate is ready", () => {
     const openKnowledge = vi.fn();
     const retryKnowledge = vi.fn();
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
       loaded: true, failed: false, knowledgeBase: null, currentKnowledgeBase: null,
       canCompose: false, canSend: false, onOpenKnowledge: openKnowledge, onRetryKnowledge: retryKnowledge,
+      starterQuestions: {
+        current: { id: "server-current", questions: ["可以简单介绍一下你们吗？", "你们主要提供哪些产品或服务？", "我可以先了解哪些核心信息？"] },
+        revision: 1,
+      },
     })} />);
-    expect(screen.getByText("尚未发布可用知识库。")).toBeTruthy();
+    expect(screen.getByText("尚未发布可用知识库")).toBeTruthy();
     expect(screen.getByTestId("rag-question-input").hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "可以简单介绍一下你们吗？" }).hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "前往知识库" }));
@@ -414,10 +473,13 @@ describe("enterprise RAG evidence-based review UI", () => {
   it("opens report chapters as new-tab links without changing the answer or opening a drawer", async () => {
     const buildReportUrl = vi.fn((section: string) => `/?view=enterprise-qa&report=1#${section}`);
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} buildReportUrl={buildReportUrl} />);
-    expect(screen.queryByText("让回答真正满足用户需求")).toBeNull();
-    expect(screen.queryByText("用企业资料回答客户问题，核对回答依据，找到改进方向。")).toBeNull();
+    expect(screen.getByText("让回答真正满足用户需求")).toBeTruthy();
+    expect(screen.getByText("用企业资料回答客户问题，核对回答依据，找到改进方向。")).toBeTruthy();
+    const resources = screen.getByRole("group", { name: "评估资料" });
     const qualityPanel = screen.getByRole("region", { name: "本轮回答质量" });
-    const resources = within(qualityPanel).getByRole("group", { name: "评估资料" });
+    expect(qualityPanel.contains(resources)).toBe(false);
+    expect(within(qualityPanel).getByRole("heading", { name: "本轮回答质量" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /查看(?:评估状态|本轮评分)/ })).toBeNull();
     const question = screen.getByRole("textbox", { name: "输入企业 RAG 预览问题" });
     fireEvent.change(question, { target: { value: "保留这份草稿" } });
     for (const [name, anchor] of [["评分规则（在新标签页打开）", "rules"], ["评估记录（在新标签页打开）", "records"]]) {
@@ -956,6 +1018,7 @@ describe("enterprise RAG evidence-based review UI", () => {
       question: "你们支持哪些部署方式？", answer: "支持私有化部署，具体环境要求请联系项目团队确认。",
     })} />);
 
+    expect(evaluation().getByText("正在评估本次回答")).toBeTruthy();
     expectTaskStatus("正在评估本次回答", "unverified");
     await waitFor(() => expect(screen.getByTestId("rag-gauge-value").textContent).toBe("93"));
     expectTaskStatus("暂无任务分析", "unverified");
@@ -999,7 +1062,8 @@ describe("enterprise RAG evidence-based review UI", () => {
 
     expect(screen.getByTestId("enterprise-rag-live-root")).toBeTruthy();
     expect(screen.getByTestId("rag-task-status").textContent).toContain("待评估");
-    expect(screen.getByText("企业知识库.zip")).toBeTruthy();
+    expect(evaluation().getByText("待评估")).toBeTruthy();
+    expect(screen.getByText(/企业知识库\.zip.*当前发布 v7/)).toBeTruthy();
     expect(screen.queryByText(/知识版本 v7/)).toBeNull();
     fireEvent.change(screen.getByTestId("rag-question-input"), {
       target: { value: "你们支持哪些部署方式？" },
@@ -1481,12 +1545,12 @@ describe("enterprise RAG evidence-based review UI", () => {
       />,
     );
 
-    expect(screen.queryByText("本任务冻结知识快照")).toBeNull();
-    expect(screen.queryByText(/知识版本 v3/)).toBeNull();
-    expect(screen.queryByText(/项目已发布 v9/)).toBeNull();
+    expect(screen.getByText(/历史资料\.zip.*本回答冻结 v3/)).toBeTruthy();
+    expect(screen.getByText(/项目当前已发布 v9；本回答仍使用冻结 v3/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "使用新版新建问答" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "新建问答" }));
     expect(startNewConversation).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("历史资料.zip")).toBeTruthy();
+    expect(screen.getByText(/历史资料\.zip.*本回答冻结 v3/)).toBeTruthy();
     expect(screen.queryByText("当前资料.zip")).toBeNull();
   });
 
@@ -1512,7 +1576,8 @@ describe("enterprise RAG evidence-based review UI", () => {
       />,
     );
 
-    expect(screen.getAllByText(/历史任务知识版本未知/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("知识版本：历史任务知识版本未知")).toHaveLength(1);
+    expect(screen.queryByText("正在确认知识库、模型与服务状态。")).toBeNull();
     expect(screen.queryByText(/未使用当前发布版本替代/)).toBeNull();
     expect(screen.getByTestId("rag-submit").hasAttribute("disabled")).toBe(true);
     expect(screen.queryByText(/知识版本 v9/)).toBeNull();
@@ -1673,22 +1738,21 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
   });
 
-  it("requires a question when entering an answer in a new conversation", async () => {
+  it("uses the blank welcome pencil for preset questions instead of answer editing", async () => {
     await showPage();
     fireEvent.click(screen.getByRole("button", { name: "新建问答" }));
-    fireEvent.click(screen.getByRole("button", { name: "编辑回答" }));
-    const editor = within(screen.getByRole("dialog", { name: "录入待评估回答" }));
-    const save = editor.getByRole("button", { name: "保存回答，重新评审" });
-    const question = editor.getByRole("textbox", { name: "问题" }) as HTMLTextAreaElement;
-    expect(question.value).toBe("");
-    fireEvent.change(editor.getByRole("textbox", { name: "用户任务" }), { target: { value: "了解支持的场景" } });
-    fireEvent.change(editor.getByRole("textbox", { name: "实际回答" }), { target: { value: "请先与团队确认场景。" } });
-    expect(save.hasAttribute("disabled")).toBe(true);
-    fireEvent.change(question, { target: { value: "支持哪些场景？" } });
-    expect(save.hasAttribute("disabled")).toBe(false);
-    fireEvent.click(save);
-    expect(screen.getByText("支持哪些场景？")).toBeTruthy();
-    expectEmptyGauge();
+    expect(screen.queryByRole("button", { name: "编辑回答" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
+    const settingsDialog = screen.getByRole("dialog", { name: "设置预设问题" });
+    const settings = within(settingsDialog);
+    expect(settings.getByText("新问题草稿已生成，确认后才会替换当前问题。")).toBeTruthy();
+    expect(settings.getByRole("button", { name: "编辑问题" })).toBeTruthy();
+    expect(settings.getByRole("button", { name: "换一批" })).toBeTruthy();
+    expect(settings.getByRole("button", { name: "确认使用" })).toBeTruthy();
+    fireEvent.click(settings.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(settings.getByText("编辑并确认后，才会替换当前问题。")).toBeTruthy());
+    expect(screen.getByRole("dialog", { name: "设置预设问题" })).toBe(settingsDialog);
+    expect(settings.queryByText("新问题草稿已生成，确认后才会替换当前问题。")).toBeNull();
   });
 
   it("preserves unknown weight and a pending score when a saved rating lacks evidence", async () => {
@@ -1704,7 +1768,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     confirmReview();
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    expectEmptyGauge();
+    expect(screen.getByTestId("rag-evaluation-score")).toBeTruthy();
     expect(evaluation().getByText("评审覆盖 80%")).toBeTruthy();
     expect(evaluation().queryByText(/可能分数/)).toBeNull();
     const saved = JSON.parse(window.localStorage.getItem(historyKey) || "[]");
@@ -1796,9 +1860,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     expectEmptyGauge();
     expect(evaluation().getByRole("heading", { name: "待评估" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "当前评估摘要" }).classList.contains("is-neutral")).toBe(true);
-    expect(evaluation().getByText("评审覆盖 0%")).toBeTruthy();
-    expect(evaluation().getByText("关键风险待核验")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "编辑回答" }).hasAttribute("disabled")).toBe(false);
+    expect(evaluation().getByTestId("rag-evaluation-supporting-meta").getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("button", { name: "编辑回答" })).toBeNull();
+    expect(screen.getByRole("button", { name: "设置预设问题" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "录入回答" })).toBeNull();
     expect(screen.getByRole("button", { name: "人工评审" }).hasAttribute("disabled")).toBe(true);
     expect(evaluation().getByRole("button", { name: "优化方案" }).hasAttribute("disabled")).toBe(true);
@@ -2059,7 +2123,7 @@ describe("rag-eval-1.3 server conclusions", () => {
     expectTaskStatus("待核验", "pending");
     expect(screen.getByText("待补证。")).toBeTruthy();
     expect(evaluation().queryByText(/可用\s*·?\s*待改进/)).toBeNull();
-    expectEmptyGauge();
+    expect(screen.getByTestId("rag-evaluation-score")).toBeTruthy();
   });
   it("keeps a historical report's actual rule in its explanation", async () => {
     const run = completedAutomaticRun();
@@ -2293,7 +2357,7 @@ describe("RAG evaluation lifecycle and immediate composer", () => {
     page.rerender(<EnterpriseRagPreview {...props} live={{ ...answerRuntime(), turnId: "turn-2", answerId: "answer-2" }} />);
     await waitFor(() => expectNeutral("评估暂未开始"));
     expectTaskStatus("评估暂未开始", "unverified");
-    await act(async () => fireEvent.click(evaluation().getByRole("button", { name: "重试" })));
+    await act(async () => fireEvent.click(evaluation().getByRole("button", { name: "重新读取状态" })));
     expect(latest).toHaveBeenCalledTimes(3);
     expect(start).not.toHaveBeenCalled();
   });
@@ -2307,6 +2371,7 @@ describe("RAG evaluation lifecycle and immediate composer", () => {
     expectNeutral("未进入自动评估");
     expectTaskStatus("未进入自动评估", "unverified");
     expect(screen.getByTestId("rag-task-panel").textContent).toContain("该历史回答未进入自动评估流程。");
+    expect(evaluation().getByTestId("rag-evaluation-summary-copy").textContent).toContain("该历史回答未进入自动评估流程。");
     expect(latest).not.toHaveBeenCalled();
   });
 
@@ -2372,6 +2437,31 @@ describe("RAG evaluation lifecycle and immediate composer", () => {
     expect(within(review).queryByText("示例 · 预设评审，仅供查看。")).toBeNull();
     expect(within(review).getByRole("button", { name: "保存评审并计算" })).toBeTruthy();
   });
+});
+
+it("keeps the current preview when deleting another item and opens a blank draft after deleting the active item", async () => {
+  render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} storageScopeKey="preview-delete-selection" />);
+  await selectFirstPreviewConversation(false);
+  const activeQuestion = document.querySelector(".erag-user-message")?.textContent ?? "";
+  expect(activeQuestion).not.toBe("");
+
+  fireEvent.click(screen.getByRole("button", { name: "历史问答" }));
+  let dialog = screen.getByRole("dialog", { name: "历史问答" });
+  const inactiveDelete = within(dialog).getAllByRole("button", { name: /^删除/ })
+    .find(button => button.getAttribute("aria-label") !== `删除${activeQuestion}`);
+  expect(inactiveDelete).toBeTruthy();
+  fireEvent.click(inactiveDelete!);
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
+  expect(screen.getByText(activeQuestion, { selector: ".erag-user-message" })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "历史问答" }));
+  dialog = screen.getByRole("dialog", { name: "历史问答" });
+  fireEvent.click(within(dialog).getByRole("button", { name: `删除${activeQuestion}` }));
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
+  await waitFor(() => expect(document.querySelectorAll(".erag-user-message")).toHaveLength(0));
+  expect(screen.getByText(/你好！我是 FrontMind 企业助手，很高兴为你服务。/)).toBeTruthy();
 });
 
 

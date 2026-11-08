@@ -1,4 +1,5 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useId, type RefObject, type MouseEvent, type KeyboardEvent } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useId, type RefObject, type MouseEvent, type KeyboardEvent, type ReactNode } from "react";
+import * as Popover from "@radix-ui/react-popover";
 import { Check, Copy, Send, Sparkles, Square, SquarePen, X } from "lucide-react";
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import { copyToClipboard } from "@frontmind/module-ui/lib/utils";
@@ -31,6 +32,7 @@ export type RagChatFollowup = { id: string; text: string; status: "queued" | "di
 export type RagStarterQuestions = {
   current?: { id: string; questions: string[] } | null;
   draft?: { id: string; questions: string[] } | null;
+  loading?: boolean;
   pending?: boolean;
   error?: string | null;
   revision?: number;
@@ -46,11 +48,6 @@ type Props = {
   scopeKey: string;
   live: boolean;
   assistantName: string;
-  knowledgeSource?: {
-    sourceFileName: string;
-    version: number;
-    companyName?: string | null;
-  } | null;
   question: string;
   answer: string;
   previousTurns?: RagChatTurn[];
@@ -65,6 +62,8 @@ type Props = {
   sources: RagChatSource[];
   busy: boolean;
   running: boolean;
+  canStop?: boolean;
+  stopCapabilityReason?: string | null;
   /** Stable identity of the current business turn, including its supplements. */
   turnKey?: string;
   activity?: RagChatActivity[];
@@ -204,11 +203,15 @@ const CompletionTime = memo(function CompletionTime({ value }: { value?: number 
   return <time className="rag-chat-completed" dateTime={completed.toISOString()} title={`${completionDateFormat.format(completed)} ${label}`} aria-label={`回答完成于 ${label}`}><span className="rag-chat-completed-digits">{digits}</span>{label.slice(digits.length)}</time>;
 });
 
-function StarterGuideTools({ scopeKey, text, completedAt, onEditAnswer, onError }: {
+function StarterGuideTools({ scopeKey, text, completedAt, onEditAnswer, starterSettings, starterSettingsDisabled, starterSettingsOpen, onStarterSettingsOpenChange, onError }: {
   scopeKey: string;
   text: string;
   completedAt: number;
   onEditAnswer?: () => void;
+  starterSettings?: ReactNode;
+  starterSettingsDisabled?: boolean;
+  starterSettingsOpen?: boolean;
+  onStarterSettingsOpenChange?: (open: boolean) => void;
   onError: (message: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -274,7 +277,10 @@ function StarterGuideTools({ scopeKey, text, completedAt, onEditAnswer, onError 
       <div className="rag-chat-rating-menu" id={`${id}-rating-menu`} role="menu" aria-label="评价回答" aria-hidden={!feedbackOpen} inert={!feedbackOpen} data-open={feedbackOpen}><button type="button" role="menuitemradio" aria-checked={feedback === "up"} aria-label="有帮助" title={feedback === "up" ? "取消赞" : "有帮助"} onClick={() => rate("up")}><FeedbackGlyph value="up" filled={feedback === "up"} /></button><button type="button" role="menuitemradio" aria-checked={feedback === "down"} aria-label="没有帮助" title={feedback === "down" ? "取消踩" : "没有帮助"} onClick={() => rate("down")}><FeedbackGlyph value="down" filled={feedback === "down"} /></button></div>
     </div>
     <button type="button" className="rag-chat-tool rag-chat-speech" aria-label={speaking ? "停止朗读" : "朗读"} aria-pressed={speaking} aria-disabled={!canSpeak} aria-describedby={`${id}-speech`} onClick={readAloud}><span className="rag-chat-icon-stack" aria-hidden="true"><ReadAloudGlyph hidden={speaking} /><ReadAloudStopGlyph hidden={!speaking} /></span><span className="rag-chat-tool-tip" id={`${id}-speech`} role="tooltip"><span className="rag-chat-tip-copy">{speechLabel}</span></span></button>
-    {onEditAnswer && <button type="button" className="rag-chat-tool rag-chat-edit" data-answer-panel-trigger="answer" aria-label="编辑回答" aria-describedby={`${id}-edit`} onClick={onEditAnswer}><span className="rag-chat-icon-stack" aria-hidden="true"><SquarePen size={14} /></span><span className="rag-chat-tool-tip" id={`${id}-edit`} role="tooltip"><span className="rag-chat-tip-copy">编辑回答</span></span></button>}
+    {starterSettings ? <Popover.Root open={starterSettingsOpen} onOpenChange={onStarterSettingsOpenChange}>
+      <Popover.Trigger asChild><button type="button" className="rag-chat-tool rag-chat-edit" disabled={starterSettingsDisabled} aria-label="设置预设问题" aria-describedby={`${id}-starter-settings`}><span className="rag-chat-icon-stack" aria-hidden="true"><SquarePen size={14} /></span><span className="rag-chat-tool-tip" id={`${id}-starter-settings`} role="tooltip"><span className="rag-chat-tip-copy">设置预设问题</span></span></button></Popover.Trigger>
+      <Popover.Portal><Popover.Content className="fm-brand-portal-theme rag-chat-starter-popover" side="top" align="start" sideOffset={8} collisionPadding={16} aria-label="设置预设问题">{starterSettings}</Popover.Content></Popover.Portal>
+    </Popover.Root> : onEditAnswer && <button type="button" className="rag-chat-tool rag-chat-edit" data-answer-panel-trigger="answer" aria-label="编辑回答" aria-describedby={`${id}-edit`} onClick={onEditAnswer}><span className="rag-chat-icon-stack" aria-hidden="true"><SquarePen size={14} /></span><span className="rag-chat-tool-tip" id={`${id}-edit`} role="tooltip"><span className="rag-chat-tip-copy">编辑回答</span></span></button>}
     <CompletionTime value={completedAt} />
   </div>;
 }
@@ -290,6 +296,7 @@ export function RagChat(props: Props) {
   const [starterEdits, setStarterEdits] = useState<string[]>([]);
   const [starterSaving, setStarterSaving] = useState(false);
   const [starterActionError, setStarterActionError] = useState("");
+  const [starterSettingsOpen, setStarterSettingsOpen] = useState(false);
   const [consumedStarterQuestions, setConsumedStarterQuestions] = useState<string[]>([]);
   const [questionEntrance, setQuestionEntrance] = useState<{ id: number; text: string } | null>(null);
   const [, setPinnedGuideRevision] = useState(0);
@@ -333,13 +340,18 @@ export function RagChat(props: Props) {
   const activityRows = ragChatActivityRows(props.activity);
   if (waiting) latestActivity.current = { runKey, rows: activityRows };
   const visibleActivity = waiting ? activityRows : latestActivity.current.runKey === runKey ? latestActivity.current.rows : [];
-  const starterCurrent = props.starterQuestions?.current?.questions?.length === 3
-    ? props.starterQuestions.current.questions
-    : [...DEFAULT_RAG_STARTER_QUESTIONS];
+  const serverStarterCurrent = props.starterQuestions?.current;
+  const hasServerStarterCurrent = serverStarterCurrent?.questions?.length === 3;
+  const starterCurrent = hasServerStarterCurrent
+    ? serverStarterCurrent.questions
+    : props.live ? [] : [...DEFAULT_RAG_STARTER_QUESTIONS];
   const starterDraft = props.starterQuestions?.draft?.questions?.length === 3
     ? props.starterQuestions.draft.questions
     : null;
   const editableStarterQuestions = starterDraft ?? starterCurrent;
+  const starterReadError = props.starterQuestions?.error?.trim() ?? "";
+  const starterLoading = Boolean(props.live && props.starterQuestions?.loading);
+  const starterManagementDisabled = Boolean(props.live && (starterLoading || starterReadError || !hasServerStarterCurrent));
   const starterRevisionKey = JSON.stringify([
     props.scopeKey,
     props.starterQuestions?.current?.id,
@@ -365,11 +377,7 @@ export function RagChat(props: Props) {
     const companyName = turn.knowledgeBase?.companyName?.trim();
     return companyName ? `${companyName} AI 助手` : "企业知识助手";
   };
-  const welcomeText = props.live
-    ? props.knowledgeSource
-      ? `你好！我是${props.assistantName}，当前基于“${props.knowledgeSource.sourceFileName}”（v${props.knowledgeSource.version}）回答问题。你可以直接提问，或选择下面的问题开始。`
-      : `你好！我是${props.assistantName}。知识库就绪后，你可以直接提问，或选择下面的问题开始。`
-    : `你好！我是${/^[A-Za-z]/u.test(props.assistantName) ? " " : ""}${props.assistantName}。你可以直接提问，或选择下面的问题开始。`;
+  const welcomeText = `你好！我是${/^[A-Za-z]/u.test(props.assistantName) ? " " : ""}${props.assistantName}，很高兴为你服务。`;
   const emptyResponseText = stopped
     ? "已停止回答。"
     : props.live
@@ -377,12 +385,12 @@ export function RagChat(props: Props) {
       : "你好！有什么可以帮你？";
 
   useEffect(() => {
-    if (starterEditing) return;
     setStarterEditing(false);
     setStarterEdits([]);
     setStarterSaving(false);
     setStarterActionError("");
-  }, [starterRevisionKey, starterEditing]);
+  }, [starterRevisionKey]);
+  useEffect(() => { if (starterManagementDisabled) setStarterSettingsOpen(false); }, [starterManagementDisabled]);
   useEffect(() => { setConsumedStarterQuestions([]); }, [starterCurrentKey]);
   useLayoutEffect(() => { if (showStarterWelcome) setWelcomeCompletedAt(Date.now()); }, [props.scopeKey, showStarterWelcome]);
 
@@ -555,7 +563,7 @@ export function RagChat(props: Props) {
     setStarterEditing(true);
   };
   const confirmStarterQuestions = async () => {
-    if (!props.onConfirmStarterQuestions || starterSaving) return;
+    if (!props.onConfirmStarterQuestions || starterSaving || starterManagementDisabled) return;
     const questions = (starterEditing ? starterEdits : editableStarterQuestions).map(value => value.trim());
     if (questions.length !== 3 || questions.some(value => !value) || new Set(questions).size !== 3) {
       setStarterActionError("请保留三条不重复的问题后再确认。");
@@ -565,17 +573,25 @@ export function RagChat(props: Props) {
     try {
       const saved = await props.onConfirmStarterQuestions(questions);
       if (!saved) setStarterActionError("预设问题未能保存，请重试。");
-      else setStarterEditing(false);
+      else { setStarterEditing(false); setStarterSettingsOpen(false); }
     } catch {
       setStarterActionError("预设问题未能保存，请重试。");
     } finally { setStarterSaving(false); }
   };
   const regenerateStarterQuestions = async () => {
-    if (!props.onRegenerateStarterQuestions || starterSaving || props.starterQuestions?.pending) return;
+    if (!props.onRegenerateStarterQuestions || starterSaving || starterManagementDisabled || props.starterQuestions?.pending) return;
     setStarterSaving(true); setStarterActionError("");
     try {
       if (!await props.onRegenerateStarterQuestions()) setStarterActionError("暂时无法生成新问题，请重试。");
     } catch { setStarterActionError("暂时无法生成新问题，请重试。"); }
+    finally { setStarterSaving(false); }
+  };
+  const discardStarterDraft = async () => {
+    if (!props.onDiscardStarterDraft || !starterDraft || starterSaving || starterManagementDisabled) return;
+    setStarterSaving(true); setStarterActionError("");
+    try {
+      if (!await props.onDiscardStarterDraft()) setStarterActionError("草稿未能取消，请重试。");
+    } catch { setStarterActionError("草稿未能取消，请重试。"); }
     finally { setStarterSaving(false); }
   };
   const stop = async () => {
@@ -724,7 +740,9 @@ export function RagChat(props: Props) {
     props.onSelectAnswer(key);
   };
   const showWait = waiting || phase === "leaving";
-  const stopAction = props.running && !props.input.trim();
+  const stopAction = props.running && !props.input.trim() && props.canStop === true;
+  const stopUnavailable = props.running && !props.input.trim() && props.canStop !== true;
+  const stopUnavailableReason = props.stopCapabilityReason?.trim() || "正在确认当前回答是否支持停止。";
   const followupAvailable = Boolean(props.onFollowup || (props.steeringSupported && props.onSteer));
   const starterButtons = (questions: readonly string[], label: string, entrance = false) => <div className={`rag-chat-starters__questions${entrance ? " is-entrance" : ""}`} role="group" aria-label={label}>
     {questions.map(starter => <button key={starter} type="button" disabled={starterSaving || steering || stopping || (props.running ? !followupAvailable : !props.canSubmit || busy)} onClick={() => void submitStarter(starter)}>{starter}</button>)}
@@ -732,33 +750,39 @@ export function RagChat(props: Props) {
   const starterPreview = (questions: readonly string[]) => <ol className="rag-chat-starters__preview" aria-label="待确认的预设问题">
     {questions.map((starter, index) => <li key={`${index}:${starter}`}>{starter}</li>)}
   </ol>;
+  const canManageStarters = Boolean(props.onConfirmStarterQuestions || props.onRegenerateStarterQuestions || props.onDiscardStarterDraft);
+  const starterSettings = canManageStarters ? <section className="rag-chat-starter-settings">
+    <header><h3>预设问题</h3></header>
+    <p className="rag-chat-starter-settings__notice">{starterDraft ? "新问题草稿已生成，确认后才会替换当前问题。" : "编辑并确认后，才会替换当前问题。"}</p>
+    {!starterEditing && starterPreview(starterDraft ?? starterCurrent)}
+    {starterEditing && <div className="rag-chat-starters__editor" aria-label="编辑预设问题">
+      {starterEdits.map((value, index) => <label key={index}><span>问题 {index + 1}</span><input value={value} disabled={starterSaving || !props.canEdit} onChange={event => { const next = event.currentTarget.value; setStarterEdits(current => current.map((item, itemIndex) => itemIndex === index ? next : item)); }} /></label>)}
+    </div>}
+    <div className="rag-chat-starters__actions">
+      {props.onConfirmStarterQuestions && !starterEditing && <button type="button" className="is-secondary" disabled={starterSaving || !props.canEdit} onClick={beginStarterEdit}>编辑问题</button>}
+      {props.onRegenerateStarterQuestions && <button type="button" className="is-secondary" disabled={starterSaving || !props.canEdit || props.starterQuestions?.pending} onClick={() => void regenerateStarterQuestions()}>换一批</button>}
+      {props.onConfirmStarterQuestions && (starterDraft || starterEditing) && <button type="button" className="is-primary" disabled={starterSaving || !props.canEdit} onClick={() => void confirmStarterQuestions()}>确认使用</button>}
+      {props.onDiscardStarterDraft && starterDraft && !starterEditing && <button type="button" className="is-ghost" disabled={starterSaving || !props.canEdit} onClick={() => void discardStarterDraft()}>取消</button>}
+      {starterEditing && <button type="button" className="is-ghost" disabled={starterSaving} onClick={() => { setStarterEditing(false); setStarterActionError(""); }}>取消</button>}
+    </div>
+    {props.starterQuestions?.pending && <p className="rag-chat-starters__status rag-waiting-text" role="status">正在生成新的预设问题…</p>}
+    {(starterActionError || props.starterQuestions?.error) && <p className="rag-chat-starters__status" role="alert">{starterActionError || props.starterQuestions?.error}</p>}
+  </section> : null;
   return <>
     <div className="erag-test-thread rag-chat" aria-label="企业助手问答">
       {props.onSelectAnswer && <span id={`${tooltipId}-select`} className="rag-chat-sr-status">按 Enter 或空格查看此回答的评估。</span>}
-      {showStarterGuide && <article aria-label="企业助手欢迎" className="rag-chat-initial-answer">
+      {showStarterGuide && <article key={`starter-guide:${props.scopeKey}`} aria-label="企业助手欢迎" className="rag-chat-initial-answer">
         <header><Sparkles size={16} aria-hidden="true" /><strong>{props.assistantName}</strong></header>
         <div className="rag-chat-response">
           <div className="rag-chat-welcome" data-testid="rag-starter-welcome">
-            <p>{welcomeText}</p>
-            <section className="rag-chat-starters" aria-label="常见问题">
+            <p className={`rag-chat-welcome-copy${showStarterWelcome ? " is-entrance" : ""}`}>{welcomeText}</p>
+            {remainingStarterQuestions.length > 0 && <section className="rag-chat-starters" aria-label="常见问题">
               {starterButtons(remainingStarterQuestions, props.starterQuestions?.current ? "当前预设问题" : "常见问题", showStarterWelcome)}
-              {starterDraft && <div className="rag-chat-starters__draft" data-testid="rag-starter-draft">
-                <p>新问题草稿已生成，确认后才会替换当前问题。</p>
-                {!starterEditing && starterPreview(starterDraft)}
-              </div>}
-              {starterEditing && <div className="rag-chat-starters__editor" aria-label="编辑预设问题">
-                {starterEdits.map((value, index) => <label key={index}><span>问题 {index + 1}</span><input value={value} disabled={starterSaving || !props.canEdit} onChange={event => { const next = event.currentTarget.value; setStarterEdits(current => current.map((item, itemIndex) => itemIndex === index ? next : item)); }} /></label>)}
-              </div>}
-              {(props.onConfirmStarterQuestions || props.onRegenerateStarterQuestions) && <div className="rag-chat-starters__actions">
-                {props.onConfirmStarterQuestions && !starterEditing && <button type="button" disabled={starterSaving || !props.canEdit} onClick={beginStarterEdit}>编辑问题</button>}
-                {props.onRegenerateStarterQuestions && <button type="button" disabled={starterSaving || !props.canEdit || props.starterQuestions?.pending} onClick={() => void regenerateStarterQuestions()}>换一批</button>}
-                {props.onConfirmStarterQuestions && (starterDraft || starterEditing) && <button type="button" disabled={starterSaving || !props.canEdit} onClick={() => void confirmStarterQuestions()}>确认使用</button>}
-                {starterEditing && <button type="button" disabled={starterSaving} onClick={() => { setStarterEditing(false); setStarterActionError(""); }}>取消</button>}
-              </div>}
-              {props.starterQuestions?.pending && <p className="rag-chat-starters__status rag-waiting-text" role="status">正在生成新的预设问题…</p>}
-              {(starterActionError || props.starterQuestions?.error) && <p className="rag-chat-starters__status" role="alert">{starterActionError || props.starterQuestions?.error}</p>}
-            </section>
-            <StarterGuideTools scopeKey={props.scopeKey} text={welcomeText} completedAt={welcomeCompletedAt} onEditAnswer={props.onEditAnswer} onError={setError} />
+            </section>}
+            {starterLoading && <p className="rag-chat-starters__status rag-waiting-text" role="status">正在读取预设问题…</p>}
+            {!starterLoading && starterReadError && <p className="rag-chat-starters__status" role="alert">{starterReadError}</p>}
+            {!starterLoading && !starterReadError && props.live && !hasServerStarterCurrent && <p className="rag-chat-starters__status" role="status">暂无可用的预设问题。</p>}
+            <StarterGuideTools scopeKey={props.scopeKey} text={welcomeText} completedAt={welcomeCompletedAt} starterSettings={starterSettings} starterSettingsDisabled={starterManagementDisabled} starterSettingsOpen={starterSettingsOpen} onStarterSettingsOpenChange={setStarterSettingsOpen} onEditAnswer={props.onEditAnswer} onError={setError} />
           </div>
         </div>
       </article>}
@@ -800,7 +824,8 @@ export function RagChat(props: Props) {
       <textarea ref={inputRef} className="rag-chat-input" rows={1} data-testid={props.live ? "rag-question-input" : undefined} aria-label={props.live ? "输入企业 RAG 问题" : "输入企业 RAG 预览问题"} placeholder={props.readOnly ? "预览问答" : props.running ? "继续输入，当前回答完成后发送" : props.live ? "输入访客问题，基于已发布知识回答" : "输入访客问题，或选择上方预览问题"} value={props.input} disabled={props.readOnly || !props.canEdit} onChange={event => { inputRevision.current += 1; latestInput.current = event.currentTarget.value; props.onInput(event.currentTarget.value); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !composing.current && event.keyCode !== 229) { event.preventDefault(); void (props.running ? steer() : submit()); }
       }} />
-      <button className="rag-chat-send" data-testid={props.live ? "rag-submit" : undefined} type={stopAction ? "button" : "submit"} disabled={props.readOnly || (stopAction ? stopping || steering : props.running ? !followupAvailable || steering || stopping : busy || !props.canSubmit || !props.input.trim())} onClick={stopAction ? () => void stop() : undefined} aria-label={stopAction ? stopping ? "正在停止回答" : "停止回答" : steering ? "正在加入待发送" : props.live ? "发送问题" : "试用问题"} title={stopAction ? "停止回答" : "发送问题"}>{stopAction ? <Square size={14} fill="currentColor" aria-hidden="true" /> : <Send size={18} aria-hidden="true" />}</button>
+      <button className="rag-chat-send" data-testid={props.live ? "rag-submit" : undefined} type={stopAction ? "button" : "submit"} disabled={props.readOnly || stopUnavailable || (stopAction ? stopping || steering : props.running ? !props.input.trim() || !followupAvailable || steering || stopping : busy || !props.canSubmit || !props.input.trim())} onClick={stopAction ? () => void stop() : undefined} aria-label={stopAction ? stopping ? "正在停止回答" : "停止回答" : stopUnavailable ? stopUnavailableReason : steering ? "正在加入待发送" : props.live ? "发送问题" : "试用问题"} aria-describedby={stopUnavailable ? `${tooltipId}-stop-unavailable` : undefined} title={stopAction ? "停止回答" : stopUnavailable ? stopUnavailableReason : "发送问题"}>{stopAction ? <Square size={14} fill="currentColor" aria-hidden="true" /> : <Send size={18} aria-hidden="true" />}</button>
+      {stopUnavailable && <span id={`${tooltipId}-stop-unavailable`} className="rag-chat-sr-status">{stopUnavailableReason}</span>}
     </form>
   </>;
 }

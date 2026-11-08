@@ -23,7 +23,11 @@ type QaTask = {
   error?: { message?: string };
   knowledgeBase?: TaskResponse["knowledgeBase"];
   steering?: EnterpriseQaSteering;
+  canStop?: boolean;
+  stopCapabilityReason?: string | null;
 };
+
+type TaskStopCapability = { taskId: string; canStop: boolean; reason: string | null };
 
 type QaKnowledgeBase = NonNullable<TaskResponse["knowledgeBase"]>;
 type SteeringSnapshot = {
@@ -78,6 +82,7 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
   const pollNotices = useRef(new Map<string, string>());
   const queueVersions = useRef(new Map<string, number>());
   const responseKnowledges = useRef(new Map<string, {taskId: string; knowledgeBase: QaKnowledgeBase}>());
+  const taskStopCapabilities = useRef(new Map<string, TaskStopCapability>());
   const followupStates = useRef(new Map<string, FollowupSnapshot>());
   const followupRequests = useRef(new Map<string, string>());
   const followupLocks = useRef(new Set<string>());
@@ -87,6 +92,20 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
   const [steeringState, setSteering] = useState<SteeringSnapshot | null>(null);
   const active = selectedActive;
   const activeUserId = active?.messages.findLast(message => message.role === "user")?.id;
+
+  const rememberTaskStopCapability = (conversationId: string, task: QaTask) => {
+    const next: TaskStopCapability = {
+      taskId: task.id,
+      canStop: task.canStop === true,
+      reason: typeof task.stopCapabilityReason === "string" && task.stopCapabilityReason.trim()
+        ? task.stopCapabilityReason.trim()
+        : null,
+    };
+    const previous = taskStopCapabilities.current.get(conversationId);
+    if (previous?.taskId === next.taskId && previous.canStop === next.canStop && previous.reason === next.reason) return;
+    taskStopCapabilities.current.set(conversationId, next);
+    redraw(value => value + 1);
+  };
 
   const sending = Boolean(active && sendingOwners.current.has(active.id));
   const notice = active ? notices.current.get(active.id) ?? "" : "";
@@ -126,6 +145,7 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
       polling.current.set(key, startEnterpriseQaPolling({
         read: async () => {
           const result = await request<QaTask>(`/api/frontmind/v2/tasks/${encodeURIComponent(taskId)}`);
+          rememberTaskStopCapability(conversationId, result);
           if (pollNotices.current.delete(conversationId)) redraw(value => value + 1);
           const current = contextRef.current.state.conversations.find(item => item.id === conversationId);
           const value = readEnterpriseQaSteering(result.steering);
@@ -339,6 +359,7 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
         if (validKnowledgeBase(task.knowledgeBase)) {
           responseKnowledges.current.set(conversation.id, { taskId: task.id, knowledgeBase: task.knowledgeBase });
         }
+        rememberTaskStopCapability(conversation.id, task);
         contextRef.current.updateStatus(
           conversation.id,
           conversationStatus(task.status),
@@ -371,7 +392,12 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
 
   const stop = useCallback(async () => {
     const conversation = contextRef.current.activeConversation;
-    if (!conversation?.taskId) return false;
+    const taskId = conversation?.previousResponseId ?? conversation?.taskId;
+    const capability = conversation ? taskStopCapabilities.current.get(conversation.id) : undefined;
+    if (!conversation || !taskId || capability?.taskId !== taskId || capability.canStop !== true) {
+      if (conversation) setOwnerNotice(conversation.id, capability?.reason || "当前回答暂不支持停止。");
+      return false;
+    }
     try {
       if (evaluationIntent) {
         queueVersions.current.set(conversation.id, (queueVersions.current.get(conversation.id) ?? 0) + 1);
@@ -379,7 +405,7 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
         followupStates.current.set(conversation.id, snapshot); redraw(value => value + 1);
       }
       await request(
-        `/api/frontmind/v2/tasks/${encodeURIComponent(conversation.taskId)}/stop`,
+        `/api/frontmind/v2/tasks/${encodeURIComponent(taskId)}/stop`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -405,6 +431,28 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
     return pending ? send(pending.content, []) : false;
   }, [send]);
   const activeTaskId = active?.previousResponseId ?? active?.taskId;
+  useEffect(() => {
+    // Standalone polling already reads the task DTO above. Dashboard delegates
+    // that polling to the host, so it needs this narrow read after a refresh.
+    if (preview || !brandHost().generalChatBackgroundPolling || !running || !active?.id || !activeTaskId) return;
+    if (taskStopCapabilities.current.get(active.id)?.taskId === activeTaskId) return;
+    let cancelled = false;
+    void request<QaTask>(`/api/frontmind/v2/tasks/${encodeURIComponent(activeTaskId)}`)
+      .then(task => { if (!cancelled) rememberTaskStopCapability(active.id, task); })
+      .catch(() => { /* Unknown capability remains fail-closed. */ });
+    return () => { cancelled = true; };
+  }, [preview, running, active?.id, activeTaskId, request]);
+  const activeStopCapability = active ? taskStopCapabilities.current.get(active.id) : undefined;
+  const canStop = Boolean(
+    running && activeTaskId && activeStopCapability?.taskId === activeTaskId && activeStopCapability?.canStop,
+  );
+  const stopCapabilityReason = canStop
+    ? null
+    : running
+      ? activeStopCapability?.taskId === activeTaskId && activeStopCapability?.reason
+        ? activeStopCapability.reason
+        : "正在确认当前回答是否支持停止。"
+      : "回答已结束，无需停止。";
   const steering = steeringState && steeringState.conversationId === active?.id &&
     steeringState.taskId === activeTaskId && steeringState.userId === activeUserId ? steeringState.value : null;
   const steer = useCallback(async (text: string) => {
@@ -465,6 +513,8 @@ export function useEnterpriseQaController({ preview = false, evaluationIntent, a
     active,
     sending,
     running,
+    canStop,
+    stopCapabilityReason,
     steering,
     steer,
     busy: sending || running,
