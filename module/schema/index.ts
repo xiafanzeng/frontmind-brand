@@ -2283,6 +2283,8 @@ const enterpriseRagHumanReviews = mysqlTable(
     skillVersion: varchar("skillVersion", { length: 96 }).notNull(),
     judgeVersion: varchar("judgeVersion", { length: 96 }).notNull(),
     modelVersion: varchar("modelVersion", { length: 191 }).notNull(),
+    humanScoringVersion: varchar("humanScoringVersion", { length: 96 }).notNull(),
+    humanScoringHash: varchar("humanScoringHash", { length: 64 }).notNull(),
     humanVerdict: mysqlEnum("humanVerdict", ["excellent", "usable", "improve", "unusable", "pending"]).notNull(),
     humanScore: decimal("humanScore", { precision: 6, scale: 2 }),
     alignment: mysqlEnum("alignment", ["aligned", "human_more_positive", "human_more_negative", "mixed", "insufficient_information"]).notNull(),

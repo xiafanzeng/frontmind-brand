@@ -5,6 +5,26 @@ export const ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE =
   "brand_rag_answer_evaluation";
 export const ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION = 3;
 export const ENTERPRISE_RAG_JUDGE_VERSION = "3.0.0";
+export const ENTERPRISE_RAG_BUILTIN_EVALUATION_VERSION_ID =
+  "rag-eval-1.4+skill-3.0.0";
+/** The legacy runtime froze the shipped evaluation Skill, but did not expose a
+ * separately versioned provider prompt template. Keep that distinction
+ * explicit instead of relabelling the Skill hash as a prompt hash. */
+export const ENTERPRISE_RAG_BUILTIN_EVALUATION_MANIFEST = {
+  schemaVersion: 1,
+  evaluationVersionId: ENTERPRISE_RAG_BUILTIN_EVALUATION_VERSION_ID,
+  legacySkillVersion: "3.0.0",
+  legacySkillHash: "040a9693623cea80f63de8487796042e8dc183cc257a24af875651d01b00f5a6",
+  promptTemplateFrozen: false,
+  ruleVersion: "rag-eval-1.4",
+  scoringVersion: "3.0.0",
+  judgeVersion: "3.0.0",
+  modelPolicy: "frozen_by_report",
+  policyPack: null,
+  policyPackHash: null,
+} as const;
+export const ENTERPRISE_RAG_BUILTIN_EVALUATION_MANIFEST_HASH =
+  "a382af25ea7d6bbcca910bf9a3b180c460a78708ac596b867c7c54a0a39de02f";
 
 export const ENTERPRISE_RAG_DIMENSION_IDS = [
   "intent",
@@ -33,6 +53,41 @@ export const ENTERPRISE_RAG_CLAIM_IDS = Array.from(
 export type EnterpriseRagDimensionId =
   (typeof ENTERPRISE_RAG_DIMENSION_IDS)[number];
 export type EnterpriseRagGateId = (typeof ENTERPRISE_RAG_GATE_IDS)[number];
+
+const evaluationVersionCitationSchema = z.object({
+  id: z.string().trim().min(1).max(191),
+  text: z.string().trim().min(1).max(1_600),
+  citedCaseIds: z.array(z.string().uuid()).min(1).max(500),
+}).strict();
+
+/** Declarative only. The evaluator reads these fields as frozen data and never
+ * executes generated code or tool instructions. Existing safety checks remain
+ * a floor; a candidate pack may refine or tighten them, never remove them. */
+export const enterpriseRagEvaluationPolicyPackSchema = z.object({
+  schemaVersion: z.literal(1),
+  promptClauses: z.array(evaluationVersionCitationSchema).min(1).max(80),
+  scoringChecks: z.array(evaluationVersionCitationSchema.extend({
+    dimensionId: z.enum(ENTERPRISE_RAG_DIMENSION_IDS),
+  })).min(1).max(80),
+  riskRules: z.array(evaluationVersionCitationSchema.extend({
+    riskId: z.enum(ENTERPRISE_RAG_GATE_IDS),
+  })).min(1).max(80),
+  thresholds: z.object({
+    excellent: z.number().min(0).max(100),
+    usable: z.number().min(0).max(100),
+    improve: z.number().min(0).max(100),
+  }).strict(),
+}).strict().superRefine((pack, context) => {
+  if (!(pack.thresholds.excellent >= pack.thresholds.usable &&
+    pack.thresholds.usable >= pack.thresholds.improve)) {
+    context.addIssue({
+      code: "custom",
+      path: ["thresholds"],
+      message: "evaluation thresholds must be monotonic",
+    });
+  }
+});
+export type EnterpriseRagEvaluationPolicyPack = z.infer<typeof enterpriseRagEvaluationPolicyPackSchema>;
 
 export type EnterpriseRagEvaluationSource = {
   id: string;
@@ -73,6 +128,10 @@ export type EnterpriseRagEvaluationFrozenInput = {
     skillVersion: string;
     ruleVersion: string;
     judgeVersion: "1.0.0" | "2.0.0" | "3.0.0";
+    /** Absent only on historical snapshots created before version governance. */
+    evaluationVersionId?: string;
+    evaluationManifestHash?: string;
+    policyPack?: EnterpriseRagEvaluationPolicyPack;
   };
 };
 
@@ -928,6 +987,9 @@ export function validateEnterpriseRagJudgeOutput(
 
 export type EnterpriseRagEvaluationResultPayload = {
   answerVerdict?: "usable" | "usable_with_improvements" | "unusable" | "pending";
+  /** Final governed score band. `excellent` is provenance, not a new
+   * publication verdict; immutable base risk gates remain authoritative. */
+  policyBand?: "excellent" | "usable" | "improve" | "unusable" | "pending";
   skillId: string;
   version: string;
   status: "not_run" | "pending" | "completed" | "failed";

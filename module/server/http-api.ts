@@ -144,6 +144,10 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   try {res.setHeader("Cache-Control","no-store");res.json(await createEnterpriseRagGovernanceService(core,req).regression(req.params.runId));}
   catch(error){sendRagReviewError(res,error);}
  });
+ router.get("/rag-evaluation-channels/:channelId",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createEnterpriseRagGovernanceService(core,req).channel(req.params.channelId));}
+  catch(error){sendRagReviewError(res,error);}
+ });
  router.post("/rag-evaluation-versions/:versionId/releases",async(req,res)=>{
   try {res.setHeader("Cache-Control","no-store");res.status(201).json(await createEnterpriseRagGovernanceService(core,req).release(req.params.versionId,req.body));}
   catch(error){sendRagReviewError(res,error);}

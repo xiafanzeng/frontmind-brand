@@ -2,9 +2,35 @@ import { z } from "zod";
 import {
   RAG_DIMENSIONS,
   RAG_GATES,
+  RAG_RULE_VERSION,
   type DimensionJudgment,
   type GateJudgment,
 } from "../client/dashboard/ai-website-preview/rag-evaluation.js";
+
+/** Immutable policy used to derive the formal human score and verdict. */
+export const ENTERPRISE_RAG_HUMAN_SCORING_VERSION = "human-review-1.0.0";
+export const ENTERPRISE_RAG_HUMAN_SCORING_MANIFEST = {
+  version: ENTERPRISE_RAG_HUMAN_SCORING_VERSION,
+  baseRuleVersion: RAG_RULE_VERSION,
+  dimensions: RAG_DIMENSIONS.map(({ id, weight }) => ({ id, weight })),
+  dimensionPolicy: {
+    levels: [0, 1, 2, 3, 4],
+    applicableJudgmentRequiresReasonAndEvidence: true,
+    notApplicableRequiresReason: true,
+    incompleteJudgmentHasNoScore: true,
+  },
+  gatePolicy: {
+    ids: RAG_GATES.map(({ id }) => id),
+    passedAndFailedRequireReason: true,
+    anyFailureVerdict: "unusable",
+    anyPendingVerdict: "pending",
+  },
+  verdictPolicy: {
+    incomplete: "pending",
+    completeWithAnyDimensionBelowFour: "improve",
+    completeAtOneHundred: "excellent",
+  },
+} as const;
 
 export const enterpriseRagReviewAlignmentSchema = z.enum([
   "aligned",
@@ -114,6 +140,10 @@ export type EnterpriseRagHumanReviewDto = {
   supersedesReviewId: string | null;
   humanVerdict: EnterpriseRagReviewVerdict;
   humanScore: number | null;
+  humanScoring: {
+    version: string;
+    hash: string;
+  };
   alignment: EnterpriseRagReviewAlignment;
   status: EnterpriseRagReviewCaseStatus;
   snapshot: {
