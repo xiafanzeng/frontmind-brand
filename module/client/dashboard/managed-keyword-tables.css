@@ -107,7 +107,7 @@
   background: #f3edf8;
   color: #2b1b44;
   text-align: left;
-  font-size: 12px;
+  font-size: 13px;
 }
 :where(.brand-keyword-workspace) .keyword-table td {
   padding: 12px 13px;
@@ -129,7 +129,11 @@
   min-width: 360px;
   color: var(--ink, #171321) !important;
   font-weight: 700;
+  font-size: 15px;
 }
+/* 字号微调只作用于已保存词条等工作台表格；生成新词条流程表格维持原字号 */
+:where(.brand-keyword-workspace) .qt-api-flow .keyword-table th { font-size: 12px; }
+:where(.brand-keyword-workspace) .qt-api-flow .keyword-question-cell { font-size: 14px; }
 :where(.brand-keyword-workspace) .keyword-pill,
 :where(.brand-keyword-workspace) .priority-pill {
   display: inline-flex;

@@ -27,7 +27,7 @@ describe('approved catalog presentation with real question identities',()=>{
     expect(screen.queryByText('部分支撑')).toBeNull();
     expect(screen.queryByText('较充分')).toBeNull();
     expect(screen.queryByText('支撑不足')).toBeNull();
-    expect(screen.getByRole('button', {name:`查看知识支撑：${q.question}`}).textContent).toBe('50 / 100');
+    expect(screen.getByRole('button', {name:`查看知识支撑：${q.question}`}).textContent).toBe('50/100');
     const summary=document.querySelector('.iw-catalog-gaps summary')!;
     expect(summary.textContent).toBe('核验功能等');
     const disclosure=summary.closest('details')!;

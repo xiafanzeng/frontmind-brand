@@ -172,7 +172,17 @@
 .iw-catalog-actions .iw-assess-entry{color:#7545a0;background:#faf7fc;border-color:#d9c7e5}
 .iw-catalog-actions button:disabled{opacity:1;color:#98a2b3;background:#fff;border-color:#e7ebef}
 .iw-workbench .iw-catalog-table th:last-child,.iw-workbench .iw-catalog-table td:last-child{position:sticky;right:0;background:#fff;z-index:1;min-width:140px;box-shadow:-1px 0 #eaecf0}
-.iw-workbench button.iw-score-link{padding:2px 0;min-height:28px;border:0;border-radius:3px;background:transparent;text-decoration:underline;text-underline-offset:4px}
+.iw-workbench button.iw-score-link{padding:2px 0;min-height:0;border:0;border-radius:3px;background:transparent;flex-direction:column;align-items:flex-start;gap:7px}
+/* 优化问题列表 · 字号微调 + 分数/100 与 70 分阈值双色（分数与色条同色，色条在分数下方） */
+.iw-catalog-table th{font-size:14px;font-weight:600}
+.iw-catalog-table .iw-catalog-primary>b{font-size:15px;font-weight:600}
+.iw-catalog-table .iw-score-num{display:inline-flex;align-items:baseline;white-space:nowrap}
+.iw-catalog-table .iw-score-num strong{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;text-decoration:underline;text-underline-offset:4px;color:inherit}
+.iw-catalog-table .iw-score-num small{font-size:12px;font-weight:400;color:#667085;margin-left:3px}
+.iw-catalog-table button.iw-score-link.hi{color:#1f5c45}
+.iw-catalog-table button.iw-score-link.lo{color:#8a2f3b}
+.iw-catalog-table .iw-score-bar{display:block;width:92px;height:6px;background:#eaecf0;border-radius:10px;overflow:hidden}
+.iw-catalog-table .iw-score-bar em{display:block;height:100%;border-radius:10px;background:currentColor}
 .iw-workbench .iw-more-actions,.brand-keyword-workspace .iw-more-actions{font-size:13px;min-width:64px}
 .iw-workbench .iw-more-actions>summary,.brand-keyword-workspace .iw-more-actions>summary{padding:8px 12px;border:1px solid #d0d5dd;border-radius:8px;cursor:pointer;list-style:none}
 .iw-workbench .iw-more-actions>summary:focus-visible,.brand-keyword-workspace .iw-more-actions>summary:focus-visible{outline:2px solid #7545a0;outline-offset:3px}
