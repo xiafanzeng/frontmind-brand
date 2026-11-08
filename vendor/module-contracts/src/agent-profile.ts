@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type AgentProvider = "manus" | "zhipu" | "xty_codex" | "tencent_wma";
+export type AgentProvider = "manus" | "zhipu" | "xty_codex" | "tencent_wma" | "kimi";
 export type AgentUpstreamEffort = "low" | "medium" | "high" | "max";
 
 export const managedAgentProfileSchema = z.enum([
@@ -27,11 +27,12 @@ export function managedAgentProfileModel(
 export function managedAgentProfileModel(
   profile: ManagedAgentProfile,
   provider: AgentProvider,
-): "manus-1.6" | "manus-1.6-max" | "glm-5.3" | "gpt-5.6-sol" | "deepseek-v4-pro";
+): "manus-1.6" | "manus-1.6-max" | "glm-5.3" | "gpt-5.6-sol" | "deepseek-v4-pro" | "kimi-k3.1-pro";
 export function managedAgentProfileModel(
   profile: ManagedAgentProfile,
   provider: AgentProvider = "manus",
 ) {
+  if (provider === "kimi") return "kimi-k3.1-pro";
   if (provider === "zhipu") return "glm-5.3";
   if (provider === "xty_codex") return "gpt-5.6-sol";
   if (provider === "tencent_wma") return "deepseek-v4-pro";
@@ -69,11 +70,12 @@ export function generalAgentModelProfileModel(
 export function generalAgentModelProfileModel(
   profile: GeneralAgentModelProfile,
   provider: AgentProvider,
-): "manus-1.6-lite" | "manus-1.6" | "manus-1.6-max" | "glm-5.3" | "gpt-5.6-sol";
+): "manus-1.6-lite" | "manus-1.6" | "manus-1.6-max" | "glm-5.3" | "gpt-5.6-sol" | "kimi-k3.1-pro";
 export function generalAgentModelProfileModel(
   profile: GeneralAgentModelProfile,
   provider: AgentProvider = "manus",
 ) {
+  if (provider === "kimi") return "kimi-k3.1-pro";
   if (provider === "zhipu") return "glm-5.3";
   if (provider === "xty_codex") return "gpt-5.6-sol";
   if (provider === "tencent_wma") throw new Error("WMA_KNOWLEDGE_ONLY");
