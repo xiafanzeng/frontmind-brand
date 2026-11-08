@@ -941,7 +941,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     </DialogFooter></DialogContent></Dialog>}
     {questionAction && <Dialog open onOpenChange={open => {if (!open && !savingQuestionId) setQuestionAction(null);}}><DialogContent className={`fm-brand-portal-theme iw-modal iw-question-modal${questionAction.kind === "delete" ? " iw-delete-modal" : ""}`} data-brand-surface="intent-workbench"><DialogHeader>
       <DialogTitle>{questionAction.kind === "edit" ? "修改问题" : "删除问题？"}</DialogTitle>
-      <DialogDescription>{questionAction.kind === "edit" ? "修改后保存到当前优化清单。原评分和方案保留在历史记录，修改后的问题需重新评估。" : "仅从当前优化清单移除该问题及其资料待办。已保存词库、历史任务、应答内容和执行记录保留。"}</DialogDescription>
+      <DialogDescription>{questionAction.kind === "edit" ? "修改后保存到当前优化清单。原评分和方案保留在历史记录，修改后的问题需重新评估。" : "仅从当前优化清单移除该问题。已保存词库、历史任务、应答内容和执行记录保留。"}</DialogDescription>
     </DialogHeader>
       {questionAction.kind === "edit" ? <div className="iw-question-fields">
         <label>问题内容<textarea aria-label="问题内容" value={questionDraft.question} disabled={Boolean(savingQuestionId)} rows={4} maxLength={500} onChange={event => setQuestionDraft(draft => ({...draft, question: event.target.value}))}/></label>
@@ -951,6 +951,6 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         <button className="iw-primary" disabled={Boolean(savingQuestionId)} onClick={() => void saveQuestionAction()}>{savingQuestionId ? "正在保存…" : questionAction.kind === "edit" ? "保存修改" : "确认删除"}</button>
       </DialogFooter>
     </DialogContent></Dialog>}
-    <Dialog open={undoOpen} onOpenChange={setUndoOpen}><DialogContent className="fm-brand-portal-theme iw-modal" data-brand-surface="intent-workbench"><DialogHeader><DialogTitle>撤销本次优化？</DialogTitle><DialogDescription>恢复本次修改的问题和节点，删除对应资料待办。已有后续修改时将保留内容并提示冲突。</DialogDescription></DialogHeader><DialogFooter><button onClick={() => setUndoOpen(false)}>取消</button><button className="iw-primary" disabled={pending} onClick={() => {setUndoOpen(false); void run(() => api.rollback({receiptId: receipt!.id, expectedRevision: revision}));}}>确认撤销</button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={undoOpen} onOpenChange={setUndoOpen}><DialogContent className="fm-brand-portal-theme iw-modal" data-brand-surface="intent-workbench"><DialogHeader><DialogTitle>撤销本次优化？</DialogTitle><DialogDescription>恢复本次修改的知识库正文。已有后续修改时将保留内容并提示冲突。</DialogDescription></DialogHeader><DialogFooter><button onClick={() => setUndoOpen(false)}>取消</button><button className="iw-primary" disabled={pending} onClick={() => {setUndoOpen(false); void run(() => api.rollback({receiptId: receipt!.id, expectedRevision: revision}));}}>确认撤销</button></DialogFooter></DialogContent></Dialog>
   </div>;
 }
