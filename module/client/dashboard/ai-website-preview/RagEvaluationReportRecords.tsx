@@ -6,7 +6,7 @@ import { isChecklistRagJudgment, isGradedRagJudgment, type EnterpriseRagEvaluati
 import { RAG_DIMENSIONS, RAG_GATES, RAG_RULE_VERSION, scoreEvaluation } from "./rag-evaluation";
 import { scoreEvaluation as scoreLegacyEvaluation } from "./rag-evaluation-legacy";
 import { enterpriseRagQualityVerdictLabels, legacyRagVerdictLabels, presentRagSummary, reportVerdict } from "./rag-report-presentation";
-import { enterpriseRagHistoryStorageKey, readRagReviewHistory, type RagReviewHistoryRead, type RagReviewRecord } from "./rag-review-history";
+import { dedupeRagReviewViews, enterpriseRagHistoryStorageKey, readRagReviewHistory, type RagReviewHistoryRead, type RagReviewRecord } from "./rag-review-history";
 import "./rag-report-records.css";
 
 export type RagEvaluationReportRecordsProps = {
@@ -184,9 +184,10 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
   const history = manual.key === storageKey ? manual.value : { records: [], status: "ready" as const, discarded: 0 };
   const state = automatic.owner === owner ? automatic : { owner, runs: [], loading: !preview && Boolean(coordinate), awaiting: false, error: "" };
   const formalReviews = formalManual.owner === owner ? formalManual.reviews : [];
-  const manualRecords: ManualRecordView[] = preview
-    ? [...history.records].sort((a, b) => b.time.localeCompare(a.time)).map(record => ({ record }))
-    : formalReviews.map(review => ({
+  const localManualRecords = [...history.records]
+    .sort((a, b) => b.time.localeCompare(a.time))
+    .map(record => ({ record }));
+  const formalManualRecords: ManualRecordView[] = formalReviews.map(review => ({
         record: {
           id: review.id,
           question: review.snapshot.question,
@@ -201,6 +202,10 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
         },
         authoritative: { humanScore: review.humanScore, humanVerdict: review.humanVerdict },
       }));
+  const manualRecords: ManualRecordView[] = dedupeRagReviewViews(
+    preview ? localManualRecords : [...formalManualRecords, ...localManualRecords],
+    item => item.record,
+  ).sort((left, right) => right.record.time.localeCompare(left.record.time));
   return <section id="records" className="rag-report-section rag-report-records" aria-labelledby="rag-report-records-title">
     <h2 id="rag-report-records-title"><span className="rag-report-section-number">02</span> 评估记录</h2>
     <p>自动评估与人工评审分别保留原有规则和结果。</p>

@@ -82,14 +82,22 @@ describe("report records", () => {
   });
 
   it("loads server records read-only, deduplicates them and exposes recorded evidence", async () => {
+    const migratedDuplicate = manual("review-1");
+    migratedDuplicate.id = "legacy-migrated-copy";
+    localStorage.setItem(enterpriseRagHistoryStorageKey("live:a"), JSON.stringify([
+      migratedDuplicate,
+      manual("legacy-only", "rag-eval-1.3", "2026-11-05T01:00:00.000Z"),
+    ]));
     vi.mocked(liveEnterpriseRagEvaluationApi.latest).mockResolvedValue({ latest: run(), history: [run()] });
     vi.mocked(liveEnterpriseRagHumanReviewApi.list).mockResolvedValue([formalReview()]);
     render(<RagEvaluationReportRecords preview={false} storageScopeKey="live:a" coordinate={coordinate} />);
     await waitFor(() => expect(screen.getAllByTestId("rag-report-automatic-record")).toHaveLength(1));
-    await waitFor(() => expect(screen.getByTestId("rag-report-manual-record")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByTestId("rag-report-manual-record")).toHaveLength(2));
     expect(screen.getByText("报告记录的陈述")).toBeTruthy();
     expect(screen.getByText("q-hash")).toBeTruthy();
-    expect(screen.getByTestId("rag-report-manual-record").textContent).toContain("完整原文review-1");
+    const manualRecords = screen.getAllByTestId("rag-report-manual-record");
+    expect(manualRecords[0].textContent).toContain("完整原文review-1");
+    expect(manualRecords[1].textContent).toContain("完整原文legacy-only");
     expect(screen.queryByText(/来自当前浏览器/)).toBeNull();
     expect(liveEnterpriseRagEvaluationApi.latest).toHaveBeenCalledWith(coordinate);
     expect(liveEnterpriseRagHumanReviewApi.list).toHaveBeenCalledWith("operation-1");

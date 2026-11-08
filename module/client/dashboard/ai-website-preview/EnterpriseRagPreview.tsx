@@ -55,7 +55,7 @@ import { RAG_CHECKLIST_RULE_VERSION } from "../../../contracts/enterprise-rag-ch
 import { isChecklistRagJudgment } from "../../../contracts/enterprise-rag-evaluation-run";
 import { presentRagReportTask, type RagTaskPresentation } from "./rag-task-presentation";
 import type { RagReportUrlBuilder } from "./rag-report-navigation";
-import { enterpriseRagHistoryStorageKey, loadRagReviewHistory as loadHistory, type RagReviewRecord as RecordEntry } from "./rag-review-history";
+import { dedupeRagReviewViews, enterpriseRagHistoryStorageKey, loadRagReviewHistory as loadHistory, type RagReviewRecord as RecordEntry } from "./rag-review-history";
 import {
   peekRagPreviewFixtures,
   ragPreviewFixturesEnabled,
@@ -1292,40 +1292,51 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   const saveReview = async () => {
     const snapshot = reviewDraftContext;
     if (exampleReadOnly) return;
-    if (!snapshot || snapshot.ownerKey !== currentAnswerContext.current || snapshot.scopeKey !== reviewDraftScope.current || !snapshot.answer.trim() || !snapshot.need.trim() || !reviewer.trim() || !confirmed || (live && !exampleReadOnly && (question !== live.question || answer !== live.answer))) return;
+    if (!snapshot || snapshot.ownerKey !== currentAnswerContext.current || snapshot.scopeKey !== reviewDraftScope.current || !snapshot.answer.trim() || !snapshot.need.trim() || (!live && !reviewer.trim()) || !confirmed || (live && !exampleReadOnly && (question !== live.question || answer !== live.answer))) return;
     if (live) {
-      const context = formalReviewContext;
-      if (!context || !context.canReview || !automaticReportRun || !automaticReport || snapshot.reportId !== context.reportId ||
-          context.operationId !== automaticReportRun.operationId || context.reportId !== automaticReport.reportId) {
-        setNotice(formalReviewError || context?.reason || "人工评审服务暂时不可用。");
-        return;
-      }
-      const fingerprint = JSON.stringify([context.operationId, context.reportId, reviewDimensions, reviewGates, true]);
-      const requestKey = `${context.operationId}:${context.reportId}`;
-      const previous = formalReviewRequests.current.get(requestKey);
-      const clientRequestId = previous?.fingerprint === fingerprint ? previous.clientRequestId : crypto.randomUUID();
-      formalReviewRequests.current.set(requestKey, { fingerprint, clientRequestId });
-      const ownLatest = formalReviews
-        .filter(item => item.reviewer.userId === context.reviewer.userId)
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-      const input = {
-        clientRequestId,
-        operationId: context.operationId,
-        reportId: context.reportId,
-        dimensions: clone(reviewDimensions),
-        gates: clone(reviewGates),
-        confirmed: true as const,
-        ...(ownLatest ? { supersedesReviewId: ownLatest.id } : {}),
-      };
-      const submission = { owner: formalReviewOwner, clientRequestId };
-      formalReviewSubmission.current = submission;
-      const submissionIsCurrent = () => currentFormalReviewOwner.current === submission.owner &&
-        formalReviewSubmission.current?.owner === submission.owner &&
-        formalReviewSubmission.current.clientRequestId === submission.clientRequestId &&
+      if (!automaticReportRun || !automaticReport) return;
+      const attemptOwner = formalReviewOwner;
+      const attemptIsCurrent = () => currentFormalReviewOwner.current === attemptOwner &&
         currentAnswerContext.current === snapshot.ownerKey;
       setFormalReviewSubmitting(true);
       setNotice("");
       try {
+        let context = formalReviewContext;
+        if (!context || context.operationId !== automaticReportRun.operationId || context.reportId !== automaticReport.reportId) {
+          context = await liveEnterpriseRagHumanReviewApi.context(automaticReportRun.operationId);
+          if (!attemptIsCurrent() || context.reportId !== automaticReport.reportId) return;
+          setFormalReviewState({ owner: attemptOwner, context, reviews: context.reviews, loading: false, error: "" });
+          setReviewer(context.reviewer.displayName);
+          const draft = reviewDrafts.current.get(snapshot.ownerKey);
+          if (draft) draft.reviewer = context.reviewer.displayName;
+        }
+        if (!context.canReview || snapshot.reportId !== context.reportId) {
+          setNotice(context.reason || formalReviewError || "人工评审服务暂时不可用。");
+          return;
+        }
+        const fingerprint = JSON.stringify([context.operationId, context.reportId, reviewDimensions, reviewGates, true]);
+        const requestKey = `${context.operationId}:${context.reportId}`;
+        const previous = formalReviewRequests.current.get(requestKey);
+        const clientRequestId = previous?.fingerprint === fingerprint ? previous.clientRequestId : crypto.randomUUID();
+        formalReviewRequests.current.set(requestKey, { fingerprint, clientRequestId });
+        const visibleReviews = context === formalReviewContext ? formalReviews : context.reviews;
+        const ownLatest = visibleReviews
+          .filter(item => item.reviewer.userId === context.reviewer.userId)
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+        const input = {
+          clientRequestId,
+          operationId: context.operationId,
+          reportId: context.reportId,
+          dimensions: clone(reviewDimensions),
+          gates: clone(reviewGates),
+          confirmed: true as const,
+          ...(ownLatest ? { supersedesReviewId: ownLatest.id } : {}),
+        };
+        const submission = { owner: attemptOwner, clientRequestId };
+        formalReviewSubmission.current = submission;
+        const submissionIsCurrent = () => attemptIsCurrent() &&
+          formalReviewSubmission.current?.owner === submission.owner &&
+          formalReviewSubmission.current.clientRequestId === submission.clientRequestId;
         let saved: EnterpriseRagHumanReviewDto | undefined;
         try {
           saved = (await liveEnterpriseRagHumanReviewApi.submit(input)).review;
@@ -1352,10 +1363,10 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
         setConfirmed(false);
         close("review");
       } catch (error) {
-        if (submissionIsCurrent()) setNotice(error instanceof Error ? error.message : "人工评审保存失败，请稍后重试。");
+        if (attemptIsCurrent()) setNotice(error instanceof Error ? error.message : "人工评审保存失败，请稍后重试。");
       } finally {
-        if (submissionIsCurrent()) {
-          formalReviewSubmission.current = null;
+        if (attemptIsCurrent()) {
+          if (formalReviewSubmission.current?.owner === attemptOwner) formalReviewSubmission.current = null;
           setFormalReviewSubmitting(false);
         }
       }
@@ -1380,9 +1391,12 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   };
   const drawerTitle = { review: "人工评审与计算", evidence: "回答依据与陈述核验", rules: "评分规则", improve: "优化方案", answer: "录入待评估回答", history: "评估记录" };
   const currentReviewDiff = live ? reviewDiffPreview(formalReviewContext, reviewDimensions, reviewGates) : null;
-  const visibleManualHistory: VisibleReviewRecord[] = live
-    ? formalReviews.map(formalReviewRecord)
-    : history.map(record => ({ record }));
+  const visibleManualHistory: VisibleReviewRecord[] = dedupeRagReviewViews(
+    live
+      ? [...formalReviews.map(formalReviewRecord), ...history.map(record => ({ record }))]
+      : history.map(record => ({ record })),
+    item => item.record,
+  ).sort((left, right) => right.record.time.localeCompare(left.record.time));
   const serverHistory = mergeAutomaticRuns([
     ...(automaticRun ? [automaticRun] : []),
     ...automaticHistory,
@@ -1541,7 +1555,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
         {visibleManualHistory.length === 0 ? <p>暂无已保存的人工评审。完成评审后在这里查看。</p> : visibleManualHistory.map(({ record, authoritative }) => { const grade = record.ruleVersion === "rag-eval-1.2" ? scoreLegacyEvaluation(record) : record.ruleVersion === RAG_RULE_VERSION ? scoreEvaluation(record) : null; const verdict = authoritative?.humanVerdict ?? grade?.verdict; const numericScore = authoritative ? authoritative.humanScore : grade?.score; const sameAnswer = record.question === question && record.answer === answer && record.need === need; const score = presentEvaluationScore(numericScore, verdict === "unusable"); return <article className="rag-evidence" key={record.id}><header><strong>{record.question}</strong><span className={`rag-history-score${score.showScale ? "" : " is-unavailable"}`} aria-label={score.ariaLabel}>{score.text}</span></header><p>{verdict ? (record.ruleVersion === "rag-eval-1.2" ? legacyRagVerdictLabels : verdicts)[verdict] : "历史规则暂不支持重新计算"} · {sameAnswer ? "与当前回答相同" : "历史快照，不适用于当前回答"}</p><small>{record.reviewer} · {new Date(record.time).toLocaleString("zh-CN")} · {record.knowledgeVersion}</small><details><summary>查看回答与判断</summary><p>{record.answer}</p>{record.dimensions.map((item) => <p key={item.id}>{RAG_DIMENSIONS.find((d) => d.id === item.id)?.label}：{item.level ?? "待判定"}/4 · {item.rationale}</p>)}</details></article>; })}
       </>}
   </>;
-  const renderDrawerFooter = (panel: NonNullable<Drawer>) => panel === "evidence" || panel === "improve" ? null : panel === "review" ? exampleReadOnly ? null : <button className="sfp-button sfp-button--primary" disabled={!reviewDraftContext || !answer.trim() || !need.trim() || !reviewer.trim() || !confirmed || formalReviewSubmitting || Boolean(live && (formalReviewLoading || !formalReviewContext?.canReview || reviewDraftContext.reportId !== formalReviewContext.reportId))} onClick={() => void saveReview()}>保存评审并计算</button> : panel === "answer" ? <button className="sfp-button sfp-button--primary" disabled={!questionEdit.trim() || !answerEdit.trim() || !needEdit.trim()} onClick={() => updateAnswer(answerEdit, needEdit, questionEdit)}>保存回答，重新评审</button> : <button className="sfp-button sfp-button--ghost" onClick={() => close()}>完成</button>;
+  const renderDrawerFooter = (panel: NonNullable<Drawer>) => panel === "evidence" || panel === "improve" ? null : panel === "review" ? exampleReadOnly ? null : <button className="sfp-button sfp-button--primary" disabled={!reviewDraftContext || !answer.trim() || !need.trim() || Boolean(!live && !reviewer.trim()) || !confirmed || formalReviewSubmitting || Boolean(live && (formalReviewLoading || (formalReviewContext && (!formalReviewContext.canReview || reviewDraftContext.reportId !== formalReviewContext.reportId))))} onClick={() => void saveReview()}>保存评审并计算</button> : panel === "answer" ? <button className="sfp-button sfp-button--primary" disabled={!questionEdit.trim() || !answerEdit.trim() || !needEdit.trim()} onClick={() => updateAnswer(answerEdit, needEdit, questionEdit)}>保存回答，重新评审</button> : <button className="sfp-button sfp-button--ghost" onClick={() => close()}>完成</button>;
 
   return <section className="sfp-root erag-root rag-eval-root" data-testid={live ? "enterprise-rag-live-root" : undefined}>
     <div ref={backgroundRef}>

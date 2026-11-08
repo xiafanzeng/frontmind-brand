@@ -239,24 +239,28 @@ describe("RAG starter-question client API", () => {
     expect(retry.expectedCurrentSetId).toBe("00000000-0000-4000-8000-000000000031");
   });
 
-  it("reconciles a lost manual regeneration response with GET and does not repeat the POST", async () => {
+  it("replays a lost manual regeneration response with the same request id", async () => {
     mocks.fetch.mockResolvedValueOnce(json(dto()))
       .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce(json(dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000041" })))
       .mockResolvedValueOnce(json(dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000041" })));
     const hook = renderHook(() => useRagStarterQuestions());
     await waitFor(() => expect(hook.result.current.data?.revision).toBe(2));
     await act(async () => { await hook.result.current.regenerate(); });
     const first = JSON.parse(mocks.fetch.mock.calls[1][1].body);
+    const replay = JSON.parse(mocks.fetch.mock.calls[3][1].body);
     expect(first.clientRequestId).toEqual(expect.any(String));
+    expect(replay.clientRequestId).toBe(first.clientRequestId);
     expect(hook.result.current.data?.pending).toBe(true);
     expect(hook.result.current.error).toBeNull();
-    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "POST", "GET"]);
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "POST", "GET", "POST"]);
   });
 
-  it("retains the manual regeneration request id when GET cannot confirm the lost response", async () => {
+  it("retains the manual regeneration request id when the immediate replay also fails", async () => {
     mocks.fetch.mockResolvedValueOnce(json(dto()))
       .mockRejectedValueOnce(new Error("response lost"))
       .mockResolvedValueOnce(json(dto()))
+      .mockRejectedValueOnce(new Error("replay interrupted"))
       .mockResolvedValueOnce(json(dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000042" })));
     const hook = renderHook(() => useRagStarterQuestions());
     await waitFor(() => expect(hook.result.current.data?.revision).toBe(2));
@@ -264,24 +268,27 @@ describe("RAG starter-question client API", () => {
     await act(async () => { await hook.result.current.regenerate(); });
     const first = JSON.parse(mocks.fetch.mock.calls[1][1].body);
     const replay = JSON.parse(mocks.fetch.mock.calls[3][1].body);
+    const retry = JSON.parse(mocks.fetch.mock.calls[4][1].body);
     expect(replay.clientRequestId).toBe(first.clientRequestId);
-    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "POST", "GET", "POST"]);
+    expect(retry.clientRequestId).toBe(first.clientRequestId);
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "POST", "GET", "POST", "POST"]);
   });
 
-  it("does not treat an unchanged pending state as confirmation of a lost regeneration response", async () => {
-    const unchanged = dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000043" });
-    mocks.fetch.mockResolvedValueOnce(json(unchanged))
+  it("does not treat an unrelated changed GET as confirmation of a lost regeneration response", async () => {
+    const original = dto({ current: item("00000000-0000-4000-8000-000000000043") });
+    const unrelated = dto({ current: item("00000000-0000-4000-8000-000000000044"), revision: 3 });
+    mocks.fetch.mockResolvedValueOnce(json(original))
       .mockRejectedValueOnce(new Error("response lost"))
-      .mockResolvedValueOnce(json(unchanged))
-      .mockResolvedValueOnce(json(dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000044" })));
+      .mockResolvedValueOnce(json(unrelated))
+      .mockResolvedValueOnce(json(dto({ ...unrelated, pending: true, pendingSetId: "00000000-0000-4000-8000-000000000045" })));
     const hook = renderHook(() => useRagStarterQuestions());
-    await waitFor(() => expect(hook.result.current.data?.pendingSetId).toBe("00000000-0000-4000-8000-000000000043"));
-    await act(async () => { await hook.result.current.regenerate().catch(() => undefined); });
-    expect(hook.result.current.error?.message).toBe("response lost");
+    await waitFor(() => expect(hook.result.current.data?.current?.id).toBe("00000000-0000-4000-8000-000000000043"));
     await act(async () => { await hook.result.current.regenerate(); });
     const first = JSON.parse(mocks.fetch.mock.calls[1][1].body);
     const replay = JSON.parse(mocks.fetch.mock.calls[3][1].body);
     expect(replay.clientRequestId).toBe(first.clientRequestId);
+    expect(replay.expectedCurrentSetId).toBe("00000000-0000-4000-8000-000000000044");
+    expect(hook.result.current.data?.pendingSetId).toBe("00000000-0000-4000-8000-000000000045");
   });
 
   it("reconciles a lost manual confirmation response before reporting failure", async () => {

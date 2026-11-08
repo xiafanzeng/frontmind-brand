@@ -1774,6 +1774,52 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(screen.getByRole("button", { name: "评估记录" })).toBeTruthy();
   });
 
+  it("keeps legacy local reviews visible beside formal records without duplicates", async () => {
+    const scope = "live:7:workspace-a";
+    const formal = formalReviewDto();
+    const localRecord = {
+      id: formal.id,
+      question: formal.snapshot.question,
+      answer: formal.snapshot.answer,
+      need: formal.snapshot.need || formal.snapshot.question,
+      reviewer: formal.reviewer.displayName,
+      time: formal.createdAt,
+      ruleVersion: "rag-eval-1.3",
+      knowledgeVersion: formal.snapshot.knowledgeVersion,
+      dimensions: formal.dimensions,
+      gates: formal.gates,
+    };
+    window.localStorage.setItem(enterpriseRagHistoryStorageKey(scope), JSON.stringify([
+      { ...localRecord, id: "legacy-migrated-copy" },
+      { ...localRecord, id: "legacy-only", question: "仅本地保留的问题", need: "仅本地保留的任务", time: "2026-11-07T08:00:00.000Z" },
+    ]));
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: completedAutomaticRun(), history: [] });
+    vi.mocked(liveEnterpriseRagHumanReviewApi.context).mockResolvedValue(formalReviewContext({ reviews: [formal] }));
+    render(<EnterpriseRagPreview storageScopeKey={scope} onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({ taskId: "task-1", turnId: "turn-1", question: "真实问题", answer: "真实回答" })} />);
+    await waitFor(() => expect(liveEnterpriseRagHumanReviewApi.context).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: /评估记录/ }));
+    const history = within(screen.getByRole("dialog", { name: "评估记录" }));
+    expect(history.getByText("仅本地保留的问题", { exact: true })).toBeTruthy();
+    expect(history.getAllByText(formal.snapshot.question, { exact: true })).toHaveLength(1);
+  });
+
+  it("retries a failed formal context read from the existing save button", async () => {
+    vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: completedAutomaticRun(), history: [] });
+    vi.mocked(liveEnterpriseRagHumanReviewApi.context)
+      .mockRejectedValueOnce(new Error("context unavailable"))
+      .mockResolvedValueOnce(formalReviewContext());
+    render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({ taskId: "task-1", turnId: "turn-1", question: "真实问题", answer: "真实回答" })} />);
+    await waitFor(() => expect(liveEnterpriseRagHumanReviewApi.context).toHaveBeenCalledTimes(1));
+    const review = openReview();
+    fireEvent.click(review.getByRole("checkbox", { name: /已对照当前回答与证据进行核验/ }));
+    const save = review.getByRole("button", { name: "保存评审并计算" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(liveEnterpriseRagHumanReviewApi.context).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(liveEnterpriseRagHumanReviewApi.submit).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "人工评审与计算" })).toBeNull());
+  });
+
   it("hides an empty override diff and shows only changed automatic judgments", async () => {
     vi.spyOn(liveEnterpriseRagEvaluationApi, "latest").mockResolvedValue({ latest: completedAutomaticRun(), history: [] });
     render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({ taskId: "task-1", turnId: "turn-1", question: "真实问题", answer: "真实回答" })} />);

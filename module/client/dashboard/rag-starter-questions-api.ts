@@ -98,6 +98,17 @@ export const liveRagStarterQuestionsApi = {
   },
 };
 
+function regenerationOutcomeMayBeUnknown(cause: unknown) {
+  return !(cause instanceof RagStarterQuestionsApiError) ||
+    cause.code === "INVALID_RESPONSE" || cause.status === 408 || cause.status === 429 || cause.status >= 500;
+}
+
+async function replayUnknownRegeneration(clientRequestId: string, cause: unknown) {
+  if (!regenerationOutcomeMayBeUnknown(cause)) throw cause;
+  const latest = await liveRagStarterQuestionsApi.read();
+  return liveRagStarterQuestionsApi.regenerate({ ...latest, clientRequestId });
+}
+
 /** Optional state wrapper; callers may also use liveRagStarterQuestionsApi directly. */
 export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
   const [data, setData] = useState<RagStarterQuestionsDto | null>(null);
@@ -113,13 +124,7 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
   const mutationOwner = useRef(0);
   const automaticGenerationAttempt = useRef<string | null>(null);
   const automaticActivationAttempt = useRef<string | null>(null);
-  const regenerationRequest = useRef<{
-    id: string;
-    revision: number;
-    currentId: string | null;
-    draftId: string | null;
-    pendingSetId: string | null;
-  } | null>(null);
+  const regenerationRequest = useRef<{ id: string } | null>(null);
   const readLatest = useCallback(async (clearConflict: boolean) => {
     if (clearConflict) conflicted.current = false;
     const current = ++generation.current;
@@ -173,16 +178,6 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
       if (timer) clearTimeout(timer);
     };
   }, [enabled, data?.pending, readLatest]);
-  useEffect(() => {
-    const request = regenerationRequest.current;
-    if (!request || !data) return;
-    if (
-      data.revision !== request.revision ||
-      (data.current?.id ?? null) !== request.currentId ||
-      (data.draft?.id ?? null) !== request.draftId ||
-      (data.pendingSetId ?? null) !== request.pendingSetId
-    ) regenerationRequest.current = null;
-  }, [data]);
   const mutate = useCallback(async (
     run: (current: RagStarterQuestionsDto) => Promise<RagStarterQuestionsDto>,
     acceptsLatest?: (latest: RagStarterQuestionsDto, before: RagStarterQuestionsDto) => boolean,
@@ -269,10 +264,6 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
     automaticGenerationAttempt.current = attemptKey;
     const request = regenerationRequest.current ?? {
       id: globalThis.crypto.randomUUID(),
-      revision: data.revision,
-      currentId: null,
-      draftId: null,
-      pendingSetId: data.pendingSetId ?? null,
     };
     regenerationRequest.current = request;
     const snapshot = data;
@@ -282,7 +273,9 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
     setLoading(true);
     setAutoGenerating(true);
     setError(null);
-    void liveRagStarterQuestionsApi.regenerate({ ...snapshot, clientRequestId: request.id }).then(next => {
+    void liveRagStarterQuestionsApi.regenerate({ ...snapshot, clientRequestId: request.id }).catch(cause =>
+      replayUnknownRegeneration(request.id, cause)
+    ).then(next => {
       if (current !== generation.current) return;
       regenerationRequest.current = null;
       conflicted.current = false;
@@ -291,23 +284,23 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
     }).catch(async cause => {
       if (current !== generation.current) return;
       const next = cause instanceof Error ? cause : new Error("预设问题生成失败。");
-      if (next instanceof RagStarterQuestionsApiError && next.status !== 409) {
-        setError(next);
+      if (next instanceof RagStarterQuestionsApiError && next.status === 409) {
+        try {
+          const latest = await liveRagStarterQuestionsApi.read();
+          if (current !== generation.current) return;
+          setData(latest);
+          const accepted = Boolean(latest.current || latest.draft || latest.pending || latest.error);
+          if (accepted) {
+            regenerationRequest.current = null;
+            setError(null);
+          } else setError(next);
+          conflicted.current = false;
+        } catch {
+          if (current === generation.current) setError(next);
+        }
         return;
       }
-      try {
-        const latest = await liveRagStarterQuestionsApi.read();
-        if (current !== generation.current) return;
-        setData(latest);
-        const accepted = Boolean(latest.current || latest.draft || latest.pending || latest.error);
-        if (accepted) {
-          regenerationRequest.current = null;
-          setError(null);
-        } else setError(next);
-        conflicted.current = false;
-      } catch {
-        if (current === generation.current) setError(next);
-      }
+      setError(next);
     }).finally(() => {
       if (mutationOwner.current !== current) return;
       mutating.current = false;
@@ -344,26 +337,17 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
     },
     regenerate: async () => {
       const next = await mutate(async (current) => {
-      const request = regenerationRequest.current ?? {
-        id: globalThis.crypto.randomUUID(),
-        revision: current.revision,
-        currentId: current.current?.id ?? null,
-        draftId: current.draft?.id ?? null,
-        pendingSetId: current.pendingSetId ?? null,
-      };
-      regenerationRequest.current = request;
-      const next = await liveRagStarterQuestionsApi.regenerate({
-        ...current,
-        clientRequestId: request.id,
+        const request = regenerationRequest.current ?? {
+          id: globalThis.crypto.randomUUID(),
+        };
+        regenerationRequest.current = request;
+        const saved = await liveRagStarterQuestionsApi.regenerate({
+          ...current,
+          clientRequestId: request.id,
+        }).catch(cause => replayUnknownRegeneration(request.id, cause));
+        regenerationRequest.current = null;
+        return saved;
       });
-      regenerationRequest.current = null;
-      return next;
-      }, (latest, before) => Boolean(
-        latest.pending !== before.pending || latest.error !== before.error ||
-        (latest.pendingSetId ?? null) !== (before.pendingSetId ?? null) || latest.revision !== before.revision ||
-        (latest.draft?.id ?? null) !== (before.draft?.id ?? null) ||
-        (latest.current?.id ?? null) !== (before.current?.id ?? null)
-      ));
       regenerationRequest.current = null;
       return next;
     },
