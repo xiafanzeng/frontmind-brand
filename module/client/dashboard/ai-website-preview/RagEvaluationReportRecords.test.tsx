@@ -33,6 +33,7 @@ function formalReview(id = "review-1"): EnterpriseRagHumanReviewDto {
     snapshot: { question: record.question, answer: record.answer, need: record.need, knowledgeVersion: record.knowledgeVersion },
     humanVerdict: "improve",
     humanScore: 75,
+    humanScoring: { version: "human-review-1.0.0", hash: "a".repeat(64) },
     alignment: "human_more_negative",
     status: "pending_analysis",
     dimensions: record.dimensions,

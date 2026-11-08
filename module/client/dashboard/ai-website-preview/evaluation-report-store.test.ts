@@ -143,6 +143,15 @@ describe("evaluation skill contract", () => {
       recommendation: "recommended",
       risks: [{ ...result().risks[0], severity: "critical" }],
     })).toBeNull();
+    expect(parseEvaluationResult({
+      ...result(), answerVerdict: "usable_with_improvements", policyBand: "excellent",
+    })).toBeNull();
+  });
+
+  it("preserves a server-derived governed policy band", () => {
+    expect(parseEvaluationResult(result({
+      answerVerdict: "usable_with_improvements", policyBand: "improve",
+    }))).toMatchObject({ answerVerdict: "usable_with_improvements", policyBand: "improve" });
   });
 
   it("accepts human-readable Unicode evidence references without relaxing report IDs", () => {

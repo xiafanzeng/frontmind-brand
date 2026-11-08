@@ -3,6 +3,8 @@ import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Request } from "express";
 import { z } from "zod";
 import {
+  ENTERPRISE_RAG_HUMAN_SCORING_MANIFEST,
+  ENTERPRISE_RAG_HUMAN_SCORING_VERSION,
   enterpriseRagHumanReviewCreateSchema,
   type EnterpriseRagHumanReviewDto,
   type EnterpriseRagReviewAlignment,
@@ -46,8 +48,14 @@ const duplicateKey = (error: unknown) => {
   const cause = candidate.cause && typeof candidate.cause === "object" ? candidate.cause as { code?: unknown; errno?: unknown } : {};
   return candidate.code === "ER_DUP_ENTRY" || Number(candidate.errno) === 1062 || cause.code === "ER_DUP_ENTRY" || Number(cause.errno) === 1062;
 };
+const ENTERPRISE_RAG_HUMAN_SCORING_HASH = intentHash(ENTERPRISE_RAG_HUMAN_SCORING_MANIFEST);
 
 function reportVerdict(report: EnterpriseRagEvaluationReport): EnterpriseRagReviewVerdict {
+  const policyBand = report.result.policyBand;
+  if (policyBand === "excellent" || policyBand === "usable" || policyBand === "unusable" || policyBand === "pending") {
+    return policyBand;
+  }
+  if (policyBand === "improve") return "improve";
   const value = report.result.answerVerdict;
   if (value === "unusable") return "unusable";
   if (value === "pending" || report.result.status !== "completed") return "pending";
@@ -178,6 +186,7 @@ export function createEnterpriseRagHumanReviewService(core: ModuleHttpCore, requ
       reviewer: { userId: Number(row.reviewerUserId), displayName: String(row.reviewerDisplayName) },
       createdAt: iso(row.createdAt), supersedesReviewId: row.supersedesReviewId ? String(row.supersedesReviewId) : null,
       humanVerdict: row.humanVerdict, humanScore: row.humanScore === null || row.humanScore === undefined ? null : Number(row.humanScore),
+      humanScoring: { version: String(row.humanScoringVersion), hash: String(row.humanScoringHash) },
       alignment: row.alignment, status: row.caseStatus,
       snapshot: {
         question: String(row.questionSnapshot), answer: String(row.answerSnapshot), need: "",
@@ -305,15 +314,23 @@ export function createEnterpriseRagHumanReviewService(core: ModuleHttpCore, requ
         : hasInsufficientInformation ? "insufficient_information"
         : "aligned";
       const evaluator = snapshot.report.evaluator;
+      if (typeof evaluator.skillHash !== "string" || !/^[a-f0-9]{64}$/u.test(evaluator.skillHash)) {
+        throw new EnterpriseRagHumanReviewError("REPORT_SOURCE_BUNDLE_INVALID", "自动评估报告缺少可核验的评估来源包指纹。", 409);
+      }
       const row = {
         id: reviewId, enterpriseProjectId: context.enterpriseProjectId, accountUserId: context.accountUserId,
         operationId: input.operationId, reportId: input.reportId, reviewerUserId: actor!.id,
         reviewerDisplayName: identity.public.displayName, clientRequestId: input.clientRequestId, requestHash, contentHash,
         supersedesReviewId: input.supersedesReviewId ?? null, questionSnapshot: snapshot.input.question, answerSnapshot: snapshot.input.answer,
         knowledgeSnapshot: snapshot.report.knowledgeBase, aiReportSnapshot: snapshot.report,
-        evaluationVersionId: `${evaluator.ruleVersion}+skill-${evaluator.skillVersion}`,
-        promptVersion: `enterprise-rag-skill-${evaluator.skillVersion}`, promptHash: evaluator.skillHash,
+        evaluationVersionId: evaluator.evaluationVersionId ?? `${evaluator.ruleVersion}+skill-${evaluator.skillVersion}`,
+        // The historical evaluator froze the source Skill bundle, not a
+        // separately versioned provider prompt template. Keep those facts
+        // distinct instead of relabelling the Skill hash as a prompt hash.
+        promptVersion: "unfrozen", promptHash: "0".repeat(64), promptTemplateFrozen: false,
+        sourceBundleHash: evaluator.skillHash,
         ruleVersion: evaluator.ruleVersion, skillVersion: evaluator.skillVersion, judgeVersion: evaluator.judgeVersion, modelVersion: evaluator.model,
+        humanScoringVersion: ENTERPRISE_RAG_HUMAN_SCORING_VERSION, humanScoringHash: ENTERPRISE_RAG_HUMAN_SCORING_HASH,
         humanVerdict: computed.humanVerdict, humanScore: computed.humanScore, alignment: computed.diff.alignment, caseStatus,
         dimensions: input.dimensions, gates: input.gates, diff: computed.diff,
       };
@@ -474,10 +491,16 @@ export function createEnterpriseRagHumanReviewService(core: ModuleHttpCore, requ
         evaluationVersionId: frozenReview.evaluationVersionId,
         promptVersion: frozenReview.promptVersion,
         promptHash: frozenReview.promptHash,
+        promptTemplateFrozen: Boolean(frozenReview.promptTemplateFrozen),
+        sourceBundleHash: frozenReview.sourceBundleHash,
         ruleVersion: frozenReview.ruleVersion,
         skillVersion: frozenReview.skillVersion,
         judgeVersion: frozenReview.judgeVersion,
         modelVersion: frozenReview.modelVersion,
+      } : null,
+      frozenHumanScoring: frozenReview ? {
+        version: frozenReview.humanScoringVersion,
+        hash: frozenReview.humanScoringHash,
       } : null,
       reviews: reviews.map((row: any) => dto(caseRow ? { ...row, caseStatus: caseRow.status } : row)),
       case: caseRow,
@@ -505,6 +528,11 @@ export function createEnterpriseRagHumanReviewService(core: ModuleHttpCore, requ
     }).strict().parse(value);
     const db = await database();
     const requestHash = intentHash(input);
+    const scopedCase = (await db.select({ id: model.enterpriseRagReviewCases.id }).from(model.enterpriseRagReviewCases).where(and(
+      eq(model.enterpriseRagReviewCases.id, id),
+      eq(model.enterpriseRagReviewCases.enterpriseProjectId, context.enterpriseProjectId),
+    )).limit(1))[0];
+    if (!scopedCase) throw new EnterpriseRagHumanReviewError("REVIEW_CASE_NOT_FOUND", "人工评审案例不存在。", 404);
     const existing = (await db.select().from(model.enterpriseRagReviewCaseEvents).where(and(
       eq(model.enterpriseRagReviewCaseEvents.caseId, id),
       eq(model.enterpriseRagReviewCaseEvents.actorUserId, actor!.id),

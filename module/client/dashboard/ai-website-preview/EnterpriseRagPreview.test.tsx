@@ -244,6 +244,7 @@ function formalReviewDto(
     snapshot: { question: "真实问题", answer: "真实回答", need: "", knowledgeVersion: "企业知识库.zip · v7" },
     humanVerdict: "improve",
     humanScore: 93,
+    humanScoring: { version: "human-review-1.0.0", hash: "a".repeat(64) },
     alignment: "aligned",
     status: "aligned",
     dimensions,

@@ -56,7 +56,7 @@ function frozenSnapshot() {
     questionHash: "q",
     answerHash: "a",
     knowledgeBase: { snapshotId: "snapshot", version: 3, sourceFileName: "knowledge.zip", documentCount: 1, contentHash: "knowledge-hash" },
-    evaluator: { skillId: "enterprise-rag-evaluation", skillVersion: "3.0.0", ruleVersion: "rag-eval-1.4", judgeVersion: "3.0.0", provider: "xty_codex", model: "model", effort: null, skillHash: "skill-hash", outputHash: "output-hash" },
+    evaluator: { skillId: "enterprise-rag-evaluation", skillVersion: "3.0.0", ruleVersion: "rag-eval-1.4", judgeVersion: "3.0.0", provider: "xty_codex", model: "model", effort: null, skillHash: "a".repeat(64), outputHash: "b".repeat(64) },
     judgments: { schemaVersion: 3, operationToken: "token", inputHash: "input-hash", checks: [], claims: [], summary: "ok", task: { status: "completed", rationale: "ok", evidenceIds: ["answer:a"] }, findings: [], gates: gates().map((item) => ({ ...item, evidenceIds: ["answer:a"] })) },
     result: {
       answerVerdict: "usable",
@@ -103,8 +103,10 @@ function harness() {
     requestHash: varchar("requestHash", { length: 64 }), contentHash: varchar("contentHash", { length: 64 }), supersedesReviewId: varchar("supersedesReviewId", { length: 36 }),
     questionSnapshot: varchar("questionSnapshot", { length: 1000 }), answerSnapshot: varchar("answerSnapshot", { length: 1000 }),
     knowledgeSnapshot: json("knowledgeSnapshot"), aiReportSnapshot: json("aiReportSnapshot"), evaluationVersionId: varchar("evaluationVersionId", { length: 96 }),
-    promptVersion: varchar("promptVersion", { length: 96 }), promptHash: varchar("promptHash", { length: 64 }), ruleVersion: varchar("ruleVersion", { length: 96 }),
+    promptVersion: varchar("promptVersion", { length: 96 }), promptHash: varchar("promptHash", { length: 64 }),
+    promptTemplateFrozen: int("promptTemplateFrozen"), sourceBundleHash: varchar("sourceBundleHash", { length: 64 }), ruleVersion: varchar("ruleVersion", { length: 96 }),
     skillVersion: varchar("skillVersion", { length: 96 }), judgeVersion: varchar("judgeVersion", { length: 96 }), modelVersion: varchar("modelVersion", { length: 191 }),
+    humanScoringVersion: varchar("humanScoringVersion", { length: 96 }), humanScoringHash: varchar("humanScoringHash", { length: 64 }),
     humanVerdict: varchar("humanVerdict", { length: 32 }), humanScore: int("humanScore"), alignment: varchar("alignment", { length: 32 }),
     caseStatus: varchar("caseStatus", { length: 32 }), dimensions: json("dimensions"), gates: json("gates"), diff: json("diff"), createdAt: timestamp("createdAt"),
   });
@@ -150,6 +152,7 @@ function harness() {
       { id: 7, displayName: "评审甲", username: "reviewer-a", name: "评审甲", role: "delivery_member", adminAccessLevel: null, engineerRoleType: "monitoring_optimization_engineer", isActive: 1 },
       { id: 8, displayName: "评审乙", username: "reviewer-b", name: "评审乙", role: "delivery_member", adminAccessLevel: null, engineerRoleType: "monitoring_optimization_engineer", isActive: 1 },
       { id: 9, displayName: "客户", username: "customer", name: "客户", role: "user", adminAccessLevel: null, engineerRoleType: null, isActive: 1 },
+      { id: 10, displayName: "管理员", username: "admin", name: "管理员", role: "admin", adminAccessLevel: "delivery_admin", engineerRoleType: null, isActive: 1 },
     ],
     assignments: [
       { id: "assignment-a", customerUserId: 42, engineerUserId: 7, roleType: "monitoring_optimization_engineer" },
@@ -249,13 +252,17 @@ function harness() {
     enterpriseRagEvaluationChannels: evaluationChannels,
     enterpriseRagReleaseEvents: releaseEvents,
   } as unknown as BrandKeywordPorts);
-  const core = (actorUserId: number): ModuleHttpCore => ({
-    context: () => ({ accountUserId: 42, actorUserId, enterpriseProjectId: "project", businessOwnerId: "42", businessActorId: String(actorUserId) }),
+  const core = (actorUserId: number, enterpriseProjectId = "project"): ModuleHttpCore => ({
+    context: () => ({ accountUserId: 42, actorUserId, enterpriseProjectId, businessOwnerId: "42", businessActorId: String(actorUserId) }),
     database: async () => db,
     environment: {},
   });
-  const service = (actorUserId: number) => createEnterpriseRagHumanReviewService(core(actorUserId), {
-    frontmindUser: { id: actorUserId, role: rows.users.find((item) => item.id === actorUserId)?.role },
+  const service = (actorUserId: number, enterpriseProjectId = "project") => createEnterpriseRagHumanReviewService(core(actorUserId, enterpriseProjectId), {
+    frontmindUser: {
+      id: actorUserId,
+      role: rows.users.find((item) => item.id === actorUserId)?.role,
+      adminAccessLevel: rows.users.find((item) => item.id === actorUserId)?.adminAccessLevel,
+    },
   } as unknown as Request);
   return { rows, service };
 }
@@ -283,9 +290,19 @@ describe("enterprise RAG formal human-review persistence", () => {
       questionSnapshot: "门诊时间是什么？",
       answerSnapshot: "门诊时间为 8:00。",
       evaluationVersionId: "rag-eval-1.4+skill-3.0.0",
+      promptVersion: "unfrozen",
+      promptHash: "0".repeat(64),
+      promptTemplateFrozen: false,
+      sourceBundleHash: "a".repeat(64),
       ruleVersion: "rag-eval-1.4",
       skillVersion: "3.0.0",
       modelVersion: "model",
+      humanScoringVersion: "human-review-1.0.0",
+    });
+    expect(rows.reviews[0].humanScoringHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(first.review.humanScoring).toEqual({
+      version: "human-review-1.0.0",
+      hash: rows.reviews[0].humanScoringHash,
     });
     expect(evaluationMock.snapshot.report).toEqual(before);
     expect(rows.reviews[0].aiReportSnapshot).toEqual(before);
@@ -337,6 +354,11 @@ describe("enterprise RAG formal human-review persistence", () => {
     expect(lineage.evaluationVersions.map((row: any) => row.id).sort()).toEqual([CANDIDATE_VERSION_ID, legacyVersionId].sort());
     expect(lineage.releaseEvents.map((row: any) => row.id)).toEqual([RELEASE_ID]);
     expect(lineage.channels.map((row: any) => row.id)).toEqual(["global"]);
+    expect(lineage.frozenHumanScoring).toEqual(created.review.humanScoring);
+    expect(lineage.frozenEvaluation).toMatchObject({
+      promptVersion: "unfrozen", promptHash: "0".repeat(64),
+      promptTemplateFrozen: false, sourceBundleHash: "a".repeat(64),
+    });
   });
 
   it("rejects an idempotency key reused for changed content", async () => {
@@ -386,5 +408,27 @@ describe("enterprise RAG formal human-review persistence", () => {
     await expect(service(9).create(input())).rejects.toMatchObject({ code: "REVIEW_FORBIDDEN", status: 403 });
     expect(evaluationMock.calls).toBe(0);
     expect(rows.reviews).toHaveLength(0);
+  });
+
+  it("checks the workspace scope before replaying a reconciliation idempotency event", async () => {
+    evaluationMock.snapshot = frozenSnapshot();
+    const { rows, service } = harness();
+    await service(7).create(input());
+    await service(8).create(input("00000000-0000-4000-8000-000000000107", dimensions(2), gates("failed")));
+    const caseRow = rows.cases[0];
+    const reconciliationRequestId = "00000000-0000-4000-8000-000000000109";
+    const reconciliation = {
+      clientRequestId: reconciliationRequestId,
+      expectedRevision: caseRow.revision,
+      reviewId: rows.reviews[0].id,
+      status: "aligned",
+      reason: "按第一位评审人的不可变记录复核。",
+    };
+    await service(10).reconcile(caseRow.id, reconciliation);
+
+    await expect(service(10, "other-project").reconcile(caseRow.id, reconciliation)).rejects.toMatchObject({
+      code: "REVIEW_CASE_NOT_FOUND",
+      status: 404,
+    });
   });
 });

@@ -37,6 +37,14 @@ describe("企业 RAG 人工改判差异", () => {
     expect(computeEnterpriseRagReviewDiff(report(4, "usable"), dimensions(2), gates("failed")).diff.alignment).toBe("human_more_negative");
   });
 
+  it("使用冻结版本的 excellent 档作为 AI 原结论", () => {
+    const source = report(4, "usable");
+    source.result.score = 95;
+    source.result.policyBand = "excellent";
+    expect(computeEnterpriseRagReviewDiff(source, dimensions(4), gates()).diff.overall)
+      .toMatchObject({ aiVerdict: "excellent", aiScore: 95, humanVerdict: "excellent" });
+  });
+
   it("同时包含人工调高和调低的维度时标记为混合分歧", () => {
     const mixed = dimensions(3);
     mixed[0] = { ...mixed[0]!, level: 4 };

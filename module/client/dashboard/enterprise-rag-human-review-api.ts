@@ -83,6 +83,15 @@ function parseReviewer(value: unknown): { userId: number; displayName: string } 
     : null;
 }
 
+function parseHumanScoring(value: unknown): EnterpriseRagHumanReviewDto["humanScoring"] | null {
+  const candidate = record(value);
+  const version = text(candidate?.version);
+  const hash = text(candidate?.hash);
+  return candidate && version && hash && /^[a-f0-9]{64}$/u.test(hash)
+    ? { version, hash }
+    : null;
+}
+
 function stringArray(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim())) return null;
   return [...value] as string[];
@@ -158,6 +167,7 @@ function parseReview(value: unknown): EnterpriseRagHumanReviewDto {
   const dimensions = parseDimensions(candidate?.dimensions);
   const gates = parseGates(candidate?.gates);
   const diff = parseDiff(candidate?.diff);
+  const humanScoring = parseHumanScoring(candidate?.humanScoring);
   const humanScore = finiteScore(candidate?.humanScore);
   if (!candidate || !text(candidate.id) || !text(candidate.clientRequestId) || !text(candidate.operationId) || !text(candidate.reportId) ||
       !reviewer || !snapshot || typeof snapshot.question !== "string" || typeof snapshot.answer !== "string" ||
@@ -167,7 +177,7 @@ function parseReview(value: unknown): EnterpriseRagHumanReviewDto {
       typeof candidate.humanVerdict !== "string" || !VERDICTS.has(candidate.humanVerdict as EnterpriseRagHumanVerdict) ||
       humanScore === undefined || typeof candidate.alignment !== "string" || !ALIGNMENTS.has(candidate.alignment as EnterpriseRagReviewAlignment) ||
       typeof candidate.status !== "string" || !REVIEW_STATUSES.has(candidate.status as EnterpriseRagReviewStatus) ||
-      !dimensions || !gates || !diff || diff.alignment !== candidate.alignment) {
+      !humanScoring || !dimensions || !gates || !diff || diff.alignment !== candidate.alignment) {
     throw new Error("人工评审接口返回的数据结构不正确，请刷新后重试。");
   }
   return {
@@ -186,6 +196,7 @@ function parseReview(value: unknown): EnterpriseRagHumanReviewDto {
     },
     humanVerdict: candidate.humanVerdict as EnterpriseRagHumanVerdict,
     humanScore,
+    humanScoring,
     alignment: candidate.alignment as EnterpriseRagReviewAlignment,
     status: candidate.status as EnterpriseRagReviewStatus,
     dimensions,

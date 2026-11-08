@@ -31,6 +31,7 @@ function review(overrides: Record<string, unknown> = {}) {
     snapshot: { question: "问题", answer: "回答", need: "", knowledgeVersion: "企业知识库.zip · v7" },
     humanVerdict: "excellent",
     humanScore: 100,
+    humanScoring: { version: "human-review-1.0.0", hash: "a".repeat(64) },
     alignment: "aligned",
     status: "aligned",
     dimensions,
@@ -85,6 +86,7 @@ describe("enterprise RAG human-review API", () => {
     mocks.fetch.mockResolvedValue(json(context()));
     const result = await liveEnterpriseRagHumanReviewApi.context(context().operationId);
     expect(result.reviewer.displayName).toBe("评审人甲");
+    expect(result.reviews[0].humanScoring).toEqual({ version: "human-review-1.0.0", hash: "a".repeat(64) });
     expect(result.reviews).toHaveLength(1);
     expect(mocks.fetch).toHaveBeenCalledWith(
       `/api/modules/brand/rag-evaluations/${context().operationId}/review-context`,
@@ -95,6 +97,13 @@ describe("enterprise RAG human-review API", () => {
   it("requires the server-normalized integer comparison bucket", async () => {
     const value = context();
     value.ai.dimensions[0].level = 3.25;
+    mocks.fetch.mockResolvedValue(json(value));
+    await expect(liveEnterpriseRagHumanReviewApi.context(value.operationId)).rejects.toThrow(/数据结构不正确/);
+  });
+
+  it("rejects an unversioned or malformed human-scoring provenance", async () => {
+    const value = context();
+    value.reviews[0].humanScoring = { version: "human-review-1.0.0", hash: "not-a-hash" };
     mocks.fetch.mockResolvedValue(json(value));
     await expect(liveEnterpriseRagHumanReviewApi.context(value.operationId)).rejects.toThrow(/数据结构不正确/);
   });
