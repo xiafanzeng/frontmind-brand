@@ -56,25 +56,30 @@ const countOccurrences = (html: string, needle: string) => html.split(needle).le
 /* ------------------------------------------------------------------ */
 
 describe("judgeEvaluationReducer", () => {
-  const K1 = judgeContextKey("q1", 2, "fp-a");
-  const K2 = judgeContextKey("q2", 2, "fp-a"); // question switched
-  const K3 = judgeContextKey("q1", 3, "fp-a"); // revision advanced
-  const K4 = judgeContextKey("q1", 2, "fp-b"); // draft fingerprint changed
-  const K5 = judgeContextKey("q1", 2, "fp-a", "Q1\u0000intent-1"); // question basis bound
-  const K6 = judgeContextKey("q1", 2, "fp-a", "Q2 edited\u0000intent-1"); // question edited elsewhere
+  const K1 = judgeContextKey("q1", "fp-a");
+  const K2 = judgeContextKey("q2", "fp-a"); // question switched
+  const K4 = judgeContextKey("q1", "fp-b"); // draft fingerprint changed
+  const K5 = judgeContextKey("q1", "fp-a", "Q1\u0000intent-1"); // question basis bound
+  const K6 = judgeContextKey("q1", "fp-a", "Q2 edited\u0000intent-1"); // question edited elsewhere
 
   const runningOn = (key: string) => {
     const starting = judgeEvaluationReducer(initialJudgeLifecycleState, { type: "start", contextKey: key });
     return judgeEvaluationReducer(starting, { type: "start-succeeded", taskId: "t1", contextKey: key });
   };
 
-  it("binds a distinct context key per question, revision and fingerprint", () => {
-    expect(new Set([K1, K2, K3, K4, K5, K6]).size).toBe(6);
+  it("binds a distinct context key per question, fingerprint and question basis", () => {
+    expect(new Set([K1, K2, K4, K5, K6]).size).toBe(5);
   });
 
-  it("appends the question basis to the context key and keeps legacy keys stable", () => {
-    expect(K1).toBe("q1:2:fp-a");
-    expect(K5).toBe(`q1:2:fp-a:Q1\u0000intent-1`);
+  it("keeps the context key across a pure revision bump (identical content re-publish)", () => {
+    // Revision is no longer part of the key: re-publishing byte-identical
+    // content must keep the completed judge task attached, not drop it.
+    expect(judgeContextKey("q1", "fp-a")).toBe(K1);
+  });
+
+  it("appends the question basis to the context key", () => {
+    expect(K1).toBe("q1:fp-a");
+    expect(K5).toBe(`q1:fp-a:Q1\u0000intent-1`);
     expect(K6).not.toBe(K5);
   });
 
@@ -97,10 +102,13 @@ describe("judgeEvaluationReducer", () => {
     expect(after).toBe(switched);
   });
 
-  it("drops a late judge result after the record revision advanced", () => {
-    const advanced = judgeEvaluationReducer(runningOn(K1), { type: "context-change", contextKey: K3 });
-    const after = judgeEvaluationReducer(advanced, { type: "poll-completed", result: buildJudge(), contextKey: K1 });
-    expect(after).toBe(advanced);
+  it("keeps a completed judge result when only the record revision advanced", () => {
+    // A content-identical re-publish no longer rotates the key, so the
+    // completed evaluation stays current (the server reuses the same task).
+    const completed = judgeEvaluationReducer(runningOn(K1), { type: "poll-completed", result: buildJudge(), contextKey: K1 });
+    expect(completed.phase).toBe("completed");
+    const after = judgeEvaluationReducer(completed, { type: "context-change", contextKey: K1 });
+    expect(after).toBe(completed);
   });
 
   it("drops a late judge result after the draft fingerprint changed", () => {

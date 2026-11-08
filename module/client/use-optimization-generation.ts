@@ -29,7 +29,6 @@ export function useOptimizationGeneration(input: {
   const contextKey =
     optimizationContextKey(
       input.questionId,
-      input.recordRevision,
       input.sourceFingerprint,
       input.judgeTaskId,
       input.questionBasis,

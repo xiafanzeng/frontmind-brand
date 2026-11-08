@@ -384,6 +384,25 @@ describe("judge API: POST / (start)", () => {
     expect(body.ruleVersion).toBeUndefined();
   });
 
+  it("reuses the completed judge task after a content-identical re-publish (revision bump)", async () => {
+    const attemptTasks = new Map<string, {id: string; status: string; prompt: string}>();
+    const first = await makeApp({ attemptTasks });
+    const res1 = await postStart(first.url, { questionId: "q1" });
+    expect(res1.status).toBe(200);
+    expect((await res1.json()).taskId).toBe("task-judge-1");
+    expect(first.effects.creates).toBe(1);
+    // The evaluation completed, then the user re-published identical content:
+    // the revision advanced while the draft fingerprint stayed the same.
+    attemptTasks.get([...attemptTasks.keys()][0])!.status = "stopped";
+    const second = await makeApp({ attemptTasks, record: { ...baseRecord, revision: 9 } });
+    const res2 = await postStart(second.url, { questionId: "q1" });
+    expect(res2.status).toBe(200);
+    const body2 = await res2.json();
+    expect(body2.taskId).toBe("task-judge-1"); // same task: no second model run
+    expect(body2.recordRevision).toBe(9);     // the reply still reflects the live record
+    expect(second.effects.creates).toBe(0);
+  });
+
   it("sends the judge model no rule evaluation and full question context in turn-input", async () => {
     const { url, archives } = await makeApp({});
     const res = await postStart(url, { questionId: "q1" });

@@ -100,15 +100,14 @@ describe("optimization client", () => {
       .rejects.toThrow(/传输协议校验|未知状态|invalid/i);
   });
 
-  it("binds context keys per question, revision, fingerprint and judge task", () => {
+  it("binds context keys per question, fingerprint and judge task; a pure revision bump keeps the key", () => {
     const keys = [
-      optimizationContextKey("q1", 5, "fp", "j1"),
-      optimizationContextKey("q2", 5, "fp", "j1"),
-      optimizationContextKey("q1", 6, "fp", "j1"),
-      optimizationContextKey("q1", 5, "fp2", "j1"),
-      optimizationContextKey("q1", 5, "fp", "j2"),
+      optimizationContextKey("q1", "fp", "j1"),
+      optimizationContextKey("q2", "fp", "j1"),
+      optimizationContextKey("q1", "fp2", "j1"),
+      optimizationContextKey("q1", "fp", "j2"),
     ];
-    expect(new Set(keys).size).toBe(5);
+    expect(new Set(keys).size).toBe(4);
   });
 });
 

@@ -287,13 +287,16 @@ describe("response-logic resolver gate across all public endpoints", () => {
     // this matrix proves only that the resolver gate lets the flow through.
   });
 
-  it("fails judge and optimization closed while the record's question basis is stale (Q1→Q2)", async () => {
+  it("adopts the current question after an edit (Q1→Q2) so re-evaluation and regeneration are not blocked", async () => {
     const harness = await startHarness({ credential: false });
     servers.push(harness);
     const json = { "Content-Type": "application/json" };
 
     // Tab A saved the record under Q1; tab B edits the ledger question to Q2
-    // (ledger revision bumps; the record's stored basis stays Q1).
+    // (ledger revision bumps; the record's stored basis stays Q1). Judge and
+    // optimization flows operate on the CURRENT question by design, so the
+    // resolver must let them through — idempotency keys embed the current
+    // question hash, so an edit creates new tasks, never stale reuse.
     harness.fake.ledgerRows[0].revision = 6;
     harness.fake.ledgerRows[0].payload = {
       version: 1,
@@ -303,33 +306,32 @@ describe("response-logic resolver gate across all public endpoints", () => {
     const judgeStart = await fetch(`${harness.url}/response-logic/evaluation/judge`, {
       method: "POST", headers: json, body: JSON.stringify({ questionId: QUESTION_ID, expectedRevision: 1 }),
     });
-    expect(judgeStart.status).toBe(409);
-    expect((await judgeStart.json()).error?.code).toBe("RESPONSE_LOGIC_QUESTION_CONTEXT_STALE");
+    expect(judgeStart.status).not.toBe(409);
+    expect((await judgeStart.json()).error?.code).toBe("CUSTOMER_KEY_REQUIRED");
 
     const judgeStatus = await fetch(
       `${harness.url}/response-logic/evaluation/judge/tasks/tk-1/status?questionId=${encodeURIComponent(QUESTION_ID)}&expectedRevision=1`,
     );
-    expect(judgeStatus.status).toBe(409);
-    expect((await judgeStatus.json()).error?.code).toBe("RESPONSE_LOGIC_QUESTION_CONTEXT_STALE");
+    // The unowned-task boundary (403) proves the request passed the resolver.
+    expect(judgeStatus.status).toBe(403);
 
     const optimizationStart = await fetch(`${harness.url}/response-logic/optimization`, {
       method: "POST", headers: json,
       body: JSON.stringify({ questionId: QUESTION_ID, expectedRevision: 1, judgeTaskId: "jt-1" }),
     });
-    expect(optimizationStart.status).toBe(409);
-    expect((await optimizationStart.json()).error?.code).toBe("RESPONSE_LOGIC_QUESTION_CONTEXT_STALE");
+    expect(optimizationStart.status).not.toBe(409);
+    expect((await optimizationStart.json()).error?.code).toBe("CUSTOMER_KEY_REQUIRED");
 
     const optimizationStatus = await fetch(
       `${harness.url}/response-logic/optimization/tasks/tk-1/status?questionId=${encodeURIComponent(QUESTION_ID)}&expectedRevision=1&judgeTaskId=jt-1`,
     );
-    expect(optimizationStatus.status).toBe(409);
-    expect((await optimizationStatus.json()).error?.code).toBe("RESPONSE_LOGIC_QUESTION_CONTEXT_STALE");
+    expect(optimizationStatus.status).toBe(403);
 
-    // No upstream client may be reached from a stale context.
+    // No upstream client may be reached without credentials.
     expect(harness.upstreamClient).not.toHaveBeenCalled();
 
-    // Re-saving the draft under the edited question text restores the basis
-    // and unblocks evaluation (the credential gate is the next stop).
+    // Re-saving the draft under the edited question text still refreshes the
+    // stored basis (the credential gate is the next stop either way).
     const resaved = await fetch(`${harness.url}/response-logic`, {
       method: "POST", headers: json,
       body: JSON.stringify({ ...saveBody, question: "修改后的新问题文本", expectedRevision: 1, publish: false }),
@@ -339,5 +341,31 @@ describe("response-logic resolver gate across all public endpoints", () => {
       method: "POST", headers: json, body: JSON.stringify({ questionId: QUESTION_ID, expectedRevision: 2 }),
     });
     expect(judgeAfter.status).toBe(428);
+  });
+
+  it("resolver fails closed by default and adopts the current question text with adoptCurrentQuestion", async () => {
+    const { createJudgeContextResolver } = await import("../server/response-logic-judge-api");
+    const record = { revision: 1, question: "旧问题", intent: "", draft: { concern: "c", conclusion: "cl", facts: "f", boundaries: "b" } };
+    const core = {
+      enterpriseWorkspaceUserId: (id: number) => id,
+      assertServiceCapability: async () => {},
+      getDashboardQuestion: async () => ({ question: "新问题", intent: "价格" }),
+      getResponseLogicEntry: async () => record,
+    } as never;
+    const req = { frontmindUser: { id: USER } } as never;
+    let strictError: unknown;
+    const strictRes = { setHeader: () => {}, status: (code: number) => ({ json: (body: unknown) => {
+      strictError = { code: (body as {error: {code: string}}).error.code, status: code };
+    }}) } as never;
+    expect(await createJudgeContextResolver(core)(req, strictRes, QUESTION_ID, 1)).toBeNull();
+    expect(strictError).toEqual({ code: "RESPONSE_LOGIC_QUESTION_CONTEXT_STALE", status: 409 });
+
+    const adopted = await createJudgeContextResolver(core, {adoptCurrentQuestion: true})(req, {} as never, QUESTION_ID, 1);
+    expect(adopted?.record.question).toBe("新问题");
+    expect(adopted?.record.intent).toBe("价格");
+    // The four draft sections (the actual evaluation subject) are untouched,
+    // and the source fingerprint stays bound to the draft, not the question.
+    expect(adopted?.logic).toEqual({concern: "c", conclusion: "cl", facts: "f", boundaries: "b"});
+    expect(adopted?.fingerprint).toBe(JSON.stringify(["c", "cl", "f", "b"]));
   });
 });

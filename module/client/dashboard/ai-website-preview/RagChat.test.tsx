@@ -9,6 +9,12 @@ vi.mock("@frontmind/module-ui/lib/utils", async original => ({ ...await original
 const base = () => ({ scopeKey:"task-a", live:true, assistantName:"企业助手", question:"支持部署吗？", answer:"", answerKey:"", sources:[], busy:false, running:false, canStop:true, canEdit:true, canSubmit:true, input:"部署问题", inputRef:createRef<HTMLTextAreaElement>(), onInput:vi.fn(), onSubmit:vi.fn(async () => {}), onStop:vi.fn(async () => true), onEvidence:vi.fn(), starterQuestions:{ current:{ id:"server-current", questions:[...DEFAULT_RAG_STARTER_QUESTIONS] }, revision:1 } });
 const phase = () => document.querySelector(".rag-chat-response")?.getAttribute("data-phase");
 const deferred = <T,>() => { let resolve!: (value:T) => void; const promise = new Promise<T>(r => {resolve=r;}); return {promise,resolve}; };
+// The immutable image builder is deliberately resource-bounded; animation
+// and act() flushes there run several times slower than a developer machine.
+// The immutable image builder is deliberately resource-bounded; animation
+// and act() flushes there run several times slower than a developer machine.
+// Staying above the worker RPC default also extends that timeout window.
+vi.setConfig({ testTimeout: 90000, hookTimeout: 30000 });
 beforeEach(() => { vi.mocked(copyToClipboard).mockReset(); vi.mocked(copyToClipboard).mockResolvedValue(true); localStorage.clear(); vi.stubGlobal("matchMedia",vi.fn(() => ({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()}))); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 function ControlledChat(props: Parameters<typeof RagChat>[0]) {
