@@ -870,6 +870,17 @@ it("重新评估只作废当前问题的旧方案，保留历史记录并允许�
 
 describe("按问题和方案校验并发提交", () => {
   const other = {id: "q2", question: "其他材料如何选择？", category: "产品", subdivision: "", tableId: "t", rowIndex: 1, sourceRevision: 1};
+  it.each(["running","paused"] as const)("问题A方案%s时仍能评估问题B，后台版本变化不制造冲突",async status=>{
+    const h=harness();const initial=await h.intake();
+    const added=await h.service.command({kind:"intake",expectedRevision:initial.revision,questions:[other]});
+    await h.service.command({...h.request,kind:"plan",expectedRevision:added.revision,expectedQuestions:initial.state.questions.map(intentQuestionSnapshot)});
+    h.ledger().state.jobs![0].status=status;
+    const result=await h.service.command({...h.request,expectedRevision:initial.revision,questionIds:[other.id],
+      expectedQuestions:[intentQuestionSnapshot(other)],clientRequestId:"00000000-0000-4000-8000-000000000098"});
+    expect(result.state.jobs?.map(job=>[job.kind,job.questionIds,job.status])).toEqual([["plan",["q"],status],["evaluate",["q2"],"running"]]);
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
+    expect(result.state.questions.map(question=>question.id)).toEqual(["q","q2"]);
+  });
   it("不同问题可以同时评估，旧清单版本不阻塞未变的问题，同题重试不重复扣费", async () => {
     const h = harness(); const initial = await h.intake();
     const added = await h.service.command({kind: "intake", expectedRevision: initial.revision, questions: [other]});

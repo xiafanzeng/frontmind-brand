@@ -1333,8 +1333,8 @@ it("后台读取和其他问题评估不吞掉确认执行，立即显示执行�
       .mockImplementation(() => new Promise<IntentWorkspace>(() => {})),
   };
   render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-  fireEvent.click(await screen.findByRole("button", {name: "查看优化方案"}));
   fireEvent.click(await screen.findByRole("button", {name: "重新读取"}));
+  fireEvent.click(screen.getByRole("button", {name: "查看优化方案"}));
   const execute = screen.getByRole("button", {name: "确认并执行已选动作"});
   expect(execute).toHaveProperty("disabled", false);
   expect(screen.queryByText("正在读取优化工作台…")).toBeNull();
@@ -1354,6 +1354,65 @@ it("后台读取和其他问题评估不吞掉确认执行，立即显示执行�
   expect(screen.queryByRole("heading", {name: "确认优化方案"})).toBeNull();
   expect(screen.getByRole("button", {name: "查看知识库变更"})).toBeTruthy();
   expect(api.execute).toHaveBeenCalledTimes(1);
+});
+
+it("问题B提交的迟到409不能污染正在查看的问题A方案任务",async()=>{
+  const initial=workspace("running","plan");
+  initial.state.questions.push({...question,id:"q2",question:"第二个评估问题",rowIndex:1});
+  let fail!:(cause:Error)=>void;
+  const {api}=pendingApi(initial);
+  api.command=vi.fn(()=>new Promise<IntentWorkspace>((_resolve,reject)=>{fail=reject;}));
+  render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+  const row=(await screen.findByText("第二个评估问题")).closest("tr")!;
+  fireEvent.click(within(row).getByRole("button",{name:"评估问题"}));
+  await waitFor(()=>expect(api.command).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button",{name:"返回问题列表"}));
+  fireEvent.click(within(screen.getByRole("region",{name:"优化方案任务"})).getByRole("button",{name:"查看进度"}));
+  await act(async()=>fail(new Error("问题B被拒绝（HTTP 409）")));
+  expect(screen.getByRole("region",{name:"优化方案进度"})).toBeTruthy();
+  expect(screen.getByRole("status",{name:"任务状态"}).textContent).toBe("进行中");
+  expect(screen.queryByText("问题B被拒绝（HTTP 409）")).toBeNull();
+  expect(api.command).toHaveBeenCalledTimes(1);
+});
+
+it("问题B的读取错误只出现在B卡片，不影响A方案进度",async()=>{
+  const initial=workspace("running","plan");
+  initial.state.questions.push({...question,id:"q2",question:"独立评估问题",rowIndex:1});
+  initial.state.jobs!.push({...initial.state.jobs![0],id:"job-b",kind:"evaluate",questionIds:["q2"]});
+  let failB!:(cause:Error)=>void;
+  const {api}=pendingApi(initial);
+  api.waitForJob=vi.fn(id=>new Promise<IntentWorkspace>((_resolve,reject)=>{if(id==="job-b")failB=reject;}));
+  render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+  const plan=await screen.findByRole("region",{name:"优化方案任务"});
+  fireEvent.click(within(plan).getByRole("button",{name:"查看进度"}));
+  await act(async()=>failB(new TypeError("B任务连接中断")));
+  expect(screen.queryByText("B任务连接中断")).toBeNull();
+  expect(screen.getByRole("status",{name:"任务状态"}).textContent).toBe("进行中");
+  fireEvent.click(screen.getByRole("button",{name:"返回问题列表"}));
+  expect(within(screen.getByRole("region",{name:"问题评估任务"})).getByText("B任务连接中断")).toBeTruthy();
+  expect(within(screen.getByRole("region",{name:"优化方案任务"})).queryByText("B任务连接中断")).toBeNull();
+  expect(api.command).not.toHaveBeenCalled();
+});
+
+it("服务端明确拒绝且未创建任务时显示未开始，不显示状态待确认",()=>{
+  render(<IntentTaskProgress kind="evaluate" error="清单已更新（HTTP 409）" submissionRejected pending={false} onBack={vi.fn()} onViewResult={vi.fn()}/>);
+  expect(screen.getByRole("status",{name:"任务状态"}).textContent).toBe("未开始");
+  expect(screen.getByRole("heading",{name:"问题评估尚未开始"})).toBeTruthy();
+  expect(screen.queryByRole("button",{name:"继续评估"})).toBeNull();
+});
+
+it("重新读取未确认的B任务时不把正在运行的A方案当成本次任务",async()=>{
+  const initial=workspace("running","plan");
+  initial.state.questions.push({...question,id:"q2",question:"尚未提交成功的问题B",rowIndex:1});
+  const {api}=pendingApi(initial);api.command=vi.fn().mockRejectedValueOnce(new TypeError("提交连接中断"));
+  render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+  const row=(await screen.findByText("尚未提交成功的问题B")).closest("tr")!;
+  fireEvent.click(within(row).getByRole("button",{name:"评估问题"}));
+  fireEvent.click(await screen.findByRole("button",{name:"重新读取"}));
+  await screen.findByText("尚未读取到本次任务，请稍后重新读取确认；请勿重复提交。");
+  expect(screen.getByRole("region",{name:"问题评估进度"})).toBeTruthy();
+  expect(screen.queryByRole("region",{name:"优化方案进度"})).toBeNull();
+  expect(api.command).toHaveBeenCalledTimes(1);
 });
 
 it("后台重新读取时继续评估仍可提交，迟到读取不解除控制请求锁或改变页面",async()=>{

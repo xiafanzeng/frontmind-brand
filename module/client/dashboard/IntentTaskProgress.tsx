@@ -3,27 +3,29 @@ import type {IntentSkillJob} from "../../contracts/intent-workbench";
 import "./intent-task-progress.css";
 import IntentTaskControls from "./IntentTaskControls";
 
-export default function IntentTaskProgress({job, kind, error, pending, onBack, onViewResult, onPause, onResume, onRetry, returnLabel = "问题列表"}: {
+export default function IntentTaskProgress({job, kind, error, pending, onBack, onViewResult, onPause, onResume, onRetry, submissionRejected=false, returnLabel = "问题列表"}: {
   job?: IntentSkillJob; kind: "evaluate" | "plan"; error: string; pending: boolean;
   onBack: () => void; onViewResult: () => void;
   returnLabel?: string;
   updating?: boolean; onPause?: () => void; onResume?: () => void;
   onRetry?: () => void;
+  submissionRejected?:boolean;
 }) {
   const stages = kind === "plan" ? ["准备知识与问题", "提交模型任务", "生成知识库优化方案", "校验并保存方案"]
     : ["准备知识与问题", "提交模型任务", "分析知识与评分", "校验并保存结果"];
   const completed = job?.status === "succeeded";
   const paused = job?.status === "paused";
   const failed = job?.status === "failed";
-  const uncertain = !completed && !failed && (Boolean(error) || job?.status === "create_unknown");
+  const notStarted=!job&&submissionRejected;
+  const uncertain = !completed && !failed && !notStarted && (Boolean(error) || job?.status === "create_unknown");
   const stage = job?.progress?.stage;
   const step = completed ? 4 : stage === "validating" || stage === "repairing" || stage === "completed" ? 3
     : stage === "analyzing" ? 2 : stage === "submitted" ? 1 : stage === "preparing" || !job ? 0 : null;
-  const status = completed ? "已完成" : paused ? "已暂停" : job?.status === "pausing" ? "正在暂停"
+  const status = notStarted ? "未开始" : completed ? "已完成" : paused ? "已暂停" : job?.status === "pausing" ? "正在暂停"
     : job?.status === "resuming" ? "正在恢复" : failed ? "未完成" : uncertain ? "状态待确认" : !job ? "准备中" : "进行中";
-  const stageTitle = completed ? "结果已校验并保存" : paused ? `${kind === "plan" ? "方案生成" : "问题评估"}已暂停` : stage === "repairing" ? "正在修复输出并重新校验"
+  const stageTitle = notStarted ? `${kind === "plan" ? "方案生成" : "问题评估"}尚未开始` : completed ? "结果已校验并保存" : paused ? `${kind === "plan" ? "方案生成" : "问题评估"}已暂停` : stage === "repairing" ? "正在修复输出并重新校验"
     : step === null ? "任务执行中，详细阶段暂不可用" : stages[Math.min(step, 3)];
-  const emptyMessage = completed ? "结果已校验并保存。" : paused ? "当前任务已暂停。"
+  const emptyMessage = notStarted ? "本次请求未被接受，尚未创建任务。请返回问题列表后重试。" : completed ? "结果已校验并保存。" : paused ? "当前任务已暂停。"
     : failed ? job?.error || "任务未完成。" : uncertain ? "请重新读取状态，核对当前任务。" : job ? "模型任务已提交，等待执行动态…" : kind === "plan" ? "正在准备方案生成任务…" : "正在准备评估任务…";
   return <div className="iw-task-progress">
     <button className="iw-back" onClick={onBack}><ArrowLeft size={15}/>返回{returnLabel}</button>

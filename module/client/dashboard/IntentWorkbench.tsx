@@ -3,7 +3,7 @@ import {ArrowLeft, ArrowRight, Check, ChevronDown, GripHorizontal, MessageSquare
 import {Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter} from "@frontmind/module-ui/components/ui/dialog";
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import ManagedKeywordTables, {type ManagedKeywordTablesProps} from "./ManagedKeywordTables";
-import {liveIntentWorkbenchApi, type IntentWorkbenchApi} from "./intent-workbench-api";
+import {liveIntentWorkbenchApi, isRejectedIntentRequest, type IntentWorkbenchApi} from "./intent-workbench-api";
 import type {IntentWorkspace, IntentEvaluation, IntentPlan, IntentAction, IntentReceipt} from "../../contracts/intent-workbench";
 import {findSavedIntentPlan, findCurrentIntentPlan, knowledgeOnlyIntentPlan, intentQuestionSnapshot, intentPlanSnapshot} from "../../contracts/intent-workbench";
 import "./intent-workbench.css";
@@ -160,7 +160,10 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [watching, setWatching] = useState(false);
   const [progressKind, setProgressKind] = useState<"evaluate" | "plan">("evaluate");
   const [progressJobId, setProgressJobId] = useState<string>();
-  const [error, setError] = useState("");
+  const [error, setErrorMessage] = useState("");
+  const errorNavigation = useRef(0);
+  const [taskErrors,setTaskErrors]=useState<Record<string,string>>({});
+  const [submissionRejected,setSubmissionRejected]=useState(false);
   const [received, setReceived] = useState<string[]>([]);
   const [intakeFeedback, setIntakeFeedback] = useState<IntentIntakeFeedbackState>(null);
   const [selected, setSelected] = useState<string[]>(initialCatalogState?.selected ?? []);
@@ -199,6 +202,11 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const draftVersion = useRef(0);
   const workspaceRef = useRef<IntentWorkspace | null>(null);
   const navigationVersion = useRef(0);
+  function setError(message:string,navigation=navigationVersion.current){errorNavigation.current=navigation;setErrorMessage(message);}
+  function setTaskError(id:string,message:string){setTaskErrors(current=>{
+    if((current[id]??"")===message)return current;
+    const next={...current};if(message)next[id]=message;else delete next[id];return next;
+  });}
   function navigateView(next: View) {navigationVersion.current++; viewRef.current = next; setView(next);}
   const watchControllers = useRef(new Map<string, AbortController>());
   const planSubmissions = useRef(new Set<string>());
@@ -216,6 +224,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   useEffect(() => {
     mounted.current = true; generation.current++; running.current = false; runningRead.current = false; runSequence.current++;
     setDismissedCompletionIds([]);
+    setTaskErrors({});setSubmissionRejected(false);
     workspaceRef.current = null; questionSaving.current = false; draftSaving.current = false;
     setSubmittingIds([]); setSavingQuestionId(undefined); setSavingDrafts(false); setBlockedModelAction(null);
     executingRef.current = false; executeId.current = undefined; setExecuting(false);
@@ -311,7 +320,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     const current = () => mounted.current && generation.current === version && !controller.signal.aborted;
     setWatching(true);
     void api.waitForJob(job.id, data => {
-      if (current()) applyWorkspace(data);
+      if (current()) {applyWorkspace(data);setTaskError(job.id,"");}
     }, controller.signal).then(data => {
       if (!current()) return;
       applyWorkspace(data);
@@ -333,7 +342,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         setDraftDirty(false); setView("plan");
       } else setView(destination === "plan" ? "evaluation" : destination);
     }).catch(cause => {
-      if (current()) setError(cause instanceof Error ? cause.message : "任务状态读取失败，请重新读取");
+      if (current()) setTaskError(job.id,cause instanceof Error ? cause.message : "任务状态读取失败，请重新读取");
     }).finally(() => {
       if (watchControllers.current.get(job.id) === controller) watchControllers.current.delete(job.id);
       if (mounted.current && generation.current === version) setWatching(watchControllers.current.size > 0);
@@ -344,15 +353,17 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     if (!target || !api.control || (pending && !pendingRead)) return;
     watchControllers.current.get(target.id)?.abort(); watchControllers.current.delete(target.id);
     setWatching(watchControllers.current.size > 0);
-    const data = await run(() => api.control!({jobId: target.id, action}));
+    const data = await run(() => api.control!({jobId: target.id, action}),undefined,false,undefined,false,[],target.id);
     if (!data && target.status !== "paused") watchJob(target, target.kind === "plan" ? "plan" : "evaluation");
   }
-  async function run(work: () => Promise<IntentWorkspace>, next?: View, restoreJob = false, modelKind?: "evaluate" | "plan", readOnly = false, requestQuestionIds: string[] = []) {
+  async function run(work: () => Promise<IntentWorkspace>, next?: View, restoreJob = false, modelKind?: "evaluate" | "plan", readOnly = false, requestQuestionIds: string[] = [], failureJobId?:string) {
     if (running.current && (readOnly || !runningRead.current)) return;
     const sequence=++runSequence.current;
+    const errorJobId=failureJobId??(!modelKind&&viewRef.current==="progress"?progressJobIdRef.current:undefined);
+    if(errorJobId)setTaskError(errorJobId,"");
     running.current = true; runningRead.current = readOnly; setPending(true); setPendingRead(readOnly); setError("");
     setSubmittingIds(requestQuestionIds);
-    if (modelKind) {setProgressKind(modelKind); setProgressJobId(undefined); setView("progress");}
+    if (modelKind) {setProgressKind(modelKind); setProgressJobId(failureJobId);progressJobIdRef.current=failureJobId;setSubmissionRejected(false); setView("progress");}
     const navigation = navigationVersion.current;
     const ownsNavigation = () => navigation === navigationVersion.current && !draftDirtyRef.current;
     const destination = next ?? (view === "progress" ? "evaluation" : view);
@@ -363,15 +374,19 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       let data = await work();
       if (!current()) return;
       applyWorkspace(data);
+      if(errorJobId)setTaskError(errorJobId,"");
       data = workspaceRef.current!;
       // A background read must not release a newer write's lock or steal its page.
       if(sequence!==runSequence.current)return data;
       const latest = data.state.jobs?.at(-1);
-      if (latest?.status === "failed" && (latest.id !== priorJob?.id || priorJob?.status !== "failed"))
+      if (latest?.status === "failed" && (!errorJobId||latest.id===errorJobId||Boolean(modelKind)) &&
+          (!modelKind||(latest.kind===modelKind&&requestQuestionIds.every(id=>latest.questionIds.includes(id)))) &&
+          (latest.id !== priorJob?.id || priorJob?.status !== "failed"))
         throw new Error(latest.error ?? "模型生成失败，请重新评估");
       const jobs = data.state.jobs?.filter(item => !["succeeded", "failed"].includes(item.status)) ?? [];
-      const job = (modelKind ? jobs.find(item => item.kind === modelKind &&
-        requestQuestionIds.every(id => item.questionIds.includes(id))) : undefined) ??
+      const job = modelKind ? jobs.find(item => item.kind === modelKind &&
+        requestQuestionIds.every(id => item.questionIds.includes(id))) :
+        restoreJob&&viewRef.current==="progress" ? jobs.find(item=>item.id===progressJobIdRef.current) :
         jobs.find(item => item.id === progressJobIdRef.current) ?? jobs[0];
       const completed = restoreJob && ownsNavigation() && viewRef.current === "progress" ? data.state.jobs?.find(item =>
         item.id === progressJobId && item.status === "succeeded") : undefined;
@@ -393,6 +408,11 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         } else setView("evaluation");
         return data;
       }
+      if(readOnly&&restoreJob&&ownsNavigation()&&viewRef.current==="progress"&&errorJobId&&
+          !data.state.jobs?.some(item=>item.id===errorJobId)){
+        setTaskError(errorJobId,"尚未读取到本次任务，请稍后重新读取确认；请勿重复提交。");
+        return data;
+      }
       if (next && ownsNavigation()) setView(next);
       if (job && restoreJob && ownsNavigation() && viewRef.current === "progress") {
         setScope(job.questionIds); setIndex(0); setExpanded([]); setSingleQueue([]);
@@ -410,7 +430,11 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         return data;
       }
     }
-    catch (cause) {if (current() && sequence===runSequence.current) setError(cause instanceof Error ? cause.message : "操作失败，请重试");}
+    catch (cause) {if (current() && sequence===runSequence.current) {
+      const message=cause instanceof Error?cause.message:"操作失败，请重试";
+      if(errorJobId)setTaskError(errorJobId,message);else setError(message,navigation);
+      if(modelKind){setError(message,navigation);setSubmissionRejected(isRejectedIntentRequest(cause));}
+    }}
     finally {if (current() && sequence===runSequence.current) {running.current = false; runningRead.current = false; setPending(false); setSubmittingIds([]);}}
   }
   const questions = workspace?.state.questions ?? [];
@@ -551,7 +575,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       evaluations.some(evaluation => evaluation.questionId === item.id)).map(item => item.id)])] : []);
     navigateView("evaluation");
     if (!missing.length) return;
-    await run(() => command({kind: "evaluate", questionIds: missing}), "evaluation", false, "evaluate", false, missing);
+    const requestId=crypto.randomUUID();
+    await run(() => command({kind: "evaluate", questionIds: missing,clientRequestId:requestId}), "evaluation", false, "evaluate", false, missing,requestId);
   }
   async function nextEvaluation() {
     const next = singleQueue[singleQueue.indexOf(scope[0]) + 1];
@@ -631,7 +656,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     const version = generation.current, requestId = crypto.randomUUID();
     const currentSession = () => mounted.current && generation.current === version;
     setProgressKind("plan"); setProgressJobId(requestId); progressJobIdRef.current = requestId;
-    setView("progress"); setError("");
+    setView("progress"); setError("");setSubmissionRejected(false);setTaskError(requestId,"");
     try {
       const current = await api.observe();
       if (!currentSession()) return;
@@ -651,7 +676,10 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         setDraftDirty(false); setView("plan");
       }
     } catch (cause) {
-      if (currentSession()) setError(cause instanceof Error ? cause.message : "生成方案失败，请重试");
+      if (currentSession()) {
+        const message=cause instanceof Error?cause.message:"生成方案失败，请重试";
+        setTaskError(requestId,message);setError(message,navigation);setSubmissionRejected(isRejectedIntentRequest(cause));
+      }
     } finally {if (currentSession()) missing.forEach(id => planSubmissions.current.delete(id));}
   }
   async function execute() {
@@ -708,8 +736,9 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         watchJob(job, job.receiptId ? "result" : job.kind === "plan" ? "plan" : "evaluation");
     } catch (cause) {
       if (currentSession()) {
-        setError(cause instanceof Error ? cause.message : "执行尚未确认，草稿已保留，请重新读取后核对");
-        if (navigation === navigationVersion.current) navigateView("plan");
+        const ownsNavigation=navigation===navigationVersion.current;
+        if (ownsNavigation) navigateView("plan");
+        setError(cause instanceof Error ? cause.message : "执行尚未确认，草稿已保留，请重新读取后核对",ownsNavigation?navigationVersion.current:navigation);
       }
     } finally {if (currentSession()) {executingRef.current = false; setExecuting(false);}}
   }
@@ -738,6 +767,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   function openTaskDetails(jobId: string, returnView: "universe" | "list") {
     const job = workspace?.state.jobs?.find(item => item.id === jobId);
     if (!job) return;
+    setError("");setSubmissionRejected(false);
     // Inspect the selected task without submitting or restarting its watcher.
     setEvaluationReturnView(returnView); setScope(job.questionIds); setIndex(0);
     setExpanded([]); setSingleQueue([]); setProgressJobId(job.id);
@@ -815,9 +845,9 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       </section>}
       {!archived && <section className="iw-panel" role="status">未找到该任务的已保存结果，请返回已完成任务重新选择。</section>}
     </>}
-    {error && view !== "progress" && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true, undefined, true)}>重新读取</button></div>}
+    {error && view !== "progress" && (view==="list"||errorNavigation.current===navigationVersion.current) && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true, undefined, true)}>重新读取</button></div>}
     {view === "progress" && <IntentTaskProgress job={workspace?.state.jobs?.find(item => item.id === progressJobId)}
-      kind={progressKind} error={error} pending={pending} updating={watching}
+      kind={progressKind} error={(progressJobId?taskErrors[progressJobId]:errorNavigation.current===navigationVersion.current?error:"")??""} pending={pending} updating={watching} submissionRejected={submissionRejected}
       onPause={api.control ? () => void controlJob("pause") : undefined} onResume={api.control ? () => void controlJob("resume") : undefined}
       onRetry={() => {const failed=workspace?.state.jobs?.find(item=>item.id===progressJobId);
         if(failed?.status!=="failed")return;
@@ -859,7 +889,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       }}
         headerStatus={refreshingList ? <IntentListRefreshStatus/> : undefined}
         taskFeedback={listTasks.length ? <div className="iw-list-tasks" aria-label="当前优化任务">{listTasks.map(job => <IntentListEvaluationStatus key={job.id}
-          job={job} uncertain={false} pending={pending && !pendingRead}
+          job={job} uncertain={Boolean(taskErrors[job.id])} pending={pending && !pendingRead}
+          taskError={taskErrors[job.id]} onRefresh={()=>void run(()=>api.observe(),undefined,false,undefined,true,[],job.id)}
           questionLabel={job.questionIds.map(id => questions.find(question => question.id === id)?.question ?? "历史问题").join("；")}
           autoDismiss={job.kind === "plan" ? job.questionIds.every(id => savedPlanIds.includes(id)) : job.questionIds.every(id => evaluations.some(item => item.questionId === id && (!item.provenance?.operationId || item.provenance.operationId === job.id)))}
           onDismiss={() => setDismissedCompletionIds(ids => [...ids, job.id])}

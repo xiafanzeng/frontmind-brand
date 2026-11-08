@@ -10,8 +10,9 @@ export interface IntentWorkbenchApi {
   waitForJob?(jobId: string, onUpdate: (value: IntentWorkspace) => void, signal?: AbortSignal): Promise<IntentWorkspace>;
 }
 class IntentRequestError extends Error {
-  constructor(message: string, readonly retryable = false) {super(message);}
+  constructor(message: string, readonly retryable = false, readonly status?:number) {super(message);}
 }
+export const isRejectedIntentRequest=(cause:unknown)=>cause instanceof IntentRequestError&&Boolean(cause.status&&cause.status>=400&&cause.status<500&&cause.status!==408);
 const temporaryStatus = (status: number) => [502, 503, 504].includes(status);
 async function requestOnce(path: string, input: unknown, operation: ReturnType<typeof captureWorkspaceRestOperation>) {
   operation.assertActive();
@@ -40,7 +41,7 @@ async function requestOnce(path: string, input: unknown, operation: ReturnType<t
   operation.assertActive();
   if (!response.ok) {
     const message = typeof value?.error === "string" ? value.error : value?.error?.message ?? value?.message;
-    throw new IntentRequestError(`${message ?? "优化工作台请求失败"}（HTTP ${response.status}，${endpoint}）`, temporaryStatus(response.status));
+    throw new IntentRequestError(`${message ?? "优化工作台请求失败"}（HTTP ${response.status}，${endpoint}）`, temporaryStatus(response.status),response.status);
   }
   if (!value || !Number.isInteger(value.revision) || value.state?.version !== 1 ||
       !["questions", "evaluations", "plans", "todos", "receipts"].every(key => Array.isArray(value.state[key])) ||
