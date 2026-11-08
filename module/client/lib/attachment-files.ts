@@ -1,3 +1,4 @@
+import { knowledgeBaseDocumentMaxBytes } from "../../contracts/knowledge-base-upload-limits";
 import { isWmaKnowledgeDocument, WMA_KNOWLEDGE_MAX_BATCH_BYTES, WMA_KNOWLEDGE_MAX_FILE_BYTES } from "../../contracts/wma-knowledge-upload";
 import JSZip from "jszip";
 import {
@@ -43,7 +44,9 @@ export function assertKnowledgeBaseInitialAttachmentSizes(files: readonly File[]
   for (const file of files) {
     if (wmaInitial && isWmaKnowledgeDocument(normalizedKnowledgeBaseUploadFilename(file.name), normalizedKnowledgeBaseUploadMimeType(file))) {
       if (file.size > WMA_KNOWLEDGE_MAX_FILE_BYTES) throw new Error(`文件“${file.name}”不能超过 1 GiB`);
-    } else assertChatAttachmentSizes([file]);
+    } else if (file.size > knowledgeBaseDocumentMaxBytes(normalizedKnowledgeBaseUploadFilename(file.name), normalizedKnowledgeBaseUploadMimeType(file), "kimi")) {
+      throw new Error(`文件“${file.name}”超过知识库资料大小上限（单个文件最大 100 MiB）`);
+    }
   }
 }
 

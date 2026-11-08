@@ -1,5 +1,6 @@
 import type { KnowledgeBaseRunPhase } from "../../contracts/knowledge-base-upload-state";
-import { Loader2, Check } from "lucide-react";
+import { CircleAlert, CirclePause, Loader2, Check } from "lucide-react";
+import "./KnowledgeExecutionActivity.css";
 import type {
   KnowledgeBaseOperationState,
   KnowledgeBaseProcessingPhase,
@@ -44,19 +45,26 @@ export default function KnowledgePublicExecution({
           : null;
   if (!label) return null;
   const complete = runPhase ? runPhase === "published" : operationState === "completed";
+  const stopped = runPhase === "cancelled";
+  const attention = runPhase === "failed" || runPhase === "reset_required" || operationState === "reset_required";
   return (
     <div
-      className="knowledge-public-execution"
+      className="knowledge-public-execution knowledge-execution-status"
+      data-state={complete ? "complete" : stopped ? "stopped" : attention ? "attention" : "active"}
       role="status"
       aria-label="知识任务执行状态"
     >
-      {complete ? (
-        <Check size={14} />
-      ) : runPhase ? ["researching", "normalizing"].includes(runPhase) ? (
-        <Loader2 size={14} className="animate-spin" />
-      ) : null : operationState !== "reset_required" ? (
-        <Loader2 size={14} className="animate-spin" />
-      ) : null}
+      <span className="knowledge-execution-status__icon" aria-hidden="true">
+        {complete ? (
+          <Check size={16} />
+        ) : attention ? (
+          <CircleAlert size={16} />
+        ) : stopped ? (
+          <CirclePause size={16} />
+        ) : (
+          <Loader2 size={16} className="knowledge-execution__spinner" />
+        )}
+      </span>
       <span>{label}</span>
     </div>
   );

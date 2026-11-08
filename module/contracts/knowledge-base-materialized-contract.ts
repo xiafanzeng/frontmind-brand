@@ -1,3 +1,5 @@
+import { factAdaptiveKnowledgeLeaves } from "./knowledge-content-policy.js";
+export { configureKnowledgeContentPolicy } from "./knowledge-content-policy.js";
 import { createHash } from "node:crypto";
 
 import JSZip from "jszip";
@@ -594,7 +596,7 @@ function knowledgeBaseHasSparseEvidenceException(
 }
 
 /** Checks retained evidence bindings and quantities, not external factual truth. */
-export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManifest, files: ReadonlyMap<string, Buffer>): KnowledgeBaseDepthIssue[] {
+export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManifest, files: ReadonlyMap<string, Buffer>, adaptiveLeaves: ReadonlySet<string> = new Set()): KnowledgeBaseDepthIssue[] {
   if (manifest.skill.version !== "6") return [];
   const policy = KNOWLEDGE_BASE_WORKING_SET_POLICY.depth;
   const traceability = policy.evidenceTraceability;
@@ -659,6 +661,7 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
     return { leaf, evidence, evidenceSources, markdown, bodyParagraphs, bodyFragments };
   });
   return records.flatMap<KnowledgeBaseDepthIssue>(({ leaf, evidence, evidenceSources, markdown, bodyParagraphs, bodyFragments }) => {
+    const adaptive = adaptiveLeaves.has(leaf.leafId);
     const texts = [...evidence.values()];
     const evidenceCharacters = texts.reduce((count, text) => count + knowledgeBaseVisibleCharacters(newBindings ? knowledgeBaseSourceText(sourceText(text), newSubstance) : text), 0);
     const body = knowledgeBaseVisibleText(markdown);
@@ -712,16 +715,16 @@ export function knowledgeBaseDepthIssues(manifest: KnowledgeBaseWorkingSetManife
       const effectiveBodyCharacters = (bodyFragments?.characters
         ?? bodyParagraphs.reduce((count, paragraph) => count + Array.from(paragraph).length, 0)) - templateCharacters;
       const substantiveIssue = { ...issue, minimumBodyCharacters: substance.minimumBodyCharacters, effectiveBodyCharacters, templateCharacters };
-      if (templateCharacters && (!bodyFragments || effectiveBodyCharacters < substance.minimumBodyCharacters)) {
+      if (templateCharacters && (adaptive ? effectiveBodyCharacters <= 0 : (!bodyFragments || effectiveBodyCharacters < substance.minimumBodyCharacters))) {
         return [{ ...substantiveIssue, reason: "BODY_TEMPLATE_REUSED" }];
       }
-      if (effectiveBodyCharacters < substance.minimumBodyCharacters
+      if (!adaptive && effectiveBodyCharacters < substance.minimumBodyCharacters
         && !knowledgeBaseHasSparseEvidenceException(manifest, leaf, evidence, evidenceSources, markdown)) {
         return [{ ...substantiveIssue, reason: "SUBSTANTIVE_BODY_TOO_SHORT" }];
       }
       return [];
     }
-    return evidenceCharacters >= policy.evidenceThreshold && bodyCharacters < minimumBodyCharacters ? [issue] : [];
+    return !adaptive && evidenceCharacters >= policy.evidenceThreshold && bodyCharacters < minimumBodyCharacters ? [issue] : [];
   });
 }
 
@@ -947,6 +950,7 @@ async function loadSafeArchive(bytes: Buffer) {
     fail("ZIP central directory 坐标无效");
   }
   const centralNames = new Set<string>();
+  const safeDirectoryNames = new Set<string>();
   let centralCursor = directoryOffset;
   for (let index = 0; index < totalEntries; index += 1) {
     if (
@@ -970,6 +974,24 @@ async function loadSafeArchive(bytes: Buffer) {
       fail("ZIP central directory 包含重复文件名");
     }
     centralNames.add(physicalName);
+    // JSZip drops unsafeOriginalName for directories after normalizing their
+    // paths. Validate their physical names before that lossy normalization.
+    const physicalPath = decodeUtf8(
+      bytes.subarray(centralCursor + 46, centralCursor + 46 + nameLength),
+      "ZIP 文件名",
+    );
+    const attributes = bytes.readUInt32LE(centralCursor + 38);
+    const fileType = (attributes >>> 16) & 0o170000;
+    if (physicalPath.endsWith("/") || (attributes & 0x10) !== 0 || fileType === 0o040000) {
+      if (!physicalPath.endsWith("/") || bytes.readUInt32LE(centralCursor + 24) !== 0 || fileType === 0o120000) {
+        fail("ZIP 目录项无效");
+      }
+      const directoryPath = physicalPath.endsWith("/") ? physicalPath.slice(0, -1) : physicalPath;
+      if (safeArchivePath(directoryPath, "ZIP 目录名") !== directoryPath) {
+        fail("ZIP 目录名包含不安全路径");
+      }
+      safeDirectoryNames.add(`${directoryPath}/`);
+    }
     centralCursor = entryEnd;
   }
   if (centralCursor !== directoryOffset + directoryBytes) {
@@ -998,8 +1020,8 @@ async function loadSafeArchive(bytes: Buffer) {
       unixPermissions?: number | string | null;
       _data?: { compressedSize?: number; uncompressedSize?: number };
     };
-    const path = safeArchivePath(entry.name, "ZIP 文件名");
-    if (raw.unsafeOriginalName && raw.unsafeOriginalName !== path) {
+    const path = safeArchivePath(entry.dir ? entry.name.slice(0, -1) : entry.name, "ZIP 文件名");
+    if (raw.unsafeOriginalName && raw.unsafeOriginalName !== (entry.dir ? entry.name : path)) {
       fail("ZIP 包含路径穿越文件名");
     }
     const unixPermissions =
@@ -1007,11 +1029,10 @@ async function loadSafeArchive(bytes: Buffer) {
         ? Number.parseInt(raw.unixPermissions, 8)
         : raw.unixPermissions;
     if (
-      entry.dir ||
       (typeof unixPermissions === "number" &&
         (unixPermissions & 0o170000) === 0o120000)
     ) {
-      fail("ZIP 不得包含目录或符号链接");
+      fail("ZIP 不得包含符号链接");
     }
     if (files.has(path)) fail("ZIP 文件名重复");
     const portablePath = path.normalize("NFC").toLocaleLowerCase("en-US");
@@ -1021,6 +1042,15 @@ async function loadSafeArchive(bytes: Buffer) {
     portablePaths.add(portablePath);
     const uncompressedHint = Number(raw._data?.uncompressedSize || 0);
     const compressedHint = Number(raw._data?.compressedSize || 0);
+    // Empty, safe directory entries are packaging metadata. Normalize them
+    // away; the canonical writer emits only declared files and their hashes.
+    if (entry.dir) {
+      if (!entry.name.endsWith("/") || !safeDirectoryNames.has(entry.name) ||
+          uncompressedHint !== 0 || (await entry.async("nodebuffer")).length !== 0) {
+        fail("ZIP 目录项无效");
+      }
+      continue;
+    }
     if (
       uncompressedHint > 0 &&
       compressedHint > 0 &&
@@ -2169,7 +2199,7 @@ async function validateKnowledgeBaseWorkingSetArchiveInternal(
     logo,
     counts,
   };
-  const depthIssues = knowledgeBaseDepthIssues(manifest, canonicalInputFiles);
+  const depthIssues = knowledgeBaseDepthIssues(manifest, canonicalInputFiles, await factAdaptiveKnowledgeLeaves(manifest));
   if (depthIssues.length) fail(`KNOWLEDGE_BASE_DEPTH_INSUFFICIENT: ${JSON.stringify(depthIssues)}`, "depth");
   const canonical = await canonicalWorkingSetArchive({
     manifest,

@@ -51,8 +51,16 @@ export function observationNeedsPolling(
 ): boolean {
   const state = observation.interaction?.interactionState;
   const completedTurn = observation.completedTurn?.turnId;
-  const timeline = observation.execution?.timeline ??
-    (observation.progress ?? observation.interaction?.progress)?.execution?.timeline ?? [];
+  const execution = observation.execution ?? (observation.progress ?? observation.interaction?.progress)?.execution;
+  const timeline = execution?.timeline ?? [];
+  const authority = completedTurn ? execution?.turnStates?.[completedTurn] : undefined;
+  const pendingPublic = completedTurn ? execution?.turnHistory?.[completedTurn]?.pendingPublicRecords ??
+    timeline.filter(entry => entry.turnId === completedTurn && entry.kind === "status" && entry.publicSummaryTranslation === "pending").length : 0;
+  if (Object.entries(execution?.turnStates ?? {}).some(([turnId, turn]) => turn.state === "completed" &&
+    Boolean(execution?.turnHistory?.[turnId]?.pendingPublicRecords) && turn.completedAt !== undefined &&
+    now >= turn.completedAt && now - turn.completedAt < 20 * 60_000)) return true;
+  if (authority?.state === "completed" && authority.completedAt && now >= authority.completedAt &&
+    now - authority.completedAt < (pendingPublic ? 20 * 60_000 : KNOWLEDGE_BASE_SUMMARY_TAIL_MS)) return true;
   const researched = completedTurn && timeline.some((entry) => entry.turnId === completedTurn && entry.phase === "researching");
   const finished = researched && timeline.find((entry) => entry.turnId === completedTurn && entry.kind === "status" && entry.phase === "published" && entry.status === "ended");
   if (finished && ["awaiting_input", "ready_to_publish", "published"].includes(state ?? "") &&

@@ -1,5 +1,7 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import type { Readable } from "node:stream";
+import { ZHIPU_KNOWLEDGE_DOCUMENT_MAX_BYTES } from "../contracts/knowledge-base-upload-limits.js";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, open, link, unlink } from "node:fs/promises";
 import path from "node:path";
 
 
@@ -21,7 +23,7 @@ const { installImmutableFileAtomically } = core;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const BUILD_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const MAX_SOURCE_BYTES = 100 * 1024 * 1024;
+const MAX_SOURCE_BYTES = ZHIPU_KNOWLEDGE_DOCUMENT_MAX_BYTES;
 
 function storageRoot() {
   return core.assetRoot();
@@ -121,10 +123,12 @@ async function persistKnowledgeBaseBuildSource(input: {
   userId: number;
   buildId: string;
   generation: number;
-  bytes: Buffer;
   permanentOriginal?: boolean;
-}) {
-  assertBytes(input.bytes);
+} & ({ bytes: Buffer; createReadStream?: never; sizeBytes?: never; contentSha256?: never } |
+     { bytes?: never; createReadStream(): Readable; sizeBytes: number; contentSha256: string })) {
+  if (input.bytes) assertBytes(input.bytes);
+  else if (!input.createReadStream || !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > MAX_SOURCE_BYTES || !SHA256_PATTERN.test(input.contentSha256))
+    throw new KnowledgeBaseLocalSourceError("INVALID", "Invalid streamed knowledge source");
   if (
     !Number.isSafeInteger(input.userId) ||
     input.userId < 1 ||
@@ -137,7 +141,8 @@ async function persistKnowledgeBaseBuildSource(input: {
       "Knowledge-base build source identity is invalid",
     );
   }
-  const contentSha256 = sha256(input.bytes);
+  const contentSha256 = input.bytes ? sha256(input.bytes) : input.contentSha256;
+  const sizeBytes: number = input.bytes ? input.bytes.length : input.sizeBytes!;
   const storageKey = [
     "knowledge-base",
     input.permanentOriginal ? "permanent-originals" : "build-sources",
@@ -146,8 +151,36 @@ async function persistKnowledgeBaseBuildSource(input: {
     `g${input.generation}`,
     `${contentSha256}.bin`,
   ].join("/");
-  await install(storageKey, input.bytes);
-  return { storageKey, contentSha256, sizeBytes: input.bytes.length };
+  if (input.bytes) await install(storageKey, input.bytes);
+  else {
+    const { target } = assertStorageKey(storageKey);
+    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+    let handle;
+    try {
+      handle = await open(temporary, "wx", 0o600);
+      const hash = createHash("sha256"); let total = 0;
+      for await (const raw of input.createReadStream()) {
+        const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+        total += chunk.length;
+        if (total > sizeBytes) throw new KnowledgeBaseLocalSourceError("INTEGRITY_MISMATCH", "Streamed knowledge source grew");
+        hash.update(chunk); await handle.writeFile(chunk);
+      }
+      if (total !== sizeBytes || hash.digest("hex") !== contentSha256)
+        throw new KnowledgeBaseLocalSourceError("INTEGRITY_MISMATCH", "Streamed knowledge source proof changed");
+      await handle.sync(); await handle.close(); handle = undefined;
+      try { await link(temporary, target); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      // Covers both a prior immutable object and a concurrent installation.
+      for await (const _ of streamKnowledgeBaseLocalSource({ storageKey, contentSha256, sizeBytes })) { /* full hash preflight */ }
+      const directory = await open(path.dirname(target), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+    } finally {
+      await handle?.close().catch(() => undefined);
+      await unlink(temporary).catch(error => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
+    }
+  }
+  return { storageKey, contentSha256, sizeBytes };
 }
 
 async function readKnowledgeBaseLocalSource(input: {

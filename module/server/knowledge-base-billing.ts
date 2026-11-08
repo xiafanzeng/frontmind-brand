@@ -2,7 +2,7 @@ import type {AiBillingPause,DashboardManagedRuntime,DashboardAgentRuntimeStore} 
 import type {KnowledgeCredential} from "./knowledge-http-ports.js";
 import type {DashboardAgentClientOptions,DashboardAgentClient} from "./siteops/provider-ports.js";
 import { createHash } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, inArray } from "drizzle-orm";
 import type { KnowledgeBaseRecoveryClaim } from "./knowledge-base-turn-service.js";
 import type {BrandSchema} from "../schema/index.js";
 import type {CoreSqlTable} from "../contracts/sql-table.js";
@@ -19,7 +19,7 @@ export interface KnowledgeBillingCore {
  getDecryptedCredentialForAccountById(userId:number,credentialId:string):Promise<KnowledgeCredential|null>;
  enterpriseOwnerPredicate(table:any,userId:number):SQL;enterpriseProjectPredicate(table:any):SQL;
  createDashboardAgentClient(options:DashboardAgentClientOptions):DashboardAgentClient;dashboardAgentRuntimeStore:Pick<DashboardAgentRuntimeStore,"mutate">;
- createBillingReconcileApi(credentialRef:string):{listAll(path:string,params:{order:"asc"}):Promise<Record<string,any>[]>};
+ createBillingReconcileApi(credentialRef:string, provider?:string):{listAll(path:string,params:{order:"asc"}):Promise<Record<string,any>[]>};
 }
 let agentOperations: KnowledgeBillingCore["agentOperations"];
 let agentTasks: KnowledgeBillingCore["agentTasks"];
@@ -117,7 +117,7 @@ async function transportForTurn(tx: any, userId: number, turn: any) {
       and(
         eq(agentOperations.accountUserId, userId),
         eq(agentOperations.scope, "managed_user"),
-        eq(agentOperations.provider, "zhipu"),
+        inArray(agentOperations.provider, ["zhipu", "kimi"]),
         enterpriseProjectPredicate(agentOperations.enterpriseProjectId),
         sql`JSON_UNQUOTE(JSON_EXTRACT(${agentTasks.providerRuntime}, '$.dashboardManaged.intentId')) = ${turn.id}`,
       ),
@@ -358,7 +358,7 @@ export async function continueKnowledgeBaseAfterRecharge(
     if (!managed || managed.sessionId !== selection.pause.sessionId)
       throw new AiBillingError("AI_BILLING_TASK_OWNERSHIP");
     const identity = {
-      provider: "zhipu" as const,
+      provider: credential.provider === "kimi" ? "kimi" as const : "zhipu" as const,
       accountUserId: input.userId,
       credentialId: credential.id,
       credentialVersion: credential.version,
@@ -387,7 +387,7 @@ export async function continueKnowledgeBaseAfterRecharge(
       ) {
         const api =
           dependencies.createApi?.(credential.credentialRef) ??
-          createBillingReconcileApi(credential.credentialRef);
+          createBillingReconcileApi(credential.credentialRef, credential.provider);
         const events = await api.listAll(
           `/v1/sessions/${managed.sessionId}/events`,
           { order: "asc" },

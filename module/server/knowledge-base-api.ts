@@ -1,3 +1,4 @@
+import { retryKnowledgeBaseProse } from "./knowledge-base-turn-service.js";
 import {knowledgeBaseBuildSkillPinSupported} from "./knowledge-base-tree-policy-rollout.js";
 import {findRetainedKnowledgeBaseLocalAsset,resumeKnowledgeBaseDeferredTurnAttachments} from './knowledge-base-deferred-upload-recovery.js';
 import {inspectKnowledgeBaseDeferredAttachmentStagePolicy,knowledgeBaseTurnLogoPolicy,requireKnowledgeBaseDeferredAttachmentStageBuild} from './knowledge-base-deferred-attachment-stage-policy.js';
@@ -15,7 +16,7 @@ import type {SQL} from 'drizzle-orm';
 import type {KnowledgeCredential,KnowledgeAgentClient,KnowledgeRequest} from './knowledge-http-ports.js';
 type Port=(...args:any[])=>any;
 import {createKnowledgeBaseUploadRouter} from './knowledge-base-upload-api.js';
-import {persistKnowledgeBaseExecution,persistKnowledgeBaseStage,collectKnowledgeBaseSummaryTail,loadCompletedKnowledgeBaseSummaryTurn,restoreKnowledgeBaseSummaryTail} from './knowledge-base-execution.js';
+import {persistKnowledgeBaseExecution,persistKnowledgeBaseStage,collectKnowledgeBaseSummaryTail,loadCompletedKnowledgeBaseSummaryTurn,restoreKnowledgeBaseSummaryTail,loadKnowledgeBaseExecutionHistory} from './knowledge-base-execution.js';
 import {failKnowledgeBaseUpload,recordKnowledgeBaseUploadHeartbeat} from './knowledge-base-turn-service.js';
 import {toKnowledgeBasePublicPayload} from './knowledge-base-public-projection.js';
 import {KNOWLEDGE_BASE_RESPONSE_HEADER,knowledgeBaseProgressResponse} from './knowledge-base-progress-response.js';
@@ -61,6 +62,9 @@ export type NativeInitialKnowledgeDispatch = (input: NativeInitialKnowledgeDispa
 export interface KnowledgeBaseApiCore {
  tables:BrandSchema;
 dispatchNativeInitialKnowledgeBase?: NativeInitialKnowledgeDispatch;
+processKnowledgeProse?:(input:{claim:KnowledgeBaseRecoveryClaim;credential:KnowledgeCredential;archiveBytes:Buffer})=>Promise<Buffer>;
+readKnowledgeProseSource?:(input:{claim:KnowledgeBaseRecoveryClaim;credential:KnowledgeCredential})=>Promise<Buffer|null>;
+deferKnowledgeProseFinalization?:(input:{claim:KnowledgeBaseRecoveryClaim;error:unknown;stage:string})=>Promise<boolean>;
 getKnowledgeImageLibrary:Port;
 saveKnowledgeImageLibrary:Port;
 acceptKnowledgeBaseInitialDraft:Port;
@@ -202,8 +206,14 @@ let upstreamTaskId:KnowledgeBaseApiCore['upstreamTaskId'];
 let credentialForRequest:(request:Request)=>KnowledgeCredential|undefined;
 let withCredentialScope:<T>(action:()=>T)=>T;
 let dispatchNativeInitialKnowledgeBase: NativeInitialKnowledgeDispatch | undefined;
+let processKnowledgeProse: KnowledgeBaseApiCore["processKnowledgeProse"];
+let readKnowledgeProseSource: KnowledgeBaseApiCore["readKnowledgeProseSource"];
+let deferKnowledgeProseFinalization: KnowledgeBaseApiCore["deferKnowledgeProseFinalization"];
 export function configureKnowledgeBaseApiCore(core:KnowledgeBaseApiCore) {
 dispatchNativeInitialKnowledgeBase = core.dispatchNativeInitialKnowledgeBase;
+processKnowledgeProse = core.processKnowledgeProse;
+readKnowledgeProseSource = core.readKnowledgeProseSource;
+deferKnowledgeProseFinalization = core.deferKnowledgeProseFinalization;
 ({knowledgeBaseBuildNodes}=core.tables);
 ({getKnowledgeImageLibrary,saveKnowledgeImageLibrary,acceptKnowledgeBaseInitialDraft,exportKnowledgeBaseWorkspace,runWithStoredEnterpriseProjectScope,sendAiBillingError,assertAiAccountFunds,assertKnowledgeBaseDispatchFunds,continueKnowledgeBaseAfterRecharge,pauseKnowledgeBaseForBilling,enterpriseWorkspaceUserId,knowledgeBaseWorkingSetAssetUrl,enterpriseProjectUrl,dispatchKnowledgeNodeEdit,dispatchManualKnowledgeNodeEdit,getKnowledgeNodeDetails,saveKnowledgeNodeContent,searchKnowledgeNodes,KNOWLEDGE_NODE_IMAGE_MIMES,createCredentialAgentClient,getUpstreamBaseUrl,AuthServiceError,getDecryptedCredentialForKnowledgeBaseReservation,getDecryptedCredentialForKnowledgeBaseUploadReservation,recordUpstreamResource,getDashboardWorkspace,getKnowledgeSnapshotById,getLatestKnowledgeSnapshot,downloadArchiveBytes,publishKnowledgeBaseBuild,KnowledgeArchiveDownloadError,assertServiceCapability,ServiceEntitlementError,getDb,UpstreamTaskAttachmentContentProofError,UpstreamTaskAttachmentPendingError,assertKnowledgeBaseWritable,parseExactJson,buildManusV2CreateTaskBody,latestManusV2TaskState,ManusV2ApiError,manusV2KnowledgeBaseStructuredResultForOperation,normalizeManusV2Output,orderManusV2EventsByProviderRank,ensureKnowledgeBaseManusV2Attachments,isKnowledgeBaseManusV2GeneratedFileCreateRejected,readStoredPresalesFile,persistKnowledgeBaseBuildSource,persistKnowledgeBaseGeneratedSource,readKnowledgeBaseLocalSource,ManagedUploadIntentError,logKnowledgeBaseRuntimeFailure,getKnowledgeBaseSkillDescriptor,knowledgeBasePinnedV4SkillSelection,readKnowledgeBaseSkillArchiveAttachment,buildKnowledgeBasePrefillEvidenceArchive,buildKnowledgeBasePrompt,KnowledgeBaseEnterpriseIdentityError,KNOWLEDGE_BASE_PREFILL_ATTACHMENT_FILENAME,resolveKnowledgeBaseEnterpriseIdentity,buildKnowledgeBaseInstructionDelivery,KNOWLEDGE_BASE_INSTRUCTIONS_FILENAME,buildKnowledgeBaseTurnPrompt,UpstreamPromptBudgetError,UpstreamFileReadinessError,canonicalUpstreamTask,upstreamTaskId, credentialForRequest,withCredentialScope}=core);
 }
@@ -937,6 +947,7 @@ export function knowledgeBaseUpstreamModelForCredential(credential: {
 }) {
   if (
     (credential.provider === "zhipu" && credential.upstreamModel === "glm-5.3") ||
+    (credential.provider === "kimi" && credential.upstreamModel === "kimi-k3.1-pro") ||
     (credential.provider === "tencent_wma" && credential.upstreamModel === "deepseek-v4-pro") ||
     (credential.provider === "xty_codex" &&
       (credential.upstreamModel === "gpt-6.1-sol" || credential.upstreamModel === "gpt-5.6-sol" || credential.upstreamModel === "gpt-6-astra"))
@@ -962,7 +973,7 @@ async function readOwnedMaterializedKnowledgeBaseLocalAsset(input: {
     ...input,
     includeBytes: true,
   });
-  if (!retained?.bytes) {
+  if (!retained || (!retained.bytes && !retained.createReadStream)) {
     throw new KnowledgeBaseTurnReservationError(
       "CONFLICT",
       `附件“${input.filename}”的本地文件已过期或缺失，请重新上传`,
@@ -970,6 +981,7 @@ async function readOwnedMaterializedKnowledgeBaseLocalAsset(input: {
   }
   return {
     bytes: retained.bytes,
+    createReadStream: retained.createReadStream,
     contentSha256: retained.contentSha256,
   };
 }
@@ -1406,13 +1418,14 @@ export function deriveKnowledgeBaseBusinessResultState(input: {
   const materializedV5 =
     input.progress.build.executionMode === "materialized_bundle_v1" &&
     (input.progress.build.skillVersion === "5" || input.progress.build.skillVersion === "6");
+  const proseSaveRetry = input.observation.notice?.code === "KNOWLEDGE_PROSE_SAVE_RETRY";
   const resetAllowed = Boolean(
-    input.progress.resetAllowed === true ||
+    !proseSaveRetry && (input.progress.resetAllowed === true ||
       input.observation.notice?.recoveryAction === "approve_reset" ||
       (materializedV5 &&
         input.observation.activeTurn === null &&
         (input.progress.build.status === "protocol_error" ||
-          input.progress.build.status === "failed")),
+          input.progress.build.status === "failed"))),
   );
   const fallbackOperationState = input.observation.activeTurn
     ? input.observation.processingPhase === "accepting"
@@ -1426,7 +1439,7 @@ export function deriveKnowledgeBaseBusinessResultState(input: {
         input.progress.build.status === "published"
       ? ("completed" as const)
       : ("creating" as const);
-  const operationState = resetAllowed
+  const operationState = proseSaveRetry ? ("normalizing" as const) : resetAllowed
     ? ("reset_required" as const)
     : (input.progress.operationState ?? fallbackOperationState);
   const warningCodes = Array.from(
@@ -3871,11 +3884,12 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   });
   await persistKnowledgeBaseStage({ ...executionScope, phase: "researching", rank: -70 });
   const priorCompletion = claim.turn.materializedCompletion;
+  const proseSource = await readKnowledgeProseSource?.({claim,credential});
   let events: Awaited<ReturnType<typeof client.listAllMessages>> = [];
   // A persisted stop attempt freezes a fully validated local CAS. Recovery of
   // that immutable candidate must not depend on the stopped Provider task
   // still being readable (it may already have been garbage-collected).
-  if (!priorCompletion?.stopAttemptState) {
+  if (!priorCompletion?.stopAttemptState && !proseSource) {
     try {
       events = await client.listAllMessages({ taskId, order: "desc" });
     } catch (error) {
@@ -3905,7 +3919,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   let output = normalizeManusV2Output(events);
   let descriptors = collectKnowledgeArchiveDescriptors(output);
   if (
-    !priorCompletion?.stopAttemptState &&
+    !priorCompletion?.stopAttemptState && !proseSource &&
     (status === "stopped" ||
       status === "error" ||
       status === "failed" ||
@@ -4124,7 +4138,11 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   // A persisted stop attempt freezes the previously validated local CAS. It
   // is already enough authority to apply the content and must not wait for a
   // later Provider status acknowledgement or a mutable transport descriptor.
-  if (priorCompletion?.stopAttemptState) {
+  if (proseSource) {
+    const candidate = await canonicalCandidateBytes(proseSource);
+    candidateBytes = candidate.bytes;
+    candidateNormalization = candidate.normalization;
+  } else if (priorCompletion?.stopAttemptState) {
     if (!priorCompletion.candidateEventIdHash || !completionHasCandidate) {
       throw new KnowledgeBaseMaterializedResultError(
         "KNOWLEDGE_BASE_MATERIALIZED_RESULT_INVALID",
@@ -4276,57 +4294,81 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
     };
   }
 
-  // Activation/application performs the authoritative transaction and repeats
-  // all archive, coordinate, ownership and CAS checks. Provider cleanup only
-  // starts after that transaction has durably made the content displayable.
-  if (input.persistResultDiagnostics && selectedResultDiagnostic) {
-    await input.observeResultDiagnostic({
-      userId: claim.turn.userId,
-      turnId: claim.turn.id,
-      leaseToken: claim.leaseToken,
-      taskId,
-      ...selectedResultDiagnostic,
-      resultProcessingStage: "activation",
-    });
-  }
-  if (build.contentVersion === 0) {
-    await input.activateInitial({
-      userId: claim.turn.userId,
-      buildId: build.id,
-      generation: build.generation,
-      turnId: claim.turn.id,
-      operationKey: claim.turn.operationKey,
-      providerTaskId: taskId,
-      archiveBytes: candidateBytes,
-      initialBundleExpectation: knowledgeBaseInitialBundleExpectation({
-        build,
-        operationId: claim.turn.operationKey,
-        expectedUploadsRead: claim.turn.expectedUserAttachmentCount,
-      }),
-      ...(candidateNormalization?.mode === "initial"
-        ? { normalization: candidateNormalization }
-        : {}),
-    });
-  } else {
-    if (!claim.turn.expectedLeafId) {
-      throw new KnowledgeBaseMaterializedResultError(
-        "KNOWLEDGE_BASE_MATERIALIZED_RESULT_INVALID",
-        "Revision 缺少目标节点",
-      );
+  let localFinalizationStage = "prose_processing";
+  try {
+    if (processKnowledgeProse && credential.provider === "kimi") {
+      const edited = await processKnowledgeProse({claim,credential,archiveBytes:candidateBytes});
+      localFinalizationStage = "archive_validation";
+      if (!edited.equals(candidateBytes)) {
+        const recanonical = await canonicalCandidateBytes(edited);
+        candidateBytes = recanonical.bytes;
+        candidateNormalization = recanonical.normalization;
+      }
     }
-    await input.applyRevision({
-      userId: claim.turn.userId,
-      buildId: build.id,
-      generation: build.generation,
-      turnId: claim.turn.id,
-      operationId: claim.turn.operationKey,
-      providerTaskId: taskId,
-      targetLeafId: claim.turn.expectedLeafId,
-      archiveBytes: candidateBytes,
-      ...(candidateNormalization?.mode === "patch"
-        ? { normalization: candidateNormalization }
-        : {}),
-    });
+
+    // Activation/application performs the authoritative transaction and repeats
+    // all archive, coordinate, ownership and CAS checks. Provider cleanup only
+    // starts after that transaction has durably made the content displayable.
+    if (input.persistResultDiagnostics && selectedResultDiagnostic) {
+      await input.observeResultDiagnostic({
+        userId: claim.turn.userId,
+        turnId: claim.turn.id,
+        leaseToken: claim.leaseToken,
+        taskId,
+        ...selectedResultDiagnostic,
+        resultProcessingStage: "activation",
+      });
+    }
+    localFinalizationStage = "activation";
+    if (build.contentVersion === 0) {
+      await input.activateInitial({
+        userId: claim.turn.userId,
+        buildId: build.id,
+        generation: build.generation,
+        turnId: claim.turn.id,
+        operationKey: claim.turn.operationKey,
+        providerTaskId: taskId,
+        archiveBytes: candidateBytes,
+        initialBundleExpectation: knowledgeBaseInitialBundleExpectation({
+          build,
+          operationId: claim.turn.operationKey,
+          expectedUploadsRead: claim.turn.expectedUserAttachmentCount,
+        }),
+        ...(candidateNormalization?.mode === "initial"
+          ? { normalization: candidateNormalization }
+          : {}),
+      });
+    } else {
+      if (!claim.turn.expectedLeafId) {
+        throw new KnowledgeBaseMaterializedResultError(
+          "KNOWLEDGE_BASE_MATERIALIZED_RESULT_INVALID",
+          "Revision 缺少目标节点",
+        );
+      }
+      await input.applyRevision({
+        userId: claim.turn.userId,
+        buildId: build.id,
+        generation: build.generation,
+        turnId: claim.turn.id,
+        operationId: claim.turn.operationKey,
+        providerTaskId: taskId,
+        targetLeafId: claim.turn.expectedLeafId,
+        archiveBytes: candidateBytes,
+        ...(candidateNormalization?.mode === "patch"
+          ? { normalization: candidateNormalization }
+          : {}),
+      });
+    }
+  } catch (error) {
+    if ((error as {code?:string})?.code !== "KNOWLEDGE_PROSE_PENDING" &&
+        credential.provider === "kimi" &&
+        await deferKnowledgeProseFinalization?.({claim,error,stage:localFinalizationStage})) {
+      logKnowledgeBaseRuntimeFailure({level:"warn",event:"[KnowledgeBaseRecovery] prose_save_pending",
+        userId:claim.turn.userId,buildId:build.id,turnId:claim.turn.id,taskId,error,
+        additionalSecrets:[credential.credentialRef]});
+      throw Object.assign(new Error("内容保存待重试，全部整理结果已保留。"), {code:"KNOWLEDGE_PROSE_PENDING"});
+    }
+    throw error;
   }
   if (
     !priorCompletion?.stopAttemptState &&
@@ -4360,7 +4402,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
     }
   }
   if (typeof (client as any).readProcessSummaries === "function") {
-    void collectKnowledgeBaseSummaryTail({ ...executionScope, taskId,
+    void collectKnowledgeBaseSummaryTail({ ...executionScope, taskId, ...(credential.provider === "kimi" ? {durationMs:1_250_000} : {}),
       read: () => (client as any).readProcessSummaries(taskId) });
   }
   return { taskId, rebound: true, reconciled: true };
@@ -4510,6 +4552,12 @@ export async function persistKnowledgeBaseDispatchFailure(
     deferMaterializedResultRead?: typeof deferKnowledgeBaseMaterializedResultRead;
   } = {},
 ) {
+  const deferMaterializedResultRead =
+    dependencies.deferMaterializedResultRead ?? deferKnowledgeBaseMaterializedResultRead;
+  if ((input.error as {code?:string})?.code === "KNOWLEDGE_PROSE_PENDING") {
+    await deferMaterializedResultRead({userId:input.claim.turn.userId,turnId:input.claim.turn.id,leaseToken:input.claim.leaseToken,lastErrorKind:"knowledge_prose_pending"});
+    return "retriable" as const;
+  }
   if (await pauseKnowledgeBaseForBilling(input.claim, input.error)) return "deterministic" as const;
   const markManusV2OutcomeUnknown =
     dependencies.markManusV2OutcomeUnknown ??
@@ -4519,9 +4567,6 @@ export async function persistKnowledgeBaseDispatchFailure(
   const failMaterializedResult =
     dependencies.failMaterializedResult ??
     failKnowledgeBaseMaterializedResultForApprovedReset;
-  const deferMaterializedResultRead =
-    dependencies.deferMaterializedResultRead ??
-    deferKnowledgeBaseMaterializedResultRead;
   if (input.error instanceof KnowledgeArchiveDownloadError) {
     if (input.error.retryable) {
       const disposition = await deferMaterializedResultRead({
@@ -5546,6 +5591,29 @@ function launchAcceptedKnowledgeBaseClaim(input: {
  * file bytes. This endpoint deliberately performs no provider file/task call;
  * `/turn/dispatch` is the only route that may acquire a worker lease.
  */
+router.post("/execution-history", async (req: KnowledgeRequest, res) => {
+  if (!req.frontmindUser) {res.status(401).json({error:{message:"请先登录"}});return;}
+  const parsed=z.object({buildId:z.string().uuid(),generation:z.number().int().nonnegative(),turnId:z.string().uuid(),beforeId:z.string().min(1).max(1000).optional()}).safeParse(req.body);
+  if (!parsed.success) {res.status(400).json({error:{message:"过程记录参数无效"}});return;}
+  try {
+    const page = await loadKnowledgeBaseExecutionHistory({...parsed.data,userId:enterpriseWorkspaceUserId(req.frontmindUser.id)});
+    if (!page) {res.status(404).json({error:{message:"当前过程记录不可用，请刷新知识库"}});return;}
+    res.json(toKnowledgeBasePublicPayload(page));
+  } catch {
+    res.status(409).json({error:{message:"过程记录暂未读取成功，请稍后重试"}});
+  }
+});
+
+router.post("/prose/retry", async (req: KnowledgeRequest, res) => {
+  if (!req.frontmindUser) {res.status(401).json({error:{message:"请先登录"}});return;}
+  const parsed=z.object({buildId:z.string().uuid(),turnId:z.string().uuid()}).safeParse(req.body);
+  if (!parsed.success) {res.status(400).json({error:{message:"整理任务无效"}});return;}
+  try {
+    await retryKnowledgeBaseProse({...parsed.data,userId:enterpriseWorkspaceUserId(req.frontmindUser.id)});
+    res.status(202).json({accepted:true});
+  } catch {res.status(409).json({error:{message:"当前任务已变化，请刷新后重试"}});}
+});
+
 router.post("/billing-resume", async (req: KnowledgeRequest, res) => {
   if (!req.frontmindUser) { res.status(401).json({error:{message:"请先登录"}}); return; }
   const body=z.object({buildId:z.string().uuid(),turnId:z.string().uuid(),requestId:z.string().uuid()}).safeParse(req.body);
@@ -5614,7 +5682,7 @@ router.post("/start/reserve", async (req: KnowledgeRequest, res) => {
         ? []
         : normalizeKnowledgeBaseClientAttachmentManifest(
             body.attachmentManifest,
-            { wmaInitial: credentialForRequest(req)?.provider === "tencent_wma" },
+            { wmaInitial: credentialForRequest(req)?.provider === "tencent_wma", zhipuInitial: credentialForRequest(req)?.provider === "zhipu" },
           );
     const workspace = await getDashboardWorkspace(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const companyName = resolveKnowledgeBaseEnterpriseIdentity({
@@ -6751,7 +6819,7 @@ router.post("/turn/attachments/stage", async (req: KnowledgeRequest, res) => {
       projectAssignmentId: req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
     });
     const manifest = normalizeKnowledgeBaseClientAttachmentManifest(
-      body.attachmentManifest, { wmaInitial: uploadCredential?.provider === "tencent_wma" },
+      body.attachmentManifest, { wmaInitial: uploadCredential?.provider === "tencent_wma", zhipuInitial: uploadCredential?.provider === "zhipu" },
     );
     const index = Number(body.index);
     const attachment = normalizeKnowledgeBaseUserAttachments(
@@ -6857,6 +6925,7 @@ router.post("/turn/attachments/stage", async (req: KnowledgeRequest, res) => {
         contentSha256: localAsset.contentSha256,
       },
       managedUploadBytes: localAsset.bytes,
+      managedUploadStream: localAsset.createReadStream,
       projectAssignmentId: projectAssignmentId ?? null,
     });
     const observation = await getKnowledgeBaseObservation({
@@ -6996,7 +7065,7 @@ router.post("/turn/dispatch", async (req: KnowledgeRequest, res) => {
         ? []
         : normalizeKnowledgeBaseClientAttachmentManifest(
             body.attachmentManifest,
-            { wmaInitial: uploadCredential?.provider === "tencent_wma" },
+            { wmaInitial: uploadCredential?.provider === "tencent_wma", zhipuInitial: uploadCredential?.provider === "zhipu" },
           );
     replayAfterMutableFailure = () =>
       respondIfKnowledgeBaseTurnReplay({
@@ -7101,7 +7170,7 @@ router.post("/turn/dispatch", async (req: KnowledgeRequest, res) => {
       authoritativeAttachmentManifest =
         normalizeKnowledgeBaseClientAttachmentManifest(
           acquiredClaim.recoveryMetadata.attachmentManifest,
-          { wmaInitial: taskCredential.provider === "tencent_wma" && isStartReservation },
+          { wmaInitial: taskCredential.provider === "tencent_wma" && isStartReservation, zhipuInitial: taskCredential.provider === "zhipu" && isStartReservation },
         );
     } catch {
       authoritativeAttachmentManifest = [];
@@ -7603,6 +7672,7 @@ router.post("/turn", async (req: KnowledgeRequest, res) => {
         sizeBytes: manifestItem.sizeBytes,
         sha256: manifestItem.sha256,
       });
+      if (!local.bytes) throw new KnowledgeBaseTurnReservationError("INVALID_REQUEST", "企业 Logo 超过本地图片上限");
       const receipt = await bindMaterializedKnowledgeBaseOfficialLogoLocally({
         userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         conversationId,
@@ -8536,7 +8606,7 @@ router.post("/process-summaries", async (req: KnowledgeRequest, res) => {
     const turn = await loadCompletedKnowledgeBaseSummaryTurn({ userId, buildId: build.id,
       generation: build.generation, turnId: parsed.data.turnId });
     const credential = credentialForRequest(req);
-    if (!turn?.upstreamTaskId || credential?.provider !== "xty_codex") {
+    if (!turn?.upstreamTaskId || !credential || !["xty_codex","kimi"].includes(credential.provider)) {
       res.status(409).json({ error: { message: "仅支持本企业已完成研究任务的公开过程摘要" } }); return;
     }
     const client = createCredentialAgentClient(credential, { accountUserId: userId,
@@ -8552,6 +8622,33 @@ router.post("/process-summaries", async (req: KnowledgeRequest, res) => {
   }
 });
 
+/** Both progress readers resume saved public-record work. A local confirmation
+ * may be the latest completed turn, so pending earlier AI turns remain eligible.
+ * The tail loader rechecks ownership, generation and completed status. */
+async function restoreKnowledgeBasePublicRecords(input: {
+  req: KnowledgeRequest; userId: number; conversationId: string;
+  observation: KnowledgeBaseObservationDto | null | undefined;
+}) {
+  const {req,userId,conversationId,observation}=input;
+  const credential=credentialForRequest(req);
+  const build=observation?.interaction.progress?.build;
+  if (!build || !observation || !credential || !["xty_codex","kimi"].includes(credential.provider)) return observation ?? null;
+  const execution=observation.execution ?? observation.interaction.progress?.execution;
+  const turnIds=new Set(Object.entries(execution?.turnHistory ?? {})
+    .filter(([,history])=>Boolean(history.pendingPublicRecords)).map(([id])=>id));
+  if(observation.completedTurn?.turnId)turnIds.add(observation.completedTurn.turnId);
+  const restored=await Promise.all([...turnIds].map(turnId=>restoreKnowledgeBaseSummaryTail({
+    userId,buildId:build.id,generation:observation.generation,turnId,
+    resumePending:credential.provider==="kimi",
+    read:async taskId=>{
+      const client=createCredentialAgentClient(credential,{accountUserId:userId,localTaskId:taskId,intentId:turnId,timeoutMs:5_000});
+      if(!client.readProcessSummaries)throw new Error("SUMMARY_UNAVAILABLE");
+      return client.readProcessSummaries(taskId);
+    },
+  }).catch(()=>false)));
+  return restored.some(Boolean) ? getKnowledgeBaseObservation({userId,conversationId,upstreamStatus:"running"}) : observation;
+}
+
 router.get("/progress/:conversationId", async (req: KnowledgeRequest, res) => {
   try {
     const userId = enterpriseWorkspaceUserId(req.frontmindUser!.id);
@@ -8560,22 +8657,8 @@ router.get("/progress/:conversationId", async (req: KnowledgeRequest, res) => {
       conversationId: req.params.conversationId,
       upstreamStatus: "running",
     };
-    let observation = await getKnowledgeBaseObservation(scope);
-    const credential = credentialForRequest(req);
-    const build = observation?.interaction.progress?.build;
-    const turnId = observation?.completedTurn?.turnId;
-    if (build && turnId && credential?.provider === "xty_codex") {
-      const restored = await restoreKnowledgeBaseSummaryTail({
-        userId, buildId: build.id, generation: observation!.generation, turnId,
-        read: async (taskId) => {
-          const client = createCredentialAgentClient(credential, { accountUserId: userId,
-            localTaskId: taskId, intentId: turnId, timeoutMs: 5_000 });
-          if (!client.readProcessSummaries) throw new Error("SUMMARY_UNAVAILABLE");
-          return client.readProcessSummaries(taskId);
-        },
-      }).catch(() => false);
-      if (restored) observation = await getKnowledgeBaseObservation(scope);
-    }
+    const observation = await restoreKnowledgeBasePublicRecords({req,...scope,
+      observation:await getKnowledgeBaseObservation(scope)});
     res.json({
       progress: observation?.interaction.progress || null,
       interaction:
@@ -8617,11 +8700,9 @@ router.post("/progress/reconcile", async (req: KnowledgeRequest, res) => {
       userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
     });
-    const currentObservation = await getKnowledgeBaseObservation({
-      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
-      conversationId,
-      upstreamStatus: "running",
-    });
+    const observationScope={userId:enterpriseWorkspaceUserId(req.frontmindUser.id),conversationId,upstreamStatus:"running"};
+    const currentObservation = await restoreKnowledgeBasePublicRecords({req,...observationScope,
+      observation:await getKnowledgeBaseObservation(observationScope)});
     const immutableStatus =
       currentObservation?.interaction.progress?.build.status;
     const logoRecoveryRequired =

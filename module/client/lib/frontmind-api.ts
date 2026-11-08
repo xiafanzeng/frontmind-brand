@@ -1,3 +1,4 @@
+import { knowledgeBaseDocumentMaxBytes } from "../../contracts/knowledge-base-upload-limits";
 import type { GeneralExecutionDto } from "@frontmind/module-contracts/execution";
 import type { EnterpriseQaSteering } from "../enterprise-qa-steering";
 import type { EnterpriseQaAnswerMeta } from "../../contracts/enterprise-qa-answer";
@@ -600,7 +601,10 @@ export async function uploadChatLocalAsset(
 }> {
   const rest = captureWorkspaceRestOperation(options.signal);
   options = { ...options, signal: rest.signal };
-  assertChatAttachmentSizes([file]);
+  if (options.knowledgeBaseCoordinate) {
+    const maxBytes = knowledgeBaseDocumentMaxBytes(options.filename || file.name, options.mimeType || file.type, "kimi");
+    if (file.size > maxBytes) throw new FileUploadError("知识库资料单个文件不能超过 100 MiB", { code: "UPLOAD_TOO_LARGE", retryable: false });
+  } else assertChatAttachmentSizes([file]);
   if (options.knowledgeBaseCoordinate && options.siteOpsComposerCoordinate) {
     throw new FileUploadError("附件上传坐标冲突，请重新上传", {
       code: "INVALID_UPLOAD_OPTIONS",

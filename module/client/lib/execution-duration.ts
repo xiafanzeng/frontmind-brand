@@ -25,6 +25,15 @@ export function conversationExecutionTimings(
     const active =
       current && (submitting ? submitting.phase !== "failed" : ["running", "pending"].includes(conversation.status));
     const turnId = message.knowledgeBase?.turnId ?? message.generalChat?.turnId;
+    const authority = turnId ? conversation.execution?.turnStates?.[turnId] : undefined;
+    if (authority) {
+      result.set(message.id, {
+        startedAt: authority.startedAt,
+        completedAt: authority.completedAt,
+        active: authority.state === "running" || (authority.state === "waiting" && authority.completedAt === undefined),
+      });
+      continue;
+    }
     const entries = (conversation.execution?.timeline ?? []).filter(
       (entry) =>
         entry.userMessageId === message.id ||

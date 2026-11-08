@@ -91,7 +91,7 @@
     }
   },
   "depth": {
-    "version": "knowledge_depth_v7",
+    "version": "knowledge_depth_v8",
     "skillVersion": "6",
     "evidenceThreshold": 1500,
     "minimumBodyCharacters": 300,
@@ -202,6 +202,7 @@
         "a183dac64d9ebacd28382696ee9e41da50141e4aac1022dd449d442e3034db2c",
         "0b6f84bd96f9b4cb449d28107243320d8674e4688a46a51f1b08c84f1789e171"
       ]
-    }
+    },
+    "factAdaptive": true
   }
 }

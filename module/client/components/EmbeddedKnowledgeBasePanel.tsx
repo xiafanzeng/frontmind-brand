@@ -110,6 +110,15 @@ export function isKnowledgeBaseProgressProjectionOlder(
   if (candidate.build.revision !== current.build.revision) {
     return candidate.build.revision < current.build.revision;
   }
+  if (candidate.build.contentVersion !== undefined && current.build.contentVersion !== undefined &&
+      candidate.build.contentVersion !== current.build.contentVersion) {
+    return candidate.build.contentVersion < current.build.contentVersion;
+  }
+  if (candidate.draftPreview && current.draftPreview &&
+      candidate.draftPreview.turnId === current.draftPreview.turnId &&
+      candidate.draftPreview.updatedAt !== current.draftPreview.updatedAt) {
+    return candidate.draftPreview.updatedAt < current.draftPreview.updatedAt;
+  }
   return candidate.build.updatedAt < current.build.updatedAt;
 }
 
@@ -998,6 +1007,7 @@ function RealBuildFlow({
     leafId: string;
     title: string;
     mode: "direct" | "ai";
+    instruction?: string;
   } | null>(null);
   useEffect(() => {
     onEditingBlockedChange(nodeDirty || nodePending || composerDirty || imagesBusy || imagesDirty);
@@ -1548,6 +1558,7 @@ function RealBuildFlow({
             operatorWorkspace={mode === "workspace"}
             fixedAgentProfile="frontmind-pro"
             syncKnowledgeBaseSnapshot
+            composerPrefill={!workbench && editTarget?.mode === "ai" ? editTarget.instruction : undefined}
             inlineBlocks={
               workbench && executionAssistant && !hasExecutionTimeline
                 ? [
@@ -1621,6 +1632,7 @@ function RealBuildFlow({
                   conversationId={conversationId ?? ""}
                   leafId={editTarget.leafId}
                   title={editTarget.title}
+                  instruction={editTarget.instruction}
                   progress={displayedProgress}
                   resetRevision={resetRevision}
                   disabled={updating || nodeDirty || nodePending || imagesBusy || imagesDirty}

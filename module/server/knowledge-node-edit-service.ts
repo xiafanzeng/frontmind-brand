@@ -1,14 +1,19 @@
+import { KNOWLEDGE_NODE_PROSE_RULES } from "../contracts/knowledge-node-prose.js";
+import { projectKnowledgeBaseCustomerMarkdown } from "../contracts/knowledge-base-materialized-contract.js";
+import { knowledgeBaseProsePolicyForTurn, updateKnowledgeBaseProseCheckpoint, deferKnowledgeNodeEditResult, renewKnowledgeBaseTurnLease } from "./knowledge-base-turn-service.js";
+import { isKnowledgeNodeEditPending } from "./knowledge-node-edit-provider.js";
+import type { DashboardManagedRuntime } from "@frontmind/module-contracts/managed-runtime";
 import type { BrandSchema } from "../schema/index.js";
 import type { CoreSqlTable } from "../contracts/sql-table.js";
 import type { ConversationTurn, LocalAsset, Conversation, UpstreamResource } from "../contracts/core-records.js";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { SQL } from "drizzle-orm";
 export type KnowledgeNodeCredential = { id:string; version:number; userId:number; provider:string; credentialRef:string };
-export type KnowledgeNodeProviderIdentity = {provider:"zhipu"|"xty_codex";accountUserId:number;enterpriseProjectId:string|null;enterpriseProjectLegacyDefault?:boolean;credentialId:string;credentialVersion:number;credentialOwnerUserId:number};
+export type KnowledgeNodeProviderIdentity = {provider:"zhipu"|"xty_codex"|"kimi";accountUserId:number;enterpriseProjectId:string|null;enterpriseProjectLegacyDefault?:boolean;credentialId:string;credentialVersion:number;credentialOwnerUserId:number};
 export interface KnowledgeNodeEditServiceCore {
   createKnowledgeNodeEditPatch:typeof import("../contracts/knowledge-node-edit-contract.js").createKnowledgeNodeEditPatch;
   validateKnowledgeBaseWorkingSetArchive:typeof import("../contracts/knowledge-base-materialized-contract.js").validateKnowledgeBaseWorkingSetArchive;
-  createKnowledgeNodeEditor: (credential:KnowledgeNodeCredential, identity:KnowledgeNodeProviderIdentity) => Promise<{edit(input:{intentId:string;prompt:string;onSession(sessionId:string):Promise<void>}):Promise<{contentMarkdown:string;sessionId:string}>}>;
+  createKnowledgeNodeEditor: (credential:KnowledgeNodeCredential, identity:KnowledgeNodeProviderIdentity) => Promise<{edit(input:{intentId:string;prompt:string;onSession(sessionId:string):Promise<void>;context?:NonNullable<DashboardManagedRuntime["editorContext"]>}):Promise<{contentMarkdown:string;sessionId:string}>}>;
   findRetainedKnowledgeBaseLocalAsset: typeof import("./knowledge-base-deferred-upload-recovery.js").findRetainedKnowledgeBaseLocalAsset;
   persistKnowledgeBaseBuildSource: ReturnType<typeof import("./knowledge-base-local-source-store.js").createKnowledgeBaseLocalSourceStore>["persistKnowledgeBaseBuildSource"];
   applyKnowledgeBaseRevisionWorkingSet: typeof import("./knowledge-base-materialized-service.js").applyKnowledgeBaseRevisionWorkingSet;
@@ -56,6 +61,10 @@ export async function dispatchKnowledgeNodeEdit(
     turnId: claim.turn.id,
     leaseToken: claim.leaseToken,
   };
+  let providerTaskId: string | null = claim.turn.upstreamTaskId;
+  let lostLease: unknown;
+  const renewal = setInterval(() => void renewKnowledgeBaseTurnLease({...identity,leaseMs:300_000}).catch(error => {lostLease = error;}),30_000);
+  renewal.unref();
   try {
     if (
       claim.recoveryMetadata.nodeEditMode !== "low_v1" ||
@@ -204,11 +213,12 @@ export async function dispatchKnowledgeNodeEdit(
     if (!instruction && images.length === 0 && removeAssetIds.length === 0)
       throw new Error("KNOWLEDGE_NODE_EDIT_EMPTY");
     let contentMarkdown = base.files.get(leaf.contentPath)!.toString("utf8");
-    let providerTaskId: string | null = null;
     if (instruction) {
-      if (credential.provider !== "zhipu" && credential.provider !== "xty_codex")
+      if (credential.provider !== "zhipu" && credential.provider !== "kimi" && credential.provider !== "xty_codex")
         throw new Error("KNOWLEDGE_NODE_EDIT_PROVIDER_REQUIRED");
-      const prompt = knowledgeNodeEditPrompt(contentMarkdown, instruction);
+      const prose = credential.provider === "kimi" && await knowledgeBaseProsePolicyForTurn(identity);
+      const editorialInstruction = prose ? `${instruction}\n\n在完成上述用户要求后，按以下规则整理完整正文；用户明确要求的事实修订优先：\n${KNOWLEDGE_NODE_PROSE_RULES}` : instruction;
+      const prompt = knowledgeNodeEditPrompt(contentMarkdown, editorialInstruction);
       if (
         !claim.turn.upstreamTaskId &&
         claim.turn.createAttemptState === "not_sent"
@@ -232,7 +242,10 @@ export async function dispatchKnowledgeNodeEdit(
       const output = await provider.edit({
         intentId: `knowledge-node-edit:${claim.turn.id}`,
         prompt,
+        context: {purpose:"node_edit",parentTurnId:claim.turn.id,nodeId:leaf.leafId},
         onSession: async (sessionId) => {
+          if (lostLease) throw lostLease;
+          providerTaskId = sessionId;
           if (claim.turn.upstreamTaskId) {
             if (claim.turn.upstreamTaskId !== sessionId)
               throw new Error("KNOWLEDGE_NODE_EDIT_SESSION_CONFLICT");
@@ -245,7 +258,11 @@ export async function dispatchKnowledgeNodeEdit(
           }
         },
       });
-      contentMarkdown = output.contentMarkdown;
+      if (lostLease) throw lostLease;
+      contentMarkdown = prose ? projectKnowledgeBaseCustomerMarkdown({leafTitle:leaf.title,markdown:output.contentMarkdown}) : output.contentMarkdown;
+      if (prose) await updateKnowledgeBaseProseCheckpoint({...identity,
+        grants:[{leafId:leaf.leafId,contentSha256:nodeEditSha256(contentMarkdown)}],
+        update:()=>({state:"ready",updatedAt:Date.now(),nodes:{[leaf.leafId]:{state:"ready",sessionId:output.sessionId}}})});
       providerTaskId = output.sessionId;
     }
     const archiveBytes = await createKnowledgeNodeEditPatch({
@@ -275,6 +292,16 @@ export async function dispatchKnowledgeNodeEdit(
     });
     return { taskId: providerTaskId, rebound: false, reconciled: true };
   } catch (error) {
+    if (lostLease) throw lostLease;
+    const failure = error as {code?:string;message?:string};
+    const diagnostic = `${failure?.code ?? ""} ${failure?.message ?? ""}`;
+    const explicitFailure = /CONFLICT|STALE|RESET_REQUIRED|INVALID|LEASE_LOST|TERMINAL|BALANCE|INSUFFICIENT|PROVIDER_FAILED|TERMINATED|TOOLS_FORBIDDEN|REQUEST_REJECTED|COMMAND_AMBIGUOUS/.test(diagnostic);
+    // Once accepted, a storage, database or read failure cannot justify a new
+    // paid edit. Re-read the same output and retry only the local commit.
+    if (isKnowledgeNodeEditPending(error) || (providerTaskId && !explicitFailure)) {
+      await deferKnowledgeNodeEditResult({...identity,lastErrorKind:"node_edit_result_pending"});
+      return {taskId:providerTaskId,rebound:true,reconciled:false};
+    }
     const message =
       error instanceof Error && /BALANCE|INSUFFICIENT/i.test(error.message)
         ? "账户余额不足，本次修改未保存，原节点内容已保留。充值后可重新提交修改。"
@@ -285,5 +312,5 @@ export async function dispatchKnowledgeNodeEdit(
       rebound: false,
       reconciled: true,
     };
-  }
+  } finally { clearInterval(renewal); }
 }

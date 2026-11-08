@@ -7,7 +7,12 @@ import {
   type GateJudgment,
 } from "../client/dashboard/ai-website-preview/rag-evaluation.js";
 
-/** Immutable policy used to derive the formal human score and verdict. */
+/**
+ * Immutable policy used to derive the formal human score and verdict. This is
+ * deliberately separate from the automatic evaluator version recorded on the
+ * report: a checklist-based automatic report and the existing six-dimension
+ * human form are related evidence, but they are not the same scoring program.
+ */
 export const ENTERPRISE_RAG_HUMAN_SCORING_VERSION = "human-review-1.0.0";
 export const ENTERPRISE_RAG_HUMAN_SCORING_MANIFEST = {
   version: ENTERPRISE_RAG_HUMAN_SCORING_VERSION,

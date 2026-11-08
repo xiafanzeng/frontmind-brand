@@ -19,7 +19,8 @@ import KnowledgeWorkspaceStatus from "./KnowledgeWorkspaceStatus";
 import { knowledgeBaseNoticeRecoveryMode } from "../lib/knowledge-notice";
 import { KNOWLEDGE_BASE_RESET_REQUEST_EVENT, reconcileKnowledgeBaseObservation } from "../lib/knowledge-progress";
 import { Button } from "@frontmind/module-ui/components/ui/button";
-import { GeneralExecutionActivity } from "./GeneralExecutionActivity";
+import { KnowledgeExecutionActivity } from "./KnowledgeExecutionActivity";
+import { KnowledgeDraftComposerStatus } from "./KnowledgeDraftNodeWorkspace";
 import { generalExecutionSlots } from "../lib/general-execution-display";
 import { finalReplyIds } from "../lib/final-reply";
 import { conversationExecutionTimings } from "../lib/execution-duration";
@@ -76,14 +77,17 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
         message.knowledgeBase?.turnId ? [message.knowledgeBase.turnId] : [],
       ),
   );
-  const slots = generalExecutionSlots(
-    messages,
-    conversation?.execution,
-    running,
+  const displayedExecution = conversation?.execution ?? (
+    props.knowledgeBaseProgress?.build.conversationId === conversation?.id
+      ? props.knowledgeBaseProgress?.execution
+      : undefined
   );
-  const copyable = finalReplyIds(messages, conversation?.execution, running);
+  const slots = generalExecutionSlots(messages, displayedExecution, running);
+  const draftPreview = props.knowledgeBaseProgress?.branches.some(branch => branch.leaves.length > 0)
+    ? undefined : props.knowledgeBaseProgress?.draftPreview;
+  const copyable = finalReplyIds(messages, displayedExecution, running);
   const timings = conversation
-    ? conversationExecutionTimings(conversation, messages)
+    ? conversationExecutionTimings({ ...conversation, execution: displayedExecution }, messages)
     : new Map();
   const viewport = useRef<HTMLDivElement>(null);
   const messageElements = useRef(new Map<string, HTMLElement>());
@@ -137,14 +141,12 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
         .map((block) => (
           <div key={block.id}>{block.content}</div>
         ))}
-      <GeneralExecutionActivity
+      <KnowledgeExecutionActivity
+        turnStates={displayedExecution?.turnStates} turnHistory={displayedExecution?.turnHistory}
         items={knowledgeExecutionItems(
           slots.before.get(message.id),
           localTurns,
         )}
-        thinkingDisplay="inline"
-        hideSuccessfulResults
-        hideToolDetails
       />
       <BrandConversationMessage
         message={message}
@@ -163,18 +165,16 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
       {message.role === "user" && (
         <ExecutionDivider
           timing={
-            isLocalKnowledgeConfirmation(message)
+            isLocalKnowledgeConfirmation(message) || slots.after.get(message.id)?.some(item => displayedExecution?.turnStates?.[item.turnId])
               ? undefined
               : timings.get(message.id)
           }
         />
       )}
-      <GeneralExecutionActivity
+      <KnowledgeExecutionActivity
+        turnStates={displayedExecution?.turnStates} turnHistory={displayedExecution?.turnHistory}
         items={knowledgeExecutionItems(slots.after.get(message.id), localTurns)}
         placement="after"
-        thinkingDisplay="inline"
-        hideSuccessfulResults
-        hideToolDetails
       />
     </article>
   );
@@ -309,6 +309,8 @@ export default function KnowledgeConversation(props: BrandHomeProps) {
               }
               onRecovered={() => context.wakeKnowledgeBaseConversation(conversation.id)}
             />
+          ) : draftPreview ? (
+            <KnowledgeDraftComposerStatus preview={draftPreview} authority={displayedExecution?.turnStates?.[draftPreview.turnId]} />
           ) : (
             <ChatInput {...props} operatorWorkspace syncKnowledgeBaseSnapshot />
           )}

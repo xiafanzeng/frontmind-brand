@@ -11,7 +11,7 @@ import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import MessageActions from "./MessageActions";
 import { toast } from "sonner";
 import KnowledgePublicExecution from "./KnowledgePublicExecution";
-import { GeneralExecutionActivity } from "./GeneralExecutionActivity";
+import { KnowledgeExecutionActivity } from "./KnowledgeExecutionActivity";
 import { ExecutionDivider } from "./ExecutionDuration";
 import { conversationExecutionTimings } from "../lib/execution-duration";
 import { generalExecutionSlots } from "../lib/general-execution-display";
@@ -61,6 +61,7 @@ export default function KnowledgeNodeConversation({
   resetRevision,
   disabled,
   onDirtyChange,
+  instruction,
 }: {
   conversationId: string;
   leafId: string;
@@ -69,6 +70,7 @@ export default function KnowledgeNodeConversation({
   resetRevision: number;
   disabled: boolean;
   onDirtyChange: (dirty: boolean) => void;
+  instruction?: string;
 }) {
   const {
     activeConversation,
@@ -138,7 +140,7 @@ export default function KnowledgeNodeConversation({
       </p>
       {messages.map((message) => (
         <Fragment key={message.id}>
-          <GeneralExecutionActivity items={knowledgeExecutionItems(executionSlots.before.get(message.id), localTurns)} thinkingDisplay="inline" hideSuccessfulResults />
+          <KnowledgeExecutionActivity turnStates={displayedExecution?.turnStates} turnHistory={displayedExecution?.turnHistory} items={knowledgeExecutionItems(executionSlots.before.get(message.id), localTurns)} />
           {!hasTimeline && message.id === assistant?.id && execution}
           <MessageActions message={message} allowCopy={copyableIds.has(message.id)}>
             <div className={`knowledge-node-conversation__${message.role}`}>
@@ -149,7 +151,7 @@ export default function KnowledgeNodeConversation({
             </div>
           </MessageActions>
           {message.role === "user" && <ExecutionDivider timing={isLocalKnowledgeConfirmation(message) ? undefined : executionTimings.get(message.id)} />}
-          <GeneralExecutionActivity items={knowledgeExecutionItems(executionSlots.after.get(message.id), localTurns)} placement="after" thinkingDisplay="inline" hideSuccessfulResults />
+          <KnowledgeExecutionActivity turnStates={displayedExecution?.turnStates} turnHistory={displayedExecution?.turnHistory} items={knowledgeExecutionItems(executionSlots.after.get(message.id), localTurns)} placement="after" />
         </Fragment>
       ))}
       {!hasTimeline && !assistant && running && execution}
@@ -159,6 +161,7 @@ export default function KnowledgeNodeConversation({
         </p>
       )}
       <ChatInput
+        composerPrefill={instruction}
         composerScope={`knowledge-node:${progress.build.id}:${progress.workbench?.generation ?? knowledge?.generation ?? 0}:${leafId}`}
         fixedAgentProfile="frontmind-pro"
         syncKnowledgeBaseSnapshot

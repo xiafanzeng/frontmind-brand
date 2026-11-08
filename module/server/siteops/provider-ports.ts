@@ -2,9 +2,9 @@ import type {Readable} from 'node:stream';
 export type ManusV2MessageEvent=Record<string,unknown>&{id:string;type:string;timestamp:number;providerOriginalRank?:number};
 export type ManusV2Attachment={file_id:string;filename:string;file_data?:never;mime_type?:never}|{file_data:string;filename:string;mime_type:string;file_id?:never};
 export type ManusV2StructuredOutputSchema=Record<string,unknown>;
-export type CredentialMetadata={id:string;userId:number;version:number;credentialRef:string;provider:'manus'|'zhipu'|'xty_codex';upstreamModel:string;upstreamEffort:string|null;agentProfile:string};
+export type CredentialMetadata={id:string;userId:number;version:number;credentialRef:string;provider:'manus'|'zhipu'|'xty_codex'|'kimi';upstreamModel:string;upstreamEffort:string|null;agentProfile:string};
 export type ProviderError=Error&{code:string;status:number|null;retryable:boolean;outcomeUnknown:boolean;operation:string;retryAfterMs:number|null;providerRequestId:string|null;providerField?:string|null;providerPath?:string|null;transportCause?:unknown;transportPhase?:unknown;transportAttempt?:unknown;transportElapsedMs?:unknown;transportBytesWritten?:unknown};
-export interface DashboardAgentClientOptions {credentialRef?:string;credentialId:string;credentialVersion:number;accountUserId:number;credentialOwnerUserId?:number;provider:'manus'|'zhipu'|'xty_codex';intentId?:string;upstreamModel?:string;upstreamEffort?:string|null;rateLimitScope?:string;timeoutMs?:number;[key:string]:unknown}
+export interface DashboardAgentClientOptions {credentialRef?:string;credentialId:string;credentialVersion:number;accountUserId:number;credentialOwnerUserId?:number;provider:'manus'|'zhipu'|'xty_codex'|'kimi';intentId?:string;upstreamModel?:string;upstreamEffort?:string|null;rateLimitScope?:string;timeoutMs?:number;[key:string]:unknown}
 export interface DashboardAgentClient {
  createTask(input:any):Promise<{taskId:string;taskUrl?:string|null;requestId?:string|null;raw:Record<string,unknown>;[key:string]:unknown}>;
  recoverMissingCreate?(input:Parameters<DashboardAgentClient["createTask"]>[0]):ReturnType<DashboardAgentClient["createTask"]>;

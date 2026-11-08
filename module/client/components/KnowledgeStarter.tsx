@@ -1,3 +1,4 @@
+import { knowledgeBaseDocumentMaxBytes } from "../../contracts/knowledge-base-upload-limits";
 import { wmaKnowledgeUploadCapability } from "../lib/wma-knowledge-upload";
 import { isWmaKnowledgeDocument, WMA_KNOWLEDGE_MAX_FILE_BYTES } from "../../contracts/wma-knowledge-upload";
 
@@ -16,7 +17,7 @@ import { Input } from "@frontmind/module-ui/components/ui/input";
 import { Progress } from "@frontmind/module-ui/components/ui/progress";
 import { Textarea } from "@frontmind/module-ui/components/ui/textarea";
 import { knowledgeBaseObservationFromPayload, type KnowledgeBaseObservationDto } from "../lib/knowledge-progress";
-import { chatAttachmentSizeError, normalizedKnowledgeBaseUploadFilename, normalizedKnowledgeBaseUploadMimeType } from "../lib/attachment-files";
+import { normalizedKnowledgeBaseUploadFilename, normalizedKnowledgeBaseUploadMimeType } from "../lib/attachment-files";
 import { useWorkspaceDraftGuard } from "../host";
 import { WorkflowQuestion } from "@frontmind/module-ui/dashboard/Workflow";
 
@@ -1035,7 +1036,16 @@ export function EmptyConversationHint({
       ? await wmaKnowledgeUploadCapability(startReservation ?? undefined).catch(() => false) : false;
     const incoming = selected.filter((file) => {
       const directDocument = directCos && isWmaKnowledgeDocument(normalizedKnowledgeBaseUploadFilename(file.name), normalizedKnowledgeBaseUploadMimeType(file));
-      const sizeError = directDocument ? (file.size > WMA_KNOWLEDGE_MAX_FILE_BYTES ? "PDF／ZIP 单个文件不能超过 1 GiB" : null) : chatAttachmentSizeError(file);
+      const maxBytes = directDocument
+        ? WMA_KNOWLEDGE_MAX_FILE_BYTES
+        : knowledgeBaseDocumentMaxBytes(
+            normalizedKnowledgeBaseUploadFilename(file.name),
+            normalizedKnowledgeBaseUploadMimeType(file),
+            "kimi",
+          );
+      const sizeError = file.size > maxBytes
+        ? directDocument ? "PDF／ZIP 单个文件不能超过 1 GiB" : "单个文件不能超过 100 MiB"
+        : null;
       if (!sizeError) return true;
       toast.error("文件过大", { description: sizeError });
       return false;
@@ -1930,7 +1940,7 @@ export function EmptyConversationHint({
                   拖入企业宣传册，或点击选择文件
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
-                  支持宣传册、产品目录、PPT、图片、PDF、Word 等企业资料
+                  支持宣传册、产品目录、PPT、图片、PDF、Word 等企业资料，单个文件最大 100 MiB
                 </div>
                 <input
                   ref={fileInputRef}
