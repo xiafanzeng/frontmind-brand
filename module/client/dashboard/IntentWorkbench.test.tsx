@@ -48,7 +48,7 @@ const workspace = (status?: string, kind = "evaluate"): IntentWorkspace => ({
     evaluatedAt: "2026-10-25T00:00:00Z", dimensions: [], points: [], findings: [],
   }] : []},
 });
-beforeEach(() => {Element.prototype.scrollIntoView = vi.fn();});
+beforeEach(() => {localStorage.clear();Element.prototype.scrollIntoView = vi.fn();});
 afterEach(cleanup);
 function pendingApi(initial: IntentWorkspace) {
   let finish!: (value: IntentWorkspace) => void;
@@ -602,7 +602,7 @@ describe("优化工作台任务入口", () => {
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
     await screen.findByRole("region", {name: "问题评估任务"});
     const feedback = screen.getByRole("region", {name: "问题评估任务"});
-    expect(within(feedback).getByRole("heading", {name: "正在评估 · 1 条问题"})).toBeTruthy();
+    expect(within(feedback).getByRole("heading", {name: "正在评估"})).toBeTruthy();
     expect(within(feedback).queryByText("正在分析知识与评分")).toBeNull();
     expect(within(feedback).queryByText("任务在后台处理，可继续查看和处理其他问题。")).toBeNull();
     expect(feedback.querySelector(".iw-list-task-icon")).toBeNull();
@@ -657,11 +657,11 @@ describe("优化工作台任务入口", () => {
     expect(api.command).not.toHaveBeenCalled();
   });
   it.each([
-    ["running", undefined, "正在评估 · 1 条问题"],
-    ["queued", undefined, "评估已排队 · 1 条问题"],
-    ["create_unknown", "analyzing", "评估提交待确认 · 1 条问题"],
-    ["running", "validating", "正在评估 · 1 条问题"],
-    ["running", "repairing", "正在评估 · 1 条问题"],
+    ["running", undefined, "正在评估"],
+    ["queued", undefined, "评估已排队"],
+    ["create_unknown", "analyzing", "评估提交待确认"],
+    ["running", "validating", "正在评估"],
+    ["running", "repairing", "正在评估"],
   ] as const)("列表提示按 %s / %s 保留单行任务标题，省略阶段说明", async (status, stage, label) => {
     const initial = workspace(status);
     initial.state.jobs![0].createdAt = new Date(Date.now() - 84_000).toISOString();
@@ -779,7 +779,7 @@ describe("优化工作台任务入口", () => {
     }]}];
     const {api} = pendingApi(saved);
     const first = render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    fireEvent.click(await screen.findByRole("button", {name: "查看优化方案"}));
+    fireEvent.click(within(await screen.findByRole("region",{name:"优化方案任务"})).getByRole("button", {name: "查看优化方案"}));
     expect(screen.getByRole("textbox", {name: "补充部署资料修改后"})).toHaveProperty("value", "补充证据");
     first.unmount();
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
@@ -828,7 +828,7 @@ describe("优化工作台任务入口", () => {
       ...snapshot.plans[0], inputHash: "archived-input", actions: [{...snapshot.plans[0].actions[0], after: "审核后的知识正文"}],
     }]}});
     render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-    fireEvent.click(await screen.findByRole("button", {name: "查看优化方案"}));
+    fireEvent.click(within(await screen.findByRole("region",{name:"优化方案任务"})).getByRole("button", {name: "查看优化方案"}));
     expect(screen.getByRole("heading", {name: "确认优化方案"})).toBeTruthy();
     expect(screen.queryByRole("heading", {name: "已保存任务结果"})).toBeNull();
     expect(screen.getByText("历史部署方案")).toBeTruthy();
@@ -1189,33 +1189,34 @@ describe("优化工作台任务入口", () => {
   });
 });
 
- it("关闭完成提示后重新进入列表也不再占据顶部，已有评分仍可查看", async () => {
-  const {api, finish} = pendingApi(workspace("running"));
+ it("完成任务查看成功后移除，重新挂载列表也保持已读",async()=>{
+  const initial=workspace("succeeded");const {api}=pendingApi(initial);
+  const page=render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+  const completed=await screen.findByRole("region",{name:"问题评估任务"});
+  fireEvent.click(within(completed).getByRole("button",{name:"查看评估结果"}));
+  await screen.findByText("回答要点支撑矩阵");
+  fireEvent.click(screen.getByRole("button",{name:"返回问题列表"}));
+  expect(screen.queryByRole("region",{name:"问题评估任务"})).toBeNull();
+  page.unmount();render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+  await screen.findByRole("heading",{name:"优化问题"});
+  expect(screen.queryByRole("region",{name:"问题评估任务"})).toBeNull();expect(api.command).not.toHaveBeenCalled();
+ });
+ it("其他任务仍在运行时已完成任务保留，刷新后仍待查看",async()=>{
+  const initial=workspace("succeeded");initial.state.jobs!.push({...initial.state.jobs![0],id:"another-running",kind:"plan",status:"running"});
+  const {api}=pendingApi(initial);const page=render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+  await screen.findByRole("heading",{name:"评估已完成"});expect(screen.getByRole("heading",{name:"正在生成优化方案"})).toBeTruthy();
+  page.unmount();render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+  expect(await screen.findByRole("heading",{name:"评估已完成"})).toBeTruthy();
+  expect(screen.getByRole("heading",{name:"已完成"})).toBeTruthy();
+ });
+ it("完成结果读取失败时保留未读任务，不提前标记已查看",async()=>{
+  const initial=workspace("succeeded");initial.state.evaluations=[];
+  const {api}=pendingApi(initial);api.observe=vi.fn().mockResolvedValueOnce(initial).mockRejectedValueOnce(new Error("读取失败"));
   render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
-  await screen.findByRole("region", {name:"问题评估任务"});
-  await act(async () => finish(workspace("succeeded")));
-  fireEvent.click(screen.getByRole("button", {name:"关闭评估完成提示"}));
-  expect(screen.queryByRole("region", {name:"问题评估任务"})).toBeNull();
-  fireEvent.click(screen.getByRole("button", {name:`查看评估：${question.question}`}));
-  fireEvent.click(screen.getByRole("button", {name:"返回问题列表"}));
-  expect(screen.queryByRole("region", {name:"问题评估任务"})).toBeNull();
-  expect(api.command).not.toHaveBeenCalled();
+  fireEvent.click(await screen.findByRole("button",{name:"查看评估结果"}));
+  await screen.findByText(/读取失败/);expect(screen.getByRole("heading",{name:"评估已完成"})).toBeTruthy();
+  expect(localStorage.getItem("frontmind:intent:viewed-completions:v1")).toBeNull();
  });
-
- it("完成提示八秒自动收起，父组件更新不会重置倒计时", () => {
-  vi.useFakeTimers();
-  try {
-    const first=vi.fn(), latest=vi.fn();
-    const job=workspace("succeeded").state.jobs![0];
-    const result=render(<IntentListEvaluationStatus job={job} uncertain={false} onViewTask={vi.fn()} onDismiss={first}/>);
-    act(()=>{vi.advanceTimersByTime(4000);});
-    result.rerender(<IntentListEvaluationStatus job={{...job}} uncertain={false} onViewTask={vi.fn()} onDismiss={latest}/>);
-    act(()=>{vi.advanceTimersByTime(4000);});
-    expect(latest).toHaveBeenCalledTimes(1);
-    expect(first).not.toHaveBeenCalled();
-  } finally {vi.useRealTimers();}
- });
-
  it("多条待评估问题中点击一条时仅提交该问题", async () => {
   const initial=workspace();
   initial.state.questions.push({...question,id:"q2",question:"另一条待评估问题",rowIndex:1},{...question,id:"q3",question:"第三条待评估问题",rowIndex:2});
@@ -1462,4 +1463,15 @@ it("已排队任务明确等待后台执行，可以单独暂停",()=>{
   expect(screen.getByRole("status",{name:"任务状态"}).textContent).toBe("已排队");
   expect(screen.getByText("任务已保存，将由后台执行；离开页面不会取消任务。")).toBeTruthy();
   fireEvent.click(screen.getByRole("button",{name:"暂停评估"}));expect(pause).toHaveBeenCalledTimes(1);
+});
+
+it("同题已被重新评估时仍可查看旧完成任务的冻结详情并标记已读",async()=>{
+  const initial=workspace("succeeded");const original=structuredClone(initial.state.evaluations[0]);
+  initial.state.jobs![0].result={completedAt:"2026-11-08T00:00:00Z",questions:[question],evaluations:[original],plans:[]};
+  initial.state.evaluations[0]={...original,evaluatedAt:"2026-11-08T01:00:00Z",value:90,provenance:{operationId:"newer-job"} as any};
+  const {api}=pendingApi(initial);render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+  fireEvent.click(await screen.findByRole("button",{name:"查看评估结果"}));
+  expect(await screen.findByRole("heading",{name:"已保存任务结果"})).toBeTruthy();
+  expect(JSON.parse(localStorage.getItem("frontmind:intent:viewed-completions:v1")!)).toContain("job-1");
+  expect(api.observe).toHaveBeenCalledTimes(1);expect(api.command).not.toHaveBeenCalled();
 });

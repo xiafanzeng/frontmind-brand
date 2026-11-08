@@ -1,5 +1,5 @@
-import {useEffect, useRef, useState, type ReactNode} from "react";
-import {ChevronDown, Clock3, LoaderCircle, RefreshCw, X} from "lucide-react";
+import {useEffect, useState, type ReactNode} from "react";
+import {ChevronDown, Clock3, LoaderCircle, RefreshCw} from "lucide-react";
 import type {IntentSkillJob} from "../../contracts/intent-workbench";
 import "./intent-list-feedback.css";
 import IntentTaskControls from "./IntentTaskControls";
@@ -34,11 +34,10 @@ export function IntentListRefreshStatus() {
   return <span className="iw-list-refresh" role="status" aria-label="列表更新状态"><RefreshCw size={14} aria-hidden="true"/>正在更新</span>;
 }
 
-export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewResult, pending = false, onPause, onResume, onDismiss, autoDismiss = true, questionLabel, taskError, onRefresh}: {
+export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewResult, pending = false, onPause, onResume, questionLabel, taskError, onRefresh}: {
   job: IntentSkillJob; uncertain: boolean; onViewTask: () => void;
   onViewResult?: () => void;
   pending?: boolean; onPause?: () => void; onResume?: () => void;
-  onDismiss?: () => void; autoDismiss?: boolean;
   questionLabel?: string;
   taskError?:string; onRefresh?:()=>void;
 }) {
@@ -58,14 +57,6 @@ export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewRe
   const unconfirmed = job.status === "create_unknown";
   const paused = job.status === "paused";
   const completed = job.status === "succeeded";
-  const dismissRef = useRef(onDismiss);
-  dismissRef.current = onDismiss;
-  const canAutoDismiss = Boolean(onDismiss) && autoDismiss;
-  useEffect(() => {
-    if (!completed || !canAutoDismiss) return;
-    const timer = window.setTimeout(() => dismissRef.current?.(), 8000);
-    return () => window.clearTimeout(timer);
-  }, [job.id, completed, canAutoDismiss]);
   const kindLabel = job.kind === "plan" ? "方案生成" : "评估";
   const stateLabel = completed ? job.kind === "plan" ? "优化方案已生成" : "评估已完成"
     : job.status === "failed" ? `${kindLabel}未完成`
@@ -75,19 +66,18 @@ export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewRe
     : job.kind === "plan" ? "正在生成优化方案" : "正在评估";
   return <section className={`iw-list-task${completed ? " iw-list-task--completed" : ""}`} aria-label={job.kind === "plan" ? "优化方案任务" : "问题评估任务"}>
     <div className="iw-list-task-main">
-      <div className="iw-list-task-copy" role="status"><h3>{stateLabel}{!terminal&&` · ${job.questionIds.length} 条问题`}</h3>{questionLabel && <p className="iw-list-task-question" title={questionLabel}>问题：{questionLabel}</p>}{paused&&<p className="iw-list-task-hint">点击“继续{job.kind==="plan"?"生成方案":"评估"}”恢复当前任务。</p>}</div>
+      <div className="iw-list-task-copy" role="status"><h3>{stateLabel}</h3>{questionLabel && <p className="iw-list-task-question" title={questionLabel}>问题：{questionLabel}</p>}{paused&&<p className="iw-list-task-hint">点击“继续{job.kind==="plan"?"生成方案":"评估"}”恢复当前任务。</p>}</div>
       <div className="iw-list-task-actions">
         {Number.isFinite(created) && <span className="iw-list-task-time"><Clock3 size={14} aria-hidden="true"/>已耗时 {Math.floor(seconds / 60)}分{seconds % 60}秒</span>}
         <button type="button" onClick={completed ? onViewResult ?? onViewTask : onViewTask}>{completed ? job.kind === "plan" ? "查看优化方案" : "查看评估结果" : job.status === "failed" ? "查看失败详情" : paused ? "查看暂停详情" : unconfirmed ? "核对提交状态" : uncertain ? "查看读取状态" : "查看进度"}</button>
         <IntentTaskControls job={job} pending={pending} onPause={onPause} onResume={onResume}/>
-        {completed && onDismiss && <button type="button" className="iw-list-task-dismiss" aria-label="关闭评估完成提示" onClick={onDismiss}><X size={16}/></button>}
       </div>
     </div>
-    {!completed && (taskError||job.control?.error) && <p className="iw-list-task-note" role="alert">{taskError??job.control?.error}{taskError&&onRefresh&&<button disabled={pending} onClick={onRefresh}>重新读取</button>}</p>}
+    {(taskError||(!completed&&job.control?.error)) && <p className="iw-list-task-note" role="alert">{taskError??job.control?.error}{taskError&&onRefresh&&<button disabled={pending} onClick={onRefresh}>重新读取</button>}</p>}
   </section>;
 }
 
-/** Keep task children mounted while folded: observation and completion timers continue. */
+/** Keep task children mounted while folded: observation continues. */
 export function IntentTaskTray({jobs,attentionIds=[],children}:{jobs:IntentSkillJob[];attentionIds?:string[];children:ReactNode}) {
   const needsAttention=(job:IntentSkillJob)=>job.status==="failed"||job.status==="create_unknown"||Boolean(job.control?.error)||attentionIds.includes(job.id);
   const attention=jobs.filter(needsAttention).length;

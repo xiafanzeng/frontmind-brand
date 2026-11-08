@@ -1,4 +1,4 @@
-import {useEffect, useId, useRef, useState} from "react";
+import {Fragment, useEffect, useId, useRef, useState} from "react";
 import {ArrowLeft, ArrowRight, Check, ChevronDown, GripHorizontal, MessageSquareText, Sparkles, Undo2, X} from "lucide-react";
 import {Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter} from "@frontmind/module-ui/components/ui/dialog";
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
@@ -20,6 +20,10 @@ import {findCatalogQuestion} from "./intent-catalog-link";
 import type {IntentCatalogViewState, IntentCatalogSort} from "./intent-catalog-view";
 import type {IntentQuestion} from "../../contracts/intent-workbench";
 
+const viewedCompletionKey="frontmind:intent:viewed-completions:v1";
+function readViewedCompletions():string[] {
+  try {const ids=JSON.parse(localStorage.getItem(viewedCompletionKey)??"[]");return Array.isArray(ids)?ids.filter((id):id is string=>typeof id==="string"):[];}catch{return [];}
+}
 type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge" | "progress" | "history" | "history-detail";
 type Selection = Parameters<NonNullable<ManagedKeywordTablesProps["onUseQuestion"]>>[0];
 const labels = {supported: "已支撑", partial: "部分支撑", missing: "未支撑"};
@@ -148,7 +152,11 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [view, setView] = useState<View>(initialView);
   const [evaluationReturnView, setEvaluationReturnView] = useState<"universe" | "list">("list");
   const [pending, setPending] = useState(false);
-  const [dismissedCompletionIds, setDismissedCompletionIds] = useState<string[]>([]);
+  const [dismissedCompletionIds, setDismissedCompletionIds] = useState<string[]>(readViewedCompletions);
+  function markCompletionViewed(id:string) {
+    setDismissedCompletionIds(current=>{const ids=[...new Set([...current,...readViewedCompletions(),id])];try{localStorage.setItem(viewedCompletionKey,JSON.stringify(ids));}catch{}return ids;});
+  }
+  useEffect(()=>{const sync=(event:StorageEvent)=>{if(event.key===viewedCompletionKey)setDismissedCompletionIds(readViewedCompletions());};window.addEventListener("storage",sync);return()=>window.removeEventListener("storage",sync);},[]);
   const [dismissedFailureId, setDismissedFailureId] = useState<string>();
   const [submittingIds, setSubmittingIds] = useState<string[]>([]);
   const [savingQuestionId, setSavingQuestionId] = useState<string>();
@@ -223,7 +231,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const container = useRef<HTMLDivElement>(null);
   useEffect(() => {
     mounted.current = true; generation.current++; running.current = false; runningRead.current = false; runSequence.current++;
-    setDismissedCompletionIds([]);
+    setDismissedCompletionIds(readViewedCompletions());
     setTaskErrors({});setSubmissionRejected(false);
     workspaceRef.current = null; questionSaving.current = false; draftSaving.current = false;
     setSubmittingIds([]); setSavingQuestionId(undefined); setSavingDrafts(false); setBlockedModelAction(null);
@@ -444,7 +452,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const initialListLoading = view === "list" && !workspace && !error;
   const listTask = activeJob ?? workspace?.state.jobs?.find(item => item.id === progressJobId);
   const listEvaluation = view === "list" && listTask && !dismissedCompletionIds.includes(listTask.id) ? listTask : undefined;
-  const listTasks = view === "list" ? activeJobs.length ? activeJobs : listEvaluation ? [listEvaluation] : [] : [];
+  const completedTasks=(workspace?.state.jobs??[]).filter(job=>job.status==="succeeded"&&!dismissedCompletionIds.includes(job.id)).slice().reverse();
+  const listTasks = view === "list" ? [...activeJobs,...completedTasks,...(listEvaluation?.status==="failed"?[listEvaluation]:[])] : [];
   const refreshingList = view === "list" && Boolean(workspace) && pending && pendingRead && !activeJob;
   const receipt = receiptId ? workspace?.state.receipts.find(item => item.id === receiptId) : workspace?.state.receipts.at(-1);
   // The ledger appends newly added questions; reverse that order for newest first.
@@ -779,7 +788,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     if (job.result && job.questionIds.some(id => !workspace?.state.questions.some(question => question.id === id &&
       job.result!.questions.some(original => original.id === id && original.question === question.question &&
         original.category === question.category && original.subdivision === question.subdivision)))) {
-      setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail"); return;
+      setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail"); markCompletionViewed(job.id); return;
     }
     // Completion already supplied validated results. Viewing never evaluates again.
     setEvaluationReturnView("list"); setScope(job.questionIds); setIndex(0);
@@ -793,15 +802,19 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       return !Number.isFinite(created) || Date.parse(item.evaluatedAt) >= created;
     });
     if (workspace && hasResults(workspace)) {
-      setError(""); navigateView("evaluation"); return;
+      setError(""); navigateView("evaluation"); markCompletionViewed(job.id); return;
+    }
+    if(workspace&&job.result&&!hasResults(workspace)) {
+      setHistoryId(job.id);setHistoryQuestionId(undefined);navigateView("history-detail");markCompletionViewed(job.id);return;
     }
     // The terminal event can arrive before its result snapshot. Recover by reading.
-    await run(async () => {
+    const loaded=await run(async () => {
       const current = await api.observe();
       if (!hasResults(current))
         throw new Error("评估结果尚未完整读取，请重新读取。");
       return current;
     }, "evaluation", false, undefined, true);
+    if(loaded&&hasResults(loaded))markCompletionViewed(job.id);
   }
   const evaluationReturnLabel = evaluationReturnView === "universe" ? "已保存词条" : "问题列表";
   const retainKeywordPage = view === "universe" || (evaluationReturnView === "universe" && ["progress", "evaluation", "plan"].includes(view));
@@ -888,20 +901,20 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         onDeleteQuestion: catalogIntegration?.onDeleteQuestion ?? (question => void deleteQuestionNow(question)),
       }}
         headerStatus={refreshingList ? <IntentListRefreshStatus/> : undefined}
-        taskFeedback={listTasks.length ? <IntentTaskTray jobs={listTasks} attentionIds={Object.keys(taskErrors).filter(id=>Boolean(taskErrors[id]))}>{listTasks.map(job => <IntentListEvaluationStatus key={job.id}
+        taskFeedback={listTasks.length ? <IntentTaskTray jobs={listTasks} attentionIds={Object.keys(taskErrors).filter(id=>Boolean(taskErrors[id]))}>{listTasks.map((job,position) => <Fragment key={job.id}>{job.status==="succeeded"&&listTasks[position-1]?.status!=="succeeded"&&<h4 className="iw-task-tray-completed-heading">已完成</h4>}<IntentListEvaluationStatus
           job={job} uncertain={Boolean(taskErrors[job.id])} pending={pending && !pendingRead}
           taskError={taskErrors[job.id]} onRefresh={()=>void run(()=>api.observe(),undefined,false,undefined,true,[],job.id)}
           questionLabel={job.questionIds.map(id => questions.find(question => question.id === id)?.question ?? "历史问题").join("；")}
-          autoDismiss={job.kind === "plan" ? job.questionIds.every(id => savedPlanIds.includes(id)) : job.questionIds.every(id => evaluations.some(item => item.questionId === id && (!item.provenance?.operationId || item.provenance.operationId === job.id)))}
-          onDismiss={() => setDismissedCompletionIds(ids => [...ids, job.id])}
           onViewResult={() => {
             if (job.kind !== "plan") {void openCompletedEvaluation(job.id); return;}
             const saved = job.questionIds.flatMap(id => {const plan = findCurrentIntentPlan(workspace, id); return plan ? [structuredClone(plan)] : [];});
             if (saved.length === job.questionIds.length) {setScope(job.questionIds); setIndex(0); loadDrafts(saved); setDraftDirty(false); navigateView("plan");}
-            else {setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail");}
+            else if(job.result) {setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail");}
+            else {setTaskError(job.id,"方案结果尚未完整读取，请重新读取后查看。");return;}
+            markCompletionViewed(job.id);
           }}
           onPause={api.control ? () => void controlJob("pause", job.id) : undefined} onResume={api.control ? () => void controlJob("resume", job.id) : undefined}
-          onViewTask={() => openTaskDetails(job.id, "list")}/>)}</IntentTaskTray> : undefined}
+          onViewTask={() => openTaskDetails(job.id, "list")}/></Fragment>)}</IntentTaskTray> : undefined}
         savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan} onGeneratePlan={id => void plan(false, [id])}
         historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setHistoryQuestionId(undefined); navigateView("history");}}
         expandedGaps={expandedGaps} onGapToggle={(id, open) => setExpandedGaps(ids => open ? ids.includes(id) ? ids : [...ids,id] : ids.filter(item => item !== id))}

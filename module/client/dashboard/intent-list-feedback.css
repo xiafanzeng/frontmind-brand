@@ -83,3 +83,5 @@
   .iw-task-tray-status {order:3;flex-basis:100%;gap:6px 12px;font-size:12px}
   .iw-workbench .iw-task-tray .iw-list-task-actions {justify-self:start;justify-content:flex-start}
 }
+
+.iw-task-tray-completed-heading {margin:12px 4px 8px;font-size:12px;font-weight:600;color:var(--fm-brand-muted, #636366)}
