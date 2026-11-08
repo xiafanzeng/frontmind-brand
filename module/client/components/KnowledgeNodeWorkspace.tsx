@@ -268,9 +268,6 @@ function KnowledgeNodeWorkspaceSession({
     observedContentVersion,
   );
   const selectedLeaf = leaves.find((leaf) => leaf.id === selectedLeafId);
-  const selectedBranch = branches.find((branch) =>
-    branch.leaves.some((leaf) => leaf.id === selectedLeafId),
-  );
   const currentDetails =
     details?.node.leafId === selectedLeafId ? details : null;
 
@@ -1019,7 +1016,6 @@ function KnowledgeNodeWorkspaceSession({
     <>
       <header className="knowledge-node-workspace__drawer-header">
         <div>
-          <p>{selectedBranch?.title}</p>
           <DetailTitle {...(inlineDetails ? { id: detailTitleId } : {})}>
             {selectedLeaf?.title ?? editBase?.node.title ?? "知识节点正文"}
           </DetailTitle>

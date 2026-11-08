@@ -127,15 +127,26 @@ export function knowledgeOnlyIntentPlan(plan: IntentPlan): IntentPlan {
 export function findSavedIntentPlan(state: IntentState, questionId: string): IntentPlan | undefined {
   const question = state.questions.find(question => question.id === questionId);
   if (!question) return;
+  const jobs = state.jobs ?? [];
+  // A new completed evaluation invalidates older plans for this question.
+  // Historical records remain available separately, never as the current draft.
+  const lastEvaluation = jobs.reduce((last, job, index) => job.kind === "evaluate" && job.status === "succeeded" &&
+    job.result?.evaluations.some(item => item.questionId === questionId) ? index : last, -1);
   const current = state.plans.find(plan => plan.questionId === questionId);
-  if (current) return knowledgeOnlyIntentPlan(current);
-  for (const job of [...(state.jobs ?? [])].reverse()) {
+  if (current) {
+    const sourceIndex = jobs.reduce((last, job, index) => job.kind === "plan" && job.status === "succeeded" &&
+      job.questionIds.includes(questionId) && job.inputHash === current.inputHash && Boolean(current.inputHash) ? index : last, -1);
+    if (lastEvaluation < 0 || sourceIndex > lastEvaluation) {
+      const plan = knowledgeOnlyIntentPlan(current); return plan.actions.length ? plan : undefined;
+    }
+  }
+  for (const job of jobs.slice(lastEvaluation + 1).reverse()) {
     if (job.kind !== "plan" || job.status !== "succeeded" || !job.questionIds.includes(questionId)) continue;
     const original = job.result?.questions.find(item => item.id === questionId);
     if (!original || original.question !== question.question || original.category !== question.category ||
         original.subdivision !== question.subdivision) continue;
     const saved = job.result?.plans.find(plan => plan.questionId === questionId);
-    if (saved) return knowledgeOnlyIntentPlan({...saved, inputHash: saved.inputHash ?? job.inputHash});
+    if (saved) {const plan = knowledgeOnlyIntentPlan({...saved, inputHash: saved.inputHash ?? job.inputHash}); if (plan.actions.length) return plan;}
   }
 }
 

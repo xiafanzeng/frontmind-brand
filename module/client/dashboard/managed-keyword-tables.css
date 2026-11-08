@@ -750,3 +750,13 @@
   .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions {align-items: flex-start}
   .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-batch-actions>div {flex: 1;justify-content: flex-end}
 }
+
+/* Keep selection actions beside the filters instead of adding another toolbar row. */
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .saas-search {flex:1 1 240px;max-width:none}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .keyword-batch-actions {flex:0 0 auto;margin:0 0 0 auto}
+.fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .keyword-batch-actions button {min-height:40px;white-space:nowrap}
+@media(max-width:760px){
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .saas-search {flex:0 0 auto;min-width:0}
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .filter-group {flex-direction:row;flex-wrap:wrap}
+  .fm-brand-theme .iw-workbench .brand-keyword-workspace .keyword-toolbar-saas .keyword-batch-actions {margin:0;justify-content:flex-end}
+}

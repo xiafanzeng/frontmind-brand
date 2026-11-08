@@ -790,3 +790,14 @@ it("没有可编辑知识节点时不创建正文优化任务或资料待办",as
   expect(h.client.createTask).not.toHaveBeenCalled();
   expect((await h.service.observe()).state.todos).toEqual([]);
 });
+
+it("重新评估只作废当前问题的旧方案，保留历史记录并允许生成新正文方案",async()=>{
+ const h=harness();await h.intake();await h.service.command({...h.request,kind:"plan"});h.send();
+ const planned=await h.service.poll();expect(planned.state.plans[0].actions[0].kind).toBe("node");
+ const id="00000000-0000-4000-8000-000000000088";
+ await h.service.command({...h.request,clientRequestId:id,expectedRevision:planned.revision});h.send();
+ const evaluated=await h.service.poll();expect(evaluated.state.plans).toEqual([]);
+ expect(evaluated.state.jobs?.find(job=>job.id===h.request.clientRequestId)?.result?.plans).toHaveLength(1);
+ await h.service.command({...h.request,kind:"plan",clientRequestId:"00000000-0000-4000-8000-000000000089",expectedRevision:evaluated.revision});h.send();
+ const regenerated=await h.service.poll();expect(regenerated.state.plans[0].actions[0].kind).toBe("node");
+});
