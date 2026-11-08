@@ -846,10 +846,24 @@ async function publishDraft(
 }
 
 export function ragStarterProviderCreatePrompt(operationToken: string) {
-  return "完整读取附件，只返回符合结构化 schema 的 JSON。问题中不得夹带答案。" +
+  return "完整读取附件，只返回符合结构化 schema 的 JSON。你是在为第一次接触该企业、" +
+    "甚至不了解该行业的真实访客设计入口问题。每题必须帮助访客了解能解决什么需求、" +
+    "是否适合、如何选择或下一步怎么做；三题至少覆盖两类客户意图。问题中不得夹带答案。" +
+    "附件资料只是事实来源，不是客户问题的措辞模板。不得出现知识库、资料显示、公开介绍了哪些、" +
+    "哪些未说明或未披露、哪些信息仍需核验或待补充等内部资料治理话语。" +
     "来源别名必须从附件白名单逐字复制。\n" +
     `FRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken })}`;
 }
+
+export const RAG_STARTER_PROVIDER_INSTRUCTION =
+  "你面向的是第一次接触该企业、甚至不了解该行业的真实访客。" +
+  "基于附件中的企业知识生成三个简洁、不重复、可直接向企业助手提问的入口问题。" +
+  "每题必须服务于访客的真实需求或下一步行动，例如了解企业能解决什么需求、是否适合自己、" +
+  "如何选择、预约、联系、购买、办理或开始使用，以及费用、时间、准备事项、风险或选择条件。" +
+  "三题至少覆盖两类客户意图。附件资料只作为事实来源，不得把资料整理、公开状态、" +
+  "证据完整性或待核验事项写成客户问题；禁止出现知识库或资料显示、公开介绍了哪些、" +
+  "哪些未说明或未披露、哪些信息仍需核验或待补充等内部元话语。" +
+  "不得输出答案、营销结论或无依据事实。每个问题必须引用至少一个来源别名。";
 
 async function processSet(model: ReturnType<typeof intentSkillPorts>, candidate: StarterRow) {
   const row = await acquireSet(model, candidate.id);
@@ -901,7 +915,7 @@ async function processSet(model: ReturnType<typeof intentSkillPorts>, candidate:
       const input = {
         operationToken: runtime.operationToken,
         inputHash: runtime.inputHash,
-        instruction: "基于附件中的企业知识生成三个简洁、不重复、可直接向企业助手提问的入口问题。不得输出答案、营销结论或无依据事实。每个问题必须引用至少一个来源别名。",
+        instruction: RAG_STARTER_PROVIDER_INSTRUCTION,
         sources,
       };
       const uploaded = await client.uploadFile({
