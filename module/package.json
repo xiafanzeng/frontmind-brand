@@ -7,7 +7,7 @@
     "build": "pnpm generate:policy && tsc -p tsconfig.build.json && pnpm build:workflows",
     "typecheck": "pnpm generate:policy && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
     "build:workflows": "pnpm generate:policy && node workflows/build-keyword-workflow.mjs --output dist/workflows/generate-brand-question-universe && node workflows/build-knowledge-base-workflow.mjs && node workflows/build-siteops-workflows.mjs && node workflows/build-intent-workflow.mjs && node workflows/build-rag-evaluation-workflow.mjs",
-    "test": "node --test tests/workflow-version.test.mjs tests/workflow-source.test.mjs && vitest run --config vitest.config.ts --exclude client/dashboard/ai-website-preview/RagChat.test.tsx && node scripts/run-rag-chat-test-shards.mjs",
+    "test": "node --test tests/workflow-version.test.mjs tests/workflow-source.test.mjs && vitest run --config vitest.config.ts",
     "accept:ai-website": "node scripts/accept-ai-website-flow.mjs",
     "generate:policy": "node workflows/generate-knowledge-base-working-set-policy.mjs",
     "catalog:ensure": "node dist/server/siteops/prepare-module-assets.js --ensure-ready --concurrency 1",
@@ -116,7 +116,7 @@
     "@types/react": "^19.2.1",
     "@types/react-dom": "^19.2.1",
     "@types/express": "^4.17.21",
-    "vitest": "2.1.9",
+    "vitest": "3.2.4",
     "jsdom": "26.1.0",
     "@testing-library/react": "16.3.0",
     "ajv": "8.20.0"

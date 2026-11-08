@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 /**
  * REAL Brand-path recovery reproduction (2026-10-28 incidents: tasks
@@ -51,7 +51,7 @@ vi.mock("./response-logic/optimization-workflow", () => ({
   ResponseLogicOptimizationWorkflow: () => null,
 }));
 
-import BrandResponseLogicEntry from "./BrandResponseLogicEntry.js";
+const loadBrandEntry = () => import("./BrandResponseLogicEntry.js").then(m => m.default);
 
 const emptyDraft = {
   concern: "", conclusion: "", facts: "", pending: "", boundaries: "", references: "",
@@ -69,13 +69,17 @@ const runningEnvelope = {
 };
 
 beforeEach(() => {
+  vi.resetModules();
   h.restCalls = [];
   h.router = async () => new Response("{}", { status: 404 });
+  localStorage.clear();
+  sessionStorage.clear();
 });
 afterEach(cleanup);
 
 describe("Brand entry → adapter → workspace recovery (real path)", () => {
   it("mounts with an unadopted lastTaskId and issues the status request for that task", async () => {
+    const BrandResponseLogicEntry = await loadBrandEntry();
     h.router = async (url: string) => {
       const response = (body: unknown, status = 200) =>
         new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -125,6 +129,7 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
   });
 
   it("recovers a completed task through status → adopt → editor shows the four sections", async () => {
+    const BrandResponseLogicEntry = await loadBrandEntry();
     let adoptCalls = 0;
     const adoptedRecord = {
       ...record,
@@ -185,6 +190,7 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
   });
 
   it("NEW: start path — clicking 生成应答 starts polling the created task (no recovery involved)", async () => {
+    const BrandResponseLogicEntry = await loadBrandEntry();
     let startCalls = 0;
     h.router = async (url: string, init?: RequestInit) => {
       const response = (body: unknown, status = 200) =>
@@ -221,7 +227,11 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 60)); });
     // The generation button is rendered when there is no active generation card.
     const btn = await import("@testing-library/react").then(m => m.screen.findByRole("button", { name: /生成应答/ }));
-    await act(async () => { btn.click(); await new Promise((r) => setTimeout(r, 80)); });
+    await act(async () => { fireEvent.click(btn); });
+    await waitFor(() =>
+      expect(h.restCalls.some((c) => c.includes("/response-logic/start"))).toBe(true),
+    );
+    await act(async () => { await new Promise((r) => setTimeout(r, 80)); });
     const diag = {
       startCalls,
       statusCalls: h.restCalls.filter((c) => c.includes("/tasks/task-start/status")).length,
@@ -236,6 +246,7 @@ describe("Brand entry → adapter → workspace recovery (real path)", () => {
   });
 
   it("WHITE-SCREEN REPRO: adopt succeeds -> page must render four sections immediately (no remount)", async () => {
+    const BrandResponseLogicEntry = await loadBrandEntry();
     const adoptedRec = {
       ...record,
       questionId: "q-white",
