@@ -34,6 +34,7 @@ describe("优化任务轮询", () => {
     expect(scope.fetch.mock.calls[0][1].method).toBe("GET");
     const posted=JSON.parse(scope.fetch.mock.calls[1][1].body);
     expect(posted.questionIds).toEqual(["q"]);
+    expect(scope.fetch.mock.calls[1][1].headers.Prefer).toBe("respond-async");
     if(commandVersion===2)expect(posted.expectedQuestions).toHaveLength(1);
     else {expect(posted.expectedQuestions).toBeUndefined();expect(posted.expectedRevision).toBe(7);}
     expect(scope.fetch.mock.calls.filter(([,init])=>init.method==="POST")).toHaveLength(1);

@@ -10,6 +10,6 @@ export default function IntentTaskControls({job, pending, onPause, onResume}: {
     ? <button type="button" className="iw-task-resume" disabled={pending} onClick={onResume}><Play size={14}/>继续{label}</button> : null;
   if (["pausing", "resuming"].includes(job.status))
     return <button type="button" disabled>{job.status === "pausing" ? "正在暂停…" : `正在恢复${job.kind === "plan" ? "方案生成" : "评估"}…`}</button>;
-  return onPause ? <button type="button" disabled={pending || job.status !== "running"} onClick={onPause}
-    title="中断当前模型执行；继续时沿用原任务上下文，可能重新处理被中断的部分。"><Pause size={14}/>暂停{label}</button> : null;
+  return onPause ? <button type="button" disabled={pending || !["queued","running"].includes(job.status)} onClick={onPause}
+    title={job.status==="queued"?"暂停此排队任务，其他问题继续执行。":"中断当前模型执行；继续时沿用原任务上下文，可能重新处理被中断的部分。"}><Pause size={14}/>暂停{label}</button> : null;
 }

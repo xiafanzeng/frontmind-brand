@@ -58,6 +58,8 @@ export type IntentSkillJob = {
   id: string; taskId: string; kind: "evaluate" | "plan"; questionIds: string[];
   status: "queued" | "uploading" | "create_unknown" | "running" | "pausing" | "paused" | "resuming" | "succeeded" | "failed";
   createdAt: string; inputHash: string; knowledgeHash: string; questionsHash: string;
+  startedAt?:number;
+  dispatchPaused?:boolean;
   questionsScope?: "selected";
   draftEditedQuestionIds?: string[];
   credentialId: string; credentialVersion: number; skillHash: string; model: string;

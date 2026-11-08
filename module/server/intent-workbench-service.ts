@@ -44,6 +44,7 @@ function digest(value: string) {return createHash("sha256").update(value).digest
 /** Durable workspace ledger. Schema is created by the included migration, never at request time. */
 export function createIntentWorkbenchService(core: ModuleHttpCore, request: Request) {
   const context = core.context(request);
+  const deferred=request.get?.("Prefer")==="respond-async";
   const workspaceKey = digest(`${context.accountUserId}:${context.enterpriseProjectId ?? "personal"}`);
   const scope = sql`userId = ${context.accountUserId} AND enterpriseProjectId <=> ${context.enterpriseProjectId}`;
   const ledgerScope = sql`workspace_key = ${workspaceKey} AND owner_user_id = ${context.accountUserId} AND project_id <=> ${context.enterpriseProjectId}`;
@@ -167,7 +168,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     if (previous) {
       if (previous.kind !== kind || intentHash([...previous.questionIds].sort()) !== intentHash([...new Set(questionIds)].sort()))
         throw new IntentWorkbenchError("IDEMPOTENCY_CONFLICT", "任务标识已用于其他问题");
-      await advance(previous);
+      if(!deferred)await advance(previous);
       return observe();
     }
     let prepared: Awaited<ReturnType<typeof prepareIntentSkill>>;
@@ -209,14 +210,16 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         questionsScope: "selected", questionsHash: intentHash(selectedQuestions.map(questionContent)), credentialId: prepared.credential.id,
         credentialVersion: prepared.credential.version, skillHash: prepared.skillHash, model: prepared.credential.upstreamModel, receiptId};
       const input: IntentSkillInput = {...frozen, inputHash, operationToken: `brand-intent:${clientRequestId}`};
-      await reserveIntentSkill(tx, reserved, input, prepared.credential, context.accountUserId, context.enterpriseProjectId);
+      const actor=(request as Request&{frontmindUser:{id:number;role:string}}).frontmindUser;
+      await reserveIntentSkill(tx, reserved, input, prepared.credential, context.accountUserId, context.enterpriseProjectId,
+        {context,actor:{id:actor.id,role:actor.role}});
       ledger.state.jobs ??= [];
       ledger.state.jobs.push(reserved);
       // Completed records are durable. Bound unsuccessful attempts only.
       const recentAttempts = new Set(ledger.state.jobs.filter(job => job.status !== "succeeded").slice(-100).map(job => job.id));
       ledger.state.jobs = ledger.state.jobs.filter(job => job.status === "succeeded" || activeJob(job) || recentAttempts.has(job.id));
     }, Boolean(expectedQuestions));
-    await advance(reserved);
+    if(!deferred)await advance(reserved);
     return observe();
   }
   async function advance(original: IntentSkillJob) {
@@ -237,7 +240,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       // A late result must never replace a newer evaluation of the same question.
       if (recoverableJob(current) && ledger.state.jobs!.slice(ledger.state.jobs!.indexOf(current) + 1)
         .some(later => later.questionIds.some(id => current.questionIds.includes(id)))) return;
-      current.lease = {owner, expiresAt: Date.now() + 120000}; job = structuredClone(current);
+      current.lease = {owner, expiresAt: Date.now() + 120000};
+      if(current.status==="queued")current.startedAt??=Date.now();
+      job = structuredClone(current);
     });
     if (!job) return;
     let phase = job.status;
@@ -260,7 +265,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         });
         phase = status;
       };
-      const timedOut = Date.now() - (job.repair?.claimedAt ?? job.continuation?.resumedAt ?? Date.parse(job.createdAt)) > 30 * 60_000;
+      const timedOut = Date.now() - (job.repair?.claimedAt ?? job.continuation?.resumedAt ?? job.startedAt ?? Date.parse(job.createdAt)) > 30 * 60_000;
       if (phase === "queued" || phase === "uploading") {
         if (timedOut) throw new IntentSkillRuntimeError(timeoutMessage);
         await update("uploading");
@@ -388,6 +393,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
             if (current.lease?.owner !== owner || current.lease.expiresAt < Date.now()) throw new IntentSkillRuntimeError("任务执行权已变化");
             current.autoRetry = {scheduledAt: Date.now() + 120_000, reason: state};
             current.status = "queued";
+            delete current.startedAt;
             delete current.error; delete current.terminalObservedAt; delete current.createClaimedAt;
             progress = {stage: "preparing", updatedAt: new Date().toISOString(),
               events: [...(progress?.events ?? []).filter(item => item.id !== retryEventId),
@@ -494,6 +500,10 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
             current.status === "create_unknown" ? "submitted" : "preparing",
           updatedAt: new Date().toISOString(), events: progress?.events ?? [],
         };
+        if (!terminalError) {
+          // Rotate durable discovery fairly when more than one sweep page is active.
+          await tx.update(intentSkillPorts().agentOperations).set({updatedAt:new Date()}).where(eq(intentSkillPorts().agentOperations.id,job!.id));
+        }
         if (terminalError) {
           current.status = "failed"; current.error = terminalError;
           const model = intentSkillPorts();
@@ -591,7 +601,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   async function control(value: unknown) {
     const input = z.object({jobId: z.string().uuid(), action: z.enum(["pause", "resume"])}).strict().parse(value);
     let target!: IntentSkillJob;
-    await locked(undefined, async (_tx, ledger) => {
+    await locked(undefined, async (tx, ledger) => {
       const job = ledger.state.jobs?.find(item => item.id === input.jobId);
       if (!job) throw new IntentWorkbenchError("JOB_MISSING", "当前工作区没有此评估任务", 404);
       if (["succeeded", "failed"].includes(job.status))
@@ -602,13 +612,24 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       }
       if ((job.lease?.expiresAt ?? 0) > Date.now())
         throw new IntentWorkbenchError("JOB_BUSY", "任务正在同步，请稍后再试");
+      if(input.action==="pause"&&job.status==="queued"){
+        job.status="paused";job.dispatchPaused=true;
+        await tx.update(intentSkillPorts().agentTasks).set({providerState:"paused",updatedAt:new Date()}).where(eq(intentSkillPorts().agentTasks.id,job.taskId));
+        target=structuredClone(job);return;
+      }
+      if(input.action==="resume"&&job.status==="paused"&&job.dispatchPaused){
+        job.status="queued";delete job.dispatchPaused;
+        await tx.update(intentSkillPorts().agentTasks).set({providerState:"queued",updatedAt:new Date()}).where(eq(intentSkillPorts().agentTasks.id,job.taskId));
+        target=structuredClone(job);return;
+      }
       if (input.action === "pause" ? job.status !== "running" : job.status !== "paused")
         throw new IntentWorkbenchError("CONTROL_UNAVAILABLE", "当前阶段暂不能执行此操作，请重新读取状态");
       job.status = input.action === "pause" ? "pausing" : "resuming";
       job.control = {action: input.action, intentId: randomUUID(), claimedAt: Date.now()};
+      await tx.update(intentSkillPorts().agentTasks).set({providerState:job.status,updatedAt:new Date()}).where(eq(intentSkillPorts().agentTasks.id,job.taskId));
       target = structuredClone(job);
     });
-    if (target.status !== "paused" && target.status !== "running") await advanceControl(target);
+    if (target.status === "pausing" || target.status === "resuming") await advanceControl(target);
     return observe();
   }
   async function poll() {
@@ -616,7 +637,17 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     const active = workspace.state.jobs?.filter(job => activeJob(job) && job.status !== "paused") ?? [];
     const recoverable = workspace.state.jobs?.find((candidate, index, jobs) => recoverableJob(candidate) &&
       !jobs.slice(index + 1).some(later => later.questionIds.some(id => candidate.questionIds.includes(id))));
-    for (const job of active.length ? active : recoverable ? [recoverable] : []) await advance(job);
+    const pending=active.length?active:recoverable?[recoverable]:[];
+    let cursor=0;
+    await Promise.all(Array.from({length:Math.min(4,pending.length)},async()=>{
+      while(cursor<pending.length){
+        const job=pending[cursor++]!;
+        try{await advance(job);}catch(error){
+          // A transient failure for one task must not starve other questions.
+          console.error("[Brand intent] task sweep",job.id,error instanceof IntentWorkbenchError?error.code:error instanceof Error?error.name:"WORKER_ERROR");
+        }
+      }
+    }));
     return observe();
   }
   async function command(value: unknown) {
@@ -624,7 +655,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     if (input.kind === "evaluate" || input.kind === "plan")
       return startSkill(input.kind, input.questionIds, input.expectedRevision, input.clientRequestId, undefined, input.expectedQuestions);
     const data = await knowledge();
-    const guarded = input.kind === "edit" && Boolean(input.expectedPlan);
+    // Intake only appends missing identities and cannot overwrite existing questions.
+    const guarded = input.kind === "intake" || (input.kind === "edit" && Boolean(input.expectedPlan));
     await locked(guarded ? undefined : input.expectedRevision, async (_tx, ledger) => {
       if (ledger.state.receipts.some(receipt => receipt.status === "running" || (receipt.lease?.expiresAt ?? 0) > Date.now()))
         throw new IntentWorkbenchError("EXECUTION_ACTIVE", "请先继续完成当前执行");

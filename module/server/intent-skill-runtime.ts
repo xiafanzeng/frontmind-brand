@@ -124,7 +124,8 @@ export async function prepareIntentSkill(accountUserId: number) {
   return {credential, skill, skillHash: intentHash(skill)};
 }
 export async function reserveIntentSkill(tx: any, job: IntentSkillJob, input: IntentSkillInput,
-  credential: BrandKeywordCredential, accountUserId: number, projectId: string | null) {
+  credential: BrandKeywordCredential, accountUserId: number, projectId: string | null,
+  background?:{context:{accountUserId:number;actorUserId:number;enterpriseProjectId:string|null;businessOwnerId:string;businessActorId:string};actor:{id:number;role:string}}) {
   const core = intentSkillPorts();
   await core.lockAccountRecord(tx, accountUserId);
   await tx.insert(core.agentOperations).values({
@@ -138,7 +139,7 @@ export async function reserveIntentSkill(tx: any, job: IntentSkillJob, input: In
   await tx.insert(core.agentTasks).values({
     id: job.taskId, operationId: job.id, providerTaskId: null, providerRequestId: null,
     createMarker: input.operationToken, title: `FrontMind intent ${job.id}`, providerState: "queued",
-    providerRuntime: {input},
+    providerRuntime: {input,...(background?{intentContext:background.context,intentActor:background.actor}:{})},
   });
 }
 /** Read a pinned local input without resolving credentials or contacting the provider. */

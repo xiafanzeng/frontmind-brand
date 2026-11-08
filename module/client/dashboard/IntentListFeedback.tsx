@@ -71,7 +71,7 @@ export function IntentListEvaluationStatus({job, uncertain, onViewTask, onViewRe
     : job.status === "failed" ? `${kindLabel}未完成`
     : paused ? `${kindLabel}已暂停` : job.status === "pausing" ? `正在暂停${kindLabel}`
     : job.status === "resuming" ? `正在恢复${kindLabel}`
-    : unconfirmed ? `${kindLabel}提交待确认` : uncertain ? `${kindLabel}状态待确认` : job.status === "queued" ? `${kindLabel}准备中`
+    : unconfirmed ? `${kindLabel}提交待确认` : uncertain ? `${kindLabel}状态待确认` : job.status === "queued" ? `${kindLabel}已排队`
     : job.kind === "plan" ? "正在生成优化方案" : "正在评估";
   return <section className={`iw-list-task${completed ? " iw-list-task--completed" : ""}`} aria-label={job.kind === "plan" ? "优化方案任务" : "问题评估任务"}>
     <div className="iw-list-task-main">

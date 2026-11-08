@@ -60,7 +60,7 @@ function pendingApi(initial: IntentWorkspace) {
   return {api, finish};
 }
 async function openCurrentTask() {
-  fireEvent.click(await screen.findByRole("button", {name: /查看进度|查看暂停详情|核对提交状态/}));
+  fireEvent.click(await screen.findByRole("button", {name: /查看进度|查看暂停详情|核对提交状态|查看读取状态/}));
 }
 describe("优化工作台任务入口", () => {
   it("读取断线只提示核对状态，服务端确认失败后才显示重新评估",()=>{
@@ -658,7 +658,7 @@ describe("优化工作台任务入口", () => {
   });
   it.each([
     ["running", undefined, "正在评估 · 1 条问题"],
-    ["queued", undefined, "评估准备中 · 1 条问题"],
+    ["queued", undefined, "评估已排队 · 1 条问题"],
     ["create_unknown", "analyzing", "评估提交待确认 · 1 条问题"],
     ["running", "validating", "正在评估 · 1 条问题"],
     ["running", "repairing", "正在评估 · 1 条问题"],
@@ -1454,4 +1454,12 @@ it("确认执行保留打开方案时的基线，不用后台新方案覆盖人�
  expect(api.command).toHaveBeenCalledWith(expect.objectContaining({expectedPlan:{questionId:"q1",inputHash:"original",actions:[{id:"a",selected:true,after:"原方案"}]}}));
  expect(screen.getByRole("textbox",{name:"知识正文修改后"})).toHaveProperty("value","人工确认的修改");
  expect(api.execute).not.toHaveBeenCalled();
+});
+
+it("已排队任务明确等待后台执行，可以单独暂停",()=>{
+  const pause=vi.fn();
+  render(<IntentTaskProgress kind="evaluate" job={workspace("queued").state.jobs![0]} error="" pending={false} onBack={vi.fn()} onViewResult={vi.fn()} onPause={pause}/>);
+  expect(screen.getByRole("status",{name:"任务状态"}).textContent).toBe("已排队");
+  expect(screen.getByText("任务已保存，将由后台执行；离开页面不会取消任务。")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"暂停评估"}));expect(pause).toHaveBeenCalledTimes(1);
 });

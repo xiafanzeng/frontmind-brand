@@ -10,7 +10,7 @@ import type {ModuleHttpCore} from "../server/http-api";
 import type {Request} from "express";
 
 vi.mock("../server/knowledge-node-workspace-service.js", () => ({getKnowledgeNodeDetails: vi.fn(), saveKnowledgeNodeContent: vi.fn()}));
-function harness(options: {mysqlJsonPayload?: "object" | "string";readOnly?:boolean} = {}) {
+function harness(options: {mysqlJsonPayload?: "object" | "string";readOnly?:boolean;deferred?:boolean} = {}) {
   const operations = mysqlTable("operations_test", {id: varchar("id", {length: 191})});
   const tasks = mysqlTable("tasks_test", {id: varchar("id", {length: 191}), operationId: varchar("operationId", {length: 191})});
   const events = mysqlTable("events_test", {id: varchar("id", {length: 191}), taskId: varchar("taskId", {length: 191}), normalizedPayload: json("normalizedPayload")});
@@ -30,6 +30,7 @@ function harness(options: {mysqlJsonPayload?: "object" | "string";readOnly?:bool
         : value);
     return options.mysqlJsonPayload === "object" ? value : JSON.stringify(value);
   }
+  let transactionTail=Promise.resolve();
   const db: any = {
     async execute(query: any) {
       const {sql, params} = dialect.sqlToQuery(query);
@@ -42,10 +43,13 @@ function harness(options: {mysqlJsonPayload?: "object" | "string";readOnly?:bool
       return [[]];
     },
     async transaction(work: any) {
+      const previous=transactionTail;let release!:()=>void;
+      transactionTail=new Promise<void>(resolve=>{release=resolve;});
+      await previous;
       const before = structuredClone(ledger); const beforeTasks = structuredClone(storedTasks); const beforeOperations = structuredClone(storedOperations);
       try {return await work(db);} catch (e) {
         ledger = before; storedTasks.splice(0, storedTasks.length, ...beforeTasks); storedOperations.splice(0, storedOperations.length, ...beforeOperations); throw e;
-      }
+      } finally {release();}
     },
     insert(table: any) {return {async values(value: any) {
       if (table === tasks) storedTasks.push(structuredClone(value));
@@ -83,7 +87,7 @@ function harness(options: {mysqlJsonPayload?: "object" | "string";readOnly?:bool
   } as unknown as BrandKeywordPorts);
   const core: ModuleHttpCore = {context: () => ({accountUserId: 42, actorUserId: 42, enterpriseProjectId: "project",
     businessOwnerId: "42", businessActorId: "42"}), database: async () => db, environment: {}};
-  const service = createIntentWorkbenchService(core, {frontmindUser: {id: 42, role: "user"}} as unknown as Request);
+  const service = createIntentWorkbenchService(core, {frontmindUser: {id: 42, role: "user"},get:()=>options.deferred?"respond-async":undefined} as unknown as Request);
   async function intake() {
     return service.command({kind: "intake", expectedRevision: 0, questions: [
       {id: "q", question: "材料如何选择？", category: "产品", subdivision: "", tableId: "t", rowIndex: 0, sourceRevision: 1},
@@ -107,6 +111,68 @@ function harness(options: {mysqlJsonPayload?: "object" | "string";readOnly?:bool
     core, storedEvents, ledger: () => ledger!};
 }
 describe("优化模型持久化任务", () => {
+  it("异步接受独立问题，重试同一请求不重复预留或调用模型",async()=>{
+    const h=harness({deferred:true});const first=await h.intake();
+    const second={...first.state.questions[0],id:"q2",question:"材料如何维护？",rowIndex:1};
+    await h.service.command({kind:"intake",expectedRevision:0,questions:[second]});
+    const a={...h.request,expectedQuestions:[intentQuestionSnapshot(first.state.questions[0])]};
+    const b={...h.request,questionIds:["q2"],expectedQuestions:[intentQuestionSnapshot(second)],clientRequestId:"00000000-0000-4000-8000-000000000002"};
+    await Promise.all([h.service.command(a),h.service.command(b)]);
+    await h.service.command(a);
+    expect(h.ledger().state.jobs!.map(job=>job.status)).toEqual(["queued","queued"]);
+    expect(h.storedOperations).toHaveLength(2);expect(h.client.createTask).not.toHaveBeenCalled();
+    expect(h.client.uploadFile).not.toHaveBeenCalled();
+    expect(h.storedTasks[0].providerRuntime.intentContext).toEqual(h.core.context({} as Request));
+    expect(h.storedTasks[0].providerRuntime.intentActor).toEqual({id:42,role:"user"});
+    expect(h.storedTasks[0].providerRuntime.input.intentActor).toBeUndefined();
+    const result=await h.service.poll();
+    expect(result.state.jobs!.every(job=>job.status==="running")).toBe(true);
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
+  });
+  it("后台进度不阻止追加词条，追加保持已有问题内容和任务不变",async()=>{
+    const h=harness({deferred:true});const initial=await h.intake();
+    await h.service.command({...h.request,expectedQuestions:initial.state.questions.map(intentQuestionSnapshot)});
+    await h.service.poll();
+    const extra={...initial.state.questions[0],id:"q2",question:"第二个问题？"};
+    const result=await h.service.command({kind:"intake",expectedRevision:0,questions:[{...initial.state.questions[0],question:"不可覆盖"},extra]});
+    expect(result.state.questions.map(q=>q.question)).toEqual(["材料如何选择？","第二个问题？"]);
+    expect(result.state.jobs![0].status).toBe("running");
+  });
+  it("排队任务分别暂停和继续，不停止其他问题，等待时间不消耗模型执行预算",async()=>{
+    const h=harness({deferred:true});const first=await h.intake();
+    const second={...first.state.questions[0],id:"q2",question:"材料如何维护？"};
+    await h.service.command({kind:"intake",expectedRevision:0,questions:[second]});
+    await h.service.command({...h.request,expectedQuestions:first.state.questions.map(intentQuestionSnapshot)});
+    await h.service.command({...h.request,questionIds:["q2"],expectedQuestions:[intentQuestionSnapshot(second)],clientRequestId:"00000000-0000-4000-8000-000000000002"});
+    h.ledger().state.jobs![0].createdAt=new Date(Date.now()-60*60_000).toISOString();
+    await h.service.control({jobId:h.request.clientRequestId,action:"pause"});
+    const other=await h.service.poll();
+    expect(other.state.jobs!.map(job=>job.status)).toEqual(["paused","running"]);
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);expect(h.client.stopTask).not.toHaveBeenCalled();
+    const resumed=await h.service.control({jobId:h.request.clientRequestId,action:"resume"});
+    expect(resumed.state.jobs![0].status).toBe("queued");
+    const dispatched=await h.service.poll();
+    expect(dispatched.state.jobs!.map(job=>job.status)).toEqual(["running","running"]);
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);expect(h.client.sendMessage).not.toHaveBeenCalled();
+    expect(dispatched.state.jobs![0].startedAt).toBeGreaterThan(Date.now()-10000);
+  });
+  it("一个问题上传等待时，另一个问题仍可独立提交模型任务",async()=>{
+    const h=harness({deferred:true});const first=await h.intake();
+    const second={...first.state.questions[0],id:"q2",question:"材料如何维护？"};
+    await h.service.command({kind:"intake",expectedRevision:0,questions:[second]});
+    await h.service.command({...h.request,expectedQuestions:first.state.questions.map(intentQuestionSnapshot)});
+    await h.service.command({...h.request,questionIds:["q2"],expectedQuestions:[intentQuestionSnapshot(second)],clientRequestId:"00000000-0000-4000-8000-000000000002"});
+    let release!:(value:{fileId:string})=>void;
+    h.client.uploadFile.mockImplementationOnce(()=>new Promise(resolve=>{release=resolve;}));
+    const polling=h.service.poll();
+    try {
+      await vi.waitFor(()=>expect(h.client.createTask).toHaveBeenCalledTimes(1));
+      expect(h.ledger().state.jobs![0].status).toBe("uploading");
+      expect(h.ledger().state.jobs![1].status).toBe("running");
+    } finally {release({fileId:"file"});await polling;}
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
+  });
+
   it("继续方案生成沿用同一上游任务，发送方案指令并最终保存节点修改动作",async()=>{
     const h=harness();await h.intake();await h.service.command({...h.request,kind:"plan"});
     h.client.stopTask.mockImplementation(async()=>{

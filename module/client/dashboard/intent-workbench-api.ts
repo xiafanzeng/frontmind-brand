@@ -19,7 +19,7 @@ async function requestOnce(path: string, input: unknown, operation: ReturnType<t
   const endpoint = `/api/modules/brand/intent${path}`;
   const response = await operation.fetch(endpoint, {
     method: input === undefined ? "GET" : "POST", credentials: "same-origin",
-    headers: operation.headers(input === undefined ? {} : {"Content-Type": "application/json"}),
+    headers: operation.headers(input === undefined ? {} : {"Content-Type": "application/json","Prefer":"respond-async"}),
     body: input === undefined ? undefined : JSON.stringify(input),
   }).catch(cause => {
     operation.assertActive();
