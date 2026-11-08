@@ -123,7 +123,7 @@ describe("推荐保存与历史词库", () => {
     state.evaluations.push({questionId: "saved-1", value: 70, support: 64, method: "skill_v1", dimensions: [], points: [], findings: [], evaluatedAt: "2026-10-28T00:00:00Z"});
     render(<ManagedKeywordTables tables={tables} generationEnabled onUseQuestions={vi.fn()} optimizationState={state}
       onEvaluateQuestion={onEvaluateQuestion} onViewEvaluation={vi.fn()} onViewEvaluationTask={onViewEvaluationTask}
-      evaluationPending quotaAvailability={{industry: {available: false}}}/>);
+      quotaAvailability={{industry: {available: false}}}/>);
     fireEvent.click(screen.getByRole("button", {name: /已保存词条 162/}));
     const details = screen.getByRole("button", {name: "查看评估详情：新推荐问题"});
     expect(details).toHaveProperty("disabled", false);
@@ -132,8 +132,10 @@ describe("推荐保存与历史词库", () => {
     expect(onViewEvaluationTask).toHaveBeenCalledWith("job-1");
     expect(onEvaluateQuestion).not.toHaveBeenCalled();
     expect(screen.getByRole("checkbox", {name: "选择新推荐问题"})).toHaveProperty("checked", false);
-    expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"})).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"}).textContent).toBe("待评估");
+    expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"})).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"}).textContent).toBe("评估问题");
+    fireEvent.click(screen.getByRole("button", {name: "评估问题：第二条推荐问题"}));
+    expect(onEvaluateQuestion).toHaveBeenCalledWith(expect.objectContaining({rowIndex:1,question:"第二条推荐问题"}));
   });
 });
 

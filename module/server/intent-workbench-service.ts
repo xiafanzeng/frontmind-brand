@@ -6,7 +6,7 @@ import type {ModuleHttpCore} from "./http-api.js";
 import {getKnowledgeNodeDetails, saveKnowledgeNodeContent} from "./knowledge-node-workspace-service.js";
 import {projectKnowledgeBaseCustomerMarkdown} from "../contracts/knowledge-base-materialized-contract.js";
 import {
-  emptyIntentState, findSavedIntentPlan, knowledgeOnlyIntentPlan,
+  emptyIntentState, findSavedIntentPlan, knowledgeOnlyIntentPlan, intentQuestionSnapshot, intentPlanSnapshot,
   type IntentState, type IntentNode, type IntentWorkspace, type IntentSkillJob,
 } from "../contracts/intent-workbench.js";
 import {intentHash, prepareIntentSkill, reserveIntentSkill, intentSkillClient, readIntentSkillInput, uploadIntentSkill,
@@ -18,6 +18,10 @@ export class IntentWorkbenchError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {super(message);}
 }
 const id = z.string().min(1).max(191);
+const questionSnapshotSchema = z.object({id, question: z.string().min(2).max(500),
+  category: z.string().max(80), subdivision: z.string().max(80)}).strict();
+const planSnapshotSchema = z.object({questionId: id, inputHash: z.string().nullable(),
+  actions: z.array(z.object({id, selected: z.boolean(), after: z.string().max(300000)}).strict()).max(3)}).strict();
 const commandSchema = z.discriminatedUnion("kind", [
   updateIntentQuestionSchema,
   deleteIntentQuestionSchema,
@@ -25,10 +29,11 @@ const commandSchema = z.discriminatedUnion("kind", [
     id, question: z.string().trim().min(2).max(500), category: z.string().max(80), subdivision: z.string().max(80),
     tableId: id, rowIndex: z.number().int().nonnegative(), sourceRevision: z.number().int().nonnegative().nullable(),
   }).strict()).min(1).max(160)}).strict(),
-  z.object({kind: z.literal("evaluate"), clientRequestId: z.string().uuid(), expectedRevision: z.number().int().nonnegative(), questionIds: z.array(id).min(1).max(160)}).strict(),
-  z.object({kind: z.literal("plan"), clientRequestId: z.string().uuid(), expectedRevision: z.number().int().nonnegative(), questionIds: z.array(id).min(1).max(160)}).strict(),
+  z.object({kind: z.literal("evaluate"), clientRequestId: z.string().uuid(), expectedRevision: z.number().int().nonnegative(), questionIds: z.array(id).min(1).max(160), expectedQuestions: z.array(questionSnapshotSchema).min(1).max(160).optional()}).strict(),
+  z.object({kind: z.literal("plan"), clientRequestId: z.string().uuid(), expectedRevision: z.number().int().nonnegative(), questionIds: z.array(id).min(1).max(160), expectedQuestions: z.array(questionSnapshotSchema).min(1).max(160).optional()}).strict(),
   z.object({kind: z.literal("edit"), expectedRevision: z.number().int().nonnegative(), questionId: id,
-    actions: z.array(z.object({id, selected: z.boolean(), after: z.string().trim().min(1).max(300000)}).strict()).max(3)}).strict(),
+    actions: z.array(z.object({id, selected: z.boolean(), after: z.string().trim().min(1).max(300000)}).strict()).max(3),
+    expectedPlan: planSnapshotSchema.optional()}).strict(),
   z.object({kind: z.literal("todo"), expectedRevision: z.number().int().nonnegative(), todoId: id,
     source: z.string().trim().min(1).max(2000)}).strict(),
   z.object({kind: z.literal("restore-question"), expectedRevision: z.number().int().nonnegative(), questionId: id}).strict(),
@@ -50,7 +55,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     if (payload?.version !== 1) throw new IntentWorkbenchError("STATE_INVALID", "优化清单格式不可读，请联系维护人员");
     return {revision: Number(result.revision), state: payload};
   }
-  async function locked<T>(expectedRevision: number | undefined, work: (tx: any, ledger: {revision: number; state: IntentState}) => Promise<T>) {
+  async function locked<T>(expectedRevision: number | undefined, work: (tx: any, ledger: {revision: number; state: IntentState}) => Promise<T>, syncCatalog = false) {
     const db = await database();
     return db.transaction(async tx => {
       const actor = (request as Request & {frontmindUser?: {id: number; role: string}}).frontmindUser;
@@ -68,6 +73,8 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       if (expectedRevision !== undefined && core.intentQuestionCatalog &&
           reconcileHostIntentQuestions(structuredClone(ledger.state), await core.intentQuestionCatalog(request)))
         throw new IntentWorkbenchError("REVISION_CONFLICT", "正式问题已更新，请重新读取后操作");
+      if (syncCatalog && core.intentQuestionCatalog)
+        reconcileHostIntentQuestions(ledger.state, await core.intentQuestionCatalog(request));
       const result = await work(tx, ledger);
       await tx.execute(sql`UPDATE brand_intent_workspaces SET payload = ${JSON.stringify(ledger.state)}, revision = revision + 1 WHERE ${ledgerScope}`);
       return result;
@@ -155,7 +162,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     job.error === "模型任务失败，请检查账户任务记录" && !job.repair;
   const recoverableJob = (job: IntentSkillJob) => recoverableTimeout(job) || legacyFailure(job);
   async function startSkill(kind: "evaluate" | "plan", questionIds: string[], expectedRevision: number,
-    clientRequestId: string, receiptId?: string) {
+    clientRequestId: string, receiptId?: string, expectedQuestions?: z.infer<typeof questionSnapshotSchema>[]) {
     const previous = (await observe()).state.jobs?.find(job => job.id === clientRequestId);
     if (previous) {
       if (previous.kind !== kind || intentHash([...previous.questionIds].sort()) !== intentHash([...new Set(questionIds)].sort()))
@@ -173,16 +180,28 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
     if (Buffer.byteLength(JSON.stringify(data.nodes), "utf8") > 6 * 1024 * 1024)
       throw new IntentWorkbenchError("KNOWLEDGE_LIMIT", "当前知识库过大，请缩小知识范围后评估");
     let reserved!: IntentSkillJob;
-    await locked(expectedRevision, async (tx, ledger) => {
+    await locked(expectedQuestions ? undefined : expectedRevision, async (tx, ledger) => {
+      // The same idempotency key can arrive concurrently after a lost response.
+      const accepted = ledger.state.jobs?.find(job => job.id === clientRequestId);
+      if (accepted) {
+        if (accepted.kind !== kind || intentHash([...accepted.questionIds].sort()) !== intentHash([...new Set(questionIds)].sort()))
+          throw new IntentWorkbenchError("IDEMPOTENCY_CONFLICT", "任务标识已用于其他问题");
+        reserved = structuredClone(accepted); return;
+      }
       if (ledger.state.jobs?.some(job => activeJob(job) &&
-          (kind === "evaluate" || (job.kind === "plan" && job.questionIds.some(id => questionIds.includes(id))))) ||
+          job.questionIds.some(id => questionIds.includes(id)) && (kind === "evaluate" || job.kind === "plan")) ||
           ledger.state.receipts.some(r => r.status === "running" || (r.lease?.expiresAt ?? 0) > Date.now()))
-        throw new IntentWorkbenchError("OPERATION_ACTIVE", "请先等待当前优化任务完成");
+        throw new IntentWorkbenchError("OPERATION_ACTIVE", "所选问题已有任务或执行正在处理，请查看该任务后继续");
       const selectedQuestions = [...new Set(questionIds)].map(id => {
         const question = ledger.state.questions.find(q => q.id === id);
         if (!question) throw new IntentWorkbenchError("QUESTION_MISSING", "所选问题已不存在");
         return question;
       });
+      if (expectedQuestions && (expectedQuestions.length !== selectedQuestions.length ||
+          new Set(expectedQuestions.map(question => question.id)).size !== expectedQuestions.length ||
+          selectedQuestions.some(question => {const expected = expectedQuestions.find(expected => expected.id === question.id);
+            return !expected || intentHash(intentQuestionSnapshot(question)) !== intentHash(expected);})))
+        throw new IntentWorkbenchError("QUESTION_CHANGED", "所选问题已修改，请重新读取并确认问题后再提交");
       const frozen = {kind, selectedQuestions, candidates: ledger.state.questions, nodes: data.nodes, skill: prepared.skill};
       const inputHash = intentHash(frozen);
       reserved = {id: clientRequestId, taskId: randomUUID(), kind, questionIds: selectedQuestions.map(q => q.id),
@@ -196,7 +215,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       // Completed records are durable. Bound unsuccessful attempts only.
       const recentAttempts = new Set(ledger.state.jobs.filter(job => job.status !== "succeeded").slice(-100).map(job => job.id));
       ledger.state.jobs = ledger.state.jobs.filter(job => job.status === "succeeded" || activeJob(job) || recentAttempts.has(job.id));
-    });
+    }, Boolean(expectedQuestions));
     await advance(reserved);
     return observe();
   }
@@ -603,9 +622,10 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   async function command(value: unknown) {
     const input = commandSchema.parse(value);
     if (input.kind === "evaluate" || input.kind === "plan")
-      return startSkill(input.kind, input.questionIds, input.expectedRevision, input.clientRequestId);
+      return startSkill(input.kind, input.questionIds, input.expectedRevision, input.clientRequestId, undefined, input.expectedQuestions);
     const data = await knowledge();
-    await locked(input.expectedRevision, async (_tx, ledger) => {
+    const guarded = input.kind === "edit" && Boolean(input.expectedPlan);
+    await locked(guarded ? undefined : input.expectedRevision, async (_tx, ledger) => {
       if (ledger.state.receipts.some(receipt => receipt.status === "running" || (receipt.lease?.expiresAt ?? 0) > Date.now()))
         throw new IntentWorkbenchError("EXECUTION_ACTIVE", "请先继续完成当前执行");
       const state = ledger.state;
@@ -638,6 +658,11 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         // host catalog. Unknown ids stay a harmless no-op so a stale undo cannot fail.
         state.dismissedHostQuestionIds = (state.dismissedHostQuestionIds ?? []).filter(id => id !== input.questionId);
       } else if (input.kind === "edit") {
+        if (input.expectedPlan) {
+          const current = findSavedIntentPlan(state, input.questionId);
+          if (!current || intentHash(intentPlanSnapshot(current)) !== intentHash(input.expectedPlan))
+            throw new IntentWorkbenchError("PLAN_CHANGED", "此问题的方案已被修改，请重新读取并核对后保存；本次草稿尚未覆盖新方案");
+        }
         let plan = state.plans.find(item => item.questionId === input.questionId);
         if (!plan) {
           const saved = findSavedIntentPlan(state, input.questionId);
@@ -668,10 +693,11 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         if (!todo) throw new IntentWorkbenchError("TODO_MISSING", "资料待办不存在");
         todo.status = "completed"; todo.source = input.source;
       }
-    });
+    }, guarded);
     return observe();
   }
-  const executeSchema = z.object({expectedRevision: z.number().int().nonnegative(), clientRequestId: z.string().uuid(), questionIds: z.array(id).min(1).max(160)}).strict();
+  const executeSchema = z.object({expectedRevision: z.number().int().nonnegative(), clientRequestId: z.string().uuid(), questionIds: z.array(id).min(1).max(160),
+    expectedPlans: z.array(planSnapshotSchema).min(1).max(160).optional()}).strict();
   async function execute(value: unknown) {
     const input = executeSchema.parse(value);
     const existing = (await observe()).state.receipts.find(receipt => receipt.id === input.clientRequestId);
@@ -679,8 +705,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       throw new IntentWorkbenchError("IDEMPOTENCY_CONFLICT", "本次执行标识已用于其他问题");
     if (existing && existing.status !== "running") return observe();
     const executionKnowledge = await knowledge();
-    if (!existing) await locked(input.expectedRevision, async (_tx, ledger) => {
-      if (ledger.state.jobs?.some(activeJob)) throw new IntentWorkbenchError("OPERATION_ACTIVE", "请等待当前评估完成");
+    if (!existing) await locked(input.expectedPlans ? undefined : input.expectedRevision, async (_tx, ledger) => {
+      if (ledger.state.jobs?.some(job => activeJob(job) && job.questionIds.some(id => input.questionIds.includes(id))))
+        throw new IntentWorkbenchError("OPERATION_ACTIVE", "所选问题仍有任务正在处理，请先完成该问题的任务");
       if (ledger.state.receipts.some(receipt => receipt.status === "running")) throw new IntentWorkbenchError("EXECUTION_ACTIVE", "已有执行处理中，请继续原执行");
       const plans = input.questionIds.map(questionId => {
         const plan = ledger.state.plans.find(item => item.questionId === questionId);
@@ -692,6 +719,11 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         if (!safe.actions.length) throw new IntentWorkbenchError("PLAN_REGENERATION_REQUIRED", "旧方案不包含正文修改，请重新生成知识库优化方案");
         return safe;
       });
+      if (input.expectedPlans && (input.expectedPlans.length !== plans.length ||
+          new Set(input.expectedPlans.map(plan => plan.questionId)).size !== plans.length ||
+          plans.some(plan => {const expected = input.expectedPlans!.find(expected => expected.questionId === plan.questionId);
+            return !expected || intentHash(intentPlanSnapshot(plan)) !== intentHash(expected);})))
+        throw new IntentWorkbenchError("PLAN_CHANGED", "所选方案已被修改，请重新读取并核对后执行；知识库尚未修改");
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({questionId: plan.questionId, action: structuredClone(action), status: "pending" as const})));
       if (!changes.length) throw new IntentWorkbenchError("EMPTY_PLAN", "请至少选择一项动作");
       if (changes.some(change => change.action.kind === "node" && change.action.before.trim() === change.action.after.trim()))
@@ -700,7 +732,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       if (new Set(nodeIds).size !== nodeIds.length) throw new IntentWorkbenchError("NODE_CONFLICT", "多个方案修改同一知识节点，请分别执行并重新生成方案");
       ledger.state.receipts.push({id: input.clientRequestId, status: "running", createdAt: new Date().toISOString(), changes,
         before: ledger.state.evaluations.filter(item => input.questionIds.includes(item.questionId)), after: []});
-    });
+    }, Boolean(input.expectedPlans));
     const leaseOwner = randomUUID();
     await locked(undefined, async (_tx, ledger) => {
       const target = ledger.state.receipts.find(item => item.id === input.clientRequestId)!;
@@ -826,7 +858,9 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
   }
   async function reEvaluateReceipt(receiptId: string, questionIds: string[]) {
     try {
-      return await startSkill("evaluate", questionIds, (await observe()).revision, randomUUID(), receiptId);
+      const current = await observe();
+      return await startSkill("evaluate", questionIds, current.revision, randomUUID(), receiptId,
+        current.state.questions.filter(question => questionIds.includes(question.id)).map(intentQuestionSnapshot));
     } catch {
       await locked(undefined, async (_tx, ledger) => {
         const target = ledger.state.receipts.find(r => r.id === receiptId)!;

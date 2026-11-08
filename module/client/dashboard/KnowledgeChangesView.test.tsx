@@ -36,7 +36,7 @@ async function openChanges(changes: IntentChange[], nodes: IntentNode[] = [], st
   render(<IntentWorkbench api={api} initialView="list" keywordProps={{} as any}/>);
   // The catalog no longer exposes history. Keep the real receipt-to-diff path
   // covered by entering the current task and receiving its existing receipt.
-  fireEvent.click(await screen.findByRole("button", {name: "查看当前任务"}));
+  fireEvent.click(await screen.findByRole("button", {name: "查看进度"}));
   await act(async () => finish({...running, revision: 2, state: {...running.state,
     jobs: [{...running.state.jobs![0], status: "succeeded"}]}}));
   fireEvent.click(await screen.findByRole("button", {name: "查看知识库变更"}));

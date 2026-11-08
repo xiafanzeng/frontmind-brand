@@ -4,7 +4,7 @@ import {mysqlTable, varchar, json, MySqlDialect} from "drizzle-orm/mysql-core";
 import {createIntentWorkbenchService} from "../server/intent-workbench-service";
 import {getKnowledgeNodeDetails,saveKnowledgeNodeContent} from "../server/knowledge-node-workspace-service.js";
 import {registerIntentSkillPorts} from "../server/intent-skill-runtime";
-import {emptyIntentState, findSavedIntentPlan} from "../contracts/intent-workbench";
+import {emptyIntentState, findSavedIntentPlan, intentQuestionSnapshot, intentPlanSnapshot} from "../contracts/intent-workbench";
 import type {BrandKeywordPorts} from "../server/brand-keyword-ports";
 import type {ModuleHttpCore} from "../server/http-api";
 import type {Request} from "express";
@@ -663,7 +663,7 @@ describe("优化模型持久化任务", () => {
   });
   it("任务处理中禁止开启另一个模型任务，仍可加入其他问题", async () => {
     const h = harness(); await h.intake(); const state = await h.service.command(h.request);
-    await expect(h.service.command({...h.request, expectedRevision: state.revision, clientRequestId: "00000000-0000-4000-8000-000000000002"})).rejects.toThrow("等待当前");
+    await expect(h.service.command({...h.request, expectedRevision: state.revision, clientRequestId: "00000000-0000-4000-8000-000000000002"})).rejects.toMatchObject({code: "OPERATION_ACTIVE"});
     const added = await h.service.command({kind: "intake", expectedRevision: state.revision, questions: [
       {id: "q2", question: "第二个问题", category: "", subdivision: "", tableId: "t", rowIndex: 1, sourceRevision: null},
     ]});
@@ -850,4 +850,85 @@ it("重新评估只作废当前问题的旧方案，保留历史记录并允许�
  expect(evaluated.state.jobs?.find(job=>job.id===h.request.clientRequestId)?.result?.plans).toHaveLength(1);
  await h.service.command({...h.request,kind:"plan",clientRequestId:"00000000-0000-4000-8000-000000000089",expectedRevision:evaluated.revision});h.send();
  const regenerated=await h.service.poll();expect(regenerated.state.plans[0].actions[0].kind).toBe("node");
+});
+
+describe("按问题和方案校验并发提交", () => {
+  const other = {id: "q2", question: "其他材料如何选择？", category: "产品", subdivision: "", tableId: "t", rowIndex: 1, sourceRevision: 1};
+  it("不同问题可以同时评估，旧清单版本不阻塞未变的问题，同题重试不重复扣费", async () => {
+    const h = harness(); const initial = await h.intake();
+    const added = await h.service.command({kind: "intake", expectedRevision: initial.revision, questions: [other]});
+    const first = await h.service.command({...h.request, expectedRevision: initial.revision,
+      expectedQuestions: initial.state.questions.map(intentQuestionSnapshot)});
+    const secondRequest = {...h.request, questionIds: [other.id], expectedRevision: added.revision,
+      expectedQuestions: [intentQuestionSnapshot(other)], clientRequestId: "00000000-0000-4000-8000-000000000091"};
+    const parallel = await h.service.command(secondRequest);
+    expect(parallel.state.jobs?.map(job => job.questionIds)).toEqual([["q"], ["q2"]]);
+    expect(parallel.state.questions.map(question => question.id)).toEqual(["q", "q2"]);
+    await h.service.command(secondRequest);
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
+    await expect(h.service.command({...secondRequest, clientRequestId: "00000000-0000-4000-8000-000000000092"}))
+      .rejects.toMatchObject({code: "OPERATION_ACTIVE"});
+    expect(first.state.jobs).toHaveLength(1);
+  });
+  it("其他问题评估推进版本时仍可生成本题方案，不丢失其他问题", async () => {
+    const h = harness(); const initial = await h.intake();
+    const added = await h.service.command({kind: "intake", expectedRevision: initial.revision, questions: [other]});
+    await h.service.command({...h.request, expectedRevision: added.revision, questionIds: [other.id]});
+    const planned = await h.service.command({...h.request, kind: "plan", expectedRevision: initial.revision,
+      expectedQuestions: initial.state.questions.map(intentQuestionSnapshot), clientRequestId: "00000000-0000-4000-8000-000000000093"});
+    expect(planned.state.jobs?.map(job => [job.kind, job.questionIds])).toEqual([["evaluate", ["q2"]], ["plan", ["q"]]]);
+    expect(planned.state.questions.map(question => question.id)).toEqual(["q", "q2"]);
+    expect(h.client.createTask).toHaveBeenCalledTimes(2);
+  });
+  it("当前问题真的变更时拒绝旧快照，尚未派发付费模型任务", async () => {
+    const h = harness(); const initial = await h.intake();
+    await h.service.command({kind: "update-question", expectedRevision: initial.revision, questionId: "q",
+      question: "材料维护有哪些条件？", category: "产品", subdivision: ""});
+    await expect(h.service.command({...h.request, expectedQuestions: initial.state.questions.map(intentQuestionSnapshot)}))
+      .rejects.toMatchObject({code: "QUESTION_CHANGED"});
+    expect(h.client.createTask).not.toHaveBeenCalled();
+  });
+  it("事务内仍核对正式问题来源，源问题修改不会被跳过全局版本校验所绕过", async () => {
+    const h = harness();
+    let source = [{...other, id: "q", tableId: "dashboard:confirmed"}];
+    h.core.intentQuestionCatalog = async () => source;
+    const initial = await h.service.observe();
+    source = [{...source[0], question: "已修改的正式问题？"}];
+    await expect(h.service.command({...h.request, expectedRevision: initial.revision,
+      expectedQuestions: initial.state.questions.map(intentQuestionSnapshot)})).rejects.toMatchObject({code: "QUESTION_CHANGED"});
+    expect(h.client.createTask).not.toHaveBeenCalled();
+  });
+  it("其他问题评估中可保存和执行已确认方案，正文真实写入且复评只处理本题", async () => {
+    const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
+    const planned = await h.service.poll(); const original = structuredClone(planned.state.plans[0]);
+    const added = await h.service.command({kind: "intake", expectedRevision: planned.revision, questions: [other]});
+    await h.service.command({...h.request, expectedRevision: added.revision, questionIds: [other.id],
+      clientRequestId: "00000000-0000-4000-8000-000000000094"});
+    const after = original.actions[0].after + "\n\n保存已经审核的适用说明。";
+    const edited = await h.service.command({kind: "edit", questionId: "q", expectedRevision: planned.revision,
+      expectedPlan: intentPlanSnapshot(original), actions: [{id: original.actions[0].id, selected: true, after}]});
+    const request = {expectedRevision: planned.revision, clientRequestId: "00000000-0000-4000-8000-000000000095",
+      questionIds: ["q"], expectedPlans: edited.state.plans.map(intentPlanSnapshot)};
+    const result = await h.service.execute(request);
+    expect(result.state.receipts.at(-1)?.status).toBe("completed");
+    expect(h.nodes[0].content).toBe(after);
+    expect(result.state.jobs?.filter(job => job.status === "running").map(job => job.questionIds)).toEqual([["q2"], ["q"]]);
+    expect(result.state.questions.map(question => question.id)).toEqual(["q", "q2"]);
+    await h.service.execute(request);
+    expect(saveKnowledgeNodeContent).toHaveBeenCalledTimes(1);
+    expect(h.client.createTask).toHaveBeenCalledTimes(3);
+  });
+  it("其他人修改本题方案后拒绝旧草稿保存及执行，不覆盖知识正文", async () => {
+    vi.mocked(saveKnowledgeNodeContent).mockClear();
+    const h = harness(); await h.intake(); await h.service.command({...h.request, kind: "plan"}); h.send();
+    const planned = await h.service.poll(); const original = structuredClone(planned.state.plans[0]);
+    const changed = await h.service.command({kind: "edit", expectedRevision: planned.revision, questionId: "q",
+      actions: [{id: original.actions[0].id, selected: true, after: "其他人已经审核的新正文"}]});
+    await expect(h.service.command({kind: "edit", expectedRevision: changed.revision, questionId: "q",
+      expectedPlan: intentPlanSnapshot(original), actions: [{id: original.actions[0].id, selected: true, after: "旧页面草稿"}]}))
+      .rejects.toMatchObject({code: "PLAN_CHANGED"});
+    await expect(h.service.execute({expectedRevision: changed.revision, clientRequestId: "00000000-0000-4000-8000-000000000096",
+      questionIds: ["q"], expectedPlans: [intentPlanSnapshot(original)]})).rejects.toMatchObject({code: "PLAN_CHANGED"});
+    expect(saveKnowledgeNodeContent).not.toHaveBeenCalled();
+  });
 });

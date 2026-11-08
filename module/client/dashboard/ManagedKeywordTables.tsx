@@ -529,7 +529,7 @@ export default function ManagedKeywordTables({
                             : undefined;
                           const linked = optimizationState ? findCatalogQuestion({question, tableId: sourceTableId, rowIndex}, optimizationState.questions) : undefined;
                           const evaluation = linked ? optimizationState?.evaluations.find(item => item.questionId === linked.id) : undefined;
-                          const evaluationJob = optimizationState?.jobs?.find(job => !["succeeded", "failed"].includes(job.status));
+                          const evaluationJob = linked ? optimizationState?.jobs?.find(job => !["succeeded", "failed"].includes(job.status) && job.questionIds.includes(linked.id)) : undefined;
                           const evaluating = linked && evaluationJob?.kind === "evaluate" && evaluationJob.questionIds.includes(linked.id);
                           const submittingEvaluation = evaluationPending && evaluationPendingKeyword?.tableId === sourceTableId &&
                             evaluationPendingKeyword.rowIndex === rowIndex;
@@ -630,7 +630,7 @@ export default function ManagedKeywordTables({
                                   <ChevronRight size={14} aria-hidden="true"/>
                                 </button> : optimizationState && onEvaluateQuestion ? <button type="button" className="keyword-evaluation-button keyword-evaluation-start"
                                   aria-label={`评估问题：${question}`}
-                                  title={evaluationJob && !evaluating ? "本条尚未评估；当前只评估已提交的问题，完成后可单独评估本条" : submittingEvaluation ? "正在提交当前词条的评估" : evaluationPending ? "请等待当前操作完成后再评估" : "评估当前词条"}
+                                  title={evaluationJob ? "该问题已有任务正在处理，请查看对应任务" : submittingEvaluation ? "正在提交当前词条的评估" : evaluationPending ? "请等待当前操作完成后再评估" : "评估当前词条"}
                                   disabled={selectionDisabled || evaluationPending || Boolean(evaluationJob)}
                                   onClick={() => {
                                     if (!category) return;

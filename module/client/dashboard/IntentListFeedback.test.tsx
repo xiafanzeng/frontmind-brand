@@ -10,6 +10,20 @@ const task = (patch: Partial<IntentSkillJob> = {}): IntentSkillJob => ({
   credentialId: "", credentialVersion: 1, skillHash: "", model: "", ...patch,
 });
 describe("评估任务完成状态", () => {
+  it.each(["evaluate","plan"] as const)("%s暂停时明确区分查看与继续，恢复中不能重复提交",kind=>{
+    const resume=vi.fn(),viewTask=vi.fn();
+    const props={uncertain:false,onViewTask:viewTask,onResume:resume};
+    const view=render(<IntentListEvaluationStatus {...props} job={task({kind,status:"paused"})}/>);
+    const label=kind==="plan"?"继续生成方案":"继续评估";
+    fireEvent.click(screen.getByRole("button",{name:"查看暂停详情"}));
+    expect(viewTask).toHaveBeenCalledTimes(1);expect(resume).not.toHaveBeenCalled();
+    const button=screen.getByRole("button",{name:label});
+    expect(button.classList.contains("iw-task-resume")).toBe(true);
+    fireEvent.click(button);expect(resume).toHaveBeenCalledTimes(1);
+    view.rerender(<IntentListEvaluationStatus {...props} job={task({kind,status:"resuming"})}/>);
+    expect(screen.queryByRole("button",{name:label})).toBeNull();
+    expect(screen.getByRole("button",{name:/正在恢复/})).toHaveProperty("disabled",true);
+  });
   it("只有可关闭的完成提示才启动一次自动收起计时器", () => {
     vi.useFakeTimers();
     const onDismiss = vi.fn();

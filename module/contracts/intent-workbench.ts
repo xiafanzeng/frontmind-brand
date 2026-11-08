@@ -46,6 +46,14 @@ export type IntentAction = {
   source: string;
 };
 export type IntentPlan = {questionId: string; actions: IntentAction[]; inputHash?: string};
+/** Entity preconditions remain stable while unrelated tasks advance the ledger. */
+export const intentQuestionSnapshot = (question: IntentQuestion) => ({
+  id: question.id, question: question.question, category: question.category, subdivision: question.subdivision,
+});
+export const intentPlanSnapshot = (plan: IntentPlan) => ({
+  questionId: plan.questionId, inputHash: plan.inputHash ?? null,
+  actions: knowledgeOnlyIntentPlan(plan).actions.map(({id, selected, after}) => ({id, selected, after})),
+});
 export type IntentSkillJob = {
   id: string; taskId: string; kind: "evaluate" | "plan"; questionIds: string[];
   status: "queued" | "uploading" | "create_unknown" | "running" | "pausing" | "paused" | "resuming" | "succeeded" | "failed";

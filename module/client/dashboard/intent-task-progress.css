@@ -3,6 +3,7 @@
 .iw-workbench .iw-progress-heading {display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
 .iw-workbench .iw-progress-heading h2 {margin:0;font-size:18px;font-weight:600;line-height:1.5;color:#4f485c}
 .iw-workbench .iw-progress-status {flex-shrink:0;color:#746c7d;font-size:14px;line-height:1.5}
+.iw-workbench .iw-progress-paused-hint {margin:-6px 0 20px;color:#694087;font-size:14px;line-height:1.7}
 .iw-workbench .iw-progress-main progress {display:block;appearance:none;width:100%;height:8px;border:0;border-radius:8px;overflow:hidden;background:#eee8f4}
 .iw-workbench .iw-progress-main progress::-webkit-progress-bar {background:#eee8f4}
 .iw-workbench .iw-progress-main progress::-webkit-progress-value {background:#7545a0;transition:width .3s ease}

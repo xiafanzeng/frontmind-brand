@@ -1,5 +1,5 @@
 import {readPreviewCatalog} from "./keyword-preview";
-import {createIntentPlan, emptyIntentState, evaluateIntent, knowledgeOnlyIntentPlan, type IntentWorkspace, type IntentState, type IntentNode, type IntentQuestion} from "../module/contracts/intent-workbench";
+import {createIntentPlan, emptyIntentState, evaluateIntent, knowledgeOnlyIntentPlan, intentQuestionSnapshot, intentPlanSnapshot, type IntentWorkspace, type IntentState, type IntentNode, type IntentQuestion} from "../module/contracts/intent-workbench";
 import type {IntentWorkbenchApi} from "../module/client/dashboard/intent-workbench-api";
 import {updateIntentQuestionSchema, deleteIntentQuestionSchema, mutateIntentQuestion} from "../module/contracts/intent-question-mutations";
 const demoNodes: IntentNode[] = [
@@ -9,8 +9,9 @@ const demoNodes: IntentNode[] = [
   {id: "repair", title: "双眼皮修复项目", branch: "眼部项目", verified: false, editable: true, content: "# 双眼皮修复项目\n\n双眼皮修复需评估医生经验、瘢痕和组织条件。适用人群与选择标准应以面诊为准。修复风险与案例限制资料待核验。"},
 ];
 export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
-  const reviewMode = new URLSearchParams(window.location.search).get("review") === "question-ui";
-  const key = `frontmind:intent-preview:v1:${scope}${reviewMode ? ":question-ui" : ""}`;
+  const review = new URLSearchParams(window.location.search).get("review");
+  const reviewMode = review === "question-ui" || review === "task-controls";
+  const key = `frontmind:intent-preview:v1:${scope}${reviewMode ? `:${review}` : ""}`;
   let memory: IntentWorkspace = {revision: 0, state: emptyIntentState(), nodes: structuredClone(demoNodes), preview: true};
   try {const stored = localStorage.getItem(key); if (stored) {const data = JSON.parse(stored); if (data.state?.version === 1 && data.preview === true) memory = data;}} catch {}
   if (reviewMode && !memory.state.questions.length) {
@@ -22,6 +23,10 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
     memory.state.jobs = [{id:"question-ui-review",taskId:"question-ui-review",kind:"evaluate",questionIds:memory.state.questions.map(question=>question.id),
       status:"running",createdAt:new Date().toISOString(),inputHash:"preview",knowledgeHash:"preview",questionsHash:"preview",
       credentialId:"preview",credentialVersion:0,skillHash:"preview",model:"local-preview"}];
+    if(review==="task-controls")memory.state.jobs=[
+      {...memory.state.jobs[0],id:"review-evaluation",questionIds:[memory.state.questions[0].id],status:"paused"},
+      {...memory.state.jobs[0],id:"review-plan",kind:"plan",questionIds:[memory.state.questions[1].id],status:"paused"},
+    ];
   }
   function ensureCompanyFixtures() {
     const catalog = readPreviewCatalog(scope);
@@ -39,6 +44,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
   const snapshot = () => structuredClone(memory);
   const persist = () => {memory.revision++; localStorage.setItem(key, JSON.stringify(memory)); return snapshot();};
   const check = (revision: number) => {if (revision !== memory.revision) throw new Error("清单已更新，请重新读取");};
+  const sameSnapshot=(actual:Record<string,unknown>,expected:Record<string,unknown>)=>Object.keys(actual).every(key=>JSON.stringify(actual[key])===JSON.stringify(expected[key]));
   return {
     async observe() {return snapshot();},
     async waitForJob(jobId, onUpdate, signal) {
@@ -77,7 +83,16 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       return persist();
     },
     async command(value) {
-      const input = value as any; check(input.expectedRevision);
+      const input = value as any;
+      if(input.expectedQuestions){
+        if(input.expectedQuestions.length!==new Set(input.questionIds).size||input.questionIds.some((id:string)=>{
+          const actual=memory.state.questions.find(question=>question.id===id),expected=input.expectedQuestions.find((question:IntentQuestion)=>question.id===id);
+          return !actual||!expected||!sameSnapshot(intentQuestionSnapshot(actual),expected);
+        }))throw new Error("所选问题已修改，请重新读取");
+      }else if(input.kind==="edit"&&input.expectedPlan){
+        const plan=memory.state.plans.find(plan=>plan.questionId===input.questionId);
+        if(!plan||!sameSnapshot(intentPlanSnapshot(plan),input.expectedPlan))throw new Error("此问题的方案已被修改，请重新读取");
+      }else check(input.expectedRevision);
       if (input.kind === "update-question" || input.kind === "delete-question") {
         mutateIntentQuestion(memory.state, input.kind === "update-question"
           ? updateIntentQuestionSchema.parse(input) : deleteIntentQuestionSchema.parse(input));
@@ -88,7 +103,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
       if (input.kind === "evaluate" || input.kind === "plan") ensureCompanyFixtures();
       if ((input.kind === "evaluate" || input.kind === "plan") && input.clientRequestId) {
         if(memory.state.jobs?.some(job=>job.id===input.clientRequestId))return snapshot();
-        if(memory.state.jobs?.some(job=>!["succeeded","failed"].includes(job.status)))throw new Error("已有评估任务，请先完成或继续当前任务");
+        if(memory.state.jobs?.some(job=>!["succeeded","failed"].includes(job.status)&&job.questionIds.some(id=>input.questionIds.includes(id))&&(input.kind==="evaluate"||job.kind==="plan")))throw new Error("所选问题已有任务，请先完成或继续该任务");
         memory.state.jobs??=[];
         const at=new Date().toISOString();
         memory.state.jobs.push({id:input.clientRequestId,taskId:input.clientRequestId,kind:input.kind,questionIds:[...input.questionIds],status:"running",
@@ -115,7 +130,13 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
     async execute(value) {
       const input = value as any;
       if (memory.state.receipts.some(receipt => receipt.id === input.clientRequestId)) return snapshot();
-      check(input.expectedRevision);
+      if(input.expectedPlans){
+        if(input.expectedPlans.length!==new Set(input.questionIds).size||input.questionIds.some((id:string)=>{
+          const plan=memory.state.plans.find(plan=>plan.questionId===id),expected=input.expectedPlans.find((plan:{questionId:string})=>plan.questionId===id);
+          return !plan||!expected||!sameSnapshot(intentPlanSnapshot(plan),expected);
+        }))throw new Error("所选方案已修改，请重新读取");
+      }else check(input.expectedRevision);
+      if(memory.state.jobs?.some(job=>!["succeeded","failed"].includes(job.status)&&job.questionIds.some(id=>input.questionIds.includes(id))))throw new Error("所选问题仍有任务正在处理");
       const plans = memory.state.plans.filter(plan => input.questionIds.includes(plan.questionId)).map(knowledgeOnlyIntentPlan);
       const changes = plans.flatMap(plan => plan.actions.filter(action => action.selected).map(action => ({action: structuredClone(action), questionId: plan.questionId, status: "pending" as const})));
       if (!changes.length) throw new Error("请先生成并勾选知识库正文修改方案");
