@@ -20,13 +20,89 @@ function recordTime(value: string) {
   });
 }
 
-/** A read-only timeline with an explicitly confirmed reset in the More menu. */
-export function WebsiteOperationHistory({ siteOps, onResetAccepted }: { siteOps: SiteOpsConversationPanelProps; onResetAccepted?: () => void }) {
-  const [limit, setLimit] = useState(20);
+type WebsiteRestartActionProps = {
+  siteOps: SiteOpsConversationPanelProps;
+  onResetAccepted?: () => void;
+  triggerLabel?: string;
+  dialogTitle?: string;
+  dialogDescription?: string;
+  confirmLabel?: string;
+  testId?: string;
+};
+
+/** A shared, explicitly confirmed entry point for starting a fresh SiteOps cycle. */
+export function WebsiteRestartAction({
+  siteOps,
+  onResetAccepted,
+  triggerLabel = "重新开始制作",
+  dialogTitle = "重新开始制作",
+  dialogDescription = "清理当前制作任务并从当前知识库重新开始。已经发布的网站继续运行；域名、备案和阿里云连接会保留。",
+  confirmLabel = "确认重新开始",
+  testId,
+}: WebsiteRestartActionProps) {
   const [restartOpen, setRestartOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const observation = siteOps.observation;
+  const rebuildRequest = observation?.rebuildRequest;
+  const onAction = siteOps.onAction;
+  if (!rebuildRequest?.allowed || !onAction) return null;
+
+  const restart = async () => {
+    if (busyRef.current || siteOps.interactionPending
+      || !rebuildRequest.allowed || rebuildRequest.resetPending) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await onAction({ action: "request_rebuild", input: {} });
+      onResetAccepted?.();
+      setRestartOpen(false);
+    } catch (failure) {
+      setError(userFacingErrorMessage(failure, "重新开始未完成，请重试。"));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  const disabled = busy || siteOps.interactionPending || rebuildRequest.resetPending;
+  return (
+    <>
+      <button
+        type="button"
+        data-testid={testId}
+        disabled={disabled}
+        onClick={() => { setError(null); setRestartOpen(true); }}
+      >
+        {triggerLabel}
+      </button>
+      <AlertDialog open={restartOpen} onOpenChange={(open) => { if (!busyRef.current) setRestartOpen(open); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{dialogTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{dialogDescription}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {error && <p role="alert" className="sfp-revision-error">{error}</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={disabled || !rebuildRequest.allowed}
+              onClick={(event) => { event.preventDefault(); void restart(); }}
+            >
+              {busy ? "正在处理…" : confirmLabel}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+/** A read-only timeline with an explicitly confirmed reset in the More menu. */
+export function WebsiteOperationHistory({ siteOps, onResetAccepted }: { siteOps: SiteOpsConversationPanelProps; onResetAccepted?: () => void }) {
+  const [limit, setLimit] = useState(20);
   const observation = siteOps.observation;
   if (!observation) return null;
 
@@ -45,24 +121,6 @@ export function WebsiteOperationHistory({ siteOps, onResetAccepted }: { siteOps:
     })),
   ].sort((a, b) => b.at.localeCompare(a.at));
 
-  async function restart() {
-    if (!siteOps.onAction || busyRef.current || siteOps.interactionPending
-      || !observation?.rebuildRequest.allowed || observation.rebuildRequest.resetPending) return;
-    busyRef.current = true;
-    setBusy(true);
-    setError(null);
-    try {
-      await siteOps.onAction({ action: "request_rebuild", input: {} });
-      onResetAccepted?.();
-      setRestartOpen(false);
-    } catch (failure) {
-      setError(userFacingErrorMessage(failure, "重新开始未完成，请重试。"));
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="sfp-website-history">
       <div className="sfp-website-history-toolbar">
@@ -71,7 +129,7 @@ export function WebsiteOperationHistory({ siteOps, onResetAccepted }: { siteOps:
           <details className="sfp-website-more">
             <summary><MoreHorizontal size={16} aria-hidden="true" /> 更多</summary>
             <div>
-              <button type="button" disabled={busy || siteOps.interactionPending || observation.rebuildRequest.resetPending} onClick={() => { setError(null); setRestartOpen(true); }}>重新开始制作</button>
+              <WebsiteRestartAction siteOps={siteOps} onResetAccepted={onResetAccepted} />
             </div>
           </details>
         )}
@@ -90,19 +148,6 @@ export function WebsiteOperationHistory({ siteOps, onResetAccepted }: { siteOps:
         )}
         {entries.length > limit && <button type="button" className="sfp-revision-add" onClick={() => setLimit((current) => current + 20)}>查看更早记录</button>}
       </details>
-      <AlertDialog open={restartOpen} onOpenChange={(open) => { if (!busyRef.current) setRestartOpen(open); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>重新开始制作</AlertDialogTitle>
-            <AlertDialogDescription>清理当前制作任务并从当前知识库重新开始。已经发布的网站继续运行；域名、备案和阿里云连接会保留。</AlertDialogDescription>
-          </AlertDialogHeader>
-          {error && <p role="alert" className="sfp-revision-error">{error}</p>}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
-            <AlertDialogAction disabled={busy || siteOps.interactionPending || !observation.rebuildRequest.allowed || observation.rebuildRequest.resetPending} onClick={(event) => { event.preventDefault(); void restart(); }}>{busy ? "正在处理…" : "确认重新开始"}</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

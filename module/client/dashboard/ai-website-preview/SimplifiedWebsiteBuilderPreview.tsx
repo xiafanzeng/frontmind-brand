@@ -36,7 +36,7 @@ import {
 import { SiteOpsBuildEmbedPreview } from "./siteops-build-embed-preview";
 import { WebsiteDomainPublishPanel, getWebsitePublishState, type WebsitePublishTarget } from "./WebsiteDomainPublishPanel";
 import { WebsiteRevisionFields } from "./WebsiteRevisionFields";
-import { WebsiteOperationHistory } from "./WebsiteOperationHistory";
+import { WebsiteOperationHistory, WebsiteRestartAction } from "./WebsiteOperationHistory";
 import { usePreviewDialog } from "./qa-widget/usePreviewDialog";
 import {
   findLatestEvaluationReport,
@@ -1869,6 +1869,19 @@ export function SimplifiedWebsiteBuilderPreview({
     onStepChange?.(step);
   };
 
+  const handleWebsiteResetAccepted = () => {
+    setRevisionText("");
+    setRevisionFiles([]);
+    setRevisionProgress([]);
+    revisionEditSequenceRef.current += 1;
+    liveBriefHydrationRef.current = null;
+    appliedLiveBriefKeyRef.current = null;
+    setAssistantTested(false);
+    setCompletedStepIds([]);
+    setIsConfirmed(false);
+    goTo("template");
+  };
+
   const goPrevious = () => {
     if (stepIndex > 0) goTo(steps[stepIndex - 1].id);
   };
@@ -2587,6 +2600,29 @@ export function SimplifiedWebsiteBuilderPreview({
                 )}
               </div>
             )}
+            {siteOps
+              && liveObservation
+              && liveObservation.rebuildRequest.allowed
+              && !templateSelectionOpen
+              && liveCandidates.length > 0
+              && latestBuild
+              && !liveBuildInFlight && (
+              <div className="sfp-live-start" data-testid="siteops-template-catalog-refresh">
+                <RefreshCw size={20} />
+                <span>
+                  <strong>当前展示的是本次制作已冻结的模板</strong>
+                  <small>模板目录升级不会改写历史任务；重新开始后可从当前知识库载入最新版，已发布网站继续运行。</small>
+                </span>
+                <WebsiteRestartAction
+                  siteOps={{ ...siteOps, interactionPending: liveInteractionPending }}
+                  onResetAccepted={handleWebsiteResetAccepted}
+                  triggerLabel="使用最新版模板"
+                  dialogTitle="重新开始并使用最新版模板"
+                  dialogDescription="这会清理当前未发布的制作任务、模板选择和未提交的修改，并返回当前知识库起点；之后重新载入模板时会使用当时可用的最新版目录。已经发布的网站继续运行，域名、备案和阿里云连接会保留。"
+                  testId="siteops-template-catalog-refresh-action"
+                />
+              </div>
+            )}
             <div className="sfp-template-grid">
               {templateOptions.map((template) => (
                 <label
@@ -2842,18 +2878,7 @@ export function SimplifiedWebsiteBuilderPreview({
                 />
               )}
               {siteOps && <WebsiteDomainPublishPanel siteOps={siteOps} onRequestPublish={openReleaseConfirmation} disabled={liveInteractionPending} publishBlockedReason={hasRevisionRequirements || Boolean(latestBuild?.previewUrl && !designDraftSynced) ? "请先提交设计修改，等待新版本构建完成后再发布。" : undefined} />}
-              {siteOps && <WebsiteOperationHistory siteOps={{ ...siteOps, interactionPending: liveInteractionPending }} onResetAccepted={() => {
-                setRevisionText("");
-                setRevisionFiles([]);
-                setRevisionProgress([]);
-                revisionEditSequenceRef.current += 1;
-                liveBriefHydrationRef.current = null;
-                appliedLiveBriefKeyRef.current = null;
-                setAssistantTested(false);
-                setCompletedStepIds([]);
-                setIsConfirmed(false);
-                goTo("template");
-              }} />}
+              {siteOps && <WebsiteOperationHistory siteOps={{ ...siteOps, interactionPending: liveInteractionPending }} onResetAccepted={handleWebsiteResetAccepted} />}
               </section>
             ) : (
               <section className="sfp-preview-panel sfp-builder-preview-panel" aria-label="网站与助手统一预览" data-testid="website-design-preview">
