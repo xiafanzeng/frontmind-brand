@@ -16,10 +16,10 @@ export const answerStatusLabel = (status?: string) => status === "published" ? "
 function CatalogCell({children, secondary}: {children: ReactNode; secondary?: ReactNode}) {
   return <div className="iw-catalog-cell"><div className="iw-catalog-primary">{children}</div><div className={`iw-catalog-secondary${secondary ? "" : " iw-catalog-secondary-empty"}`}>{secondary}</div></div>;
 }
-export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, sort = "newest", onSort, selected, pending, page, pageCount, savedPlanIds,
+export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, activeJobs, received, integration, search, sort = "newest", onSort, selected, pending, page, pageCount, savedPlanIds,
   onSearch, onToggle, onSelectPage, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
-  evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; received: string[];
+  evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; activeJobs?: IntentSkillJob[]; received: string[];
   search: string; selected: string[]; pending: boolean;
   sort?: IntentCatalogSort; onSort?: (sort: IntentCatalogSort) => void;
   page: number; pageCount: number; total: number;
@@ -32,6 +32,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
   mutationBlockedIds?: string[];
   expandedGaps?: string[]; onGapToggle?: (id: string, open: boolean) => void;
 }) {
+  const jobs = activeJobs ?? (activeJob ? [activeJob] : []);
   const scoreHeader = (field: "value" | "support", label: string) => <th aria-sort={sort === field ? "ascending" : "none"}>
     <button className="iw-catalog-sort" type="button" aria-label={`按${label}从低到高排列`} aria-pressed={sort === field}
       title={sort === field ? "已按分数从低到高排列，再点恢复最新加入优先" : "按分数从低到高排列"}
@@ -48,14 +49,14 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
       </div>
     </header>
     {taskFeedback}
-    {selected.length > 0 && <div className="iw-selection-bar"><button className="iw-primary" disabled={pending || Boolean(activeJob)} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div>}
+    {selected.length > 0 && <div className="iw-selection-bar"><button className="iw-primary" disabled={pending || jobs.some(job => job.questionIds.some(id => selected.includes(id)))} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div>}
     <section className="iw-panel iw-table-wrap iw-catalog-table"><table>
       <colgroup><col className="iw-catalog-col-select"/><col className="iw-catalog-col-question"/><col className="iw-catalog-col-value"/><col className="iw-catalog-col-support"/><col className="iw-catalog-col-gaps"/><col className="iw-catalog-col-actions"/></colgroup>
       <thead><tr><th><input type="checkbox" aria-label="选择当前页问题" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => onSelectPage(event.target.checked)}/></th><th>候选问题</th>{scoreHeader("value", "问题价值")}{scoreHeader("support", "知识支撑")}<th>主要缺口</th><th>操作</th></tr></thead>
       <tbody>{visible.map((question, index) => {
         const evaluation = evaluations.find(item => item.questionId === question.id);
-        const evaluating = activeJob?.kind === "evaluate" && activeJob.questionIds.includes(question.id);
-        const planning = activeJob?.kind === "plan" && activeJob.questionIds.includes(question.id);
+        const evaluating = jobs.some(job => job.kind === "evaluate" && job.questionIds.includes(question.id));
+        const planning = jobs.some(job => job.kind === "plan" && job.questionIds.includes(question.id));
         const gaps = evaluation?.points.filter(point => point.status !== "supported");
         return <tr key={question.id} data-question-id={question.id} className={`${selected.includes(question.id) ? "selected" : ""} ${received.includes(question.id) ? "iw-new-row" : ""}`}
           style={{"--i": index} as CSSProperties}
@@ -81,7 +82,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
           <button className="iw-primary iw-answer-entry" disabled={!integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
           {planning ? <button className="iw-plan-entry" disabled>方案生成中…</button> : savedPlanIds.includes(question.id)
             ? <button className="iw-plan-entry" onClick={() => onViewPlan(question.id)}>查看优化方案</button>
-            : <button className="iw-plan-entry" disabled={!evaluation && (pending || Boolean(activeJob))} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
+            : <button className="iw-plan-entry" disabled={pending || (!evaluation && evaluating)} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
           <button title={mutationBlockedIds.includes(question.id) ? "该问题正在处理，完成后可修改" : undefined} disabled={mutationBlockedIds.includes(question.id) || !integration?.onEditQuestion} onClick={() => integration?.onEditQuestion?.(question)}>修改问题</button>
           <button title={mutationBlockedIds.includes(question.id) ? "该问题正在处理，完成后可删除" : undefined} disabled={mutationBlockedIds.includes(question.id) || !integration?.onDeleteQuestion} onClick={() => integration?.onDeleteQuestion?.(question)}>删除问题</button>
         </div></td>

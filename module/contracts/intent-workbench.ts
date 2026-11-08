@@ -46,10 +46,20 @@ export type IntentAction = {
   source: string;
 };
 export type IntentPlan = {questionId: string; actions: IntentAction[]; inputHash?: string};
+/** Entity preconditions remain stable while unrelated tasks advance the ledger. */
+export const intentQuestionSnapshot = (question: IntentQuestion) => ({
+  id: question.id, question: question.question, category: question.category, subdivision: question.subdivision,
+});
+export const intentPlanSnapshot = (plan: IntentPlan) => ({
+  questionId: plan.questionId, inputHash: plan.inputHash ?? null,
+  actions: knowledgeOnlyIntentPlan(plan).actions.map(({id, selected, after}) => ({id, selected, after})),
+});
 export type IntentSkillJob = {
   id: string; taskId: string; kind: "evaluate" | "plan"; questionIds: string[];
   status: "queued" | "uploading" | "create_unknown" | "running" | "pausing" | "paused" | "resuming" | "succeeded" | "failed";
   createdAt: string; inputHash: string; knowledgeHash: string; questionsHash: string;
+  startedAt?:number;
+  dispatchPaused?:boolean;
   questionsScope?: "selected";
   draftEditedQuestionIds?: string[];
   credentialId: string; credentialVersion: number; skillHash: string; model: string;
@@ -114,6 +124,10 @@ export type IntentWorkspace = {
   state: IntentState;
   nodes: IntentNode[];
   preview: boolean;
+  /** Current server snapshot, used to distinguish usable drafts from historical plans. */
+  knowledgeHash?: string;
+  /** Version 2 accepts entity snapshots independently of background ledger progress. */
+  commandVersion?: number;
 };
 export const emptyIntentState = (): IntentState => ({
   version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [], jobs: [], dismissedHostQuestionIds: [],
@@ -149,6 +163,19 @@ export function findSavedIntentPlan(state: IntentState, questionId: string): Int
     const saved = job.result?.plans.find(plan => plan.questionId === questionId);
     if (saved) {const plan = knowledgeOnlyIntentPlan({...saved, inputHash: saved.inputHash ?? job.inputHash}); if (plan.actions.length) return plan;}
   }
+}
+
+/** Keep stale plans in history, but offer generation rather than execution against changed knowledge. */
+export function findCurrentIntentPlan(workspace:IntentWorkspace,questionId:string):IntentPlan|undefined {
+  const plan=findSavedIntentPlan(workspace.state,questionId);
+  if(!plan)return;
+  const source=workspace.state.jobs?.find(job=>job.kind==="plan"&&job.inputHash===plan.inputHash&&job.questionIds.includes(questionId));
+  if(workspace.knowledgeHash&&source?.knowledgeHash&&workspace.knowledgeHash!==source.knowledgeHash)return;
+  if(plan.actions.some(action=>{
+    const node=workspace.nodes.find(node=>node.id===action.nodeId);
+    return node&&node.content.trim()!==action.before.trim();
+  }))return;
+  return plan;
 }
 
 /** A transparent lexical assessment, not an AI or search-volume measurement. */

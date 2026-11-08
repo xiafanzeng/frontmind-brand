@@ -1,5 +1,6 @@
 import {captureWorkspaceRestOperation, forkWorkspaceRestOperation} from "../lib/workspace-rest-scope";
 import type {IntentWorkspace, IntentSkillJob} from "../../contracts/intent-workbench";
+import {findSavedIntentPlan,intentPlanSnapshot,intentQuestionSnapshot} from "../../contracts/intent-workbench";
 export interface IntentWorkbenchApi {
   observe(): Promise<IntentWorkspace>;
   command(input: unknown): Promise<IntentWorkspace>;
@@ -9,15 +10,16 @@ export interface IntentWorkbenchApi {
   waitForJob?(jobId: string, onUpdate: (value: IntentWorkspace) => void, signal?: AbortSignal): Promise<IntentWorkspace>;
 }
 class IntentRequestError extends Error {
-  constructor(message: string, readonly retryable = false) {super(message);}
+  constructor(message: string, readonly retryable = false, readonly status?:number) {super(message);}
 }
+export const isRejectedIntentRequest=(cause:unknown)=>cause instanceof IntentRequestError&&Boolean(cause.status&&cause.status>=400&&cause.status<500&&cause.status!==408);
 const temporaryStatus = (status: number) => [502, 503, 504].includes(status);
 async function requestOnce(path: string, input: unknown, operation: ReturnType<typeof captureWorkspaceRestOperation>) {
   operation.assertActive();
   const endpoint = `/api/modules/brand/intent${path}`;
   const response = await operation.fetch(endpoint, {
     method: input === undefined ? "GET" : "POST", credentials: "same-origin",
-    headers: operation.headers(input === undefined ? {} : {"Content-Type": "application/json"}),
+    headers: operation.headers(input === undefined ? {} : {"Content-Type": "application/json","Prefer":"respond-async"}),
     body: input === undefined ? undefined : JSON.stringify(input),
   }).catch(cause => {
     operation.assertActive();
@@ -39,7 +41,7 @@ async function requestOnce(path: string, input: unknown, operation: ReturnType<t
   operation.assertActive();
   if (!response.ok) {
     const message = typeof value?.error === "string" ? value.error : value?.error?.message ?? value?.message;
-    throw new IntentRequestError(`${message ?? "优化工作台请求失败"}（HTTP ${response.status}，${endpoint}）`, temporaryStatus(response.status));
+    throw new IntentRequestError(`${message ?? "优化工作台请求失败"}（HTTP ${response.status}，${endpoint}）`, temporaryStatus(response.status),response.status);
   }
   if (!value || !Number.isInteger(value.revision) || value.state?.version !== 1 ||
       !["questions", "evaluations", "plans", "todos", "receipts"].every(key => Array.isArray(value.state[key])) ||
@@ -48,6 +50,26 @@ async function requestOnce(path: string, input: unknown, operation: ReturnType<t
   return value as IntentWorkspace;
 }
 async function request(path: string, input?: unknown, operation = captureWorkspaceRestOperation()) {
+  const guarded=input&&typeof input==="object"?input as Record<string,unknown>:undefined;
+  if(guarded&&(guarded.expectedQuestions||guarded.expectedPlan||guarded.expectedPlans)){
+    const current=await request("",undefined,operation);
+    if((current.commandVersion??1)<2){
+      // Rolling upgrades/local live previews can still reach the old strict API.
+      // Check the same entity snapshot, then retain that server's global CAS.
+      const stable=(value:unknown):string=>JSON.stringify(value,(_key,item)=>item&&typeof item==="object"&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
+      if(Array.isArray(guarded.expectedQuestions)&&guarded.expectedQuestions.some((expected:any)=>{
+        const question=current.state.questions.find(item=>item.id===expected.id);
+        return !question||stable(intentQuestionSnapshot(question))!==stable(expected);
+      }))throw new Error("所选问题已修改，请重新读取并确认后再提交。");
+      const plans=guarded.expectedPlans??(guarded.expectedPlan?[guarded.expectedPlan]:[]);
+      if(Array.isArray(plans)&&plans.some((expected:any)=>{
+        const plan=findSavedIntentPlan(current.state,expected.questionId);
+        return !plan||stable(intentPlanSnapshot(plan))!==stable(expected);
+      }))throw new Error("所选方案已修改，请重新读取并核对；草稿已保留。");
+      const {expectedQuestions:_questions,expectedPlan:_plan,expectedPlans:_plans,...legacy}=guarded;
+      input={...legacy,expectedRevision:current.revision};
+    }
+  }
   for (let attempt = 0; ; attempt++) {
     try {return await requestOnce(path, input, operation);}
     catch (cause) {

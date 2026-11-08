@@ -2,6 +2,8 @@ import { Router, type Request, type Response } from "express";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import {z} from "zod";
 import {requestQuestionTemplate} from "./question-template-request.js";
+import {createQuestionTemplateGenerationStore,QuestionTemplateGenerationError} from "./question-template-generation.js";
+import {startIntentWorkbenchWorker} from "./intent-workbench-worker.js";
 import {assertQuestionTemplateAccess,createQuestionTemplateCatalogService,QuestionTemplateCatalogError} from "./question-template-catalog-service.js";
 // 包名导入保持运行时从模块自身 dist 加载；相对导入会被 Dashboard 构建内联进 bundle，破坏 workflow 清单路径解析。
 import {createIntentWorkbenchService, IntentWorkbenchError} from "@frontmind/module-brand/server/intent-workbench-service";
@@ -35,6 +37,15 @@ export interface ModuleHttpCore {
 /** Add new module-owned APIs here. Mounted in both Dashboard and the development subdomain. */
 export function createModuleHttpApi(core:ModuleHttpCore):Router {
  const router=Router();
+ startIntentWorkbenchWorker(core);
+ const generations=createQuestionTemplateGenerationStore();
+ const generationScope=(req:Request)=>{const c=core.context(req);return JSON.stringify([c.accountUserId,c.actorUserId,c.enterpriseProjectId]);};
+ const generationError=(error:unknown)=>{
+  if(error instanceof QuestionTemplateCatalogError||error instanceof QuestionTemplateGenerationError)
+   return {status:error.status,payload:{error:{code:error.code,message:error.message}}};
+  const timeout=error instanceof Error&&error.name==="TimeoutError";
+  return {status:timeout?504:502,payload:{error:{code:timeout?"MOLIZHISHU_TIMEOUT":"MOLIZHISHU_UNAVAILABLE",message:timeout?"模力指数生成超过2分钟仍未返回，请稍后重试。":"无法连接模力指数接口，请稍后重试。"}}};
+ };
  router.use('/diagnostics',createDiagnosticRouter(core));
  const sendStarterError=(res:Response,error:unknown)=>{
   const known=error instanceof RagStarterQuestionError;
@@ -94,7 +105,9 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   router.post(path, async (req,res) => {
    try {
     res.setHeader("Cache-Control","no-store");
-    res.json(await createIntentWorkbenchService(core,req)[method](req.body));
+    const result=await createIntentWorkbenchService(core,req)[method](req.body);
+    const queued=method==="command"&&["evaluate","plan"].includes(req.body?.kind)&&req.get("Prefer")==="respond-async";
+    res.status(queued?202:200).json(result);
    } catch (error) {
     const known=error instanceof IntentWorkbenchError;
     const invalid=error instanceof z.ZodError;
@@ -153,17 +166,35 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   try{
    await assertQuestionTemplateAccess(core,req);
    if(!token){res.status(503).json({error:{code:"MOLIZHISHU_NOT_CONFIGURED",message:"模力指数 API 尚未配置，请由部署人员设置服务端 MOLIZHISHU_TOKEN。"}});return;}
-   const response=await requestQuestionTemplate(normalizedBase,path,token,req.body);
-   const text=await response.text();let payload:unknown;try{payload=JSON.parse(text);}catch{payload={message:"上游接口返回非 JSON 内容。"};}
-   const record=payload&&typeof payload==="object"?payload as Record<string,unknown>:{};
-   if(!response.ok||record.success===false){res.status(response.ok?502:response.status).json({error:{code:"MOLIZHISHU_UPSTREAM_ERROR",message:typeof record.message==="string"?record.message:"模力指数接口暂时无法完成请求。"}});return;}
-   res.status(200).json(payload);
+   const generate=async()=>{
+    try{
+     const response=await requestQuestionTemplate(normalizedBase,path,token,req.body);
+     const text=await response.text();let payload:unknown;try{payload=JSON.parse(text);}catch{return {status:502,payload:{error:{code:"MOLIZHISHU_INVALID_RESPONSE",message:"上游接口返回内容无法解析，请稍后重试。"}}};}
+     const record=payload&&typeof payload==="object"?payload as Record<string,unknown>:{};
+     if(!response.ok||record.success===false)return {status:response.ok?502:response.status,payload:{error:{code:"MOLIZHISHU_UPSTREAM_ERROR",message:typeof record.message==="string"?record.message:"模力指数接口暂时无法完成请求。"}}};
+     return {status:200,payload};
+    }catch(error){return generationError(error);}
+   };
+   if(req.get("Prefer")==="respond-async"){
+    const parsed=z.string().uuid().safeParse(req.get("X-FrontMind-Request-Id"));
+    if(!parsed.success){res.status(400).json({error:{code:"INVALID_GENERATION_ID",message:"生成标识无效，请重新生成。"}});return;}
+    const result=generations.start(generationScope(req),parsed.data,{path,body:req.body},generate);
+    res.status(result.status).json(result.payload);return;
+   }
+   const result=await generate();res.status(result.status).json(result.payload);
   }catch(error){
-   if(error instanceof QuestionTemplateCatalogError){res.status(error.status).json({error:{code:error.code,message:error.message}});return;}
-   const timeout=error instanceof Error && error.name==="TimeoutError";
-   res.status(timeout?504:502).json({error:{code:timeout?"MOLIZHISHU_TIMEOUT":"MOLIZHISHU_UNAVAILABLE",message:timeout?"模力指数生成超过2分钟仍未返回，请稍后重试。":"无法连接模力指数接口，请检查服务端网络与配置。"}});
+   const result=generationError(error);res.status(result.status).json(result.payload);
   }
  };
+ router.get("/question-templates/generations/:requestId",async(req,res)=>{
+  res.setHeader("Cache-Control","no-store");
+  try{
+   await assertQuestionTemplateAccess(core,req);
+   const id=z.string().uuid().safeParse(req.params.requestId);
+   if(!id.success){res.status(400).json({error:{code:"INVALID_GENERATION_ID",message:"生成标识无效。"}});return;}
+   const result=generations.read(generationScope(req),id.data);res.status(result.status).json(result.payload);
+  }catch(error){const result=generationError(error);res.status(result.status).json(result.payload);}
+ });
  router.post("/question-templates/recommend-core-words",recommendQuestionTemplates("recommend-core-words"));
  router.post("/question-templates/recommend-questions",recommendQuestionTemplates("recommend-questions"));
  router.post("/question-templates/save",async(req,res)=>{

@@ -20,10 +20,17 @@
   .iw-workbench .iw-list-initial-status svg { animation:none; }
 }
 .iw-workbench .iw-list-task { margin:0 0 24px; padding:16px; border:1px solid #e5d9ef; border-radius:12px; background:#f8f5fb; color:var(--fm-brand-ink, #1d1d1f); }
-.iw-workbench .iw-list-task-main { display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); align-items:center; gap:12px; }
-.iw-workbench .iw-list-task-copy { grid-column:2; min-width:0; text-align:center; }
+.iw-workbench .iw-list-task-main { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; gap:16px; }
+.iw-workbench .iw-list-task-copy { grid-column:1; min-width:0; text-align:left; }
 .iw-workbench .iw-list-task-copy h3 { margin:0; font-size:15px; font-weight:600; line-height:1.5; }
-.iw-workbench .iw-list-task-actions { display:flex; grid-column:3; justify-self:end; justify-content:flex-end; min-width:0; align-items:center; gap:14px; flex-wrap:wrap; }
+.iw-workbench .iw-list-task-actions { display:flex; grid-column:2; justify-self:end; justify-content:flex-end; min-width:0; align-items:center; gap:14px; flex-wrap:wrap; }
+.iw-list-task-question { margin:5px 0 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; line-height:1.6; color:var(--fm-brand-muted, #636366); }
+.iw-list-task-hint {margin:5px 0 0;font-size:13px;line-height:1.6;color:#694087}
+.iw-workbench button.iw-task-resume,
+.iw-workbench .iw-list-task-actions button.iw-task-resume {background:var(--iw-purple, #7545a0);border-color:var(--iw-purple, #7545a0);color:#fff;font-weight:600}
+.iw-list-tasks { margin-bottom:20px; }
+.iw-workbench .iw-list-tasks .iw-list-task { margin-bottom:10px; }
+.iw-workbench .iw-list-tasks .iw-list-task:last-child { margin-bottom:0; }
 .iw-workbench .iw-list-task-actions button { border-color:#d7c3e9; color:var(--iw-purple); }
 .iw-workbench .iw-list-task-time { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--fm-brand-muted, #636366); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .iw-workbench .iw-list-task-note { margin:10px 0 0; color:var(--fm-brand-muted, #636366); font-size:12px; text-align:center; }

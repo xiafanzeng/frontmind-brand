@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {createIntentPlan, evaluateIntent, emptyIntentState, findSavedIntentPlan, type IntentNode, type IntentQuestion} from "../contracts/intent-workbench";
+import {createIntentPlan, evaluateIntent, emptyIntentState, findSavedIntentPlan, findCurrentIntentPlan, type IntentNode, type IntentQuestion} from "../contracts/intent-workbench";
 const question: IntentQuestion = {id: "q1", question: "隆鼻材料应该怎么选", category: "产品场景词", subdivision: "场景方案", tableId: "t", rowIndex: 0, sourceRevision: 1};
 const nodes: IntentNode[] = [{
   id: "node1", title: "隆鼻材料选型", branch: "诊疗项目", content: "隆鼻材料产品特点不同，材料选择应结合鼻部条件和适用人群，明确选择标准。隆鼻材料风险与禁忌待核验，暂无权威依据。",
@@ -52,4 +52,15 @@ it("重新评估后不把历史方案当成当前方案，新方案完成后才�
  const newer={...plan,inputHash:"old-input"};state.plans=[newer];
  state.jobs.push({id:"new-plan",kind:"plan",status:"succeeded",inputHash:"old-input",questionIds:[question.id],result:{...result,plans:[newer]}} as any);
  expect(findSavedIntentPlan(state,question.id)?.actions[0].kind).toBe("node");
+});
+
+it("知识库更新后保留历史方案，但当前入口回到生成方案，不困在不可执行的旧方案",()=>{
+ const state=emptyIntentState();state.questions=[question];
+ const plan={...createIntentPlan(question,evaluateIntent(question,nodes,[question]),nodes),inputHash:"input"};
+ state.plans=[plan];state.jobs=[{id:"plan",kind:"plan",status:"succeeded",inputHash:"input",questionIds:[question.id],knowledgeHash:"before"}] as any;
+ const workspace={revision:1,state,nodes,knowledgeHash:"before",preview:false};
+ expect(findCurrentIntentPlan(workspace,question.id)).toBeTruthy();
+ expect(findCurrentIntentPlan({...workspace,knowledgeHash:"after"},question.id)).toBeUndefined();
+ expect(findSavedIntentPlan(state,question.id)).toBeTruthy();
+ expect(findCurrentIntentPlan({...workspace,knowledgeHash:undefined,nodes:[{...nodes[0],content:"已更新的正文"}]},question.id)).toBeUndefined();
 });

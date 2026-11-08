@@ -7,7 +7,7 @@ vi.mock("../lib/workspace-rest-scope", () => ({
     ...scope, fetch: (input: RequestInfo | URL, init?: RequestInit) => scope.fetch(input, {...init, signal}),
   }),
 }));
-import {liveIntentWorkbenchApi} from "./intent-workbench-api";
+import {liveIntentWorkbenchApi,isRejectedIntentRequest} from "./intent-workbench-api";
 
 const workspace = (status: string): IntentWorkspace => ({
   revision: 1, nodes: [], preview: false, state: {...emptyIntentState(), jobs: [{
@@ -16,6 +16,35 @@ const workspace = (status: string): IntentWorkspace => ({
 });
 afterEach(() => {vi.useRealTimers(); vi.clearAllMocks(); scope.assertActive.mockReset();});
 describe("优化任务轮询", () => {
+  it("服务端409与连接中断分别标记为拒绝和结果未确认，不重发写入",async()=>{
+    scope.fetch.mockResolvedValueOnce(new Response(JSON.stringify({error:{message:"清单已更新"}}),{status:409}));
+    const rejected=await liveIntentWorkbenchApi.command({kind:"evaluate"}).catch(cause=>cause);
+    expect(isRejectedIntentRequest(rejected)).toBe(true);
+    scope.fetch.mockRejectedValueOnce(new TypeError("Load failed"));
+    const uncertain=await liveIntentWorkbenchApi.command({kind:"evaluate"}).catch(cause=>cause);
+    expect(isRejectedIntentRequest(uncertain)).toBe(false);
+    expect(scope.fetch).toHaveBeenCalledTimes(2);
+  });
+  it.each([undefined,2])("真实旧版与新版接口均校验所选问题，仅派发一次模型命令（版本%s）",async commandVersion=>{
+    const current=workspace("succeeded");current.commandVersion=commandVersion;current.revision=7;
+    const question={id:"q",question:"如何选择服务？",category:"industry",subdivision:"",tableId:"t",rowIndex:0,sourceRevision:1};
+    current.state.questions=[question];
+    scope.fetch.mockResolvedValueOnce(new Response(JSON.stringify(current))).mockResolvedValueOnce(new Response(JSON.stringify(current)));
+    await liveIntentWorkbenchApi.command({kind:"evaluate",expectedRevision:1,questionIds:["q"],clientRequestId:"request",expectedQuestions:[{id:"q",question:question.question,category:question.category,subdivision:""}]});
+    expect(scope.fetch.mock.calls[0][1].method).toBe("GET");
+    const posted=JSON.parse(scope.fetch.mock.calls[1][1].body);
+    expect(posted.questionIds).toEqual(["q"]);
+    expect(scope.fetch.mock.calls[1][1].headers.Prefer).toBe("respond-async");
+    if(commandVersion===2)expect(posted.expectedQuestions).toHaveLength(1);
+    else {expect(posted.expectedQuestions).toBeUndefined();expect(posted.expectedRevision).toBe(7);}
+    expect(scope.fetch.mock.calls.filter(([,init])=>init.method==="POST")).toHaveLength(1);
+  });
+  it("旧版真实接口发现问题变化时拒绝派发，不丢弃快照保护",async()=>{
+    scope.fetch.mockResolvedValueOnce(new Response(JSON.stringify(workspace("succeeded"))));
+    await expect(liveIntentWorkbenchApi.command({kind:"evaluate",questionIds:["q"],expectedQuestions:[{id:"q",question:"原问题"}]})).rejects.toThrow("所选问题已修改");
+    expect(scope.fetch).toHaveBeenCalledTimes(1);
+    expect(scope.fetch.mock.calls[0][1].method).toBe("GET");
+  });
   it("成功时交付模型完成状态", async () => {
     vi.useFakeTimers(); const result = workspace("succeeded");
     scope.fetch.mockResolvedValue(new Response(JSON.stringify(result)));
