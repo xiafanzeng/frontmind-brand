@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 const vitestEntry = require.resolve("vitest/vitest.mjs");
 const testFile = "client/dashboard/ai-website-preview/RagChat.test.tsx";
 const shards = [
-  { name: "starter basics", pattern: "starter basics", expected: 10 },
+  { name: "starter basics", pattern: "starter basics", expected: 11 },
   { name: "starter toolbar", pattern: "uses the standard answer toolbar", expected: 1 },
   { name: "starter draft confirmation", pattern: "keeps confirmed starters usable", expected: 1 },
   { name: "starter draft cancellation", pattern: "keeps the popover open", expected: 1 },
@@ -52,10 +52,10 @@ try {
   }
 
   const expectedTotal = shards.reduce((total, shard) => total + shard.expected, 0);
-  if (passed !== expectedTotal || expectedTotal !== 41) {
-    throw new Error(`RagChat shard coverage mismatch: ${passed}/${expectedTotal}, expected 41 total.`);
+  if (passed !== expectedTotal || expectedTotal !== 42) {
+    throw new Error(`RagChat shard coverage mismatch: ${passed}/${expectedTotal}, expected 42 total.`);
   }
-  console.log(`RagChat sharded suite: ${passed}/41 passed.`);
+  console.log(`RagChat sharded suite: ${passed}/42 passed.`);
 } finally {
   rmSync(resultDirectory, { recursive: true, force: true });
 }

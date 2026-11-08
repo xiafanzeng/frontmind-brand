@@ -64,7 +64,7 @@ function EnterpriseRagLiveWorkspace({
   buildReportUrl,
 }: EnterpriseRagLiveWorkspaceProps) {
   const workspace = useConversation();
-  const starterQuestions = useRagStarterQuestions(true);
+  const starterQuestions = useRagStarterQuestions(true, allowConversationCreation);
   const creating = useRef(false);
   const deletingIdsRef = useRef(new Set<string>());
   const activeDeleteMarkerRef = useRef<ActiveDeleteMarker | null>(null);
@@ -304,6 +304,7 @@ function EnterpriseRagLiveWorkspace({
     onOpenKnowledge: () => navigateWithinWorkspace("/?view=knowledge"),
     starterQuestions: {
       loading: starterQuestions.loading,
+      phase: starterQuestions.phase,
       current: starterQuestions.data?.current
         ? { id: starterQuestions.data.current.id, questions: starterQuestions.data.current.questions }
         : null,

@@ -140,6 +140,7 @@ export type EnterpriseRagLiveRuntime = {
   starterQuestions?: {
     current?: { id: string; questions: string[] } | null;
     draft?: { id: string; questions: string[] } | null;
+    phase?: "initial_loading" | "generating" | "activating_initial" | "ready" | "error";
     loading?: boolean;
     pending?: boolean;
     error?: string | null;
@@ -763,6 +764,28 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   const assistantName = live
     ? liveCompanyName ? `${liveCompanyName} AI 助手` : "企业知识助手"
     : previewFixtures.assistantName;
+  const hasStarterContent = Boolean(
+    live?.starterQuestions?.current?.questions?.length === 3 ||
+      live?.starterQuestions?.draft?.questions?.length === 3,
+  );
+  const firstStarterContentPending = Boolean(
+    live?.starterQuestions &&
+      !hasStarterContent &&
+      !live.starterQuestions.error &&
+      (
+        live.starterQuestions.loading ||
+        live.starterQuestions.pending ||
+        live.starterQuestions.phase === "initial_loading" ||
+        live.starterQuestions.phase === "generating"
+      ),
+  );
+  const blankWelcome = Boolean(live) &&
+    !(live?.chat?.question ?? live?.question ?? "").trim() &&
+    !(live?.chat?.answer ?? live?.answer ?? "").trim() &&
+    !(live?.previousTurns?.length);
+  const welcomeLoading = Boolean(
+    live && blankWelcome && ((!live.loaded && !live.failed) || firstStarterContentPending),
+  );
   const knowledgePresentation = !live
     ? { kind: "preview" as const, label: `知识版本：${knowledgeVersion}`, canView: true, canOpen: false, canRetry: false, detail: null }
     : knowledgeLoading
@@ -1380,6 +1403,7 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
               scopeKey={live ? `${storageScopeKey ?? "live"}:${live.conversationId ?? "new"}:${live.taskId ?? "new"}` : `${storageScopeKey ?? "preview"}:${previewHistory.activeId}`}
               live={Boolean(live)}
               assistantName={assistantName}
+              welcomeLoading={welcomeLoading}
               readOnly={exampleReadOnly}
               evaluationNotRequired={!exampleReadOnly && (live?.chat ? live.chat.evaluation === "not_required" : evaluationNotRequired)}
               selectedAnswerKey={exampleReadOnly ? `example:${activeCase?.id}` : live?.selectedAnswerKey}

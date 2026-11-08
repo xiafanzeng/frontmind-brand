@@ -409,17 +409,49 @@ describe("enterprise RAG evidence-based review UI", () => {
   it("never leaks the preview starter fixture into a formal live runtime", () => {
     const page = render(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime()} />);
     expect(screen.queryByRole("button", { name: "可以简单介绍一下你们吗？" })).toBeNull();
-    expect(screen.getByText("暂无可用的预设问题。")).toBeTruthy();
+    expect(screen.queryByText("暂无可用的预设问题。")).toBeNull();
 
     page.rerender(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={liveRuntime({
-      starterQuestions: { current: null, loading: true, revision: 0 },
+      loaded: false,
+      knowledgeBase: null,
+      currentKnowledgeBase: null,
+      starterQuestions: { current: null, phase: "initial_loading", loading: true, revision: 0 },
       onConfirmStarterQuestions: vi.fn(async () => true),
       onRegenerateStarterQuestions: vi.fn(async () => true),
     })} />);
     expect(screen.queryByRole("button", { name: "可以简单介绍一下你们吗？" })).toBeNull();
     const chat = within(screen.getByLabelText("企业助手问答"));
-    expect(chat.getByRole("status").textContent).toBe("正在读取预设问题…");
-    expect(chat.getByRole("button", { name: "设置预设问题" }).hasAttribute("disabled")).toBe(true);
+    expect(chat.getByRole("article", { name: "正在加载企业助手" })).toBeTruthy();
+    expect(chat.queryByRole("article", { name: "企业助手欢迎" })).toBeNull();
+    expect(chat.queryByRole("button", { name: "设置预设问题" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "输入企业 RAG 问题" })).toBeTruthy();
+
+    const hospitalKnowledge = {
+      snapshotId: "hospital-snapshot",
+      version: 3,
+      sourceFileName: "东莞台心医院-knowledge-base.zip",
+      documentCount: 49,
+      companyName: "东莞台心医院",
+    };
+    const firstDraft = ["医院地址在哪里？", "门诊时间如何安排？", "如何查询医生排班？"];
+    const readyRuntime = liveRuntime({
+      conversationId: "existing-conversation",
+      loaded: true,
+      knowledgeBase: hospitalKnowledge,
+      currentKnowledgeBase: hospitalKnowledge,
+      starterQuestions: { current: null, draft: { id: "first-draft", questions: firstDraft }, phase: "activating_initial", revision: 4 },
+      onConfirmStarterQuestions: vi.fn(async () => true),
+      onRegenerateStarterQuestions: vi.fn(async () => true),
+    });
+    page.rerender(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={readyRuntime} />);
+    expect(chat.queryByRole("article", { name: "正在加载企业助手" })).toBeNull();
+    expect(chat.getByText("东莞台心医院 AI 助手")).toBeTruthy();
+    expect(chat.getByRole("button", { name: firstDraft[0] })).toBeTruthy();
+    expect((chat.getByRole("button", { name: "设置预设问题" }) as HTMLButtonElement).disabled).toBe(false);
+
+    page.rerender(<EnterpriseRagPreview onOpenWebsite={vi.fn()} onOpenWebsiteAssistant={vi.fn()} live={{ ...readyRuntime, conversationId: undefined }} />);
+    expect(chat.getByRole("button", { name: firstDraft[0] })).toBeTruthy();
+    expect((chat.getByRole("button", { name: "设置预设问题" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("blocks formal input and starter actions until the real knowledge gate is ready", () => {

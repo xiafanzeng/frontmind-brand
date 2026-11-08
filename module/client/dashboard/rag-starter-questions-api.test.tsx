@@ -75,6 +75,145 @@ describe("RAG starter-question client API", () => {
     );
   });
 
+  it("activates the first generated draft without creating another provider task", async () => {
+    const firstDraft = item("00000000-0000-4000-8000-000000000022");
+    mocks.fetch.mockResolvedValueOnce(json(dto({
+      current: null,
+      draft: firstDraft,
+      revision: 4,
+    }))).mockResolvedValueOnce(json(dto({
+      current: firstDraft,
+      draft: null,
+      revision: 5,
+    })));
+    const hook = renderHook(() => useRagStarterQuestions(true, true));
+    await waitFor(() => expect(hook.result.current.data?.current?.id).toBe(firstDraft.id));
+    expect(hook.result.current.phase).toBe("ready");
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "PUT"]);
+    expect(JSON.parse(mocks.fetch.mock.calls[1][1].body)).toEqual({
+      expectedCurrentSetId: null,
+      expectedDraftSetId: firstDraft.id,
+      questions: firstDraft.questions,
+    });
+  });
+
+  it("reconciles a lost first-draft activation response before reporting a failure", async () => {
+    const firstDraft = item("00000000-0000-4000-8000-000000000023");
+    mocks.fetch.mockResolvedValueOnce(json(dto({ current: null, draft: firstDraft, revision: 4 })))
+      .mockRejectedValueOnce(new TypeError("response lost"))
+      .mockResolvedValueOnce(json(dto({ current: firstDraft, draft: null, revision: 5 })));
+    const hook = renderHook(() => useRagStarterQuestions(true, true));
+    await waitFor(() => expect(hook.result.current.data?.current?.id).toBe(firstDraft.id));
+    expect(hook.result.current.error).toBeNull();
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "PUT", "GET"]);
+  });
+
+  it("adopts the winning current set when another tab activates the first draft", async () => {
+    const firstDraft = item("00000000-0000-4000-8000-000000000025");
+    mocks.fetch.mockResolvedValueOnce(json(dto({ current: null, draft: firstDraft, revision: 4 })))
+      .mockResolvedValueOnce(json({
+        error: { code: "STARTER_VERSION_CONFLICT", message: "预设问题已在其他页面更新。" },
+      }, 409))
+      .mockResolvedValueOnce(json(dto({ current: firstDraft, draft: null, revision: 5 })));
+    const hook = renderHook(() => useRagStarterQuestions(true, true));
+    await waitFor(() => expect(hook.result.current.data?.current?.id).toBe(firstDraft.id));
+    expect(hook.result.current.error).toBeNull();
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "PUT", "GET"]);
+  });
+
+  it("keeps a failed first activation visible without retrying it in a render loop", async () => {
+    const firstDraft = item("00000000-0000-4000-8000-000000000026");
+    const draftDto = dto({ current: null, draft: firstDraft, revision: 4 });
+    mocks.fetch.mockResolvedValueOnce(json(draftDto))
+      .mockResolvedValueOnce(json({
+        error: { code: "REQUEST_FAILED", message: "预设问题启用失败。" },
+      }, 500))
+      .mockResolvedValueOnce(json(draftDto));
+    const hook = renderHook(() => useRagStarterQuestions(true, true));
+    await waitFor(() => expect(hook.result.current.phase).toBe("error"));
+    expect(hook.result.current.data?.draft?.id).toBe(firstDraft.id);
+    hook.rerender();
+    hook.rerender();
+    expect(mocks.fetch).toHaveBeenCalledTimes(3);
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "PUT", "GET"]);
+  });
+
+  it("starts one idempotent generation only when the published knowledge has no starter state", async () => {
+    const empty = dto({ current: null, draft: null, pending: false, revision: 0 });
+    const pending = dto({ current: null, draft: null, pending: true, pendingSetId: "set-1", revision: 1 });
+    mocks.fetch.mockResolvedValueOnce(json(empty)).mockResolvedValueOnce(json(pending));
+    const hook = renderHook(() => useRagStarterQuestions(true, true));
+    await waitFor(() => expect(hook.result.current.data?.pending).toBe(true));
+    hook.rerender();
+    hook.rerender();
+    expect(hook.result.current.phase).toBe("generating");
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "POST"]);
+    const request = JSON.parse(mocks.fetch.mock.calls[1][1].body);
+    expect(request).toMatchObject({ expectedCurrentSetId: null, expectedDraftSetId: null });
+    expect(request.clientRequestId).toEqual(expect.any(String));
+  });
+
+  it("does not generate or auto-confirm when a current set already exists", async () => {
+    mocks.fetch.mockResolvedValue(json(dto({
+      draft: item("00000000-0000-4000-8000-000000000024"),
+      revision: 4,
+    })));
+    const hook = renderHook(() => useRagStarterQuestions(true, true));
+    await waitFor(() => expect(hook.result.current.phase).toBe("ready"));
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch.mock.calls[0][1].method).toBe("GET");
+  });
+
+  it("observes an existing pending generation without starting another one", async () => {
+    mocks.fetch.mockResolvedValue(json(dto({
+      current: null,
+      draft: null,
+      pending: true,
+      pendingSetId: "set-1",
+      revision: 1,
+    })));
+    const hook = renderHook(() => useRagStarterQuestions(true, true));
+    await waitFor(() => expect(hook.result.current.phase).toBe("generating"));
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch.mock.calls[0][1].method).toBe("GET");
+  });
+
+  it("activates the first draft returned by pending polling without another generation request", async () => {
+    vi.useFakeTimers();
+    const firstDraft = item("00000000-0000-4000-8000-000000000027");
+    mocks.fetch.mockResolvedValueOnce(json(dto({
+      current: null,
+      draft: null,
+      pending: true,
+      pendingSetId: "set-1",
+      revision: 1,
+    }))).mockResolvedValueOnce(json(dto({
+      current: null,
+      draft: firstDraft,
+      pending: false,
+      pendingSetId: null,
+      revision: 2,
+    }))).mockResolvedValueOnce(json(dto({
+      current: firstDraft,
+      draft: null,
+      pending: false,
+      pendingSetId: null,
+      revision: 3,
+    })));
+    const hook = renderHook(() => useRagStarterQuestions(true, true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(hook.result.current.phase).toBe("generating");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(hook.result.current.data?.current?.id).toBe(firstDraft.id);
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "GET", "PUT"]);
+  });
+
   it("refreshes the winning server version after HTTP 409 so an edit can be retried", async () => {
     mocks.fetch.mockResolvedValueOnce(json(dto())).mockResolvedValueOnce(json({
       error: { code: "STARTER_VERSION_CONFLICT", message: "预设问题已在其他页面更新。" },

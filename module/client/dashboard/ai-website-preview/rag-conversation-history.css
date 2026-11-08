@@ -85,12 +85,17 @@
 .rag-conversation-popover__list { flex: none; min-height: 0; margin: 0; padding: 0; overflow: visible; list-style: none; }
 .rag-conversation-popover__item { display: flex; align-items: center; min-width: 0; border-radius: 10px; }
 .rag-conversation-popover__item:hover { background: rgba(118, 118, 128, .07); }
+.rag-conversation-popover__item[data-active="true"],
+.rag-conversation-popover__item[data-active="true"]:hover {
+  background: var(--fm-brand-accent-soft, rgba(117, 66, 176, .12));
+  color: #1d1d1f;
+}
+.rag-conversation-popover__item[data-active="true"] .rag-conversation-popover__subtitle { color:#636366; }
 .rag-conversation-popover button { font: inherit; }
 .rag-conversation-popover__choice { flex: 1 1 auto; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 8px 4px 8px 12px; border: 0; border-radius: 10px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .rag-conversation-popover__copy { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
 .rag-conversation-popover__title { overflow-wrap: anywhere; }
 .rag-conversation-popover__subtitle { color: #77777d; font-size: 12px; overflow-wrap: anywhere; }
-.rag-conversation-popover__check { flex: none; color: #7542b0; }
 .rag-conversation-popover__selector { display:inline-flex; flex:0 0 40px; align-items:center; justify-content:center; width:40px; height:44px; padding:0; border:0; border-radius:10px; background:transparent; color:#7542b0; cursor:pointer; }
 .rag-conversation-popover__selector:hover:not(:disabled) { background:rgba(118,118,128,.09); }
 .rag-conversation-popover__selector:disabled { opacity:.45; cursor:default; }
