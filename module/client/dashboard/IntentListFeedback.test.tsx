@@ -1,7 +1,7 @@
 import {act, cleanup, fireEvent, render, screen} from "@testing-library/react";
 import {afterEach, describe, expect, it, vi} from "vitest";
 import type {IntentSkillJob} from "../../contracts/intent-workbench";
-import {IntentListEvaluationStatus} from "./IntentListFeedback";
+import {IntentTaskTray, IntentListEvaluationStatus} from "./IntentListFeedback";
 
 afterEach(() => {cleanup(); vi.useRealTimers();});
 const task = (patch: Partial<IntentSkillJob> = {}): IntentSkillJob => ({
@@ -24,40 +24,13 @@ describe("评估任务完成状态", () => {
     expect(screen.queryByRole("button",{name:label})).toBeNull();
     expect(screen.getByRole("button",{name:/正在恢复/})).toHaveProperty("disabled",true);
   });
-  it("只有可关闭的完成提示才启动一次自动收起计时器", () => {
-    vi.useFakeTimers();
-    const onDismiss = vi.fn();
-    const props = {job: task({status: "succeeded"}), uncertain: false, onViewTask: vi.fn()};
-    const view = render(<IntentListEvaluationStatus {...props} onDismiss={onDismiss}/>);
-    expect(vi.getTimerCount()).toBe(1);
-    act(() => {vi.advanceTimersByTime(7999);});
-    expect(onDismiss).not.toHaveBeenCalled();
-    view.rerender(<IntentListEvaluationStatus {...props} onDismiss={onDismiss}/>);
-    act(() => {vi.advanceTimersByTime(1);});
-    expect(onDismiss).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-  it("撤销关闭能力或卸载提示时清理自动收起计时器", () => {
-    vi.useFakeTimers();
-    const onDismiss = vi.fn();
-    const props = {job: task({status: "succeeded"}), uncertain: false, onViewTask: vi.fn()};
-    const view = render(<IntentListEvaluationStatus {...props} onDismiss={onDismiss}/>);
-    view.rerender(<IntentListEvaluationStatus {...props}/>);
-    expect(vi.getTimerCount()).toBe(0);
-    act(() => {vi.advanceTimersByTime(8000);});
-    expect(onDismiss).not.toHaveBeenCalled();
-    view.rerender(<IntentListEvaluationStatus {...props} onDismiss={onDismiss}/>);
-    expect(vi.getTimerCount()).toBe(1);
-    view.unmount();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-  it("关闭自动收起时仍可手动关闭完成提示", () => {
-    vi.useFakeTimers();
-    const onDismiss = vi.fn();
-    render(<IntentListEvaluationStatus job={task({status: "succeeded"})} uncertain={false} onViewTask={vi.fn()} onDismiss={onDismiss} autoDismiss={false}/>);
-    expect(vi.getTimerCount()).toBe(0);
-    fireEvent.click(screen.getByRole("button", {name: "关闭评估完成提示"}));
-    expect(onDismiss).toHaveBeenCalledTimes(1);
+  it("已完成任务不会定时消失，也没有跳过查看的关闭按钮",()=>{
+    vi.useFakeTimers();const view=vi.fn();
+    render(<IntentListEvaluationStatus job={task({status:"succeeded"})} uncertain={false} onViewTask={view}/>);
+    expect(vi.getTimerCount()).toBe(0);act(()=>{vi.advanceTimersByTime(120000);});
+    expect(screen.getByRole("heading",{name:"评估已完成"})).toBeTruthy();
+    expect(screen.queryByRole("button",{name:"关闭评估完成提示"})).toBeNull();
+    expect(view).not.toHaveBeenCalled();fireEvent.click(screen.getByRole("button",{name:"查看评估结果"}));expect(view).toHaveBeenCalledTimes(1);
   });
   it("运行中更新耗时，完成后固定为保存结果的完成时间并停止计时器", () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date("2026-11-07T12:00:10Z"));
@@ -101,4 +74,17 @@ describe("评估任务完成状态", () => {
     expect(screen.getByText("已耗时 1分0秒")).toBeTruthy();
     expect(vi.getTimerCount()).toBe(0);
   });
+});
+
+it("任务区默认折叠，展开状态跨进度更新保留，折叠不触发任务控制",()=>{
+  const pause=vi.fn();const jobs=[task(),task({id:"paused",status:"paused"}),task({id:"failed",status:"failed"})];
+  const children=<button onClick={pause}>暂停独立任务</button>;
+  const view=render(<IntentTaskTray jobs={jobs}>{children}</IntentTaskTray>);
+  const tray=view.container.querySelector("details")!,summary=tray.querySelector("summary")!;
+  expect(tray.open).toBe(false);
+  expect(summary.textContent).toContain("进行中 1");expect(summary.textContent).toContain("已暂停 1");expect(summary.textContent).toContain("需处理 1");
+  fireEvent.click(summary);expect(tray.open).toBe(true);
+  view.rerender(<IntentTaskTray jobs={[...jobs,task({id:"another"})]}>{children}</IntentTaskTray>);
+  expect(tray.open).toBe(true);expect(summary.textContent).toContain("进行中 2");
+  fireEvent.click(summary);expect(tray.open).toBe(false);expect(pause).not.toHaveBeenCalled();
 });

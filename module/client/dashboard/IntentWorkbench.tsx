@@ -1,4 +1,4 @@
-import {useEffect, useId, useRef, useState} from "react";
+import {Fragment, useEffect, useId, useRef, useState} from "react";
 import {ArrowLeft, ArrowRight, Check, ChevronDown, GripHorizontal, MessageSquareText, Sparkles, Undo2, X} from "lucide-react";
 import {Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter} from "@frontmind/module-ui/components/ui/dialog";
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
@@ -15,12 +15,16 @@ import {navigate} from "wouter/use-browser-location";
 import IntentQuestionCatalog, {type IntentCatalogIntegration} from "./IntentQuestionCatalog";
 import IntentTaskProgress from "./IntentTaskProgress";
 import IntentIntakeFeedback, {type IntentIntakeFeedbackState} from "./IntentIntakeFeedback";
-import {IntentListEvaluationStatus, IntentListInitialLoading, IntentListRefreshStatus} from "./IntentListFeedback";
+import {IntentTaskTray, IntentListEvaluationStatus, IntentListInitialLoading, IntentListRefreshStatus} from "./IntentListFeedback";
 import {findCatalogQuestion} from "./intent-catalog-link";
 import type {IntentCatalogViewState, IntentCatalogSort} from "./intent-catalog-view";
 import type {IntentQuestion} from "../../contracts/intent-workbench";
 
-type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge" | "progress" | "history" | "history-detail";
+const viewedCompletionKey="frontmind:intent:viewed-completions:v1";
+function readViewedCompletions():string[] {
+  try {const ids=JSON.parse(localStorage.getItem(viewedCompletionKey)??"[]");return Array.isArray(ids)?ids.filter((id):id is string=>typeof id==="string"):[];}catch{return [];}
+}
+type View = "universe" | "list" | "evaluation" | "plan" | "result" | "knowledge" | "progress" | "history-detail";
 type Selection = Parameters<NonNullable<ManagedKeywordTablesProps["onUseQuestion"]>>[0];
 const labels = {supported: "已支撑", partial: "部分支撑", missing: "未支撑"};
 /** Mirrors HOST_QUESTION_TABLE in module/server/intent-question-catalog.ts; kept local so client code never imports the server tree. */
@@ -148,7 +152,12 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [view, setView] = useState<View>(initialView);
   const [evaluationReturnView, setEvaluationReturnView] = useState<"universe" | "list">("list");
   const [pending, setPending] = useState(false);
-  const [dismissedCompletionIds, setDismissedCompletionIds] = useState<string[]>([]);
+  const [dismissedCompletionIds, setDismissedCompletionIds] = useState<string[]>(readViewedCompletions);
+  function markCompletionsViewed(jobIds:string[]) {
+    setDismissedCompletionIds(current=>{const ids=[...new Set([...current,...readViewedCompletions(),...jobIds])];try{localStorage.setItem(viewedCompletionKey,JSON.stringify(ids));}catch{}return ids;});
+  }
+  function markCompletionViewed(id:string) {markCompletionsViewed([id]);}
+  useEffect(()=>{const sync=(event:StorageEvent)=>{if(event.key===viewedCompletionKey)setDismissedCompletionIds(readViewedCompletions());};window.addEventListener("storage",sync);return()=>window.removeEventListener("storage",sync);},[]);
   const [dismissedFailureId, setDismissedFailureId] = useState<string>();
   const [submittingIds, setSubmittingIds] = useState<string[]>([]);
   const [savingQuestionId, setSavingQuestionId] = useState<string>();
@@ -223,7 +232,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const container = useRef<HTMLDivElement>(null);
   useEffect(() => {
     mounted.current = true; generation.current++; running.current = false; runningRead.current = false; runSequence.current++;
-    setDismissedCompletionIds([]);
+    setDismissedCompletionIds(readViewedCompletions());
     setTaskErrors({});setSubmissionRejected(false);
     workspaceRef.current = null; questionSaving.current = false; draftSaving.current = false;
     setSubmittingIds([]); setSavingQuestionId(undefined); setSavingDrafts(false); setBlockedModelAction(null);
@@ -444,7 +453,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const initialListLoading = view === "list" && !workspace && !error;
   const listTask = activeJob ?? workspace?.state.jobs?.find(item => item.id === progressJobId);
   const listEvaluation = view === "list" && listTask && !dismissedCompletionIds.includes(listTask.id) ? listTask : undefined;
-  const listTasks = view === "list" ? activeJobs.length ? activeJobs : listEvaluation ? [listEvaluation] : [] : [];
+  const completedTasks=(workspace?.state.jobs??[]).filter(job=>job.status==="succeeded"&&!dismissedCompletionIds.includes(job.id)).slice().reverse();
+  const listTasks = view === "list" ? [...activeJobs,...completedTasks,...(listEvaluation?.status==="failed"?[listEvaluation]:[])] : [];
   const refreshingList = view === "list" && Boolean(workspace) && pending && pendingRead && !activeJob;
   const receipt = receiptId ? workspace?.state.receipts.find(item => item.id === receiptId) : workspace?.state.receipts.at(-1);
   // The ledger appends newly added questions; reverse that order for newest first.
@@ -779,7 +789,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     if (job.result && job.questionIds.some(id => !workspace?.state.questions.some(question => question.id === id &&
       job.result!.questions.some(original => original.id === id && original.question === question.question &&
         original.category === question.category && original.subdivision === question.subdivision)))) {
-      setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail"); return;
+      setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail"); markCompletionViewed(job.id); return;
     }
     // Completion already supplied validated results. Viewing never evaluates again.
     setEvaluationReturnView("list"); setScope(job.questionIds); setIndex(0);
@@ -793,34 +803,29 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       return !Number.isFinite(created) || Date.parse(item.evaluatedAt) >= created;
     });
     if (workspace && hasResults(workspace)) {
-      setError(""); navigateView("evaluation"); return;
+      setError(""); navigateView("evaluation"); markCompletionViewed(job.id); return;
+    }
+    if(workspace&&job.result&&!hasResults(workspace)) {
+      setHistoryId(job.id);setHistoryQuestionId(undefined);navigateView("history-detail");markCompletionViewed(job.id);return;
     }
     // The terminal event can arrive before its result snapshot. Recover by reading.
-    await run(async () => {
+    const loaded=await run(async () => {
       const current = await api.observe();
       if (!hasResults(current))
         throw new Error("评估结果尚未完整读取，请重新读取。");
       return current;
     }, "evaluation", false, undefined, true);
+    if(loaded&&hasResults(loaded))markCompletionViewed(job.id);
   }
   const evaluationReturnLabel = evaluationReturnView === "universe" ? "已保存词条" : "问题列表";
   const retainKeywordPage = view === "universe" || (evaluationReturnView === "universe" && ["progress", "evaluation", "plan"].includes(view));
   function openSection(section: "universe" | "list") {navigateView(section); emittedSection.current = section; onSectionChange?.(section);}
   return <div ref={container} className={`iw-workbench iw-view-${view}`} aria-busy={pending || executing}>
     <IntentIntakeFeedback state={intakeFeedback}/>
-    {view === "history" && workspace && <>
-      <button className="iw-back" onClick={() => openSection("list")}><ArrowLeft size={15}/>返回问题列表</button>
-      <header className="iw-header"><div><h1>历史记录</h1><p>保存评估、优化方案和执行记录，查看不会重新评估。</p></div></header>
-      <section className="iw-panel iw-todo-list"><h2>已完成任务</h2>{history.length ? history.map(job => <div key={job.id}>
-        <span>{new Date(job.result!.completedAt).toLocaleString("zh-CN")} · {job.kind === "plan" ? "评估与优化方案" : "问题评估"} · {job.result!.questions.length} 条问题</span>
-        <button onClick={() => {setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail");}}>查看任务结果</button>
-      </div>) : <p>暂无已完成任务记录。</p>}</section>
-      {workspace.state.receipts.length > 0 && <section className="iw-panel iw-todo-list"><h2>执行记录</h2>{[...workspace.state.receipts].reverse().map(item => <div key={item.id}><span>{new Date(item.createdAt).toLocaleString("zh-CN")} · {item.changes.length} 项动作 · {({running: "待确认", completed: "已完成", partial: "部分完成", reverted: "已撤销"})[item.status]}</span><button onClick={() => {setReceiptId(item.id); setView("result");}}>查看执行记录</button></div>)}</section>}
-    </>}
     {view === "history-detail" && workspace && <>
       <button className="iw-back" onClick={() => {
-        setHistoryId(undefined); setHistoryQuestionId(undefined); navigateView(historyQuestionId ? "list" : "history");
-      }}><ArrowLeft size={15}/>{historyQuestionId ? "返回问题列表" : "返回历史记录"}</button>
+        setHistoryId(undefined); setHistoryQuestionId(undefined); openSection("list");
+      }}><ArrowLeft size={15}/>返回问题列表</button>
       <header className="iw-header iw-saved-header"><h1>已保存任务结果</h1></header>
       {archived && <section className="iw-saved-result" aria-label="已保存任务详情">
         {archived.evaluations.filter(item => !historyQuestionId || item.questionId === historyQuestionId).map(item => <section key={item.questionId} className="iw-plan-section iw-saved-question">
@@ -843,7 +848,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
           </section>)}
         </section>)}
       </section>}
-      {!archived && <section className="iw-panel" role="status">未找到该任务的已保存结果，请返回已完成任务重新选择。</section>}
+      {!archived && <section className="iw-panel" role="status">未找到该任务的已保存结果，请返回问题列表后重新选择任务。</section>}
     </>}
     {error && view !== "progress" && (view==="list"||errorNavigation.current===navigationVersion.current) && <div className="iw-error" role="alert">{error}<button disabled={pending} onClick={() => void run(() => api.observe(), undefined, true, undefined, true)}>重新读取</button></div>}
     {view === "progress" && <IntentTaskProgress job={workspace?.state.jobs?.find(item => item.id === progressJobId)}
@@ -888,22 +893,21 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         onDeleteQuestion: catalogIntegration?.onDeleteQuestion ?? (question => void deleteQuestionNow(question)),
       }}
         headerStatus={refreshingList ? <IntentListRefreshStatus/> : undefined}
-        taskFeedback={listTasks.length ? <div className="iw-list-tasks" aria-label="当前优化任务">{listTasks.map(job => <IntentListEvaluationStatus key={job.id}
+        taskFeedback={listTasks.length ? <IntentTaskTray jobs={listTasks} attentionIds={Object.keys(taskErrors).filter(id=>Boolean(taskErrors[id]))}>{listTasks.map((job,position) => <Fragment key={job.id}>{job.status==="succeeded"&&listTasks[position-1]?.status!=="succeeded"&&<div className="iw-task-tray-completed-header"><h4 className="iw-task-tray-completed-heading">已完成</h4><button type="button" className="iw-task-tray-read-all" onClick={()=>markCompletionsViewed(completedTasks.map(task=>task.id))}>全部已读</button></div>}<IntentListEvaluationStatus
           job={job} uncertain={Boolean(taskErrors[job.id])} pending={pending && !pendingRead}
           taskError={taskErrors[job.id]} onRefresh={()=>void run(()=>api.observe(),undefined,false,undefined,true,[],job.id)}
           questionLabel={job.questionIds.map(id => questions.find(question => question.id === id)?.question ?? "历史问题").join("；")}
-          autoDismiss={job.kind === "plan" ? job.questionIds.every(id => savedPlanIds.includes(id)) : job.questionIds.every(id => evaluations.some(item => item.questionId === id && (!item.provenance?.operationId || item.provenance.operationId === job.id)))}
-          onDismiss={() => setDismissedCompletionIds(ids => [...ids, job.id])}
           onViewResult={() => {
             if (job.kind !== "plan") {void openCompletedEvaluation(job.id); return;}
             const saved = job.questionIds.flatMap(id => {const plan = findCurrentIntentPlan(workspace, id); return plan ? [structuredClone(plan)] : [];});
             if (saved.length === job.questionIds.length) {setScope(job.questionIds); setIndex(0); loadDrafts(saved); setDraftDirty(false); navigateView("plan");}
-            else {setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail");}
+            else if(job.result) {setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail");}
+            else {setTaskError(job.id,"方案结果尚未完整读取，请重新读取后查看。");return;}
+            markCompletionViewed(job.id);
           }}
           onPause={api.control ? () => void controlJob("pause", job.id) : undefined} onResume={api.control ? () => void controlJob("resume", job.id) : undefined}
-          onViewTask={() => openTaskDetails(job.id, "list")}/>)}</div> : undefined}
+          onViewTask={() => openTaskDetails(job.id, "list")}/></Fragment>)}</IntentTaskTray> : undefined}
         savedPlanIds={savedPlanIds} onViewPlan={openSavedPlan} onGeneratePlan={id => void plan(false, [id])}
-        historyCount={history.length + workspace.state.receipts.length} onHistory={() => {setHistoryId(undefined); setHistoryQuestionId(undefined); navigateView("history");}}
         expandedGaps={expandedGaps} onGapToggle={(id, open) => setExpandedGaps(ids => open ? ids.includes(id) ? ids : [...ids,id] : ids.filter(item => item !== id))}
         search={search} sort={sort} onSort={value => {setSort(value); setPage(0);}} selected={selected} pending={pending && !pendingRead}
         mutationBlockedIds={savingQuestionId ? [savingQuestionId] : []}
@@ -972,7 +976,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     </DialogFooter></DialogContent></Dialog>}
     {questionAction && <Dialog open onOpenChange={open => {if (!open && !savingQuestionId) setQuestionAction(null);}}><DialogContent className={`fm-brand-portal-theme iw-modal iw-question-modal${questionAction.kind === "delete" ? " iw-delete-modal" : ""}`} data-brand-surface="intent-workbench"><DialogHeader>
       <DialogTitle>{questionAction.kind === "edit" ? "修改问题" : "删除问题？"}</DialogTitle>
-      <DialogDescription>{questionAction.kind === "edit" ? "修改后保存到当前优化清单。原评分和方案保留在历史记录，修改后的问题需重新评估。" : "仅从当前优化清单移除该问题。已保存词库、历史任务、应答内容和执行记录保留。"}</DialogDescription>
+      <DialogDescription>{questionAction.kind === "edit" ? "修改后保存到当前优化清单。原评分和方案保留在已保存任务中，修改后的问题需重新评估。" : "仅从当前优化清单移除该问题。已保存词库、历史任务、应答内容和执行记录保留。"}</DialogDescription>
     </DialogHeader>
       {questionAction.kind === "edit" ? <div className="iw-question-fields">
         <label>问题内容<textarea aria-label="问题内容" value={questionDraft.question} disabled={Boolean(savingQuestionId)} rows={4} maxLength={500} onChange={event => setQuestionDraft(draft => ({...draft, question: event.target.value}))}/></label>

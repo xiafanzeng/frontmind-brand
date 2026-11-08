@@ -59,3 +59,33 @@
   .iw-workbench .iw-list-task--completed .iw-list-task-copy {flex-basis:100%}
   .iw-workbench .iw-list-task--completed .iw-list-task-actions {grid-column:auto;justify-content:flex-start;justify-self:start;width:100%;gap:8px}
 }
+
+/* Fold the whole task area so simultaneous jobs do not displace the question list. */
+.iw-workbench .iw-task-tray {border:1px solid var(--fm-brand-line, #e9e5ee);border-radius:10px;background:#fcfbfe;overflow:hidden}
+.iw-task-tray-summary {display:flex;align-items:center;gap:16px;min-height:48px;padding:12px 16px;cursor:pointer;list-style:none;font-size:13px;line-height:1.5}
+.iw-task-tray-summary::-webkit-details-marker {display:none}
+.iw-task-tray-summary:focus-visible {outline:2px solid var(--iw-purple);outline-offset:-3px;border-radius:9px}
+.iw-task-tray-summary strong {display:inline-flex;align-items:center;gap:8px;white-space:nowrap;font-size:14px}
+.iw-task-tray-count {color:var(--iw-purple);font-variant-numeric:tabular-nums}
+.iw-task-tray-status {display:flex;flex-wrap:wrap;gap:6px 14px;min-width:0;color:var(--fm-brand-muted, #636366)}
+.iw-task-tray-status span {white-space:nowrap}
+.iw-task-tray-attention {color:#a54c16;font-weight:600}
+.iw-task-tray-toggle {display:inline-flex;align-items:center;gap:5px;margin-left:auto;white-space:nowrap;color:var(--iw-purple)}
+.iw-task-tray-collapse,.iw-task-tray[open] .iw-task-tray-expand {display:none}
+.iw-task-tray[open] .iw-task-tray-collapse {display:inline}
+.iw-task-tray[open] .iw-task-tray-toggle svg {transform:rotate(180deg)}
+.iw-task-tray-content {max-height:min(48vh, 480px);overflow-y:auto;padding:0 10px 10px;overscroll-behavior:contain}
+.iw-workbench .iw-task-tray .iw-list-task {padding:12px;background:#fff;border-color:var(--fm-brand-line, #e9e5ee);border-radius:8px}
+.iw-workbench .iw-task-tray .iw-list-task-actions {gap:8px}
+@media(max-width:600px) {
+  .iw-task-tray-summary {gap:6px 12px;flex-wrap:wrap;padding:12px}
+  .iw-task-tray-summary strong {font-size:13px}
+  .iw-task-tray-status {order:3;flex-basis:100%;gap:6px 12px;font-size:12px}
+  .iw-workbench .iw-task-tray .iw-list-task-actions {justify-self:start;justify-content:flex-start}
+}
+
+.iw-task-tray-completed-heading {margin:12px 4px 8px;font-size:12px;font-weight:600;color:var(--fm-brand-muted, #636366)}
+
+.iw-task-tray-completed-header {display:flex;align-items:center;gap:12px;margin:12px 4px 8px}
+.iw-task-tray-completed-header .iw-task-tray-completed-heading {margin:0}
+.iw-workbench button.iw-task-tray-read-all {min-height:32px;padding:4px 10px;border:1px solid var(--fm-brand-line, #e9e5ee);border-radius:6px;background:#fff;color:var(--iw-purple);font-size:12px;line-height:1.5}
