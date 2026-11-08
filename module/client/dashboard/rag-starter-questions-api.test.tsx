@@ -239,10 +239,23 @@ describe("RAG starter-question client API", () => {
     expect(retry.expectedCurrentSetId).toBe("00000000-0000-4000-8000-000000000031");
   });
 
-  it("reuses the regeneration request id after a lost receipt and clears it after success", async () => {
+  it("reconciles a lost manual regeneration response with GET and does not repeat the POST", async () => {
     mocks.fetch.mockResolvedValueOnce(json(dto()))
       .mockRejectedValueOnce(new Error("response lost"))
-      .mockResolvedValueOnce(json(dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000041" })))
+      .mockResolvedValueOnce(json(dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000041" })));
+    const hook = renderHook(() => useRagStarterQuestions());
+    await waitFor(() => expect(hook.result.current.data?.revision).toBe(2));
+    await act(async () => { await hook.result.current.regenerate(); });
+    const first = JSON.parse(mocks.fetch.mock.calls[1][1].body);
+    expect(first.clientRequestId).toEqual(expect.any(String));
+    expect(hook.result.current.data?.pending).toBe(true);
+    expect(hook.result.current.error).toBeNull();
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "POST", "GET"]);
+  });
+
+  it("retains the manual regeneration request id when GET cannot confirm the lost response", async () => {
+    mocks.fetch.mockResolvedValueOnce(json(dto()))
+      .mockRejectedValueOnce(new Error("response lost"))
       .mockResolvedValueOnce(json(dto()))
       .mockResolvedValueOnce(json(dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000042" })));
     const hook = renderHook(() => useRagStarterQuestions());
@@ -250,12 +263,39 @@ describe("RAG starter-question client API", () => {
     await act(async () => { await hook.result.current.regenerate().catch(() => undefined); });
     await act(async () => { await hook.result.current.regenerate(); });
     const first = JSON.parse(mocks.fetch.mock.calls[1][1].body);
-    const replay = JSON.parse(mocks.fetch.mock.calls[2][1].body);
+    const replay = JSON.parse(mocks.fetch.mock.calls[3][1].body);
     expect(replay.clientRequestId).toBe(first.clientRequestId);
-    await act(async () => { await hook.result.current.reload(); });
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "POST", "GET", "POST"]);
+  });
+
+  it("does not treat an unchanged pending state as confirmation of a lost regeneration response", async () => {
+    const unchanged = dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000043" });
+    mocks.fetch.mockResolvedValueOnce(json(unchanged))
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce(json(unchanged))
+      .mockResolvedValueOnce(json(dto({ pending: true, pendingSetId: "00000000-0000-4000-8000-000000000044" })));
+    const hook = renderHook(() => useRagStarterQuestions());
+    await waitFor(() => expect(hook.result.current.data?.pendingSetId).toBe("00000000-0000-4000-8000-000000000043"));
+    await act(async () => { await hook.result.current.regenerate().catch(() => undefined); });
+    expect(hook.result.current.error?.message).toBe("response lost");
     await act(async () => { await hook.result.current.regenerate(); });
-    const next = JSON.parse(mocks.fetch.mock.calls[4][1].body);
-    expect(next.clientRequestId).not.toBe(first.clientRequestId);
+    const first = JSON.parse(mocks.fetch.mock.calls[1][1].body);
+    const replay = JSON.parse(mocks.fetch.mock.calls[3][1].body);
+    expect(replay.clientRequestId).toBe(first.clientRequestId);
+  });
+
+  it("reconciles a lost manual confirmation response before reporting failure", async () => {
+    const questions = ["确认后的问题一", "确认后的问题二", "确认后的问题三"];
+    const confirmed = { ...item("00000000-0000-4000-8000-000000000052"), questions };
+    mocks.fetch.mockResolvedValueOnce(json(dto()))
+      .mockRejectedValueOnce(new TypeError("response lost"))
+      .mockResolvedValueOnce(json(dto({ current: confirmed, draft: null, revision: 3 })));
+    const hook = renderHook(() => useRagStarterQuestions());
+    await waitFor(() => expect(hook.result.current.data?.revision).toBe(2));
+    await act(async () => { await hook.result.current.confirm(questions); });
+    expect(hook.result.current.data?.current?.questions).toEqual(questions);
+    expect(hook.result.current.error).toBeNull();
+    expect(mocks.fetch.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "PUT", "GET"]);
   });
 
   it("polls with GET only while generation is pending and stops at the draft", async () => {

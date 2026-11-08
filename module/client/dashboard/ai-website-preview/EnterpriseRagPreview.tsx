@@ -11,11 +11,20 @@ import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
 import {
   liveEnterpriseRagEvaluationApi,
 } from "../enterprise-rag-evaluation-api";
+import {
+  liveEnterpriseRagHumanReviewApi,
+  type EnterpriseRagHumanReviewApiError,
+} from "../enterprise-rag-human-review-api";
 import type {
   EnterpriseRagEvaluationAutomaticState,
   EnterpriseRagEvaluationReport,
   EnterpriseRagEvaluationRunDto,
 } from "../../../contracts/enterprise-rag-evaluation-run";
+import type {
+  EnterpriseRagHumanReviewDto,
+  EnterpriseRagReviewContextDto,
+  EnterpriseRagReviewDiff,
+} from "../../../contracts/enterprise-rag-human-review";
 import "./simplified-product-preview.css";
 import "./rag-evaluation-ui.css";
 import "./rag-evidence-topics.css";
@@ -162,8 +171,12 @@ type SurfaceProps = EnterpriseRagPreviewProps & {
   previewFixtures: RagPreviewFixtures;
 };
 type Drawer = "review" | "evidence" | "rules" | "improve" | "answer" | "history" | null;
-type ReviewDraftContext = { ownerKey: string; scopeKey: string; question: string; answer: string; need: string; knowledgeVersion: string; evidenceOptions: ReviewEvidenceOption[] };
+type ReviewDraftContext = { ownerKey: string; scopeKey: string; reportId: string | null; question: string; answer: string; need: string; knowledgeVersion: string; evidenceOptions: ReviewEvidenceOption[] };
 type ReviewDraft = ReviewDraftContext & { dimensions: DimensionJudgment[]; gates: GateJudgment[]; reviewer: string; confirmed: boolean };
+type VisibleReviewRecord = {
+  record: RecordEntry;
+  authoritative?: Pick<EnterpriseRagHumanReviewDto, "humanScore" | "humanVerdict">;
+};
 const AUTOMATIC_REQUEST_KEY = "frontmind-rag-evaluation-request-v1";
 const AUTOMATIC_SUBMITTED_NOTICE = "自动评估已提交；离开页面后任务仍会继续，重新打开可恢复进度。";
 const PREVIEW_STARTER_DRAFTS = [
@@ -209,6 +222,8 @@ const gateStatusLabels: Record<GateJudgment["status"], string> = {
   failed: "发现风险",
   pending: "待核验",
 };
+const reviewLevelLabel = (value: number | null) => value === null ? "待判定" : `${format(value)} / 4`;
+const reviewScoreLabel = (value: number | null) => value === null ? "N/A" : `${format(value)} / 100`;
 function RagEvidenceTag({ label, tone, testId }: { label: string; tone: EvidenceTone; testId: string }) {
   return <span className={`rag-evidence-tag is-${tone}`} data-testid={testId}>{label}</span>;
 }
@@ -275,6 +290,64 @@ function reportGates(report: EnterpriseRagEvaluationReport): GateJudgment[] {
   }));
 }
 
+function humanVerdict(dimensions: DimensionJudgment[], gates: GateJudgment[]) {
+  const result = scoreEvaluation({ dimensions, gates });
+  return {
+    score: result.score,
+    verdict: result.verdict === "usable" && result.score === 100
+      ? ("excellent" as const)
+      : result.verdict,
+  };
+}
+
+function reviewDiffPreview(
+  context: EnterpriseRagReviewContextDto | null,
+  dimensions: DimensionJudgment[],
+  gates: GateJudgment[],
+): EnterpriseRagReviewDiff | null {
+  if (!context) return null;
+  const after = humanVerdict(dimensions, gates);
+  const changedDimensions = context.ai.dimensions.flatMap((before) => {
+    const next = dimensions.find(item => item.id === before.id)?.level ?? null;
+    return before.level === next ? [] : [{ id: before.id, aiLevel: before.level, humanLevel: next }];
+  });
+  const changedGates = context.ai.gates.flatMap((before) => {
+    const next = gates.find(item => item.id === before.id)?.status ?? "pending";
+    return before.status === next ? [] : [{ id: before.id, aiStatus: before.status, humanStatus: next }];
+  });
+  const overallChanged = context.ai.verdict !== after.verdict || context.ai.score !== after.score;
+  if (!overallChanged && changedDimensions.length === 0 && changedGates.length === 0) return null;
+  return {
+    alignment: "mixed",
+    ...(overallChanged ? { overall: {
+      aiVerdict: context.ai.verdict,
+      aiScore: context.ai.score,
+      humanVerdict: after.verdict,
+      humanScore: after.score,
+    } } : {}),
+    dimensions: changedDimensions,
+    gates: changedGates,
+  };
+}
+
+function formalReviewRecord(review: EnterpriseRagHumanReviewDto): VisibleReviewRecord {
+  return {
+    record: {
+      id: review.id,
+      question: review.snapshot.question,
+      answer: review.snapshot.answer,
+      need: review.snapshot.need || review.snapshot.question,
+      reviewer: review.reviewer.displayName,
+      time: review.createdAt,
+      ruleVersion: RAG_RULE_VERSION,
+      knowledgeVersion: review.snapshot.knowledgeVersion,
+      dimensions: clone(review.dimensions) as DimensionJudgment[],
+      gates: clone(review.gates) as GateJudgment[],
+    },
+    authoritative: { humanScore: review.humanScore, humanVerdict: review.humanVerdict },
+  };
+}
+
 function manualIssues(dimensions: DimensionJudgment[], gates: GateJudgment[]): RagIssue[] {
   const risks: RagIssue[] = gates.filter((item) => item.status === "failed").map((item) => ({ id: `gate-${item.id}`, priority: "P0", title: `${RAG_GATES.find((gate) => gate.id === item.id)?.label}存在关键风险`, impact: item.reason, action: "先移除或修正风险内容，核对授权与依据，再重新评审。" }));
   const gaps: RagIssue[] = dimensions.filter((item) => item.level !== null && item.level < 4).sort((a, b) => (a.level ?? 4) - (b.level ?? 4)).map((item) => ({ id: item.id, priority: item.level! <= 2 ? "P1" : "P2", title: `${RAG_DIMENSIONS.find((d) => d.id === item.id)?.label}可改进`, impact: item.rationale, action: dimensionActions[item.id], dimensionId: item.id }));
@@ -332,6 +405,17 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   const [reviewer, setReviewer] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [reviewDraftSnapshot, setReviewDraftSnapshot] = useState<ReviewDraftContext | null>(null);
+  const [formalReviewState, setFormalReviewState] = useState<{
+    owner: string;
+    context: EnterpriseRagReviewContextDto | null;
+    reviews: EnterpriseRagHumanReviewDto[];
+    loading: boolean;
+    error: string;
+  }>({ owner: "", context: null, reviews: [], loading: false, error: "" });
+  const [formalReviewSubmitting, setFormalReviewSubmitting] = useState(false);
+  const formalReviewRequests = useRef(new Map<string, { fingerprint: string; clientRequestId: string }>());
+  const currentFormalReviewOwner = useRef("");
+  const formalReviewSubmission = useRef<{ owner: string; clientRequestId: string } | null>(null);
   const reviewDrafts = useRef(new Map<string, ReviewDraft>());
   const reviewDraftScope = useRef(historyStorageKey);
   if (reviewDraftScope.current !== historyStorageKey) {
@@ -659,6 +743,37 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
         (run) => run.status === "completed" && Boolean(run.report),
       ) ?? null;
   const automaticReport = automaticReportRun?.report ?? null;
+  const formalReviewOperationId = live && automaticReport ? automaticReportRun?.operationId ?? "" : "";
+  const formalReviewOwner = formalReviewOperationId
+    ? JSON.stringify([answerContextKey, formalReviewOperationId, automaticReport?.reportId])
+    : "";
+  currentFormalReviewOwner.current = formalReviewOwner;
+  useEffect(() => {
+    let active = true;
+    formalReviewSubmission.current = null;
+    setFormalReviewSubmitting(false);
+    if (!formalReviewOperationId || !automaticReport) {
+      setFormalReviewState({ owner: formalReviewOwner, context: null, reviews: [], loading: false, error: "" });
+      if (live) setReviewer("");
+      return () => { active = false; };
+    }
+    setFormalReviewState({ owner: formalReviewOwner, context: null, reviews: [], loading: true, error: "" });
+    void liveEnterpriseRagHumanReviewApi.context(formalReviewOperationId).then((context) => {
+      if (!active || context.operationId !== formalReviewOperationId || context.reportId !== automaticReport.reportId) return;
+      setFormalReviewState({ owner: formalReviewOwner, context, reviews: context.reviews, loading: false, error: "" });
+      setReviewer(context.reviewer.displayName);
+      const draft = reviewDrafts.current.get(answerContextKey);
+      if (draft) draft.reviewer = context.reviewer.displayName;
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setFormalReviewState({ owner: formalReviewOwner, context: null, reviews: [], loading: false, error: error instanceof Error ? error.message : "人工评审服务暂时不可用。" });
+    });
+    return () => { active = false; };
+  }, [formalReviewOwner]);
+  const formalReviewContext = formalReviewState.owner === formalReviewOwner ? formalReviewState.context : null;
+  const formalReviews = formalReviewState.owner === formalReviewOwner ? formalReviewState.reviews : [];
+  const formalReviewLoading = formalReviewState.owner === formalReviewOwner && formalReviewState.loading;
+  const formalReviewError = formalReviewState.owner === formalReviewOwner ? formalReviewState.error : "";
   const mirroredServerReportIds = useRef(new Set<string>());
   useEffect(() => {
     if (!live || !automaticReport || automaticOwner.current.key !== automaticCoordinateKey) return;
@@ -1108,10 +1223,13 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
   const ensureReviewDraft = () => {
     if (exampleReadOnly) return true;
     if (!answer.trim() || !need.trim() || currentAnswerContext.current !== answerContextKey || (live && !exampleReadOnly && (question !== live.question || answer !== live.answer))) return false;
-    if (reviewDraftSnapshot?.ownerKey === answerContextKey && reviewDrafts.current.has(answerContextKey)) return true;
-    const draft = reviewDrafts.current.get(answerContextKey) ?? {
+    const reportId = live ? automaticReport?.reportId ?? null : null;
+    if (reviewDraftSnapshot?.ownerKey === answerContextKey && reviewDrafts.current.has(answerContextKey) && reviewDraftSnapshot.reportId === reportId) return true;
+    const existingDraft = reviewDrafts.current.get(answerContextKey);
+    const draft = existingDraft?.reportId === reportId ? existingDraft : {
       ownerKey: answerContextKey,
       scopeKey: historyStorageKey,
+      reportId,
       question, answer, need,
       knowledgeVersion: live ? knowledgeVersion : activeCase ? previewFixtures.knowledgeVersion : "人工录入-待绑定正式知识版本",
       evidenceOptions: buildReviewEvidenceOptions({
@@ -1121,12 +1239,12 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
         sources: live?.sources ?? activeCase?.sources,
         selectedValues: displayDimensions.flatMap(item => item.evidenceIds),
       }),
-      dimensions: clone(displayDimensions), gates: clone(displayGates), reviewer: "", confirmed: false,
+      dimensions: clone(displayDimensions), gates: clone(displayGates), reviewer: live ? formalReviewContext?.reviewer.displayName ?? "" : "", confirmed: false,
     };
     reviewDrafts.current.set(answerContextKey, draft);
-    setReviewDraftSnapshot({ ownerKey: draft.ownerKey, scopeKey: draft.scopeKey, question: draft.question, answer: draft.answer, need: draft.need, knowledgeVersion: draft.knowledgeVersion, evidenceOptions: draft.evidenceOptions });
+    setReviewDraftSnapshot({ ownerKey: draft.ownerKey, scopeKey: draft.scopeKey, reportId: draft.reportId, question: draft.question, answer: draft.answer, need: draft.need, knowledgeVersion: draft.knowledgeVersion, evidenceOptions: draft.evidenceOptions });
     setReviewDimensions(clone(draft.dimensions)); setReviewGates(clone(draft.gates));
-    setReviewer(draft.reviewer); setConfirmed(draft.confirmed);
+    setReviewer(live ? formalReviewContext?.reviewer.displayName ?? draft.reviewer : draft.reviewer); setConfirmed(draft.confirmed);
     return true;
   };
   const openAnswer = () => {
@@ -1171,11 +1289,79 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
     setDimensions(emptyDimensions()); setGates(emptyGates()); close("answer");
     setNotice("回答或用户任务已更新，旧评分已失效，请重新核验。历史记录保留原快照。");
   };
-  const saveReview = () => {
+  const saveReview = async () => {
     const snapshot = reviewDraftContext;
     if (exampleReadOnly) return;
     if (!snapshot || snapshot.ownerKey !== currentAnswerContext.current || snapshot.scopeKey !== reviewDraftScope.current || !snapshot.answer.trim() || !snapshot.need.trim() || !reviewer.trim() || !confirmed || (live && !exampleReadOnly && (question !== live.question || answer !== live.answer))) return;
-    const record: RecordEntry = { ...(live ? { subjectKey: JSON.stringify([historyStorageKey, live.selectedAnswerKey ?? liveAnswerKey]) } : {}), id: `review-${crypto.randomUUID()}`, question: snapshot.question, answer: snapshot.answer, need: snapshot.need, reviewer: reviewer.trim(), time: new Date().toISOString(), ruleVersion: RAG_RULE_VERSION, knowledgeVersion: snapshot.knowledgeVersion, dimensions: clone(reviewDimensions), gates: clone(reviewGates) };
+    if (live) {
+      const context = formalReviewContext;
+      if (!context || !context.canReview || !automaticReportRun || !automaticReport || snapshot.reportId !== context.reportId ||
+          context.operationId !== automaticReportRun.operationId || context.reportId !== automaticReport.reportId) {
+        setNotice(formalReviewError || context?.reason || "人工评审服务暂时不可用。");
+        return;
+      }
+      const fingerprint = JSON.stringify([context.operationId, context.reportId, reviewDimensions, reviewGates, true]);
+      const requestKey = `${context.operationId}:${context.reportId}`;
+      const previous = formalReviewRequests.current.get(requestKey);
+      const clientRequestId = previous?.fingerprint === fingerprint ? previous.clientRequestId : crypto.randomUUID();
+      formalReviewRequests.current.set(requestKey, { fingerprint, clientRequestId });
+      const ownLatest = formalReviews
+        .filter(item => item.reviewer.userId === context.reviewer.userId)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+      const input = {
+        clientRequestId,
+        operationId: context.operationId,
+        reportId: context.reportId,
+        dimensions: clone(reviewDimensions),
+        gates: clone(reviewGates),
+        confirmed: true as const,
+        ...(ownLatest ? { supersedesReviewId: ownLatest.id } : {}),
+      };
+      const submission = { owner: formalReviewOwner, clientRequestId };
+      formalReviewSubmission.current = submission;
+      const submissionIsCurrent = () => currentFormalReviewOwner.current === submission.owner &&
+        formalReviewSubmission.current?.owner === submission.owner &&
+        formalReviewSubmission.current.clientRequestId === submission.clientRequestId &&
+        currentAnswerContext.current === snapshot.ownerKey;
+      setFormalReviewSubmitting(true);
+      setNotice("");
+      try {
+        let saved: EnterpriseRagHumanReviewDto | undefined;
+        try {
+          saved = (await liveEnterpriseRagHumanReviewApi.submit(input)).review;
+        } catch (error) {
+          const candidate = error as EnterpriseRagHumanReviewApiError;
+          if (!candidate.outcomeUnknown) throw error;
+          const existing = await liveEnterpriseRagHumanReviewApi.list(context.operationId);
+          saved = existing.find(item => item.clientRequestId === clientRequestId);
+          if (!saved) throw error;
+        }
+        formalReviewRequests.current.delete(requestKey);
+        if (!submissionIsCurrent() || saved.operationId !== context.operationId || saved.reportId !== context.reportId) return;
+        setFormalReviewState(previousState => {
+          if (previousState.owner !== formalReviewOwner) return previousState;
+          const reviews = [saved, ...previousState.reviews.filter(item => item.id !== saved.id)]
+            .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+          return { ...previousState, reviews, context: previousState.context ? { ...previousState.context, reviews } : null };
+        });
+        setDimensions(clone(saved.dimensions) as DimensionJudgment[]);
+        setGates(clone(saved.gates) as GateJudgment[]);
+        setMode("manual");
+        reviewDrafts.current.delete(snapshot.ownerKey);
+        setReviewDraftSnapshot(null);
+        setConfirmed(false);
+        close("review");
+      } catch (error) {
+        if (submissionIsCurrent()) setNotice(error instanceof Error ? error.message : "人工评审保存失败，请稍后重试。");
+      } finally {
+        if (submissionIsCurrent()) {
+          formalReviewSubmission.current = null;
+          setFormalReviewSubmitting(false);
+        }
+      }
+      return;
+    }
+    const record: RecordEntry = { id: `review-${crypto.randomUUID()}`, question: snapshot.question, answer: snapshot.answer, need: snapshot.need, reviewer: reviewer.trim(), time: new Date().toISOString(), ruleVersion: RAG_RULE_VERSION, knowledgeVersion: snapshot.knowledgeVersion, dimensions: clone(reviewDimensions), gates: clone(reviewGates) };
     const skillResult = enterpriseRagEvaluationSkill.evaluate({ dimensions: record.dimensions, gates: record.gates });
     const reportSaved = saveEvaluationReport({
       reportId: `report-${record.id}`,
@@ -1193,11 +1379,15 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
     close("review");
   };
   const drawerTitle = { review: "人工评审与计算", evidence: "回答依据与陈述核验", rules: "评分规则", improve: "优化方案", answer: "录入待评估回答", history: "评估记录" };
+  const currentReviewDiff = live ? reviewDiffPreview(formalReviewContext, reviewDimensions, reviewGates) : null;
+  const visibleManualHistory: VisibleReviewRecord[] = live
+    ? formalReviews.map(formalReviewRecord)
+    : history.map(record => ({ record }));
   const serverHistory = mergeAutomaticRuns([
     ...(automaticRun ? [automaticRun] : []),
     ...automaticHistory,
   ]);
-  const recordedEvaluationCount = history.length + serverHistory.length;
+  const recordedEvaluationCount = visibleManualHistory.length + serverHistory.length;
   const [answerPanelState, setAnswerPanelState] = useState<{ owner: string; panels: AnswerPanel[]; active: AnswerPanel | null }>({ owner: "", panels: [], active: null });
   const visibleAnswerPanels = answerPanelState.owner === answerContextKey ? answerPanelState.panels : [];
   const visibleActivePanel = answerPanelState.owner === answerContextKey ? answerPanelState.active : null;
@@ -1264,10 +1454,17 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
           </RagEvaluationDisclosure>)}
           </div>
         </section>
+        {currentReviewDiff && <section className="rag-drawer-section rag-review-diff" aria-label="本次改判差异">
+          <h3>本次改判差异</h3>
+          <div className="rag-review-diff__rows">
+            {currentReviewDiff.overall && <p><strong>总体：</strong>{verdicts[currentReviewDiff.overall.aiVerdict]} {reviewScoreLabel(currentReviewDiff.overall.aiScore)} → {verdicts[currentReviewDiff.overall.humanVerdict]} {reviewScoreLabel(currentReviewDiff.overall.humanScore)}</p>}
+            {currentReviewDiff.dimensions.map(item => <p key={`dimension-${item.id}`}><strong>{RAG_DIMENSIONS.find(dimension => dimension.id === item.id)?.label ?? item.id}：</strong>{reviewLevelLabel(item.aiLevel)} → {reviewLevelLabel(item.humanLevel)}</p>)}
+            {currentReviewDiff.gates.map(item => <p key={`gate-${item.id}`}><strong>{RAG_GATES.find(gate => gate.id === item.id)?.label ?? item.id}：</strong>{gateStatusLabels[item.aiStatus]} → {gateStatusLabels[item.humanStatus]}</p>)}
+          </div>
+        </section>}
         <section className="rag-drawer-section rag-review-confirmation" aria-label="确认人工评审">
-          <label className="rag-reviewer">评审人<input aria-label="评审人" value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="姓名或评审代号" /></label>
+          <label className="rag-reviewer">评审人<input aria-label="评审人" value={reviewer} readOnly={Boolean(live)} onChange={(event) => { if (!live) setReviewer(event.target.value); }} placeholder="姓名或评审代号" /></label>
           <label className="rag-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>已对照当前回答与证据进行核验，不将预设评审当作自动评估结果。</span></label>
-          <p className="rag-muted">记录仅保存在当前浏览器，最多保留 30 条。请勿粘贴敏感业务资料。</p>
         </section>
       </>}
       {panel === "answer" && <><label className="rag-editor-label">问题<textarea aria-label="问题" value={questionEdit} onChange={(event) => setQuestionEdit(event.target.value)} placeholder="输入访客的问题" /></label><label className="rag-editor-label">用户任务<textarea aria-label="用户任务" value={needEdit} onChange={(event) => setNeedEdit(event.target.value)} placeholder="访客希望解决什么、做出什么决定？" /></label><label className="rag-editor-label">实际回答<textarea className="rag-answer-editor" aria-label="实际回答" value={answerEdit} onChange={(event) => setAnswerEdit(event.target.value)} placeholder="粘贴待评估的回答，包括引用定位。此处不会调用模型。" /></label><p className="rag-muted">保存后清空当前评审。人工证据通过评审表逐项记录，不会自动继承示例来源。</p></>}
@@ -1340,11 +1537,11 @@ export function EnterpriseRagPreviewSurface({ storageScopeKey, live, buildReport
       {panel === "history" && <>
         {live && <><h3>服务端自动评估记录</h3><p className="rag-muted">以下记录来自服务端，绑定问答任务、轮次、冻结知识、规则与模型版本。完成后的报告不可被人工复核覆盖。</p>{serverHistory.length === 0 ? <p>{automaticLoading ? "正在读取已有自动评估…" : "当前回答暂无自动评估记录。页面加载不会自动发起付费评估。"}</p> : serverHistory.map((run, index) => { const score = presentEvaluationScore(run.report?.result.score, Boolean(run.report && reportVerdict(run.report) === "unusable")); return <article className="rag-evidence" key={run.operationId}><header><strong>{index === 0 ? "最新自动评估" : "历史自动评估"}</strong><span className={`rag-history-score${score.showScale ? "" : " is-unavailable"}`} aria-label={score.ariaLabel}>{score.text}</span></header><p>{automaticStatusLabels[run.status]}{run.report ? ` · ${presentRagSummary(run.report.result.summary)}` : run.error ? ` · ${run.error.message}` : ""}</p><small>操作 {run.operationId} · {new Date(run.createdAt).toLocaleString("zh-CN")}</small>{run.report && <details><summary>查看不可变报告信息</summary><p>报告：{run.report.reportId}</p><p>问答任务 / 轮次：{run.report.sourceQaTaskId} / {run.report.sourceTurnId}</p><p>知识快照：{run.report.knowledgeBase.snapshotId} · v{run.report.knowledgeBase.version}</p><p>评估依据已记录</p><p>六维 {run.report.judgments.dimensions.length} 项 · 风险门 {run.report.judgments.gates.length} 项 · 陈述 {run.report.judgments.claims.length} 项</p></details>}</article>; })}</>}
         <h3>{live ? "人工复核记录（辅助）" : "人工评审记录"}</h3>
-        <p className="rag-muted">本地快照绑定问题、回答、知识版本和规则版本；修改回答不会覆盖旧记录。当前浏览器保存 {history.length}/30 条。{live ? "人工复核不改变服务端自动报告。" : ""}</p>
-        {history.length === 0 ? <p>暂无已保存的人工评审。完成评审后在这里查看。</p> : history.map((record) => { const grade = record.ruleVersion === "rag-eval-1.2" ? scoreLegacyEvaluation(record) : record.ruleVersion === RAG_RULE_VERSION ? scoreEvaluation(record) : null; const sameAnswer = record.question === question && record.answer === answer && record.need === need; const score = presentEvaluationScore(grade?.score, grade?.verdict === "unusable"); return <article className="rag-evidence" key={record.id}><header><strong>{record.question}</strong><span className={`rag-history-score${score.showScale ? "" : " is-unavailable"}`} aria-label={score.ariaLabel}>{score.text}</span></header><p>{grade ? (record.ruleVersion === "rag-eval-1.2" ? legacyRagVerdictLabels : verdicts)[grade.verdict] : "历史规则暂不支持重新计算"} · {sameAnswer ? "与当前回答相同" : "历史快照，不适用于当前回答"}</p><small>{record.reviewer} · {new Date(record.time).toLocaleString("zh-CN")} · {record.knowledgeVersion}</small><details><summary>查看回答与判断</summary><p>{record.answer}</p>{record.dimensions.map((item) => <p key={item.id}>{RAG_DIMENSIONS.find((d) => d.id === item.id)?.label}：{item.level ?? "待判定"}/4 · {item.rationale}</p>)}</details></article>; })}
+        {!live && <p className="rag-muted">本地快照绑定问题、回答、知识版本和规则版本；修改回答不会覆盖旧记录。当前浏览器保存 {history.length}/30 条。</p>}
+        {visibleManualHistory.length === 0 ? <p>暂无已保存的人工评审。完成评审后在这里查看。</p> : visibleManualHistory.map(({ record, authoritative }) => { const grade = record.ruleVersion === "rag-eval-1.2" ? scoreLegacyEvaluation(record) : record.ruleVersion === RAG_RULE_VERSION ? scoreEvaluation(record) : null; const verdict = authoritative?.humanVerdict ?? grade?.verdict; const numericScore = authoritative ? authoritative.humanScore : grade?.score; const sameAnswer = record.question === question && record.answer === answer && record.need === need; const score = presentEvaluationScore(numericScore, verdict === "unusable"); return <article className="rag-evidence" key={record.id}><header><strong>{record.question}</strong><span className={`rag-history-score${score.showScale ? "" : " is-unavailable"}`} aria-label={score.ariaLabel}>{score.text}</span></header><p>{verdict ? (record.ruleVersion === "rag-eval-1.2" ? legacyRagVerdictLabels : verdicts)[verdict] : "历史规则暂不支持重新计算"} · {sameAnswer ? "与当前回答相同" : "历史快照，不适用于当前回答"}</p><small>{record.reviewer} · {new Date(record.time).toLocaleString("zh-CN")} · {record.knowledgeVersion}</small><details><summary>查看回答与判断</summary><p>{record.answer}</p>{record.dimensions.map((item) => <p key={item.id}>{RAG_DIMENSIONS.find((d) => d.id === item.id)?.label}：{item.level ?? "待判定"}/4 · {item.rationale}</p>)}</details></article>; })}
       </>}
   </>;
-  const renderDrawerFooter = (panel: NonNullable<Drawer>) => panel === "evidence" || panel === "improve" ? null : panel === "review" ? exampleReadOnly ? null : <button className="sfp-button sfp-button--primary" disabled={!reviewDraftContext || !answer.trim() || !need.trim() || !reviewer.trim() || !confirmed} onClick={saveReview}>保存评审并计算</button> : panel === "answer" ? <button className="sfp-button sfp-button--primary" disabled={!questionEdit.trim() || !answerEdit.trim() || !needEdit.trim()} onClick={() => updateAnswer(answerEdit, needEdit, questionEdit)}>保存回答，重新评审</button> : <button className="sfp-button sfp-button--ghost" onClick={() => close()}>完成</button>;
+  const renderDrawerFooter = (panel: NonNullable<Drawer>) => panel === "evidence" || panel === "improve" ? null : panel === "review" ? exampleReadOnly ? null : <button className="sfp-button sfp-button--primary" disabled={!reviewDraftContext || !answer.trim() || !need.trim() || !reviewer.trim() || !confirmed || formalReviewSubmitting || Boolean(live && (formalReviewLoading || !formalReviewContext?.canReview || reviewDraftContext.reportId !== formalReviewContext.reportId))} onClick={() => void saveReview()}>保存评审并计算</button> : panel === "answer" ? <button className="sfp-button sfp-button--primary" disabled={!questionEdit.trim() || !answerEdit.trim() || !needEdit.trim()} onClick={() => updateAnswer(answerEdit, needEdit, questionEdit)}>保存回答，重新评审</button> : <button className="sfp-button sfp-button--ghost" onClick={() => close()}>完成</button>;
 
   return <section className="sfp-root erag-root rag-eval-root" data-testid={live ? "enterprise-rag-live-root" : undefined}>
     <div ref={backgroundRef}>

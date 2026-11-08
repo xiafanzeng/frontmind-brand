@@ -183,7 +183,10 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
       (data.pendingSetId ?? null) !== request.pendingSetId
     ) regenerationRequest.current = null;
   }, [data]);
-  const mutate = useCallback(async (run: (current: RagStarterQuestionsDto) => Promise<RagStarterQuestionsDto>) => {
+  const mutate = useCallback(async (
+    run: (current: RagStarterQuestionsDto) => Promise<RagStarterQuestionsDto>,
+    acceptsLatest?: (latest: RagStarterQuestionsDto, before: RagStarterQuestionsDto) => boolean,
+  ) => {
     if (!data) throw new RagStarterQuestionsApiError("预设问题尚未读取完成。", "STARTER_NOT_READY", 409);
     const current = ++generation.current;
     mutationOwner.current = current;
@@ -198,20 +201,24 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
       return next;
     } catch (cause) {
       const next = cause instanceof Error ? cause : new Error("预设问题更新失败。");
-      let conflictRefreshed = false;
-      if (next instanceof RagStarterQuestionsApiError && next.status === 409) {
-        conflicted.current = true;
+      const conflict = next instanceof RagStarterQuestionsApiError && next.status === 409;
+      if (conflict) conflicted.current = true;
+      let latest: RagStarterQuestionsDto | null = null;
+      if (conflict || acceptsLatest) {
         try {
-          const latest = await liveRagStarterQuestionsApi.read();
+          latest = await liveRagStarterQuestionsApi.read();
           if (current === generation.current) {
             setData(latest);
-            setError(null);
             conflicted.current = false;
-            conflictRefreshed = true;
+            if (acceptsLatest?.(latest, data)) {
+              setError(null);
+              return latest;
+            }
+            if (conflict) setError(null);
           }
-        } catch { /* Keep the last readable DTO and the original conflict. */ }
+        } catch { /* Keep the last readable DTO and the original mutation error. */ }
       }
-      if (current === generation.current && !conflictRefreshed) setError(next);
+      if (current === generation.current && !conflict) setError(next);
       throw next;
     } finally {
       if (mutationOwner.current === current) mutating.current = false;
@@ -328,9 +335,15 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
     phase,
     error,
     reload,
-    confirm: (questions: string[]) => mutate((current) =>
-      liveRagStarterQuestionsApi.confirm({ ...current, questions })),
-    regenerate: () => mutate(async (current) => {
+    confirm: (questions: string[]) => {
+      const parsed = parseRagStarterQuestionTexts(questions);
+      return mutate(
+        (current) => liveRagStarterQuestionsApi.confirm({ ...current, questions: parsed }),
+        (latest) => Boolean(latest.current && !latest.draft && latest.current.questions.every((question, index) => question === parsed[index])),
+      );
+    },
+    regenerate: async () => {
+      const next = await mutate(async (current) => {
       const request = regenerationRequest.current ?? {
         id: globalThis.crypto.randomUUID(),
         revision: current.revision,
@@ -345,7 +358,18 @@ export function useRagStarterQuestions(enabled = true, autoInitialize = false) {
       });
       regenerationRequest.current = null;
       return next;
-    }),
-    discard: () => mutate((current) => liveRagStarterQuestionsApi.discard(current)),
+      }, (latest, before) => Boolean(
+        latest.pending !== before.pending || latest.error !== before.error ||
+        (latest.pendingSetId ?? null) !== (before.pendingSetId ?? null) || latest.revision !== before.revision ||
+        (latest.draft?.id ?? null) !== (before.draft?.id ?? null) ||
+        (latest.current?.id ?? null) !== (before.current?.id ?? null)
+      ));
+      regenerationRequest.current = null;
+      return next;
+    },
+    discard: () => mutate(
+      (current) => liveRagStarterQuestionsApi.discard(current),
+      (latest) => latest.draft === null,
+    ),
   };
 }

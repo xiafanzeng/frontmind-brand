@@ -315,6 +315,10 @@
 .rag-drawer--review .rag-review-field label,
 .rag-drawer--review .rag-reviewer { gap:8px; margin:16px 0 0; font-size:14px; font-weight:600; line-height:1.5; }
 .rag-drawer--review .rag-reviewer { margin:0; }
+.rag-drawer--review .rag-review-diff { min-width:0; padding:16px; border:.5px solid var(--sfp-line); border-radius:20px; background:rgba(255,255,255,.72); }
+.rag-drawer--review .rag-review-diff h3 { margin:0 0 10px; }
+.rag-drawer--review .rag-review-diff__rows { display:flex; flex-direction:column; gap:8px; min-width:0; }
+.rag-drawer--review .rag-review-diff__rows p { margin:0; color:var(--sfp-ink); font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
 .rag-drawer--review :is(input:not([type="checkbox"]),textarea,select) { display:block; box-sizing:border-box; width:100%; min-width:0; max-width:100%; min-height:44px; padding:10px 12px; border-radius:12px; font-size:16px; line-height:1.5; font-weight:400; }
 .rag-drawer--review textarea { min-height:94px; resize:vertical; }
 .rag-drawer--review .rag-check { min-width:0; margin:0; gap:8px; font-size:14px; line-height:1.5; }

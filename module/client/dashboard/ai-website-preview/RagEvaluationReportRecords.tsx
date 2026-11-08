@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { liveEnterpriseRagEvaluationApi, type EnterpriseRagEvaluationCoordinate } from "../enterprise-rag-evaluation-api";
+import { liveEnterpriseRagHumanReviewApi } from "../enterprise-rag-human-review-api";
+import type { EnterpriseRagHumanReviewDto } from "../../../contracts/enterprise-rag-human-review";
 import { isChecklistRagJudgment, isGradedRagJudgment, type EnterpriseRagEvaluationReport, type EnterpriseRagEvaluationRunDto } from "../../../contracts/enterprise-rag-evaluation-run";
 import { RAG_DIMENSIONS, RAG_GATES, RAG_RULE_VERSION, scoreEvaluation } from "./rag-evaluation";
 import { scoreEvaluation as scoreLegacyEvaluation } from "./rag-evaluation-legacy";
@@ -83,17 +85,24 @@ function AutomaticRecord({ run }: { run: EnterpriseRagEvaluationRunDto }) {
   </details>;
 }
 
-function ManualRecord({ record }: { record: RagReviewRecord }) {
+type ManualRecordView = {
+  record: RagReviewRecord;
+  authoritative?: Pick<EnterpriseRagHumanReviewDto, "humanScore" | "humanVerdict">;
+};
+
+function ManualRecord({ record, authoritative }: ManualRecordView) {
   const grade = record.ruleVersion === "rag-eval-1.2" ? scoreLegacyEvaluation(record) : record.ruleVersion === RAG_RULE_VERSION ? scoreEvaluation(record) : null;
-  const label = grade ? (record.ruleVersion === "rag-eval-1.2" ? legacyRagVerdictLabels : enterpriseRagQualityVerdictLabels)[grade.verdict] : "历史规则暂不支持重新计算";
+  const verdict = authoritative?.humanVerdict ?? grade?.verdict;
+  const score = authoritative ? authoritative.humanScore : grade?.score;
+  const label = verdict ? (record.ruleVersion === "rag-eval-1.2" ? legacyRagVerdictLabels : enterpriseRagQualityVerdictLabels)[verdict] : "历史规则暂不支持重新计算";
   return <details className="rag-report-record" data-testid="rag-report-manual-record">
-    <summary><span className="rag-report-record-meta"><time dateTime={record.time}>{stamp(record.time)}</time><span>{label}</span></span><span className="rag-report-record-line"><span>{record.question || "未记录问题"}</span><Score value={grade?.score} unavailable={grade?.verdict === "unusable"} /></span></summary>
+    <summary><span className="rag-report-record-meta"><time dateTime={record.time}>{stamp(record.time)}</time><span>{label}</span></span><span className="rag-report-record-line"><span>{record.question || "未记录问题"}</span><Score value={score} unavailable={verdict === "unusable"} /></span></summary>
     <div className="rag-report-record-detail">
       <Metadata rows={[["评审人", record.reviewer], ["知识版本", record.knowledgeVersion], ["记录编号", record.id]]} />
       {!grade && <p className="rag-report-record-note">以下保留原始评审内容，不使用当前规则重新计算。</p>}
       <div className="rag-report-record-block"><h4>任务描述</h4><p>{record.need || "未记录"}</p></div>
       <div className="rag-report-record-block"><h4>问题与回答</h4><p>{record.question}</p><blockquote>{record.answer}</blockquote></div>
-      {grade && <Metadata rows={[["诊断分", grade.score === null ? "待核验" : `${number(grade.score)} / 100`], ["评审覆盖率", `${number(grade.coverage)}%`], ["可能得分范围", `${number(grade.lower)}–${number(grade.upper)}`]]} />}
+      {grade && <Metadata rows={[["诊断分", score === null || score === undefined ? "待核验" : `${number(score)} / 100`], ["评审覆盖率", `${number(grade.coverage)}%`], ["可能得分范围", `${number(grade.lower)}–${number(grade.upper)}`]]} />}
       <div className="rag-report-record-block"><h4>六维人工评分</h4><ul className="rag-report-record-list">{record.dimensions.map((item, index) => <li key={`${item.id}-${index}`}><strong>{RAG_DIMENSIONS.find(dimension => dimension.id === item.id)?.label ?? item.id}</strong><span className="rag-report-record-inline-status">{item.applicable === false ? "不适用" : typeof item.level === "number" ? `${item.level} / 4` : "待核验"}</span><p>{item.rationale || "未记录理由"}</p><EvidenceIds ids={item.evidenceIds} /></li>)}</ul></div>
       <div className="rag-report-record-block"><h4>关键风险核验</h4><ul className="rag-report-record-list">{record.gates.map((item, index) => <li key={`${item.id}-${index}`}><strong>{RAG_GATES.find(gate => gate.id === item.id)?.label ?? item.id}</strong><span className="rag-report-record-inline-status">{gateStatus[item.status] ?? "待核验"}</span><p>{item.reason || "未记录理由"}</p></li>)}</ul></div>
     </div>
@@ -107,6 +116,7 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
   const [manual, setManual] = useState<{ key: string; value: RagReviewHistoryRead }>(() => ({ key: storageKey, value: readRagReviewHistory(storageKey) }));
   const owner = JSON.stringify([storageScopeKey, preview, coordinate?.sourceQaTaskId, coordinate?.turnId]);
   const [automatic, setAutomatic] = useState<AutomaticState>({ owner, runs: [], loading: !preview && Boolean(coordinate), awaiting: false, error: "" });
+  const [formalManual, setFormalManual] = useState<{ owner: string; reviews: EnterpriseRagHumanReviewDto[]; loading: boolean }>({ owner, reviews: [], loading: !preview && Boolean(coordinate) });
   const reloadAutomatic = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -124,9 +134,14 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
       clearTimeout(timer);
-      if (preview || !coordinate) { setAutomatic({ owner, runs: [], loading: false, awaiting: false, error: "" }); return; }
+      if (preview || !coordinate) {
+        setAutomatic({ owner, runs: [], loading: false, awaiting: false, error: "" });
+        setFormalManual({ owner, reviews: [], loading: false });
+        return;
+      }
       const sequence = ++request;
       setAutomatic(previous => ({ owner, runs: previous.owner === owner ? previous.runs : [], loading: true, awaiting: previous.owner === owner && previous.awaiting, error: "" }));
+      setFormalManual(previous => ({ owner, reviews: previous.owner === owner ? previous.reviews : [], loading: true }));
       try {
         const result = await liveEnterpriseRagEvaluationApi.latest(coordinate);
         if (!alive || sequence !== request) return;
@@ -139,10 +154,24 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
         const blocked = !hasReport && result.automaticAdmission?.status === "blocked";
         const awaiting = !hasReport && !blocked && Boolean(result.automaticExpected || result.automaticAdmission?.status === "retrying");
         setAutomatic({ owner, runs, loading: false, awaiting, error: blocked ? "评估未完成，请重新读取状态。" : "" });
+        const reportOperationIds = [...new Set(runs.filter(run => Boolean(run.report)).map(run => run.operationId))];
+        if (reportOperationIds.length === 0) setFormalManual({ owner, reviews: [], loading: false });
+        else {
+          void Promise.all(reportOperationIds.map(operationId => liveEnterpriseRagHumanReviewApi.list(operationId))).then(groups => {
+            if (!alive || sequence !== request) return;
+            const uniqueReviews = new Map<string, EnterpriseRagHumanReviewDto>();
+            groups.flat().forEach(review => { if (!uniqueReviews.has(review.id)) uniqueReviews.set(review.id, review); });
+            setFormalManual({ owner, reviews: [...uniqueReviews.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt)), loading: false });
+          }).catch(() => {
+            if (!alive || sequence !== request) return;
+            setFormalManual(previous => ({ owner, reviews: previous.owner === owner ? previous.reviews : [], loading: false }));
+          });
+        }
         if ((awaiting || runs.some(run => !terminal.has(run.status))) && document.visibilityState === "visible") timer = setTimeout(() => void refresh(), 5000);
       } catch (error) {
         if (!alive || sequence !== request) return;
         setAutomatic(previous => ({ owner, runs: previous.owner === owner ? previous.runs : [], loading: false, awaiting: false, error: error instanceof Error ? error.message : "暂时无法读取自动评估记录。" }));
+        setFormalManual(previous => ({ owner, reviews: previous.owner === owner ? previous.reviews : [], loading: false }));
       }
     };
     const focus = () => { void refresh(); };
@@ -154,7 +183,24 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
 
   const history = manual.key === storageKey ? manual.value : { records: [], status: "ready" as const, discarded: 0 };
   const state = automatic.owner === owner ? automatic : { owner, runs: [], loading: !preview && Boolean(coordinate), awaiting: false, error: "" };
-  const manualRecords = [...history.records].sort((a, b) => b.time.localeCompare(a.time));
+  const formalReviews = formalManual.owner === owner ? formalManual.reviews : [];
+  const manualRecords: ManualRecordView[] = preview
+    ? [...history.records].sort((a, b) => b.time.localeCompare(a.time)).map(record => ({ record }))
+    : formalReviews.map(review => ({
+        record: {
+          id: review.id,
+          question: review.snapshot.question,
+          answer: review.snapshot.answer,
+          need: review.snapshot.need || review.snapshot.question,
+          reviewer: review.reviewer.displayName,
+          time: review.createdAt,
+          ruleVersion: RAG_RULE_VERSION,
+          knowledgeVersion: review.snapshot.knowledgeVersion,
+          dimensions: review.dimensions,
+          gates: review.gates,
+        },
+        authoritative: { humanScore: review.humanScore, humanVerdict: review.humanVerdict },
+      }));
   return <section id="records" className="rag-report-section rag-report-records" aria-labelledby="rag-report-records-title">
     <h2 id="rag-report-records-title"><span className="rag-report-section-number">02</span> 评估记录</h2>
     <p>自动评估与人工评审分别保留原有规则和结果。</p>
@@ -165,11 +211,11 @@ export function RagEvaluationReportRecords({ storageScopeKey, preview, coordinat
       {preview ? <p className="rag-report-empty">暂无评估记录。</p> : !coordinate ? <p className="rag-report-empty">未选择回答。请从企业 RAG 页面打开对应回答的评估记录。</p> : state.runs.length === 0 && !state.loading && !state.awaiting && !state.error ? <p className="rag-report-empty">当前回答暂无自动评估记录。</p> : null}
       {state.runs.map(run => <AutomaticRecord key={run.operationId} run={run} />)}
     </section>
-    <section className="rag-report-record-group" aria-labelledby="rag-report-manual-title"><h3 id="rag-report-manual-title">当前工作区的人工评审</h3><p className="rag-report-record-note">来自当前浏览器，最多保留30条已保存记录；包含工作区内不同回答。{preview ? "本地预览与正式记录分开保存。" : ""}</p>
-      {history.status === "unavailable" && <p role="alert">浏览器存储不可用，暂时无法读取人工评审记录。</p>}
-      {history.status === "invalid" && <p role="alert">部分本地记录格式无效，无法完整读取；有效记录仍显示在下方。</p>}
-      {manualRecords.length === 0 && history.status === "ready" && <p className="rag-report-empty">暂无已保存的人工评审。</p>}
-      {manualRecords.map((record, index) => <ManualRecord key={`${record.id}-${index}`} record={record} />)}
+    <section className="rag-report-record-group" aria-labelledby="rag-report-manual-title"><h3 id="rag-report-manual-title">当前工作区的人工评审</h3>
+      {preview && history.status === "unavailable" && <p role="alert">浏览器存储不可用，暂时无法读取人工评审记录。</p>}
+      {preview && history.status === "invalid" && <p role="alert">部分本地记录格式无效，无法完整读取；有效记录仍显示在下方。</p>}
+      {manualRecords.length === 0 && (preview ? history.status === "ready" : !formalManual.loading) && <p className="rag-report-empty">暂无已保存的人工评审。</p>}
+      {manualRecords.map((item, index) => <ManualRecord key={`${item.record.id}-${index}`} {...item} />)}
     </section>
   </section>;
 }
