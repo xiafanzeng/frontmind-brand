@@ -5,7 +5,7 @@ import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import ManagedKeywordTables, {type ManagedKeywordTablesProps} from "./ManagedKeywordTables";
 import {liveIntentWorkbenchApi, type IntentWorkbenchApi} from "./intent-workbench-api";
 import type {IntentWorkspace, IntentEvaluation, IntentPlan, IntentAction, IntentReceipt} from "../../contracts/intent-workbench";
-import {findSavedIntentPlan, knowledgeOnlyIntentPlan, intentQuestionSnapshot, intentPlanSnapshot} from "../../contracts/intent-workbench";
+import {findSavedIntentPlan, findCurrentIntentPlan, knowledgeOnlyIntentPlan, intentQuestionSnapshot, intentPlanSnapshot} from "../../contracts/intent-workbench";
 import "./intent-workbench.css";
 import "./saved-plan-result.css";
 import "./plan-confirm.css";
@@ -615,7 +615,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   }
   async function plan(force = false, ids = scope) {
     if (!workspace || !ids.length) return;
-    const missing = force ? ids : ids.filter(id => !findSavedIntentPlan(workspace.state, id)?.actions.length);
+    const missing = force ? ids : ids.filter(id => !findCurrentIntentPlan(workspace, id)?.actions.length);
     const existing = workspaceRef.current?.state.jobs?.find(job => job.kind === "plan" &&
       !["succeeded", "failed"].includes(job.status) && job.questionIds.some(id => missing.includes(id)));
     if (existing) {openTaskDetails(existing.id, view === "universe" ? "universe" : "list"); return;}
@@ -623,7 +623,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
     setScope(ids);
     navigationVersion.current++;
     if (!missing.length) {
-      loadDrafts(ids.map(id => structuredClone(findSavedIntentPlan(workspace.state, id)!)));
+      loadDrafts(ids.map(id => structuredClone(findCurrentIntentPlan(workspace, id)!)));
       setDraftDirty(false); setView("plan"); return;
     }
     const navigation = navigationVersion.current;
@@ -726,9 +726,9 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   }, [view, workspace, pending, activeEvaluation, evaluationReturnView]);
   const history = [...(workspace?.state.jobs ?? [])].filter(job => job.status === "succeeded" && job.result).reverse();
   const archived = history.find(job => job.id === historyId)?.result;
-  const savedPlanIds = workspace ? questions.filter(question => findSavedIntentPlan(workspace.state, question.id)).map(question => question.id) : [];
+  const savedPlanIds = workspace ? questions.filter(question => findCurrentIntentPlan(workspace, question.id)).map(question => question.id) : [];
   function openSavedPlan(id: string) {
-    const saved = workspace && findSavedIntentPlan(workspace.state, id);
+    const saved = workspace && findCurrentIntentPlan(workspace, id);
     if (saved) {
       if (view === "list") setEvaluationReturnView("list");
       setScope([id]); setIndex(0); setExpanded([]); setSingleQueue([]);
@@ -865,7 +865,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
           onDismiss={() => setDismissedCompletionIds(ids => [...ids, job.id])}
           onViewResult={() => {
             if (job.kind !== "plan") {void openCompletedEvaluation(job.id); return;}
-            const saved = job.questionIds.flatMap(id => {const plan = findSavedIntentPlan(workspace.state, id); return plan ? [structuredClone(plan)] : [];});
+            const saved = job.questionIds.flatMap(id => {const plan = findCurrentIntentPlan(workspace, id); return plan ? [structuredClone(plan)] : [];});
             if (saved.length === job.questionIds.length) {setScope(job.questionIds); setIndex(0); loadDrafts(saved); setDraftDirty(false); navigateView("plan");}
             else {setHistoryId(job.id); setHistoryQuestionId(undefined); navigateView("history-detail");}
           }}

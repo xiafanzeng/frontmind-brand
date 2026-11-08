@@ -107,6 +107,22 @@ function harness(options: {mysqlJsonPayload?: "object" | "string";readOnly?:bool
     core, storedEvents, ledger: () => ledger!};
 }
 describe("优化模型持久化任务", () => {
+  it("继续方案生成沿用同一上游任务，发送方案指令并最终保存节点修改动作",async()=>{
+    const h=harness();await h.intake();await h.service.command({...h.request,kind:"plan"});
+    h.client.stopTask.mockImplementation(async()=>{
+      h.client.taskDetail.mockResolvedValue({status:"cancelled"});return {taskId:"upstream-task"};
+    });
+    await h.service.control({jobId:h.request.clientRequestId,action:"pause"});
+    await h.service.control({jobId:h.request.clientRequestId,action:"resume"});
+    expect(h.client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({taskId:"upstream-task",prompt:expect.stringContaining("继续用户暂停的优化方案生成")}));
+    const prompt=(h.client.sendMessage.mock.calls[0] as any[])[0].prompt;
+    expect(prompt).toContain("知识库正文优化方案");expect(prompt).not.toContain("完整评估");
+    h.send();const result=await h.service.poll();
+    expect(result.state.jobs![0].status).toBe("succeeded");
+    expect(result.state.plans[0].actions[0].kind).toBe("node");
+    expect(h.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.client.sendMessage).toHaveBeenCalledTimes(1);
+  });
   it("暂停真实上游执行、刷新不推进，继续同一任务并忽略暂停前的取消事件", async () => {
     const h = harness();
     await h.intake(); await h.service.command(h.request);

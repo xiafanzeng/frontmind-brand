@@ -142,7 +142,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
       });
       ledger = await readLedger(db);
     }
-    return {...ledger, nodes: data.nodes, preview: false};
+    return {...ledger, nodes: data.nodes, knowledgeHash:intentHash(data.nodes), preview: false};
   }
   const activeJob = (job: IntentSkillJob) => !["succeeded", "failed"].includes(job.status);
   // Host-wide source revisions and row positions can change when another
@@ -563,7 +563,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
         if (!settled) throw new IntentSkillRuntimeError("模型尚未停止，请重新读取状态后继续");
         await repairClient(job.control!.intentId).sendMessage({
           taskId: providerTaskId, structuredOutputSchema: INTENT_WIRE_SCHEMA,
-          prompt: `继续用户暂停的评估。沿用本任务原附件 SKILL.md 和 input.json、已保存上下文及证据，完成原问题范围的完整评估。不得执行优化方案，不得更改任务标识。仅返回符合原结构的完整 JSON。\noperationToken=${input.operationToken}\ninputHash=${input.inputHash}\n继续标识=${job.control!.intentId}`,
+          prompt: `继续用户暂停的${job.kind === "plan" ? "优化方案生成" : "评估"}。沿用本任务原附件 SKILL.md 和 input.json、已保存上下文及证据，${job.kind === "plan" ? "完成原问题范围的知识库正文优化方案，返回原契约要求的节点修改动作和修改前后正文" : "完成原问题范围的完整评估"}。不得实际执行优化方案，不得更改任务标识。仅返回符合原结构的完整 JSON。\noperationToken=${input.operationToken}\ninputHash=${input.inputHash}\n继续标识=${job.control!.intentId}`,
         });
         await finish("running");
       }

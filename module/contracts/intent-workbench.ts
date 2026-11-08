@@ -122,6 +122,8 @@ export type IntentWorkspace = {
   state: IntentState;
   nodes: IntentNode[];
   preview: boolean;
+  /** Current server snapshot, used to distinguish usable drafts from historical plans. */
+  knowledgeHash?: string;
 };
 export const emptyIntentState = (): IntentState => ({
   version: 1, questions: [], evaluations: [], plans: [], todos: [], receipts: [], jobs: [], dismissedHostQuestionIds: [],
@@ -157,6 +159,19 @@ export function findSavedIntentPlan(state: IntentState, questionId: string): Int
     const saved = job.result?.plans.find(plan => plan.questionId === questionId);
     if (saved) {const plan = knowledgeOnlyIntentPlan({...saved, inputHash: saved.inputHash ?? job.inputHash}); if (plan.actions.length) return plan;}
   }
+}
+
+/** Keep stale plans in history, but offer generation rather than execution against changed knowledge. */
+export function findCurrentIntentPlan(workspace:IntentWorkspace,questionId:string):IntentPlan|undefined {
+  const plan=findSavedIntentPlan(workspace.state,questionId);
+  if(!plan)return;
+  const source=workspace.state.jobs?.find(job=>job.kind==="plan"&&job.inputHash===plan.inputHash&&job.questionIds.includes(questionId));
+  if(workspace.knowledgeHash&&source?.knowledgeHash&&workspace.knowledgeHash!==source.knowledgeHash)return;
+  if(plan.actions.some(action=>{
+    const node=workspace.nodes.find(node=>node.id===action.nodeId);
+    return node&&node.content.trim()!==action.before.trim();
+  }))return;
+  return plan;
 }
 
 /** A transparent lexical assessment, not an AI or search-volume measurement. */
