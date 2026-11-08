@@ -17,7 +17,7 @@ function CatalogCell({children, secondary}: {children: ReactNode; secondary?: Re
   return <div className="iw-catalog-cell"><div className="iw-catalog-primary">{children}</div><div className={`iw-catalog-secondary${secondary ? "" : " iw-catalog-secondary-empty"}`}>{secondary}</div></div>;
 }
 export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, received, integration, search, sort = "newest", onSort, selected, pending, page, pageCount, savedPlanIds,
-  onSearch, onToggle, onSelectPage, onClear, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
+  onSearch, onToggle, onSelectPage, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
   evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; received: string[];
   search: string; selected: string[]; pending: boolean;
@@ -48,7 +48,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
       </div>
     </header>
     {taskFeedback}
-    {selected.length > 0 && <div className="iw-selection-bar"><span>已选择 <strong>{selected.length}</strong> 条问题</span><div><button onClick={onClear}>清空选择</button><button className="iw-primary" disabled={pending || Boolean(activeJob)} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div></div>}
+    {selected.length > 0 && <div className="iw-selection-bar"><button className="iw-primary" disabled={pending || Boolean(activeJob)} onClick={() => onEvaluate(selected)}>批量评估并优化（{selected.length}）</button></div>}
     <section className="iw-panel iw-table-wrap iw-catalog-table"><table>
       <colgroup><col className="iw-catalog-col-select"/><col className="iw-catalog-col-question"/><col className="iw-catalog-col-value"/><col className="iw-catalog-col-support"/><col className="iw-catalog-col-gaps"/><col className="iw-catalog-col-actions"/></colgroup>
       <thead><tr><th><input type="checkbox" aria-label="选择当前页问题" checked={visible.length > 0 && visible.every(item => selected.includes(item.id))} onChange={event => onSelectPage(event.target.checked)}/></th><th>候选问题</th>{scoreHeader("value", "问题价值")}{scoreHeader("support", "知识支撑")}<th>主要缺口</th><th>操作</th></tr></thead>

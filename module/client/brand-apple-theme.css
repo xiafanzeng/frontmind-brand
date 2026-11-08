@@ -991,10 +991,11 @@
 .fm-brand-theme[data-brand-page="intent"] .iw-selection-bar {
   gap: var(--fm-brand-space-2);
   margin-bottom: var(--fm-brand-space-2);
-  padding: var(--fm-brand-space-2);
-  border: 0.5px solid rgba(117, 66, 176, 0.24);
-  border-radius: var(--fm-brand-radius-control);
-  background: var(--fm-brand-accent-soft);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   color: var(--fm-brand-text);
 }
 
