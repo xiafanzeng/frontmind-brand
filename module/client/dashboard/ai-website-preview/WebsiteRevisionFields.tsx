@@ -1,5 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { FileText, ImagePlus, X } from "lucide-react";
+import {
+  SITEOPS_REVISION_DOCUMENT_MAX_BYTES,
+  SITEOPS_REVISION_DOCUMENT_MIME_TYPES,
+  SITEOPS_REVISION_IMAGE_MAX_BYTES,
+  SITEOPS_REVISION_IMAGE_MIME_TYPES,
+  siteOpsRevisionInputDescriptor,
+} from "../../../contracts/siteops-revision-input.js";
 import "./website-revision-tools.css";
 
 export type WebsiteRevisionFieldsProps = {
@@ -10,13 +17,8 @@ export type WebsiteRevisionFieldsProps = {
   onChange: (text: string, files: File[]) => void;
 };
 
-const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-const DOCUMENT_TYPES = new Set([
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "text/plain",
-  "text/markdown",
-]);
+const IMAGE_TYPES = new Set<string>(SITEOPS_REVISION_IMAGE_MIME_TYPES);
+const DOCUMENT_TYPES = new Set<string>(SITEOPS_REVISION_DOCUMENT_MIME_TYPES);
 const ACCEPT_ATTRIBUTE = [
   ...IMAGE_TYPES,
   ...DOCUMENT_TYPES,
@@ -26,12 +28,10 @@ const ACCEPT_ATTRIBUTE = [
   ".md",
 ].join(",");
 const MIB = 1024 * 1024;
-const IMAGE_MAX_BYTES = 8 * MIB;
-const DOCUMENT_MAX_BYTES = 10 * MIB;
 const TOTAL_MAX_BYTES = 32 * MIB;
 
 function isImage(file: File) {
-  return IMAGE_TYPES.has(file.type);
+  return siteOpsRevisionInputDescriptor(file.name, file.type)?.kind === "image";
 }
 
 /** Controlled fields share the design step's single save/rebuild action. */
@@ -64,11 +64,11 @@ export function WebsiteRevisionFields({
     }
     let failure: string | null = null;
     if (next.length > 8) failure = "一次最多添加 8 个附件。";
-    else if (next.some((file) => !IMAGE_TYPES.has(file.type) && !DOCUMENT_TYPES.has(file.type))) {
+    else if (next.some((file) => !siteOpsRevisionInputDescriptor(file.name, file.type))) {
       failure = "仅支持 PNG、JPEG、WebP 图片，或 PDF、DOCX、TXT、Markdown 文档。";
     } else if (next.some((file) => isImage(file)
-      ? file.size < 1 || file.size > IMAGE_MAX_BYTES
-      : file.size < 1 || file.size > DOCUMENT_MAX_BYTES)) {
+      ? file.size < 1 || file.size > SITEOPS_REVISION_IMAGE_MAX_BYTES
+      : file.size < 1 || file.size > SITEOPS_REVISION_DOCUMENT_MAX_BYTES)) {
       failure = "单张图片不超过 8 MiB，单个文档不超过 10 MiB。";
     } else if (next.reduce((total, file) => total + file.size, 0) > TOTAL_MAX_BYTES) {
       failure = "本次附件总大小不能超过 32 MiB。";

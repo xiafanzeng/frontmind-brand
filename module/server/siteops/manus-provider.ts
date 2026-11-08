@@ -98,6 +98,11 @@ import {
   validateSiteContentPlanV2,
   type SiteContentPlanV2,
 } from "../../contracts/siteops-content-plan.js";
+import {
+  SITEOPS_REVISION_INPUT_MAX_BYTES,
+  isSiteOpsRevisionImageMimeType,
+  siteOpsRevisionInputCoordinate,
+} from "../../contracts/siteops-revision-input.js";
 import { createHostOwnedSiteDesignResultV2 } from "../../contracts/siteops-host-design.js";
 import { missingFeaturedRouteIds } from "./site-design-runtime.js";
 import { managedAgentProfileSchema } from "@frontmind/module-contracts/agent-profile";
@@ -204,6 +209,8 @@ import {
   NATIVE_SOURCE_PREFLIGHT_SHA256,
   NATIVE_SOURCE_PREFLIGHT_VERSION,
   NATIVE_SOURCE_PREFLIGHT_V2_FILENAME,
+  NATIVE_SOURCE_PREFLIGHT_V2_LEGACY_SCRIPT,
+  NATIVE_SOURCE_PREFLIGHT_V2_LEGACY_SHA256,
   NATIVE_SOURCE_PREFLIGHT_V2_SCRIPT,
   NATIVE_SOURCE_PREFLIGHT_V2_SHA256,
   NATIVE_SOURCE_PREFLIGHT_V2_VERSION,
@@ -235,31 +242,19 @@ import {
 /** Provider-model plan compliance is nondeterministic; allow one extra
  * targeted repair before declaring the plan stage exhausted. */
 const SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS = 2 as const;
-/** Single-file ceiling for frozen revision inputs: images ≤ 8 MiB, documents ≤ 10 MiB. */
-export const SITEOPS_REVISION_INPUT_MAX_BYTES = 10 * 1024 * 1024;
+function isSiteOpsRevisionImageMedia<T extends { mimeType: string }>(
+  asset: T,
+): asset is T & { mimeType: "image/png" | "image/jpeg" | "image/webp" } {
+  return isSiteOpsRevisionImageMimeType(asset.mimeType);
+}
 
-/** Reference documents ride the frozen-media pipeline as `document` entries. */
+/** Kept as a public compatibility export for focused module tests. */
+export { SITEOPS_REVISION_INPUT_MAX_BYTES };
+
 export function siteOpsRevisionMediaKind(
   mimeType: string,
 ): "image" | "document" {
-  return mimeType.startsWith("image/") ? "image" : "document";
-}
-
-const SITEOPS_REVISION_IMAGE_MIME_TYPES = [
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-] as const;
-
-type SiteOpsRevisionImageMime =
-  (typeof SITEOPS_REVISION_IMAGE_MIME_TYPES)[number];
-
-function isSiteOpsRevisionImageMedia<T extends { mimeType: string }>(
-  asset: T,
-): asset is T & { mimeType: SiteOpsRevisionImageMime } {
-  return (SITEOPS_REVISION_IMAGE_MIME_TYPES as readonly string[]).includes(
-    asset.mimeType,
-  );
+  return isSiteOpsRevisionImageMimeType(mimeType) ? "image" : "document";
 }
 import {
   SITEOPS_NATIVE_TEMPLATE_WORKFLOW_VERSION,
@@ -872,6 +867,10 @@ type NativeSourceRuntimeValidationInput = {
   expectedBaseSourceSha256: string;
   expectedExecutionBaselineSha256: string;
   expectedContentPlanSha256?: string;
+  trustedUserDocuments?: readonly {
+    publicPath: string;
+    contentSha256: string;
+  }[];
 };
 
 export type NativeSourceRuntimeRegistryEntry = Readonly<{
@@ -967,7 +966,7 @@ export function createNativeSourceRuntimeRegistry(input: {
   });
 }
 
-function nativeSourceReceiptV2SchemaForRuntime(
+export function nativeSourceReceiptV2SchemaForRuntime(
   coordinates: NativeSourceRuntimeCoordinates,
 ) {
   return replayableSiteSourceReceiptV2Schema.extend({
@@ -1016,6 +1015,9 @@ const CURRENT_NATIVE_SOURCE_RUNTIME_ENTRY: NativeSourceRuntimeRegistryEntry =
       validateNativeReactSourceArchive({
         ...input,
         requiredReceiptVersion: 2,
+        receiptSchema: nativeSourceReceiptV2SchemaForRuntime(
+          CURRENT_NATIVE_SOURCE_RUNTIME_COORDINATES,
+        ),
         runtimeContract: NATIVE_RUNTIME_CONTRACT_V1,
       }),
     audit: (input) =>
@@ -1025,9 +1027,55 @@ const CURRENT_NATIVE_SOURCE_RUNTIME_ENTRY: NativeSourceRuntimeRegistryEntry =
       }),
   });
 
+const LEGACY_NATIVE_SOURCE_RUNTIME_COORDINATES =
+  nativeSourceRuntimeCoordinatesSchema.parse({
+    ...CURRENT_NATIVE_SOURCE_RUNTIME_COORDINATES,
+    preflightSha256: NATIVE_SOURCE_PREFLIGHT_V2_LEGACY_SHA256,
+  });
+
+const LEGACY_NATIVE_SOURCE_RUNTIME_ENTRY: NativeSourceRuntimeRegistryEntry =
+  Object.freeze({
+    ...CURRENT_NATIVE_SOURCE_RUNTIME_ENTRY,
+    coordinates: LEGACY_NATIVE_SOURCE_RUNTIME_COORDINATES,
+    attachments: Object.freeze([
+      {
+        filename: NATIVE_RUNTIME_CONTRACT_FILENAME,
+        mime_type: "application/json",
+        file_data: `data:application/json;base64,${NATIVE_RUNTIME_CONTRACT_V1_BYTES.toString("base64")}`,
+      },
+      {
+        filename: NATIVE_RUNTIME_EXECUTION_SHELL_FILENAME,
+        mime_type: "application/json",
+        file_data: `data:application/json;base64,${NATIVE_RUNTIME_EXECUTION_SHELL_V1_BYTES.toString("base64")}`,
+      },
+      {
+        filename: NATIVE_SOURCE_PREFLIGHT_V2_FILENAME,
+        mime_type: "text/javascript",
+        file_data: `data:text/javascript;base64,${NATIVE_SOURCE_PREFLIGHT_V2_LEGACY_SCRIPT.toString("base64")}`,
+      },
+    ] satisfies ManusV2Attachment[]),
+    receiptSchema: nativeSourceReceiptV2SchemaForRuntime(
+      LEGACY_NATIVE_SOURCE_RUNTIME_COORDINATES,
+    ),
+    validate: (input) =>
+      validateNativeReactSourceArchive({
+        ...input,
+        requiredReceiptVersion: 2,
+        receiptSchema: nativeSourceReceiptV2SchemaForRuntime(
+          LEGACY_NATIVE_SOURCE_RUNTIME_COORDINATES,
+        ),
+        runtimeContract: NATIVE_RUNTIME_CONTRACT_V1,
+        trustedUserDocuments: [],
+      }),
+  });
+
 const DEFAULT_NATIVE_SOURCE_RUNTIME_REGISTRY =
   createNativeSourceRuntimeRegistry({
     current: CURRENT_NATIVE_SOURCE_RUNTIME_ENTRY,
+    entries: [
+      LEGACY_NATIVE_SOURCE_RUNTIME_ENTRY,
+      CURRENT_NATIVE_SOURCE_RUNTIME_ENTRY,
+    ],
   });
 
 type ManusBuildLogStage =
@@ -4181,10 +4229,10 @@ function siteOpsCustomerMediaPlanId(publicPath: string) {
 }
 
 export function siteOpsContentPlanMediaSelection<
-  T extends { publicPath: string },
+  T extends { publicPath: string; mimeType: string },
 >(plan: SiteContentPlanV2, userMedia: readonly T[]) {
   const customerMediaById = new Map(
-    userMedia.map((asset) => [
+    userMedia.filter(isSiteOpsRevisionImageMedia).map((asset) => [
       siteOpsCustomerMediaPlanId(asset.publicPath),
       asset,
     ]),
@@ -4566,20 +4614,11 @@ async function loadInheritedSiteOpsRevisionLineage(input: {
   });
   const media: SiteOpsRevisionLineageMedia[] = [];
   for (const { row, sourceDocumentId } of lineage.assets) {
-    if (
-      !["image/png", "image/jpeg", "image/webp"].includes(row.mimeType) ||
-      !/^[a-f0-9]{64}$/u.test(row.contentSha256) ||
-      !/^\/frontmind-user-media\/[a-f0-9]{64}\.(?:png|jpg|webp)$/u.test(
-        row.publicPath,
-      ) ||
-      row.sizeBytes < 1 ||
-      row.sizeBytes > 8 * 1024 * 1024 ||
-      row.width < 1 ||
-      row.height < 1
-    ) {
+    const coordinate = siteOpsRevisionInputCoordinate(row);
+    if (!coordinate) {
       throw new SiteOpsManusFailure(
         "FRONTMIND_BUILD_REVISION_LINEAGE_MEDIA_INVALID",
-        "连续修订的历史图片坐标无法通过校验。",
+        "连续修订的历史附件坐标无法通过校验。",
         "failed",
       );
     }
@@ -4598,12 +4637,12 @@ async function loadInheritedSiteOpsRevisionLineage(input: {
     }
     const bytes = await storedArtifactBytes(
       artifact,
-      NATIVE_SOURCE_DEFAULT_LIMITS.maxSingleFileBytes,
+      coordinate.maxBytes,
     );
     if (bytes.length !== row.sizeBytes || sha256(bytes) !== row.contentSha256) {
       throw new SiteOpsManusFailure(
         "FRONTMIND_BUILD_REVISION_LINEAGE_MEDIA_INVALID",
-        "连续修订的历史图片未通过冻结哈希校验。",
+        "连续修订的历史附件未通过冻结哈希校验。",
         "failed",
       );
     }
@@ -4611,7 +4650,7 @@ async function loadInheritedSiteOpsRevisionLineage(input: {
       schemaVersion: 1,
       localAssetId: row.localAssetId,
       filename: row.filename,
-      mimeType: row.mimeType as "image/png" | "image/jpeg" | "image/webp",
+      mimeType: row.mimeType as SiteOpsRevisionMedia["mimeType"],
       sizeBytes: row.sizeBytes,
       contentSha256: row.contentSha256,
       width: row.width,
@@ -5932,13 +5971,25 @@ async function handleNativeReactSiteBuild(input: {
       }
       const bytes = await storedArtifactBytes(
         artifact,
-        NATIVE_SOURCE_DEFAULT_LIMITS.maxSingleFileBytes,
+        SITEOPS_REVISION_INPUT_MAX_BYTES,
       );
+      const coordinate = siteOpsRevisionInputCoordinate(descriptor);
+      if (
+        !coordinate ||
+        bytes.length !== descriptor.sizeBytes ||
+        sha256(bytes) !== descriptor.contentSha256
+      ) {
+        throw new SiteOpsManusFailure(
+          "FRONTMIND_BUILD_REVISION_MEDIA_INVALID",
+          "修订附件未通过冻结坐标与哈希校验。",
+          "failed",
+        );
+      }
       media.push({ ...descriptor, bytes });
     }
-    currentRevisionMediaPlanIds = media.map((asset) =>
-      siteOpsCustomerMediaPlanId(asset.publicPath),
-    );
+    currentRevisionMediaPlanIds = media
+      .filter(isSiteOpsRevisionImageMedia)
+      .map((asset) => siteOpsCustomerMediaPlanId(asset.publicPath));
     const parentArtifact = await input.readArtifact({
       userId: input.operation.userId,
       localAssetId: revisionBaseline.sourceLocalAssetId,
@@ -6090,7 +6141,10 @@ async function handleNativeReactSiteBuild(input: {
           mime_type: "application/json",
           file_data: `data:application/json;base64,${parentPlanBytes.toString("base64")}`,
         },
-        ...media.map(
+        ...[
+          ...media.filter(isSiteOpsRevisionImageMedia),
+          ...allMedia.filter((asset) => !isSiteOpsRevisionImageMedia(asset)),
+        ].map(
           (asset) =>
             ({
               filename: `frontmind-user-media-${asset.contentSha256}${path.posix.extname(asset.publicPath)}`,
@@ -6113,6 +6167,10 @@ async function handleNativeReactSiteBuild(input: {
     ? { bytes: revisionSource.bytes, sha256: revisionSource.sha256 }
     : null;
   let requiredRevisionMedia: SiteOpsRevisionLineageMedia[] = [];
+  const requiredRevisionDocuments =
+    revisionSource?.media.filter(
+      (asset) => !isSiteOpsRevisionImageMedia(asset),
+    ) ?? [];
   let knowledgeMedia: TrustedSiteKnowledgeMedia[] = [];
   const knowledgeMediaRoutePaths = new Map<string, Set<string>>();
   const runtimeVisual = siteOpsRuntimeVisualEvidenceV1Schema.parse({
@@ -8663,6 +8721,10 @@ async function handleNativeReactSiteBuild(input: {
             expectedBaseSourceSha256: baseSourceSha256,
             expectedExecutionBaselineSha256: baseSourceSha256,
             expectedContentPlanSha256,
+            trustedUserDocuments: requiredRevisionDocuments.map((asset) => ({
+              publicPath: asset.publicPath,
+              contentSha256: asset.contentSha256,
+            })),
           })
         : await validateNativeReactSourceArchive({
             archive,
@@ -8670,6 +8732,10 @@ async function handleNativeReactSiteBuild(input: {
             expectedOperationToken: operationToken,
             expectedBaseSourceSha256: baseSourceSha256,
             requiredReceiptVersion: 1,
+            trustedUserDocuments: requiredRevisionDocuments.map((asset) => ({
+              publicPath: asset.publicPath,
+              contentSha256: asset.contentSha256,
+            })),
           });
     if (nativeSourceContractVersion === 2) {
       const routeAudit = nativeSourceRuntime!.audit({
@@ -8706,6 +8772,35 @@ async function handleNativeReactSiteBuild(input: {
             path: sourcePath,
             detail:
               "The frozen user media public URL is not referenced by the site source.",
+          });
+        }
+      }
+      if (issues.length > 0) {
+        throw new NativeRuntimeContractAuditError({ ok: false, issues });
+      }
+    }
+    if (requiredRevisionDocuments.length > 0) {
+      const sourceText = [...validated.files.entries()]
+        .filter(([pathname]) => /\.(?:css|html|js|jsx|mjs|ts|tsx)$/iu.test(pathname))
+        .map(([, bytes]) => bytes.toString("utf8"))
+        .join("\n");
+      const issues: Array<NativeRuntimeAudit["issues"][number]> = [];
+      for (const asset of requiredRevisionDocuments) {
+        const sourcePath = `public${asset.publicPath}`;
+        const actual = validated.files.get(sourcePath);
+        if (!actual || sha256(actual) !== asset.contentSha256) {
+          issues.push({
+            code: "REQUIRED_FILE_MISSING",
+            path: sourcePath,
+            detail: "The frozen user document is missing or changed.",
+          });
+          continue;
+        }
+        if (!sourceText.includes(asset.publicPath)) {
+          issues.push({
+            code: "APP_SHELL_INVALID",
+            path: sourcePath,
+            detail: "The frozen user document public URL is not referenced by the site source.",
           });
         }
       }
@@ -8974,6 +9069,10 @@ async function handleNativeReactSiteBuild(input: {
           ? nativeSourceRuntime!.audit
           : undefined,
       requiredUserMedia: requiredRevisionMedia.map((asset) => ({
+        publicPath: asset.publicPath,
+        contentSha256: asset.contentSha256,
+      })),
+      requiredUserDocuments: requiredRevisionDocuments.map((asset) => ({
         publicPath: asset.publicPath,
         contentSha256: asset.contentSha256,
       })),

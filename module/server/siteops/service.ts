@@ -116,6 +116,7 @@ export function configureSiteOpsServiceCore(core:SiteOpsServiceCore){
 import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { domainToASCII, domainToUnicode } from "node:url";
 import {
   and,
@@ -133,6 +134,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { z } from "zod";
+import JSZip from "jszip";
 
 import {
   SITEOPS_DEFAULT_WORKFLOW,
@@ -238,10 +240,12 @@ import {
 } from "./persistence-diagnostics.js";
 import {
   decodedRasterImageDimensions,
-  imageMimeByExtension,
   isSupportedImageBytes,
 } from "../knowledge-archive-image-validation.js";
-import { SITEOPS_REVISION_INPUT_MAX_BYTES } from "./manus-provider.js";
+import {
+  SITEOPS_REVISION_INPUT_MAX_BYTES,
+  siteOpsRevisionInputDescriptor,
+} from "../../contracts/siteops-revision-input.js";
 import {
   createSiteDesignRecommendation,
   type SiteDesignRecommendationSourceDocument,
@@ -3979,16 +3983,7 @@ export async function disconnectSiteOpsAliyunConnection(
 }
 
 const SITEOPS_REVISION_WORKFLOW_VERSION = "2.9.0";
-const SITEOPS_REVISION_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 const SITEOPS_UNBOUND_INPUT_RETENTION_MS = 24 * 60 * 60 * 1_000;
-
-/** Reference documents ride the same frozen-media pipeline with 0×0 dimensions. */
-const siteOpsRevisionDocumentMimeByExtension = {
-  ".pdf": "application/pdf",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".txt": "text/plain",
-  ".md": "text/markdown",
-} as const;
 
 type FrozenSiteOpsRevisionInputAsset = {
   id: string;
@@ -4009,16 +4004,19 @@ type FrozenSiteOpsRevisionInputAsset = {
 async function revisionInputBytes(
   stream: AsyncIterable<unknown>,
   expectedSize?: number,
+  maxBytes = SITEOPS_REVISION_INPUT_MAX_BYTES,
 ) {
   const chunks: Buffer[] = [];
   let sizeBytes = 0;
   for await (const raw of stream) {
     const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as any);
     sizeBytes += chunk.length;
-    if (sizeBytes > SITEOPS_REVISION_IMAGE_MAX_BYTES) {
+    if (sizeBytes > maxBytes) {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
-        "单张图片不能超过 8 MiB。",
+        maxBytes === SITEOPS_REVISION_INPUT_MAX_BYTES
+          ? "单个文档不能超过 10 MiB。"
+          : "单张图片不能超过 8 MiB。",
         400,
       );
     }
@@ -4030,11 +4028,233 @@ async function revisionInputBytes(
   ) {
     throw new SiteOpsServiceError(
       "INVALID_INPUT",
-      "图片内容不完整，请重新上传。",
+      "附件内容不完整，请重新上传。",
       400,
     );
   }
   return Buffer.concat(chunks, sizeBytes);
+}
+
+const SITEOPS_REVISION_DOCX_MAX_ENTRIES = 512;
+const SITEOPS_REVISION_DOCX_MAX_ENTRY_BYTES = 16 * 1024 * 1024;
+const SITEOPS_REVISION_DOCX_MAX_EXPANDED_BYTES = 32 * 1024 * 1024;
+const SITEOPS_REVISION_DOCX_CONTENT_TYPES_MAX_BYTES = 256 * 1024;
+const SITEOPS_REVISION_DOCX_DOCUMENT_XML_MAX_BYTES = 8 * 1024 * 1024;
+
+type SiteOpsRevisionDocxObject = JSZip.JSZipObject & {
+  _data?: {
+    compressedSize?: unknown;
+    uncompressedSize?: unknown;
+  };
+};
+
+/** Inspect the ZIP central directory without inflating any entry. DOCX input
+ * is untrusted and a small compressed file may otherwise expand without
+ * bound while JSZip performs a whole-archive CRC pass. ZIP64 and multi-disk
+ * archives are unnecessary below the 10 MiB upload ceiling and are rejected. */
+function assertSiteOpsRevisionDocxCentralDirectory(bytes: Buffer) {
+  const eocdSignature = 0x06054b50;
+  const centralEntrySignature = 0x02014b50;
+  const minimumEocdBytes = 22;
+  const maximumCommentBytes = 0xffff;
+  const searchStart = Math.max(
+    0,
+    bytes.length - minimumEocdBytes - maximumCommentBytes,
+  );
+  let eocdOffset = -1;
+  for (
+    let offset = bytes.length - minimumEocdBytes;
+    offset >= searchStart;
+    offset -= 1
+  ) {
+    if (bytes.readUInt32LE(offset) !== eocdSignature) continue;
+    const commentBytes = bytes.readUInt16LE(offset + 20);
+    if (offset + minimumEocdBytes + commentBytes === bytes.length) {
+      eocdOffset = offset;
+      break;
+    }
+  }
+  if (eocdOffset < 0) return false;
+  const diskNumber = bytes.readUInt16LE(eocdOffset + 4);
+  const centralDirectoryDisk = bytes.readUInt16LE(eocdOffset + 6);
+  const diskEntries = bytes.readUInt16LE(eocdOffset + 8);
+  const totalEntries = bytes.readUInt16LE(eocdOffset + 10);
+  const centralDirectoryBytes = bytes.readUInt32LE(eocdOffset + 12);
+  const centralDirectoryOffset = bytes.readUInt32LE(eocdOffset + 16);
+  if (
+    diskNumber !== 0 ||
+    centralDirectoryDisk !== 0 ||
+    diskEntries !== totalEntries ||
+    totalEntries < 1 ||
+    totalEntries > SITEOPS_REVISION_DOCX_MAX_ENTRIES ||
+    totalEntries === 0xffff ||
+    centralDirectoryBytes === 0xffffffff ||
+    centralDirectoryOffset === 0xffffffff ||
+    centralDirectoryOffset + centralDirectoryBytes !== eocdOffset
+  ) {
+    return false;
+  }
+  let cursor = centralDirectoryOffset;
+  let expandedBytes = 0;
+  for (let index = 0; index < totalEntries; index += 1) {
+    if (
+      cursor + 46 > eocdOffset ||
+      bytes.readUInt32LE(cursor) !== centralEntrySignature
+    ) {
+      return false;
+    }
+    const flags = bytes.readUInt16LE(cursor + 8);
+    const compression = bytes.readUInt16LE(cursor + 10);
+    const compressedBytes = bytes.readUInt32LE(cursor + 20);
+    const uncompressedBytes = bytes.readUInt32LE(cursor + 24);
+    const filenameBytes = bytes.readUInt16LE(cursor + 28);
+    const extraBytes = bytes.readUInt16LE(cursor + 30);
+    const commentBytes = bytes.readUInt16LE(cursor + 32);
+    const diskStart = bytes.readUInt16LE(cursor + 34);
+    const localHeaderOffset = bytes.readUInt32LE(cursor + 42);
+    const next = cursor + 46 + filenameBytes + extraBytes + commentBytes;
+    if (
+      (flags & 0x0001) !== 0 ||
+      (compression !== 0 && compression !== 8) ||
+      compressedBytes === 0xffffffff ||
+      uncompressedBytes === 0xffffffff ||
+      localHeaderOffset === 0xffffffff ||
+      diskStart !== 0 ||
+      filenameBytes < 1 ||
+      next > eocdOffset ||
+      uncompressedBytes > SITEOPS_REVISION_DOCX_MAX_ENTRY_BYTES ||
+      localHeaderOffset >= centralDirectoryOffset
+    ) {
+      return false;
+    }
+    expandedBytes += uncompressedBytes;
+    if (expandedBytes > SITEOPS_REVISION_DOCX_MAX_EXPANDED_BYTES) {
+      return false;
+    }
+    cursor = next;
+  }
+  return cursor === eocdOffset;
+}
+
+function siteOpsRevisionDocxEntrySize(
+  entry: JSZip.JSZipObject,
+  maxBytes: number,
+) {
+  const size = Number(
+    (entry as SiteOpsRevisionDocxObject)._data?.uncompressedSize,
+  );
+  return Number.isSafeInteger(size) && size > 0 && size <= maxBytes;
+}
+
+async function siteOpsRevisionDocxEntryBytes(
+  entry: JSZip.JSZipObject,
+  maxBytes: number,
+) {
+  const stream = entry.nodeStream("nodebuffer") as Readable;
+  return await new Promise<Buffer | null>((resolve) => {
+    const chunks: Buffer[] = [];
+    let sizeBytes = 0;
+    let settled = false;
+    const settle = (value: Buffer | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    stream.on("data", (rawChunk: Buffer | string) => {
+      if (settled) return;
+      const chunk = Buffer.isBuffer(rawChunk)
+        ? rawChunk
+        : Buffer.from(rawChunk);
+      sizeBytes += chunk.length;
+      if (sizeBytes > maxBytes) {
+        stream.destroy();
+        settle(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.once("error", () => settle(null));
+    stream.once("end", () =>
+      settle(sizeBytes > 0 ? Buffer.concat(chunks, sizeBytes) : null),
+    );
+  });
+}
+
+export async function assertSiteOpsRevisionDocumentBytes(
+  extension: string,
+  bytes: Buffer,
+) {
+  if (extension === ".pdf") {
+    return bytes.subarray(0, 5).toString("latin1") === "%PDF-";
+  }
+  if (extension === ".docx") {
+    try {
+      if (!assertSiteOpsRevisionDocxCentralDirectory(bytes)) return false;
+      const archive = await JSZip.loadAsync(bytes, {
+        checkCRC32: false,
+        createFolders: false,
+      });
+      const entries = Object.values(archive.files) as SiteOpsRevisionDocxObject[];
+      if (
+        entries.length < 1 ||
+        entries.length > SITEOPS_REVISION_DOCX_MAX_ENTRIES ||
+        entries.some((entry) => {
+          const originalName = entry.unsafeOriginalName ?? entry.name;
+          return (
+            originalName !== entry.name ||
+            originalName.includes("\\") ||
+            originalName.startsWith("/") ||
+            originalName.split("/").some((part) => part === "..")
+          );
+        })
+      ) {
+        return false;
+      }
+      const contentTypes = archive.file("[Content_Types].xml");
+      const documentXml = archive.file("word/document.xml");
+      if (
+        !contentTypes ||
+        !documentXml ||
+        !siteOpsRevisionDocxEntrySize(
+          contentTypes,
+          SITEOPS_REVISION_DOCX_CONTENT_TYPES_MAX_BYTES,
+        ) ||
+        !siteOpsRevisionDocxEntrySize(
+          documentXml,
+          SITEOPS_REVISION_DOCX_DOCUMENT_XML_MAX_BYTES,
+        )
+      ) {
+        return false;
+      }
+      const contentTypesBytes = await siteOpsRevisionDocxEntryBytes(
+        contentTypes,
+        SITEOPS_REVISION_DOCX_CONTENT_TYPES_MAX_BYTES,
+      );
+      const documentXmlBytes = await siteOpsRevisionDocxEntryBytes(
+        documentXml,
+        SITEOPS_REVISION_DOCX_DOCUMENT_XML_MAX_BYTES,
+      );
+      if (!contentTypesBytes || !documentXmlBytes) return false;
+      const contentTypesText = new TextDecoder("utf-8", { fatal: true }).decode(
+        contentTypesBytes,
+      );
+      const documentXmlText = new TextDecoder("utf-8", { fatal: true }).decode(
+        documentXmlBytes,
+      );
+      return (
+        /<(?:\w+:)?Types\b/u.test(contentTypesText) &&
+        /<(?:\w+:)?document\b/u.test(documentXmlText)
+      );
+    } catch {
+      return false;
+    }
+  }
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return !bytes.includes(0);
+  } catch {
+    return false;
+  }
 }
 
 async function freezeSiteOpsRevisionInputAssets(input: {
@@ -4142,49 +4362,29 @@ async function freezeSiteOpsRevisionInputAssets(input: {
       );
     }
     const extension = path.extname(resolved.filename).toLowerCase();
-    const documentMime =
-      siteOpsRevisionDocumentMimeByExtension[
-        extension as keyof typeof siteOpsRevisionDocumentMimeByExtension
-      ];
-    const imageMime = imageMimeByExtension[extension as keyof typeof imageMimeByExtension];
-    if (!imageMime && !documentMime) {
+    const descriptor = siteOpsRevisionInputDescriptor(
+      resolved.filename,
+      resolved.mimeType,
+    );
+    if (!descriptor) {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
         "仅支持 PNG、JPEG、WebP 图片，或 PDF、DOCX、TXT、Markdown 文档。",
         400,
       );
     }
-    if (imageMime && resolved.mimeType.toLowerCase() !== imageMime) {
-      throw new SiteOpsServiceError(
-        "INVALID_INPUT",
-        "图片格式与扩展名不一致，请重新上传。",
-        400,
-      );
-    }
-    if (documentMime && resolved.mimeType.toLowerCase() !== documentMime) {
-      throw new SiteOpsServiceError(
-        "INVALID_INPUT",
-        "文档类型与扩展名不一致，请重新上传。",
-        400,
-      );
-    }
-    const mimeType = (imageMime ?? documentMime)!;
-    const isDocument = Boolean(documentMime);
-    const bytes = await revisionInputBytes(resolved.stream, resolved.sizeBytes);
+    const mimeType = descriptor.mimeType;
+    const isDocument = descriptor.kind === "document";
+    const bytes = await revisionInputBytes(
+      resolved.stream,
+      resolved.sizeBytes,
+      descriptor.maxBytes,
+    );
     totalInputBytes += bytes.length;
     if (totalInputBytes > 32 * 1024 * 1024) {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
         "本次附件总大小不能超过 32 MiB。",
-        400,
-      );
-    }
-    if (bytes.length > (isDocument ? SITEOPS_REVISION_INPUT_MAX_BYTES : SITEOPS_REVISION_IMAGE_MAX_BYTES)) {
-      throw new SiteOpsServiceError(
-        "INVALID_INPUT",
-        isDocument
-          ? "单个文档不能超过 10 MiB。"
-          : "单张图片不能超过 8 MiB。",
         400,
       );
     }
@@ -4208,10 +4408,10 @@ async function freezeSiteOpsRevisionInputAssets(input: {
       }
       width = dimensions.width;
       height = dimensions.height;
-    } else if (extension === ".pdf" && bytes.subarray(0, 5).toString("latin1") !== "%PDF-") {
+    } else if (!(await assertSiteOpsRevisionDocumentBytes(extension, bytes))) {
       throw new SiteOpsServiceError(
         "INVALID_INPUT",
-        "PDF 文档内容无效，请重新上传。",
+        "文档内容无效或与扩展名不一致，请重新上传。",
         400,
       );
     }
@@ -4223,7 +4423,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
         400,
       );
     }
-    const publicExtension = extension === ".jpeg" ? ".jpg" : extension;
+    const publicExtension = descriptor.publicExtension;
     const publicPath = `/frontmind-user-media/${contentSha256}${publicExtension}`;
     if (publicPaths.has(publicPath)) {
       throw new SiteOpsServiceError(

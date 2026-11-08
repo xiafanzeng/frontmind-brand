@@ -124,6 +124,10 @@ export type NativeReactBuildInput = {
     publicPath: string;
     contentSha256: string;
   }[];
+  requiredUserDocuments?: readonly {
+    publicPath: string;
+    contentSha256: string;
+  }[];
   requiredKnowledgeMedia?: readonly {
     assetId: string;
     publicPath: string;
@@ -2129,6 +2133,26 @@ export function auditSiteDocumentViewRouteBindings(input: {
   return diagnostics;
 }
 
+export function matchedNativeUserDocumentPaths(
+  requiredDocuments: readonly { publicPath: string }[],
+  linkReferences: readonly { origin: string; pathname: string }[],
+  expectedOrigin: string,
+) {
+  const requiredPaths = new Set(
+    requiredDocuments.map((document) => document.publicPath),
+  );
+  const matched = new Set<string>();
+  for (const reference of linkReferences) {
+    if (
+      reference.origin === expectedOrigin &&
+      requiredPaths.has(reference.pathname)
+    ) {
+      matched.add(reference.pathname);
+    }
+  }
+  return [...matched];
+}
+
 async function runBrowserQaStrict(input: {
   files: OutputFile[];
   routes: string[];
@@ -2137,6 +2161,10 @@ async function runBrowserQaStrict(input: {
   runLighthouse: boolean;
   abortSignal?: AbortSignal;
   requiredUserMedia: readonly {
+    publicPath: string;
+    contentSha256: string;
+  }[];
+  requiredUserDocuments: readonly {
     publicPath: string;
     contentSha256: string;
   }[];
@@ -2220,6 +2248,7 @@ async function runBrowserQaStrict(input: {
   let contentReceipt: NativeContentReceiptV1 | null = null;
   const contentPlanSnapshots: NativeContentPlanDomSnapshot[] = [];
   const renderedUserMedia = new Set<string>();
+  const linkedUserDocuments = new Set<string>();
   const launchQaBrowser = () =>
     chromium.launch({
       headless: true,
@@ -2342,6 +2371,17 @@ async function runBrowserQaStrict(input: {
               alt: image.getAttribute("alt")?.trim() ?? "",
             })),
           );
+        const linkReferences = await page
+          .locator("a[href]")
+          .evaluateAll((links) =>
+            links.map((link) => {
+              const url = new URL(
+                (link as HTMLAnchorElement).href,
+                document.baseURI,
+              );
+              return { origin: url.origin, pathname: url.pathname };
+            }),
+          );
         if (recordEvidence) {
           for (const required of input.requiredUserMedia) {
             if (
@@ -2353,6 +2393,13 @@ async function runBrowserQaStrict(input: {
             ) {
               renderedUserMedia.add(required.publicPath);
             }
+          }
+          for (const publicPath of matchedNativeUserDocumentPaths(
+            input.requiredUserDocuments,
+            linkReferences,
+            origin,
+          )) {
+            linkedUserDocuments.add(publicPath);
           }
           for (const required of input.requiredKnowledgeMedia) {
             if (
@@ -3288,6 +3335,20 @@ async function runBrowserQaStrict(input: {
           })),
         );
       }
+      const missingUserDocuments = input.requiredUserDocuments.filter(
+        (asset) => !linkedUserDocuments.has(asset.publicPath),
+      );
+      if (missingUserDocuments.length > 0) {
+        throw new NativeReactBuildError(
+          "NATIVE_BUILD_USER_MEDIA_INVALID",
+          missingUserDocuments.map((asset) => ({
+            code: "USER_DOCUMENT_LINK_REQUIRED",
+            file: asset.publicPath,
+            line: null,
+            column: null,
+          })),
+        );
+      }
       const captureHomepage = (viewport: { width: number; height: number }) =>
         withQaPage(viewport, async () => {
           await navigateAndAssertRendered("/", privatePreviewQa, false);
@@ -3364,6 +3425,21 @@ async function runBrowserQaStrict(input: {
             })),
           );
         }
+        const missingUserDocuments = input.requiredUserDocuments.filter(
+          (asset) => !linkedUserDocuments.has(asset.publicPath),
+        );
+        if (missingUserDocuments.length > 0) {
+          await closeServer();
+          throw new NativeReactBuildError(
+            "NATIVE_BUILD_USER_MEDIA_INVALID",
+            missingUserDocuments.map((asset) => ({
+              code: "USER_DOCUMENT_LINK_REQUIRED",
+              file: asset.publicPath,
+              line: null,
+              column: null,
+            })),
+          );
+        }
         warnings.push(...contentPlanAdvisoryWarnings(error.diagnostics));
         contentReceipt ??= observedSiteContentReceipt({
           plan: input.contentPlan,
@@ -3388,7 +3464,10 @@ async function runBrowserQaStrict(input: {
         ],
       );
     } else if (input.contentPlan && input.contentPlanSha256) {
-      if (input.requiredUserMedia.length > 0) {
+      if (
+        input.requiredUserMedia.length > 0 ||
+        input.requiredUserDocuments.length > 0
+      ) {
         await closeServer();
         throw new NativeReactBuildError("NATIVE_BUILD_USER_MEDIA_INVALID", [
           {
@@ -3595,7 +3674,10 @@ async function runBrowserQa(input: Parameters<typeof runBrowserQaStrict>[0]) {
         ],
       );
     }
-    if (input.requiredUserMedia.length > 0) {
+    if (
+      input.requiredUserMedia.length > 0 ||
+      input.requiredUserDocuments.length > 0
+    ) {
       throw new NativeReactBuildError("NATIVE_BUILD_USER_MEDIA_INVALID", [
         {
           code: "USER_MEDIA_BROWSER_AUDIT_UNAVAILABLE",
@@ -3792,6 +3874,22 @@ export async function materializeNativeReactSource(
   ) {
     throw new NativeReactBuildError("NATIVE_BUILD_INPUT_INVALID");
   }
+  const requiredUserDocuments = input.requiredUserDocuments ?? [];
+  if (
+    requiredUserDocuments.length > NATIVE_SOURCE_MAX_FILES ||
+    new Set(requiredUserDocuments.map((asset) => asset.publicPath)).size !==
+      requiredUserDocuments.length ||
+    requiredUserDocuments.some(
+      (asset) =>
+        !/^\/frontmind-user-media\/[a-f0-9]{64}\.(?:pdf|docx|txt|md)$/u.test(
+          asset.publicPath,
+        ) ||
+        !/^[a-f0-9]{64}$/u.test(asset.contentSha256) ||
+        !asset.publicPath.includes(asset.contentSha256),
+    )
+  ) {
+    throw new NativeReactBuildError("NATIVE_BUILD_INPUT_INVALID");
+  }
   const requiredKnowledgeMedia = input.requiredKnowledgeMedia ?? [];
   if (
     requiredKnowledgeMedia.length > 100 ||
@@ -3932,6 +4030,20 @@ export async function materializeNativeReactSource(
         ]);
       }
     }
+    for (const asset of requiredUserDocuments) {
+      const outputPath = asset.publicPath.replace(/^\//u, "");
+      const output = files.find((file) => file.path === outputPath);
+      if (!output || sha256(output.bytes) !== asset.contentSha256) {
+        throw new NativeReactBuildError("NATIVE_BUILD_USER_MEDIA_INVALID", [
+          {
+            code: "USER_DOCUMENT_DIST_FILE_MISSING_OR_CHANGED",
+            file: asset.publicPath,
+            line: null,
+            column: null,
+          },
+        ]);
+      }
+    }
     for (const asset of requiredKnowledgeMedia) {
       const outputPath = asset.publicPath.replace(/^\//u, "");
       const output = files.find((file) => file.path === outputPath);
@@ -3947,7 +4059,7 @@ export async function materializeNativeReactSource(
       }
     }
     if (input.browserQa === false) {
-      if (requiredUserMedia.length > 0) {
+      if (requiredUserMedia.length > 0 || requiredUserDocuments.length > 0) {
         throw new NativeReactBuildError("NATIVE_BUILD_USER_MEDIA_INVALID", [
           {
             code: "USER_MEDIA_BROWSER_AUDIT_REQUIRED",
@@ -4012,6 +4124,7 @@ export async function materializeNativeReactSource(
             runLighthouse: input.lighthouseQa !== false,
             abortSignal: input.abortSignal,
             requiredUserMedia,
+            requiredUserDocuments,
             requiredKnowledgeMedia,
             contentPlan: frozenContentPlan?.plan ?? null,
             contentPlanSha256: frozenContentPlan?.sha256 ?? null,
@@ -4026,6 +4139,13 @@ export async function materializeNativeReactSource(
         id: "user-media:dist-and-dom",
         passed: true,
         detail: `${requiredUserMedia.length} frozen user media assets retain exact bytes and render as img elements with non-empty alt text.`,
+      });
+    }
+    if (requiredUserDocuments.length > 0) {
+      checks.push({
+        id: "user-documents:dist-and-dom",
+        passed: true,
+        detail: `${requiredUserDocuments.length} frozen user documents retain exact bytes and are linked from the rendered site.`,
       });
     }
     if (requiredKnowledgeMedia.length > 0) {

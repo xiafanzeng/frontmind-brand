@@ -1,6 +1,7 @@
 import type { SiteOpsObservationV1 } from "../../../contracts/siteops-contract";
 import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "../../../contracts/siteops-branding";
 import type { SiteOpsActInput } from "../../../contracts/siteops";
+import { siteOpsRevisionInputDescriptor } from "../../../contracts/siteops-revision-input";
 import type {
   SiteDesignPreferencesSaveInput,
   SiteDesignRecommendationInput,
@@ -268,7 +269,9 @@ export async function siteOpsRevisionAttempt(
     text: input.text,
     files: input.files.map((file, index) => ({
       name: file.name,
-      type: file.type,
+      type:
+        siteOpsRevisionInputDescriptor(file.name, file.type)?.mimeType ??
+        file.type,
       size: file.size,
       lastModified: file.lastModified,
       contentSha256: contentSha256s[index],
@@ -913,6 +916,9 @@ export default function ConnectedSiteOpsConversationPanel({
           file,
           (percent) => input.onProgress(index, percent),
           {
+            mimeType:
+              siteOpsRevisionInputDescriptor(file.name, file.type)?.mimeType ??
+              file.type,
             siteOpsComposerCoordinate: {
               clientRequestId,
               contentSha256,

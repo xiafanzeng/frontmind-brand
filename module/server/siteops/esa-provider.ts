@@ -59,6 +59,10 @@ import {
   type SiteContentPlanV2,
 } from "../../contracts/siteops-content-plan.js";
 import { canonicalJson } from "../../contracts/siteops-workflow.js";
+import {
+  isSiteOpsRevisionImageMimeType,
+  siteOpsRevisionInputCoordinate,
+} from "../../contracts/siteops-revision-input.js";
 
 
 
@@ -1429,6 +1433,10 @@ export async function materializeSiteOpsProductionSource(input: {
     publicPath: string;
     contentSha256: string;
   }[];
+  requiredUserDocuments?: readonly {
+    publicPath: string;
+    contentSha256: string;
+  }[];
   requiredKnowledgeMedia?: readonly {
     assetId: string;
     publicPath: string;
@@ -1480,6 +1488,7 @@ export async function materializeSiteOpsProductionSource(input: {
     },
     expectedOperationToken: "frontmind-production-rebuild",
     expectedBaseSourceSha256: input.sourceSha256,
+    trustedUserDocuments: input.requiredUserDocuments,
   });
   const native = await input.materializeNativeProduction({
     sourceZip: input.sourceZip,
@@ -1497,6 +1506,7 @@ export async function materializeSiteOpsProductionSource(input: {
     documentViewPlan: input.documentViewPlan,
     documentViewForbiddenSources: input.documentViewForbiddenSources,
     requiredUserMedia: input.requiredUserMedia,
+    requiredUserDocuments: input.requiredUserDocuments,
     requiredKnowledgeMedia: input.requiredKnowledgeMedia,
     canonicalOrigin: input.canonicalOrigin,
     target: input.target,
@@ -1604,6 +1614,43 @@ async function readFrozenProductionContentPlan(input: {
   }
 }
 
+export function siteOpsProductionRevisionAssetRequirement(asset: {
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentSha256: string;
+  width: number;
+  height: number;
+  publicPath: string;
+}):
+  | { kind: "image"; customerMediaId: string }
+  | {
+      kind: "document";
+      requiredUserDocument: {
+        publicPath: string;
+        contentSha256: string;
+      };
+    }
+  | null {
+  if (!siteOpsRevisionInputCoordinate(asset)) return null;
+  if (isSiteOpsRevisionImageMimeType(asset.mimeType)) {
+    return {
+      kind: "image" as const,
+      customerMediaId: `customer-media:${createHash("sha256")
+        .update(asset.publicPath, "utf8")
+        .digest("hex")
+        .slice(0, 32)}`,
+    };
+  }
+  return {
+    kind: "document" as const,
+    requiredUserDocument: {
+      publicPath: asset.publicPath,
+      contentSha256: asset.contentSha256,
+    },
+  };
+}
+
 export async function loadFrozenProductionMediaRequirements(input: {
   db: DbExecutor;
   context: DeploymentContext;
@@ -1613,6 +1660,10 @@ export async function loadFrozenProductionMediaRequirements(input: {
   if (!input.contentPlan) {
     return {
       requiredUserMedia: [] as Array<{
+        publicPath: string;
+        contentSha256: string;
+      }>,
+      requiredUserDocuments: [] as Array<{
         publicPath: string;
         contentSha256: string;
       }>,
@@ -1708,6 +1759,10 @@ export async function loadFrozenProductionMediaRequirements(input: {
     ["image/webp", "webp"],
   ] as const);
   const customerMediaById = new Map<string, (typeof userMediaRows)[number]>();
+  const requiredUserDocumentsByPath = new Map<
+    string,
+    (typeof userMediaRows)[number]
+  >();
   const uniqueUserMediaByPublicPath = new Map<
     string,
     (typeof userMediaRows)[number]
@@ -1727,28 +1782,14 @@ export async function loadFrozenProductionMediaRequirements(input: {
     left.width === right.width &&
     left.height === right.height;
   for (const asset of userMediaRows) {
-    const extension = expectedExtension.get(
-      asset.mimeType as "image/jpeg" | "image/png" | "image/webp",
-    );
-    const customerMediaId = `customer-media:${createHash("sha256")
-      .update(asset.publicPath, "utf8")
-      .digest("hex")
-      .slice(0, 32)}`;
-    if (
-      !extension ||
-      !/^[a-f0-9]{64}$/u.test(asset.contentSha256) ||
-      asset.publicPath !==
-        `/frontmind-user-media/${asset.contentSha256}.${extension}` ||
-      asset.sizeBytes < 1 ||
-      asset.sizeBytes > 8 * 1024 * 1024 ||
-      asset.width < 1 ||
-      asset.height < 1
-    ) {
-      failUserMedia();
-    }
+    const requirement =
+      siteOpsProductionRevisionAssetRequirement(asset) ?? failUserMedia();
     const samePath = uniqueUserMediaByPublicPath.get(asset.publicPath);
     const sameLocalAsset = userMediaByLocalAsset.get(asset.localAssetId);
-    const sameCustomerId = customerMediaById.get(customerMediaId);
+    const sameCustomerId =
+      requirement.kind === "image"
+        ? customerMediaById.get(requirement.customerMediaId)
+        : undefined;
     if (
       (samePath && !sameRenderedMedia(samePath, asset)) ||
       (sameLocalAsset && !sameRenderedMedia(sameLocalAsset, asset)) ||
@@ -1762,7 +1803,11 @@ export async function loadFrozenProductionMediaRequirements(input: {
     }
     uniqueUserMediaByPublicPath.set(asset.publicPath, asset);
     userMediaByLocalAsset.set(asset.localAssetId, asset);
-    customerMediaById.set(customerMediaId, asset);
+    if (requirement.kind === "image") {
+      customerMediaById.set(requirement.customerMediaId, asset);
+    } else {
+      requiredUserDocumentsByPath.set(asset.publicPath, asset);
+    }
   }
   const routePathsByMediaId = new Map<string, Set<string>>();
   const selectedCustomerMediaIds = new Set<string>();
@@ -1793,6 +1838,12 @@ export async function loadFrozenProductionMediaRequirements(input: {
       contentSha256: asset.contentSha256,
     };
   });
+  const requiredUserDocuments = [...requiredUserDocumentsByPath.values()].map(
+    (asset) => ({
+      publicPath: asset.publicPath,
+      contentSha256: asset.contentSha256,
+    }),
+  );
   const snapshotRows = await input.db
     .select()
     .from(knowledgeBaseSnapshots)
@@ -1828,6 +1879,7 @@ export async function loadFrozenProductionMediaRequirements(input: {
   if (routePathsByMediaId.size === 0) {
     return {
       requiredUserMedia,
+      requiredUserDocuments,
       requiredKnowledgeMedia: [],
       documentViewPlan,
       documentViewForbiddenSources,
@@ -1876,6 +1928,7 @@ export async function loadFrozenProductionMediaRequirements(input: {
   );
   return {
     requiredUserMedia,
+    requiredUserDocuments,
     requiredKnowledgeMedia,
     documentViewPlan,
     documentViewForbiddenSources,

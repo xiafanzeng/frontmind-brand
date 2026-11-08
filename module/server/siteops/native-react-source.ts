@@ -302,7 +302,8 @@ export const NATIVE_SOURCE_PREFLIGHT_SHA256 = createHash("sha256")
  * contract before the provider reports a successful receipt. The host repeats
  * every check and remains authoritative.
  */
-export const NATIVE_SOURCE_PREFLIGHT_V2_SCRIPT = Buffer.from(
+/** Exact pre-document-input preflight retained for immutable operation replay. */
+export const NATIVE_SOURCE_PREFLIGHT_V2_LEGACY_SCRIPT = Buffer.from(
   String.raw`import { createHash } from "node:crypto";
 	import { readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 	import { spawnSync } from "node:child_process";
@@ -476,6 +477,44 @@ export const NATIVE_SOURCE_PREFLIGHT_V2_SCRIPT = Buffer.from(
 	}
 	process.stdout.write(JSON.stringify({ version: "${NATIVE_SOURCE_PREFLIGHT_V2_VERSION}", status: "passed", runtimeContractVersion: "${NATIVE_RUNTIME_CONTRACT_VERSION}", runtimeContractSha256: createHash("sha256").update(contractBytes).digest("hex") }) + "\n");
 	`,
+  "utf8",
+);
+export const NATIVE_SOURCE_PREFLIGHT_V2_LEGACY_SHA256 = createHash("sha256")
+  .update(NATIVE_SOURCE_PREFLIGHT_V2_LEGACY_SCRIPT)
+  .digest("hex");
+
+function replacePreflightSource(source: string, before: string, after: string) {
+  if (!source.includes(before)) {
+    throw new Error("NATIVE_SOURCE_PREFLIGHT_PATCH_ANCHOR_MISSING");
+  }
+  return source.replace(before, after);
+}
+
+let currentPreflightV2Source =
+  NATIVE_SOURCE_PREFLIGHT_V2_LEGACY_SCRIPT.toString("utf8");
+currentPreflightV2Source = replacePreflightSource(
+  currentPreflightV2Source,
+  `\tconst binaryExtensions = new Set(${JSON.stringify(NATIVE_SOURCE_BINARY_FILE_EXTENSIONS)});`,
+  `\tconst binaryExtensions = new Set(${JSON.stringify([...NATIVE_SOURCE_BINARY_FILE_EXTENSIONS, ".pdf", ".docx"])});`,
+);
+currentPreflightV2Source = replacePreflightSource(
+  currentPreflightV2Source,
+  `\tconst ignoredFiles = new Set(["${NATIVE_SOURCE_PREFLIGHT_FILENAME}", "${NATIVE_SOURCE_PREFLIGHT_V2_FILENAME}", "${NATIVE_RUNTIME_CONTRACT_FILENAME}", "${NATIVE_RUNTIME_EXECUTION_SHELL_FILENAME}", configFilename]);`,
+  `\tconst ignoredFiles = new Set(["${NATIVE_SOURCE_PREFLIGHT_FILENAME}", "${NATIVE_SOURCE_PREFLIGHT_V2_FILENAME}", "${NATIVE_RUNTIME_CONTRACT_FILENAME}", "${NATIVE_RUNTIME_EXECUTION_SHELL_FILENAME}", configFilename]);\n\tconst frozenUserDocumentPattern = /^public\\/frontmind-user-media\\/([a-f0-9]{64})\\.(?:pdf|docx|txt|md)$/u;`,
+);
+currentPreflightV2Source = replacePreflightSource(
+  currentPreflightV2Source,
+  `\t    if (metadata.size > ${NATIVE_SOURCE_MAX_SINGLE_FILE_BYTES}) { add("FILE_TOO_LARGE", relative, "over ${NATIVE_SOURCE_MAX_SINGLE_FILE_BYTES} bytes"); continue; }`,
+  `\t    const frozenUserDocument = relative.match(frozenUserDocumentPattern);\n\t    const maxFileBytes = frozenUserDocument ? ${10 * 1024 * 1024} : ${NATIVE_SOURCE_MAX_SINGLE_FILE_BYTES};\n\t    if (metadata.size > maxFileBytes) { add("FILE_TOO_LARGE", relative, "over " + maxFileBytes + " bytes"); continue; }\n\t    if (frozenUserDocument && createHash("sha256").update(readFileSync(absolute)).digest("hex") !== frozenUserDocument[1]) { add("USER_DOCUMENT_HASH_MISMATCH", relative, "filename hash"); continue; }`,
+);
+currentPreflightV2Source = replacePreflightSource(
+  currentPreflightV2Source,
+  `\t    if (!ignoredFiles.has(relative) && kind !== "binary") textFiles.set(relative, readFileSync(absolute, "utf8"));`,
+  `\t    if (!ignoredFiles.has(relative) && kind !== "binary" && !frozenUserDocument) textFiles.set(relative, readFileSync(absolute, "utf8"));`,
+);
+
+export const NATIVE_SOURCE_PREFLIGHT_V2_SCRIPT = Buffer.from(
+  currentPreflightV2Source,
   "utf8",
 );
 export const NATIVE_SOURCE_PREFLIGHT_V2_SHA256 = createHash("sha256")
@@ -1991,25 +2030,49 @@ export async function validateNativeReactSourceArchive(input: {
   runtimeContract?: unknown;
   limits?: Partial<NativeSourceLimits>;
   allowedDependencies?: readonly string[];
+  /** Exact host-frozen static documents may exceed the ordinary source-file
+   * ceiling. They remain bounded, hash-addressed and non-executable. */
+  trustedUserDocuments?: readonly {
+    publicPath: string;
+    contentSha256: string;
+  }[];
+  receiptSchema?: z.ZodType<unknown>;
 }): Promise<ValidatedNativeReactSource> {
   const limits = effectiveLimits(input.limits);
+  const trustedUserDocuments = new Map<string, string>();
+  for (const document of input.trustedUserDocuments ?? []) {
+    if (
+      !/^\/frontmind-user-media\/[a-f0-9]{64}\.(?:pdf|docx|txt|md)$/u.test(
+        document.publicPath,
+      ) ||
+      !SHA256_PATTERN.test(document.contentSha256) ||
+      !document.publicPath.includes(document.contentSha256) ||
+      trustedUserDocuments.has(`public${document.publicPath}`)
+    ) {
+      throw new NativeReactSourceError("NATIVE_SOURCE_RECEIPT_INVALID");
+    }
+    trustedUserDocuments.set(
+      `public${document.publicPath}`,
+      document.contentSha256,
+    );
+  }
   if (
     input.archive.length < 1 ||
     input.archive.length > limits.maxArchiveBytes
   ) {
     throw new NativeReactSourceError("NATIVE_SOURCE_LIMIT_EXCEEDED");
   }
-  const receiptSchema =
-    input.requiredReceiptVersion === 1
+  const receiptSchema = input.receiptSchema ??
+    (input.requiredReceiptVersion === 1
       ? siteSourceReceiptV1Schema
       : input.requiredReceiptVersion === 2
         ? siteSourceReceiptV2Schema
-        : siteSourceReceiptSchema;
+        : siteSourceReceiptSchema);
   const parsedReceipt = receiptSchema.safeParse(input.receipt);
   let receipt: SiteSourceReceipt;
   let lenientReceipt = false;
   if (parsedReceipt.success) {
-    receipt = parsedReceipt.data;
+    receipt = parsedReceipt.data as SiteSourceReceipt;
   } else {
     // Hand-written provider receipts typo pinned literals or add unknown
     // fields; structurally sound ones are recovered here and every relaxed
@@ -2173,13 +2236,6 @@ export async function validateNativeReactSourceArchive(input: {
     }
     collisionKeys.add(collisionKey);
     if (entry.dir) continue;
-    const declaredSize = Number(entry._data?.uncompressedSize ?? 0);
-    if (
-      Number.isFinite(declaredSize) &&
-      declaredSize > limits.maxSingleFileBytes
-    ) {
-      throw new NativeReactSourceError("NATIVE_SOURCE_LIMIT_EXCEEDED");
-    }
     rawFilePaths.push(safePath);
     entryByRawPath.set(safePath, entry);
   }
@@ -2196,18 +2252,43 @@ export async function validateNativeReactSourceArchive(input: {
     ) {
       throw new NativeReactSourceError("NATIVE_SOURCE_PATH_COLLISION");
     }
-    if (nativeSourcePathKind(normalizedPath) === null) {
+    const trustedDocumentSha256 = trustedUserDocuments.get(normalizedPath);
+    if (
+      nativeSourcePathKind(normalizedPath) === null &&
+      trustedDocumentSha256 === undefined
+    ) {
       throw new NativeReactSourceError("NATIVE_SOURCE_FILE_TYPE_FORBIDDEN");
+    }
+    const maxSingleFileBytes = trustedDocumentSha256
+      ? 10 * 1024 * 1024
+      : limits.maxSingleFileBytes;
+    const declaredSize = Number(
+      entryByRawPath.get(rawPath)!._data?.uncompressedSize ?? 0,
+    );
+    if (
+      Number.isFinite(declaredSize) &&
+      declaredSize > maxSingleFileBytes
+    ) {
+      throw new NativeReactSourceError("NATIVE_SOURCE_LIMIT_EXCEEDED");
     }
     const bytes = await entryByRawPath.get(rawPath)!.async("nodebuffer");
     expandedBytes += bytes.length;
     if (
-      bytes.length > limits.maxSingleFileBytes ||
+      bytes.length > maxSingleFileBytes ||
       expandedBytes > limits.maxExpandedBytes
     ) {
       throw new NativeReactSourceError("NATIVE_SOURCE_LIMIT_EXCEEDED");
     }
+    if (
+      trustedDocumentSha256 &&
+      !secureStringEqual(sha256(bytes), trustedDocumentSha256)
+    ) {
+      throw new NativeReactSourceError("NATIVE_SOURCE_ARCHIVE_HASH_MISMATCH");
+    }
     files.set(normalizedPath, bytes);
+  }
+  if ([...trustedUserDocuments.keys()].some((pathname) => !files.has(pathname))) {
+    throw new NativeReactSourceError("NATIVE_SOURCE_ARCHIVE_INVALID");
   }
   const allowedDependencies = new Set(
     input.allowedDependencies ?? NATIVE_SOURCE_ALLOWED_DEPENDENCIES,
@@ -2223,6 +2304,7 @@ export async function validateNativeReactSourceArchive(input: {
   }
   const packageJson = assertPackageSafe(files, allowedDependencies);
   for (const [path, bytes] of files) {
+    if (trustedUserDocuments.has(path)) continue;
     assertNoOperationTokenBytes(bytes, input.expectedOperationToken);
     const kind = nativeSourcePathKind(path);
     if (kind !== "text" && kind !== "lock") continue;

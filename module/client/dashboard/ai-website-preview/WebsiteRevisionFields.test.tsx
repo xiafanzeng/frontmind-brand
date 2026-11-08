@@ -61,6 +61,22 @@ describe("website revision fields", () => {
     expect(screen.getByText("公司介绍.md")).toBeTruthy();
   });
 
+  it("normalizes Markdown files whose browser MIME is empty or text/plain", () => {
+    render(<Fields />);
+    const input = screen.getByLabelText("添加修改参考图片或文档");
+    fireEvent.change(input, {
+      target: {
+        files: [
+          documentFile("empty-mime.md", 1024, ""),
+          documentFile("windows.md", 1024, "text/plain"),
+        ],
+      },
+    });
+    expect(screen.getByText("empty-mime.md")).toBeTruthy();
+    expect(screen.getByText("windows.md")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("accepts paste and drop, deduplicates files and releases removed preview URLs", async () => {
     const first = image("first.png");
     const second = image("second.webp", 100, "image/webp");
