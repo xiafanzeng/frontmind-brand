@@ -14,9 +14,15 @@ import type {IntentQuestion} from "../contracts/intent-workbench.js";
 import type {ResponseLogicHostPorts} from "./response-logic-runtime.js";
 import {
  createEnterpriseRagEvaluationService,
+ EnterpriseRagEvaluationError,
 } from "@frontmind/module-brand/server/enterprise-rag-evaluation-service";
 import { recordRagEvaluationError } from "@frontmind/module-brand/server/enterprise-rag-evaluation-errors";
 import {createRagStarterQuestionService,RagStarterQuestionError} from "@frontmind/module-brand/server/rag-starter-question-service";
+import {
+ createEnterpriseRagHumanReviewService,
+ EnterpriseRagHumanReviewError,
+} from "@frontmind/module-brand/server/enterprise-rag-human-review-service";
+import {createEnterpriseRagGovernanceService} from "@frontmind/module-brand/server/enterprise-rag-governance-service";
 
 import type { DiagnosticCollectionPort } from "./diagnostic-monitor.js";
 
@@ -70,6 +76,14 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   res.setHeader("X-FrontMind-Request-Id",requestId);
   res.status(failure.status).json({error:{code:failure.code,message:failure.message,requestId}});
  };
+ const sendRagReviewError=(res:Response,error:unknown)=>{
+  const known=error instanceof EnterpriseRagEvaluationError || error instanceof EnterpriseRagHumanReviewError;
+  const invalid=error instanceof z.ZodError;
+  res.status(known?error.status:invalid?400:503).json({error:{
+   code:known?error.code:invalid?"INVALID_INPUT":"RAG_EVALUATION_UNAVAILABLE",
+   message:known?error.message:invalid?"人工评审内容不符合要求。":"人工评审服务暂时无法读取，请稍后重试。",
+  }});
+ };
  router.post("/rag-evaluations",async(req,res)=>{
   try {
    res.setHeader("Cache-Control","no-store");
@@ -83,12 +97,56 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
    res.json(await createEnterpriseRagEvaluationService(core,req).latest(coordinate.sourceQaTaskId,coordinate.turnId));
   } catch(error) {sendRagEvaluationError(res,error,"history");}
  });
+ router.get("/rag-evaluations/:operationId/review-context",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createEnterpriseRagHumanReviewService(core,req).context(z.string().uuid().parse(req.params.operationId)));}
+  catch(error){sendRagReviewError(res,error);}
+ });
+ router.get("/rag-evaluations/:operationId/reviews",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createEnterpriseRagHumanReviewService(core,req).list(z.string().uuid().parse(req.params.operationId)));}
+  catch(error){sendRagReviewError(res,error);}
+ });
  router.get("/rag-evaluations/:operationId",async(req,res)=>{
   try {
    res.setHeader("Cache-Control","no-store");
    const operationId=z.string().uuid().parse(req.params.operationId);
    res.json(await createEnterpriseRagEvaluationService(core,req).observe(operationId));
   } catch(error) {sendRagEvaluationError(res,error,"observe");}
+ });
+ router.post("/rag-evaluation-reviews",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.status(201).json(await createEnterpriseRagHumanReviewService(core,req).create(req.body));}
+  catch(error){sendRagReviewError(res,error);}
+ });
+ router.post("/rag-evaluation-review-cases/:caseId/reconcile",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createEnterpriseRagHumanReviewService(core,req).reconcile(z.string().uuid().parse(req.params.caseId),req.body));}
+  catch(error){sendRagReviewError(res,error);}
+ });
+ router.get("/rag-evaluation-records/:reportId/lineage",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createEnterpriseRagHumanReviewService(core,req).lineage(z.string().uuid().parse(req.params.reportId)));}
+  catch(error){sendRagReviewError(res,error);}
+ });
+ router.post("/rag-evaluation-governance/bootstrap",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createEnterpriseRagGovernanceService(core,req).initialize(req.body));}
+  catch(error){sendRagReviewError(res,error);}
+ });
+ router.post("/rag-evaluation-optimization-runs",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.status(202).json(await createEnterpriseRagGovernanceService(core,req).startOptimization(req.body));}
+  catch(error){sendRagReviewError(res,error);}
+ });
+ router.get("/rag-evaluation-optimization-runs/:runId",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createEnterpriseRagGovernanceService(core,req).optimization(req.params.runId));}
+  catch(error){sendRagReviewError(res,error);}
+ });
+ router.post("/rag-evaluation-proposals/:proposalId/regression-runs",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.status(202).json(await createEnterpriseRagGovernanceService(core,req).startRegression(req.params.proposalId,req.body));}
+  catch(error){sendRagReviewError(res,error);}
+ });
+ router.get("/rag-evaluation-regression-runs/:runId",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.json(await createEnterpriseRagGovernanceService(core,req).regression(req.params.runId));}
+  catch(error){sendRagReviewError(res,error);}
+ });
+ router.post("/rag-evaluation-versions/:versionId/releases",async(req,res)=>{
+  try {res.setHeader("Cache-Control","no-store");res.status(201).json(await createEnterpriseRagGovernanceService(core,req).release(req.params.versionId,req.body));}
+  catch(error){sendRagReviewError(res,error);}
  });
  for (const [path, method] of [["/intent/command","command"],["/intent/execute","execute"],["/intent/rollback","rollback"],["/intent/control","control"]] as const) {
   router.post(path, async (req,res) => {
@@ -197,7 +255,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   const context=core.context(req);
   res.setHeader("Cache-Control","no-store");
   res.json({module:"brand",apiVersion:1,workspaceId:context.enterpriseProjectId,
-   features:["diagnostics", "knowledge", "keywords", "intent-workbench", "response-logic", "enterprise-qa", "enterprise-rag-evaluation", "siteops"]});
+   features:["diagnostics", "knowledge", "keywords", "intent-workbench", "response-logic", "enterprise-qa", "enterprise-rag-evaluation", "enterprise-rag-human-review", "siteops"]});
  });
  return router;
 }

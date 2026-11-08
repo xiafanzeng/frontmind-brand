@@ -1952,5 +1952,44 @@ export function createEnterpriseRagEvaluationRuntime(
     return { advanced, deferred };
   }
 
-  return { start: (value: unknown) => start(value), observe, latest, ensureAutomatic, advance: advanceOperation, sweep };
+  /** Trusted, read-only source for formal human-review persistence. */
+  async function reviewSnapshot(operationId: string) {
+    assertActor();
+    const parsed = z.string().uuid().parse(operationId);
+    const owned = await findOwnedOperation(parsed);
+    if (!owned) {
+      throw new EnterpriseRagEvaluationError("EVALUATION_NOT_FOUND", "评估任务不存在。", 404);
+    }
+    const runtime = runtimeFromTask(owned.task);
+    if (runtime.phase !== "completed") {
+      throw new EnterpriseRagEvaluationError("EVALUATION_NOT_COMPLETED", "自动评估完成后才能提交正式人工评审。", 409);
+    }
+    const report = await readReport(owned, runtime);
+    if (!report) {
+      throw new EnterpriseRagEvaluationError(
+        "EVALUATION_REPORT_MISSING",
+        "评估任务已完成，但不可变报告不存在，请联系维护人员。",
+        503,
+      );
+    }
+    return {
+      operationId: parsed,
+      report,
+      input: structuredClone(runtime.input),
+      operation: {
+        provider: String(owned.operation.provider),
+        model: String(owned.operation.upstreamModel),
+      },
+    };
+  }
+
+  return {
+    start: (value: unknown) => start(value),
+    observe,
+    latest,
+    reviewSnapshot,
+    ensureAutomatic,
+    advance: advanceOperation,
+    sweep,
+  };
 }
