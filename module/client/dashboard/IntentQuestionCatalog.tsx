@@ -17,7 +17,7 @@ function CatalogCell({children, secondary}: {children: ReactNode; secondary?: Re
   return <div className="iw-catalog-cell"><div className="iw-catalog-primary">{children}</div><div className={`iw-catalog-secondary${secondary ? "" : " iw-catalog-secondary-empty"}`}>{secondary}</div></div>;
 }
 export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, activeJobs, received, integration, search, sort = "newest", onSort, selected, pending, page, pageCount, savedPlanIds,
-  onSearch, onToggle, onSelectPage, onEvaluate, onViewPlan, onGeneratePlan, onPage, onHistory, historyCount, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
+  onSearch, onToggle, onSelectPage, onEvaluate, onViewPlan, onGeneratePlan, onPage, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
   evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; activeJobs?: IntentSkillJob[]; received: string[];
   search: string; selected: string[]; pending: boolean;
@@ -27,7 +27,6 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
   onSearch: (value: string) => void;
   onToggle: (id: string) => void; onSelectPage: (checked: boolean) => void; onClear: () => void;
   onEvaluate: (ids: string[]) => void; onPage: (page: number) => void;
-  onHistory: () => void; historyCount: number;
   headerStatus?: ReactNode; taskFeedback?: ReactNode;
   mutationBlockedIds?: string[];
   expandedGaps?: string[]; onGapToggle?: (id: string, open: boolean) => void;

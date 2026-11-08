@@ -85,3 +85,7 @@
 }
 
 .iw-task-tray-completed-heading {margin:12px 4px 8px;font-size:12px;font-weight:600;color:var(--fm-brand-muted, #636366)}
+
+.iw-task-tray-completed-header {display:flex;align-items:center;gap:12px;margin:12px 4px 8px}
+.iw-task-tray-completed-header .iw-task-tray-completed-heading {margin:0}
+.iw-workbench button.iw-task-tray-read-all {min-height:32px;padding:4px 10px;border:1px solid var(--fm-brand-line, #e9e5ee);border-radius:6px;background:#fff;color:var(--iw-purple);font-size:12px;line-height:1.5}

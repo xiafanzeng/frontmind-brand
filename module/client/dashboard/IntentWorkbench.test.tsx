@@ -1473,5 +1473,27 @@ it("同题已被重新评估时仍可查看旧完成任务的冻结详情并标�
   fireEvent.click(await screen.findByRole("button",{name:"查看评估结果"}));
   expect(await screen.findByRole("heading",{name:"已保存任务结果"})).toBeTruthy();
   expect(JSON.parse(localStorage.getItem("frontmind:intent:viewed-completions:v1")!)).toContain("job-1");
+  expect(screen.queryByRole("button",{name:"返回历史记录"})).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"返回问题列表"}));
+  expect(screen.getByRole("heading",{name:"优化问题"})).toBeTruthy();
+  expect(screen.queryByRole("heading",{name:"历史记录"})).toBeNull();
+  expect(screen.queryByRole("heading",{name:"已保存任务结果"})).toBeNull();
+  expect(initial.state.jobs).toHaveLength(1);
   expect(api.observe).toHaveBeenCalledTimes(1);expect(api.command).not.toHaveBeenCalled();
+});
+
+it("全部已读只移除当前完成任务，保留运行暂停任务且新完成任务仍提醒",async()=>{
+ const initial=workspace("succeeded");
+ initial.state.jobs!.push({...initial.state.jobs![0],id:"completed-two"},{...initial.state.jobs![0],id:"running-next",status:"running",kind:"plan"},{...initial.state.jobs![0],id:"paused-next",status:"paused"});
+ const {api}=pendingApi(initial);const page=render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+ fireEvent.click(await screen.findByRole("button",{name:"全部已读"}));
+ expect(screen.queryByRole("heading",{name:"评估已完成"})).toBeNull();
+ expect(screen.getByRole("heading",{name:"正在生成优化方案"})).toBeTruthy();
+ expect(screen.getByRole("heading",{name:"评估已暂停"})).toBeTruthy();
+ expect(JSON.parse(localStorage.getItem("frontmind:intent:viewed-completions:v1")!)).toEqual(["completed-two","job-1"]);
+ expect(initial.state.jobs).toHaveLength(4);expect(api.command).not.toHaveBeenCalled();expect(api.execute).not.toHaveBeenCalled();
+ page.unmount();const next=structuredClone(initial);next.state.jobs!.find(job=>job.id==="running-next")!.status="succeeded";
+ api.observe=vi.fn(async()=>next);render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+ expect(await screen.findByRole("heading",{name:"优化方案已生成"})).toBeTruthy();
+ expect(screen.queryByRole("heading",{name:"评估已完成"})).toBeNull();
 });
