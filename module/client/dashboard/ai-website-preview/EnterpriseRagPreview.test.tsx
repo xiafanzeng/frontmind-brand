@@ -1984,17 +1984,21 @@ describe("enterprise RAG evidence-based review UI", () => {
     await showPage();
     fireEvent.click(screen.getByRole("button", { name: "新建问答" }));
     expect(screen.queryByRole("button", { name: "编辑回答" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "设置预设问题" }));
-    const settingsDialog = screen.getByRole("dialog", { name: "设置预设问题" });
+    const settingsTrigger = screen.getByRole("button", { name: "设置预设问题" });
+    fireEvent.click(settingsTrigger);
+    const settingsDialog = screen.getByRole("dialog", { name: "预设问题" });
     const settings = within(settingsDialog);
     expect(settings.getByText("新问题草稿已生成，确认后才会替换当前问题。")).toBeTruthy();
     expect(settings.getByRole("button", { name: "编辑问题" })).toBeTruthy();
     expect(settings.getByRole("button", { name: "换一批" })).toBeTruthy();
     expect(settings.getByRole("button", { name: "确认使用" })).toBeTruthy();
     fireEvent.click(settings.getByRole("button", { name: "取消" }));
-    await waitFor(() => expect(settings.getByText("编辑并确认后，才会替换当前问题。")).toBeTruthy());
-    expect(screen.getByRole("dialog", { name: "设置预设问题" })).toBe(settingsDialog);
+    await waitFor(() => expect(settings.queryByText("新问题草稿已生成，确认后才会替换当前问题。")).toBeNull());
+    expect(settings.queryByText("编辑并确认后，才会替换当前问题。")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "预设问题" })).toBe(settingsDialog);
     expect(settings.queryByText("新问题草稿已生成，确认后才会替换当前问题。")).toBeNull();
+    fireEvent.click(settings.getByRole("button", { name: "关闭预设问题" }));
+    await waitFor(() => expect(document.activeElement).toBe(settingsTrigger));
   });
 
   it("preserves unknown weight and a pending score when a saved rating lacks evidence", async () => {
@@ -2223,7 +2227,8 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(panel.classList.contains("rag-drawer--evidence")).toBe(true);
     const evidenceRadar = details.getByTestId("rag-evidence-radar");
     expect(within(evidenceRadar).getAllByTestId("rag-evaluation-dimension")).toHaveLength(6);
-    fireEvent.click(within(evidenceRadar).getByRole("button", { name: /需求满足 75%/ }));
+    const evidenceDimension = within(evidenceRadar).getByRole("button", { name: /需求满足 75%/ });
+    fireEvent.click(evidenceDimension);
     expect(within(evidenceRadar).getByRole("region", { name: "需求满足详情" })).toBeTruthy();
     expect(within(evidenceRadar).getByText(/直接介绍知识库/)).toBeTruthy();
     const gateGrid = details.getByTestId("rag-evaluation-gate-grid");
@@ -2235,7 +2240,7 @@ describe("enterprise RAG evidence-based review UI", () => {
     expect(document.body.style.overflow).toBe("");
     expect(panel.getAttribute("aria-modal")).toBeNull();
     expect(document.querySelector<HTMLElement>(".rag-eval-root > div")?.inert).toBe(false);
-    expect(document.activeElement === details.getByRole("button", { name: "关闭评估面板" })).toBe(true);
+    expect(document.activeElement).toBe(evidenceDimension);
 
     escapeFocusedDialog();
     expect(screen.queryByRole("dialog")).toBeNull();

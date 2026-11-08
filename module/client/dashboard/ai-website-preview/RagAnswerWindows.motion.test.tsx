@@ -24,8 +24,8 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); Object.d
 function ReadyStatus() { return <output data-testid="child-ready">{useRagEntranceReady() ? "ready" : "waiting"}</output>; }
 function props(): RagAnswerWindowsProps {
   return { panels: ["evidence"], activePanel: "evidence", onActivate: vi.fn(), onClose: vi.fn(),
-    titles: { evidence: "回答依据", improve: "优化方案", review: "人工评审", answer: "回答编辑" },
-    availability: { evidence: true, improve: true, review: true, answer: true },
+    titles: { evidence: "回答依据", improve: "优化方案", review: "人工评审", answer: "回答编辑", starter: "预设问题" },
+    availability: { evidence: true, improve: true, review: true, answer: true, starter: true },
     renderBody: vi.fn(() => <><ReadyStatus /><textarea aria-label="草稿" defaultValue="保存的输入" /></>), renderFooter: vi.fn(() => null) };
 }
 function runFrames() { const pending = [...frames.values()]; frames.clear(); act(() => pending.forEach(callback => callback(16))); }

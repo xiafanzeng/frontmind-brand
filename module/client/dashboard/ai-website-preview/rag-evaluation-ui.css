@@ -413,46 +413,181 @@
 .rag-eval-root .rag-radar-detail-shell { display:grid; grid-template-rows:0fr; opacity:0; transform:translateY(-8px); visibility:hidden; pointer-events:none; transition:grid-template-rows 300ms cubic-bezier(.25,.1,.25,1),opacity 300ms cubic-bezier(.25,.1,.25,1),transform 300ms cubic-bezier(.25,.1,.25,1),visibility 0s linear 300ms; }
 .rag-eval-root .rag-radar-detail-shell.is-open { grid-template-rows:1fr; opacity:1; transform:translateY(0); visibility:visible; pointer-events:auto; transition:grid-template-rows 300ms cubic-bezier(.25,.1,.25,1),opacity 300ms cubic-bezier(.25,.1,.25,1),transform 300ms cubic-bezier(.25,.1,.25,1),visibility 0s; }
 .rag-eval-root .rag-radar-detail-shell__inner { min-height:0; overflow:hidden; }
-.rag-eval-root .rag-radar-detail { margin-top:12px; border:1px solid var(--sfp-line,#e5e5ed); border-radius:10px; padding:16px; background:transparent; box-shadow:none; overflow-wrap:anywhere; }
-.rag-eval-root .rag-radar-detail__header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; padding-bottom:14px; border-bottom:.5px solid var(--sfp-line,#e5e5ed); }
-.rag-eval-root .rag-radar-detail__content { display:flex; flex-direction:column; gap:12px; min-width:0; padding-top:12px; }
-.rag-eval-root .rag-radar-detail h3 { min-width:0; margin:0; font-size:16px; font-weight:400; letter-spacing:-.011em; line-height:1.35; }
+.rag-eval-root .rag-radar-detail { margin-top:12px; min-width:0; overflow-wrap:anywhere; }
 .rag-eval-root .rag-radar-detail-score { --rag-radar-score-muted:var(--sfp-muted,#6b7280); display:inline-flex; flex:none; align-items:baseline; gap:1px; min-width:0; color:#7736a6; font-variant-numeric:tabular-nums; line-height:1; white-space:nowrap; }
 .rag-eval-root .rag-radar-detail-score__earned { color:#7736a6; font-size:30px; font-weight:600; letter-spacing:-.032em; }
 .rag-eval-root .rag-radar-detail-score__earned.is-zero { color:var(--rag-radar-score-muted); }
 .rag-eval-root .rag-radar-detail-score__maximum { color:var(--rag-radar-score-muted); font-size:12px; font-weight:500; letter-spacing:-.021em; }
 .rag-eval-root .rag-radar-detail-score.is-unavailable { color:var(--sfp-muted,#6b7280); font-size:12px; font-weight:600; letter-spacing:-.011em; line-height:1.5; }
-.rag-eval-root .rag-radar-detail article { padding:0; border:0; }
-.rag-eval-root .rag-radar-detail__check-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; }
-.rag-eval-root .rag-radar-detail__check-title { min-width:0; color:var(--sfp-text,#263244); font-size:13px; font-weight:600; line-height:1.4; }
-.rag-eval-root .rag-radar-detail__check-status { display:inline-flex; flex:none; align-items:center; gap:6px; color:var(--sfp-text,#263244); font-size:12px; font-weight:400; line-height:1.4; white-space:nowrap; }
-.rag-eval-root .rag-radar-detail__check-status.is-met { --rag-status-color:#30b56f; --rag-status-glow:rgba(48,181,111,.2); }
-.rag-eval-root .rag-radar-detail__check-status.is-partial { --rag-status-color:#ff9f0a; --rag-status-glow:rgba(255,159,10,.2); }
-.rag-eval-root .rag-radar-detail__check-status.is-unmet { --rag-status-color:#d85b72; --rag-status-glow:rgba(216,91,114,.2); }
-.rag-eval-root .rag-radar-detail__check-status:is(.is-undetermined,.is-not_applicable) { --rag-status-color:#8e8e93; --rag-status-glow:rgba(142,142,147,.2); }
-.rag-eval-root .rag-radar-detail__check-status .rag-evaluation-status-orb { flex:none; width:14px; height:14px; }
-.rag-eval-root .rag-radar-detail__check-status .rag-evaluation-status-orb::after { width:6px; height:6px; }
-.rag-eval-root .rag-radar-detail p { margin:6px 0 0; font-size:12px; line-height:1.5; }
-.rag-eval-root .rag-radar-detail .rag-radar-detail__note { color:var(--sfp-muted,#6b7280); }
-.rag-eval-root .rag-radar-detail__finding > strong { font-size:13px; line-height:1.4; }
-.rag-eval-root .rag-radar-detail blockquote { margin:8px 0; padding-left:10px; border-left:2px solid #bfa1d4; }
+
+@keyframes rag-enterprise-detail-overflow {
+  from { overflow:hidden; }
+  to { overflow:visible; }
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail-shell.is-open > .rag-radar-detail-shell__inner {
+  animation:rag-enterprise-detail-overflow 300ms step-end forwards;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail--enterprise {
+  position:relative;
+  box-sizing:border-box;
+  min-width:0;
+  max-width:100%;
+  margin-top:12px;
+  padding:14px 16px 16px;
+  border:.5px solid rgba(0,0,0,.08);
+  border-radius:20px;
+  background:rgba(255,255,255,.72);
+  box-shadow:0 8px 24px rgba(29,29,31,.08);
+  -webkit-backdrop-filter:blur(20px) saturate(180%);
+  backdrop-filter:blur(20px) saturate(180%);
+  overflow-wrap:anywhere;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__header {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:clamp(8px,3vw,12px);
+  min-width:0;
+  margin-bottom:0;
+  padding-bottom:10px;
+  border-bottom:.5px solid var(--sfp-line,#e5e5ed);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__header h3 {
+  min-width:0;
+  margin:0;
+  color:#1d1d1f;
+  font-size:16px;
+  font-weight:600;
+  letter-spacing:-.011em;
+  line-height:1.35;
+  white-space:nowrap;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail-score {
+  align-self:center;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail-score__earned {
+  font-size:clamp(18px,5.64vw,30px);
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__content {
+  min-width:0;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__checks {
+  display:grid;
+  gap:6px;
+  min-width:0;
+  margin-top:8px;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+  padding:2px 0;
+  border:0;
+  background:transparent;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-copy {
+  display:grid;
+  gap:2px;
+  min-width:0;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-title {
+  min-width:0;
+  color:#1d1d1f;
+  font-size:15px;
+  font-weight:400;
+  line-height:1.4;
+  overflow-wrap:anywhere;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-copy p,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__summary,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__supplement,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__finding p,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__finding blockquote {
+  margin:0;
+  color:#77717d;
+  font-size:13px;
+  font-weight:400;
+  line-height:1.4;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-status {
+  display:inline-flex;
+  flex:0 0 auto;
+  align-items:center;
+  align-self:center;
+  gap:6px;
+  color:#514a58;
+  font-size:13px;
+  font-weight:400;
+  white-space:nowrap;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-status.is-met { --rag-status-color:#30b56f; --rag-status-glow:rgba(48,181,111,.20); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-status.is-partial { --rag-status-color:#ff9f0a; --rag-status-glow:rgba(255,159,10,.20); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-status.is-unmet { --rag-status-color:#d85b72; --rag-status-glow:rgba(216,91,114,.20); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-status.is-undetermined { --rag-status-color:#8e8e93; --rag-status-glow:rgba(142,142,147,.20); }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-status.is-not_applicable { --rag-status-color:#aeaeb2; --rag-status-glow:rgba(174,174,178,.20); }
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-status .rag-evaluation-status-orb {
+  flex:0 0 14px;
+  width:14px;
+  height:14px;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__check-status .rag-evaluation-status-orb::after {
+  width:6px;
+  height:6px;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__summary,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__supplement,
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__finding {
+  margin-top:8px;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__finding {
+  display:grid;
+  gap:2px;
+  padding:0;
+  border:0;
+  background:transparent;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__finding > strong {
+  color:#1d1d1f;
+  font-size:15px;
+  font-weight:400;
+  line-height:1.4;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail__finding blockquote {
+  padding-left:10px;
+  border-left:2px solid #bfa1d4;
+}
 .rag-eval-root .rag-optional-suggestions { margin:12px 0; color:var(--sfp-muted,#6b7280); font-size:12px; }
 .rag-eval-root .rag-optional-suggestions summary { cursor:pointer; min-height:32px; }
 .rag-eval-root .rag-risk-summary { border-left:3px solid #c65969; padding-left:10px; font-size:13px; }
 @container sfp (max-width:400px) {
   .rag-eval-root .rag-radar-label { width:68px; }
-  .rag-eval-root .rag-radar-point-control { width:36px; height:36px; min-height:36px; }
-  .rag-eval-root .rag-radar-point-control::before { inset:2px; }
-}
-@media (max-width:390px) {
-  .rag-eval-root .rag-radar-detail-score__earned { font-size:22px; }
-}
-@media (max-width:320px) {
-  .rag-eval-root .rag-radar-detail-score__earned { font-size:18px; }
 }
 @media (prefers-reduced-motion:reduce) {
   .rag-eval-root .rag-radar-detail-shell,
-  .rag-eval-root .rag-radar-detail-shell.is-open { transition:none; }
+  .rag-eval-root .rag-radar-detail-shell.is-open { transform:none; transition:none; }
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar--enterprise .rag-radar-detail-shell.is-open > .rag-radar-detail-shell__inner { animation:none; overflow:visible; }
 }
 
 /* Approved Apple summary-and-gauge layout; the score geometry below is unchanged. */

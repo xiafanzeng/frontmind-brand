@@ -1891,16 +1891,9 @@
 }
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-evaluation-gauge-marker:is(.is-pending, .is-unavailable) { fill: #aeaeb2; }
 
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root :where(.rag-radar-detail, .rag-automatic-evaluation) {
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-automatic-evaluation {
   padding: var(--fm-brand-space-2);
   border-radius: var(--fm-brand-radius-card);
-}
-
-.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar-detail {
-  padding: 16px;
-  box-shadow: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-radar-area {
