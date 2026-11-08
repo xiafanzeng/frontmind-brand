@@ -109,13 +109,13 @@ function Evaluation({item}: {item: IntentEvaluation}) {
     <aside className="iw-panel iw-diagnosis"><h3>诊断摘要</h3>{item.findings.length ? item.findings.map(finding => <p key={finding}><Sparkles size={16}/>{finding}</p>) : <p><Check size={16}/>当前要点均有相关内容支撑。</p>}<div className="iw-method">更新时间：<time dateTime={item.evaluatedAt}>{new Date(item.evaluatedAt).toLocaleString("zh-CN")}</time></div></aside>
   </div>;
 }
-export function PlanEditor({plan: savedPlan, onChange}: {plan: IntentPlan; onChange: (plan: IntentPlan) => void}) {
+export function PlanEditor({plan: savedPlan, onChange, pendingKind}: {plan: IntentPlan; onChange: (plan: IntentPlan) => void; pendingKind?: "evaluate" | "plan"}) {
   const plan = knowledgeOnlyIntentPlan(savedPlan);
   const previewId = useId();
   const [active, setActive] = useState(plan.actions.find(item => item.kind === "node")?.id ?? plan.actions[0]?.id);
   const action = plan.actions.find(item => item.id === active) ?? plan.actions[0];
   const update = (id: string, patch: Partial<IntentAction>) => onChange({...plan, actions: plan.actions.map(item => item.id === id ? {...item, ...patch} : item)});
-  if (!plan.actions.length) return <div className="iw-panel" role="status">此方案没有可执行的知识库优化动作，请重新生成方案。</div>;
+  if (!plan.actions.length) return <div className="iw-plan-empty-state" role="status" aria-live="polite"><span className="iw-plan-empty-icon" aria-hidden="true">{pendingKind ? <span className="iw-spinner"/> : <Sparkles size={20}/>}</span><div><h3>{pendingKind === "evaluate" ? "正在评估问题，暂无优化方案，请等待" : pendingKind === "plan" ? "正在生成优化方案，请稍候" : "暂无可执行的优化方案"}</h3><p>{pendingKind ? "完成后即可查看并确认方案。" : "请重新生成方案，审核知识库正文修改后再执行。"}</p></div></div>;
   return <div className="iw-plan-grid iw-plan-editor">
     <div className="iw-panel iw-tasks">{plan.actions.map(item => <section key={item.id} aria-label={`优化动作：${item.title}`} className={`iw-task ${item.selected ? "selected" : ""} ${item.id === action?.id ? "is-active" : ""}`}>
       <button type="button" className="iw-task-open" aria-label={`查看并编辑：${item.title}`} aria-pressed={item.id === action?.id} aria-controls={previewId} onClick={() => setActive(item.id)}><ArrowRight size={18}/></button>
@@ -660,6 +660,9 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   }
   const evaluated = scope.map(id => evaluations.find(item => item.questionId === id)).filter((item): item is IntentEvaluation => Boolean(item));
   const activeEvaluation = evaluated[index] ?? evaluated[0];
+  useEffect(() => {
+    if (view === "evaluation" && workspace && !pending && !activeEvaluation) navigateView(evaluationReturnView);
+  }, [view, workspace, pending, activeEvaluation, evaluationReturnView]);
   const history = [...(workspace?.state.jobs ?? [])].filter(job => job.status === "succeeded" && job.result).reverse();
   const archived = history.find(job => job.id === historyId)?.result;
   const savedPlanIds = workspace ? questions.filter(question => findSavedIntentPlan(workspace.state, question.id)).map(question => question.id) : [];
@@ -811,7 +814,6 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       {workspace.state.receipts.some(item => item.status === "running") && <div className="iw-sticky"><span>有执行尚未确认完成</span><button disabled={pending} onClick={() => {const runningReceipt = workspace.state.receipts.find(item => item.status === "running")!; setReceiptId(runningReceipt.id); setView("result"); void run(() => api.execute({expectedRevision: revision, clientRequestId: runningReceipt.id, questionIds: [...new Set(runningReceipt.changes.map(change => change.questionId))]}));}}>继续原执行</button></div>}
     </div>}
     {view === "evaluation" && pending && !activeEvaluation && <><button className="iw-back" onClick={() => navigateView(evaluationReturnView)}><ArrowLeft size={15}/>返回{evaluationReturnLabel}</button><header className="iw-header"><div><h1>{activeJob?.kind === "plan" ? "正在生成优化方案" : `正在评估 ${scope.length} 条问题`}</h1><p>任务完成后显示最新评估结果，请勿重复提交。</p></div></header><Steps step={activeJob?.kind === "plan" ? 1 : 0}/></>}
-    {view === "evaluation" && !pending && !activeEvaluation && <div className="iw-panel"><p>当前任务尚无有效评估结果，请返回列表查看任务提示。</p><button onClick={() => navigateView(evaluationReturnView)}>返回{evaluationReturnLabel}</button></div>}
     {view === "evaluation" && activeEvaluation && <>
       <button className="iw-back" onClick={() => navigateView(evaluationReturnView)}><ArrowLeft size={15}/>返回{evaluationReturnLabel}</button>
       <header className="iw-header iw-evaluation-header">
@@ -846,7 +848,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
       <Steps step={1}/>
       {drafts.map(draft => <section className="iw-plan-section" key={draft.questionId}>
         <header className="iw-plan-question-heading"><h2>{questions.find(item => item.id === draft.questionId)?.question}</h2></header>
-        <PlanEditor plan={draft} onChange={changeDraft}/>
+        <PlanEditor plan={draft} onChange={changeDraft} pendingKind={workspace?.state.jobs?.find(job => !["succeeded", "failed"].includes(job.status) && job.questionIds.includes(draft.questionId))?.kind}/>
       </section>)}
       <div className="iw-sticky"><span>已选正文修改 <strong>{drafts.reduce((sum, draft) => sum + draft.actions.filter(action => action.selected && action.kind === "node").length, 0)}</strong> 项</span><div>
         {draftDirty && <button disabled={savingDrafts} onClick={() => void saveDrafts()}>保存方案草稿</button>}

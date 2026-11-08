@@ -33,7 +33,7 @@ vi.mock("./ManagedKeywordTables", () => ({default: ({onUseQuestions, onEvaluateQ
 </>;
 }}));
 vi.mock("./KnowledgeChangeComparison", () => ({default: () => null}));
-import IntentWorkbench from "./IntentWorkbench";
+import IntentWorkbench, {PlanEditor} from "./IntentWorkbench";
 import IntentTaskProgress from "./IntentTaskProgress";
 import {IntentListEvaluationStatus} from "./IntentListFeedback";
 
@@ -1204,3 +1204,33 @@ describe("优化工作台任务入口", () => {
     expect(first).not.toHaveBeenCalled();
   } finally {vi.useRealTimers();}
  });
+
+ it("多条待评估问题中点击一条时仅提交该问题", async () => {
+  const initial=workspace();
+  initial.state.questions.push({...question,id:"q2",question:"另一条待评估问题",rowIndex:1},{...question,id:"q3",question:"第三条待评估问题",rowIndex:2});
+  const {api}=pendingApi(initial);
+  render(<IntentWorkbench keywordProps={{} as any} api={api}/>);
+  const button=await screen.findByRole("button",{name:"词条直接评估"});
+  await waitFor(()=>expect(button).toHaveProperty("disabled",false));
+  fireEvent.click(button);
+  await waitFor(()=>expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind:"evaluate",questionIds:["q1"]})));
+  expect(api.command).toHaveBeenCalledTimes(1);
+ });
+ it.each(["evaluate","plan",undefined] as const)("空方案提示反映真实任务状态：%s", pendingKind => {
+  render(<PlanEditor plan={{questionId:"q1",actions:[]}} onChange={vi.fn()} pendingKind={pendingKind}/>);
+  const text=pendingKind==="evaluate"?"正在评估问题，暂无优化方案，请等待":pendingKind==="plan"?"正在生成优化方案，请稍候":"暂无可执行的优化方案";
+  expect(screen.getByRole("status").textContent).toContain(text);
+ });
+
+it("评估完成但旧方案只有待办时，点击生成会真正派发新方案而不打开空方案",async()=>{
+ const initial=workspace("succeeded");initial.state.plans=[{questionId:"q1",actions:[{id:"old",kind:"todo",nodeId:null,before:"",after:"补资料",source:"",title:"旧待办",selected:true}]}];
+ const running=workspace("running","plan");const {api,finish}=pendingApi(initial);vi.mocked(api.command).mockResolvedValue(running);
+ render(<IntentWorkbench keywordProps={{} as any} initialView="list" api={api}/>);
+ const generate=await screen.findByRole("button",{name:"生成优化方案"});
+ expect(screen.queryByRole("button",{name:"查看优化方案"})).toBeNull();
+ fireEvent.click(generate);
+ await waitFor(()=>expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind:"plan",questionIds:["q1"]})));
+ const completed=workspace("succeeded","plan");completed.state.plans=[{questionId:"q1",actions:[{id:"body",kind:"node",nodeId:"node",before:"原文",after:"修改后的正文",source:"知识节点",title:"更新正文",selected:true}]}];
+ await act(async()=>finish(completed));
+ expect(await screen.findByRole("textbox",{name:"更新正文修改后"})).toHaveProperty("value","修改后的正文");
+});

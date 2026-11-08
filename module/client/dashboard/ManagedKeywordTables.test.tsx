@@ -26,7 +26,11 @@ describe("推荐保存与历史词库", () => {
     expect(screen.getByText("新推荐问题")).toBeTruthy();
     expect(screen.getByText("历史问题0")).toBeTruthy();
     fireEvent.click(screen.getByRole("checkbox", {name: "选择新推荐问题"}));
-    fireEvent.click(screen.getByRole("button", {name: "批量加入优化清单（1）"}));
+    const bulk=screen.getByRole("button", {name: "批量加入优化清单（1）"});
+    expect(bulk.closest(".keyword-toolbar-saas")).toBeTruthy();
+    expect(screen.queryByRole("combobox", {name: "词表"})).toBeNull();
+    expect(screen.queryByRole("button", {name: "清空选择"})).toBeNull();
+    fireEvent.click(bulk);
     expect(onUseQuestions).toHaveBeenCalledWith([{question: "新推荐问题", category: "industry", tableId: "question-template-api:v1", rowIndex: 0}]);
     expect(screen.getByText("历史问题0")).toBeTruthy();
     expect(screen.queryByText("历史问题20")).toBeNull();
@@ -129,7 +133,7 @@ describe("推荐保存与历史词库", () => {
     expect(onEvaluateQuestion).not.toHaveBeenCalled();
     expect(screen.getByRole("checkbox", {name: "选择新推荐问题"})).toHaveProperty("checked", false);
     expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"})).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"}).textContent).toBe("评估问题");
+    expect(screen.getByRole("button", {name: "评估问题：第二条推荐问题"}).textContent).toBe("待评估");
   });
 });
 

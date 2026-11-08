@@ -581,3 +581,18 @@
 .knowledge-node-optimization-diff{margin:0 0 24px;border-bottom:1px solid #ece7f1;padding-bottom:16px}
 .knowledge-node-optimization-diff>summary{cursor:pointer;color:#7545a0;font-size:13px;padding:8px 0}
 .knowledge-node-optimization-diff>.iw-workbench{padding:8px 0 0;max-width:none}
+
+/* Align the embedded comparison independently of the full workbench page layout. */
+.knowledge-node-optimization-diff {margin-bottom:24px;border:1px solid #e8e2ee;border-radius:12px;padding:0;background:#fff;overflow:hidden}
+.knowledge-node-optimization-diff>summary {padding:14px 16px;line-height:1.6;font-weight:500}
+.knowledge-node-optimization-diff[open]>summary {border-bottom:1px solid #eee9f3}
+.knowledge-node-optimization-diff>.iw-workbench {margin:0;padding:16px;max-width:none}
+.knowledge-node-optimization-diff .iw-change-controls {padding:0 0 14px;gap:8px;align-items:center}
+.knowledge-node-optimization-diff .iw-change-controls button {min-height:34px;font-size:13px}
+.knowledge-node-optimization-diff .iw-change-caption {margin:14px 0;color:#7e7487;line-height:1.7}
+.knowledge-node-optimization-diff .iw-change-section {padding:0;min-width:0}
+.knowledge-node-optimization-diff .iw-diff-legend {margin:12px 0;gap:12px;line-height:1.6}
+.knowledge-node-optimization-diff .iw-record-line {grid-template-columns:28px minmax(0,1fr);font-size:13px;line-height:1.8}
+.knowledge-node-optimization-diff .iw-record-line>span {padding:7px 0;line-height:1.8}
+.knowledge-node-optimization-diff .iw-record-line pre {margin:0;padding:7px 12px;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.8}
+.knowledge-node-optimization-diff .iw-article {padding:0}

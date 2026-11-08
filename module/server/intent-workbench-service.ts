@@ -329,6 +329,7 @@ export function createIntentWorkbenchService(core: ModuleHttpCore, request: Requ
           }).map(question => question.id));
           ledger.state.evaluations = [...ledger.state.evaluations.filter(e => !publishIds.has(e.questionId)),
             ...result.evaluations.filter(e => publishIds.has(e.questionId))];
+          if (job!.kind === "evaluate") ledger.state.plans = ledger.state.plans.filter(plan => !publishIds.has(plan.questionId));
           const planPublishIds = new Set([...publishIds].filter(id => !current.draftEditedQuestionIds?.includes(id)));
           if (job!.kind === "plan") ledger.state.plans = [...ledger.state.plans.filter(p => !planPublishIds.has(p.questionId)),
             ...result.plans.filter(p => planPublishIds.has(p.questionId))];

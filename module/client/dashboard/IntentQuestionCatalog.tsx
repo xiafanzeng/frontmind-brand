@@ -55,6 +55,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
       <tbody>{visible.map((question, index) => {
         const evaluation = evaluations.find(item => item.questionId === question.id);
         const evaluating = activeJob?.kind === "evaluate" && activeJob.questionIds.includes(question.id);
+        const planning = activeJob?.kind === "plan" && activeJob.questionIds.includes(question.id);
         const gaps = evaluation?.points.filter(point => point.status !== "supported");
         return <tr key={question.id} data-question-id={question.id} className={`${selected.includes(question.id) ? "selected" : ""} ${received.includes(question.id) ? "iw-new-row" : ""}`}
           style={{"--i": index} as CSSProperties}
@@ -78,7 +79,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
         </details> : "暂无关键缺口"}</CatalogCell></td>
         <td><div className="iw-catalog-actions">
           <button className="iw-primary iw-answer-entry" disabled={!integration?.onOpenAnswer} onClick={() => integration?.onOpenAnswer?.(question)}>进入应答逻辑</button>
-          {savedPlanIds.includes(question.id)
+          {planning ? <button className="iw-plan-entry" disabled>方案生成中…</button> : savedPlanIds.includes(question.id)
             ? <button className="iw-plan-entry" onClick={() => onViewPlan(question.id)}>查看优化方案</button>
             : <button className="iw-plan-entry" disabled={!evaluation && (pending || Boolean(activeJob))} onClick={() => evaluation ? onGeneratePlan(question.id) : onEvaluate([question.id])}>{evaluation ? "生成优化方案" : "评估问题"}</button>}
           <button title={mutationBlockedIds.includes(question.id) ? "该问题正在处理，完成后可修改" : undefined} disabled={mutationBlockedIds.includes(question.id) || !integration?.onEditQuestion} onClick={() => integration?.onEditQuestion?.(question)}>修改问题</button>

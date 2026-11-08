@@ -58,6 +58,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
             const evaluation=evaluateIntent(question,memory.nodes,memory.state.questions);
             evaluation.provenance={operationId:job.id,inputHash:job.inputHash,skillHash:job.skillHash,model:job.model};
             memory.state.evaluations=[...memory.state.evaluations.filter(item=>item.questionId!==id),evaluation];
+            if(job.kind==="evaluate")memory.state.plans=memory.state.plans.filter(item=>item.questionId!==id);
             if(job.kind==="plan")memory.state.plans=[...memory.state.plans.filter(item=>item.questionId!==id),{...createIntentPlan(question,evaluation,memory.nodes),inputHash:job.inputHash}];
           }
           job.status="succeeded";
@@ -99,6 +100,7 @@ export function createIntentPreviewApi(scope: string): IntentWorkbenchApi {
         const question = memory.state.questions.find(item => item.id === id)!;
         const evaluation = evaluateIntent(question, memory.nodes, memory.state.questions);
         memory.state.evaluations = [...memory.state.evaluations.filter(item => item.questionId !== id), evaluation];
+        if (input.kind === "evaluate") memory.state.plans = memory.state.plans.filter(item => item.questionId !== id);
         if (input.kind === "plan") memory.state.plans = [...memory.state.plans.filter(item => item.questionId !== id), createIntentPlan(question, evaluation, memory.nodes)];
       }
       if (input.kind === "edit") {

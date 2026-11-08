@@ -237,11 +237,6 @@ export default function ManagedKeywordTables({
     "",
     readFlowString,
   );
-  const [tableFilter, setTableFilter] = useBusinessFlowState(
-    "keywordTable",
-    "all",
-    readFlowString,
-  );
   const [categoryFilter, setCategoryFilter] = useBusinessFlowState(
     "keywordCategory",
     "all",
@@ -254,12 +249,12 @@ export default function ManagedKeywordTables({
   );
   const keyword = searchTerm.trim().toLowerCase();
   function openSource(source: "recommended" | "saved") {
-    setSourceView(source); setTableFilter("all"); setCategoryFilter("all");
+    setSourceView(source); setCategoryFilter("all");
     setSubdivisionFilter("all"); setSearchTerm(""); setPages({});
   }
   useEffect(
     () => setPages({}),
-    [searchTerm, tableFilter, categoryFilter, subdivisionFilter],
+    [searchTerm, categoryFilter, subdivisionFilter],
   );
   const hasKeywordCategories = useMemo(
     () =>
@@ -293,11 +288,7 @@ export default function ManagedKeywordTables({
     [sourceTables],
   );
   const visibleTables = useMemo(() => {
-    const selectedTables =
-      tableFilter === "all"
-        ? sourceTables
-        : sourceTables.filter((table) => table.id === tableFilter);
-    return selectedTables
+    return sourceTables
       .map((table) => {
         const categoryColumnIndex = keywordCategoryColumnIndex(table.columns);
         const subdivisionColumnIndex = questionSubdivisionColumnIndex(
@@ -344,7 +335,7 @@ export default function ManagedKeywordTables({
             subdivisionFilter === "all") ||
           table.rows.length > 0,
       );
-  }, [categoryFilter, keyword, subdivisionFilter, tableFilter, sourceTables]);
+  }, [categoryFilter, keyword, subdivisionFilter, sourceTables]);
   // Present one customer-facing table while preserving each row's durable source identity.
   const displayTables = useMemo(() => {
     if (!generationEnabled) return visibleTables;
@@ -417,12 +408,6 @@ export default function ManagedKeywordTables({
         ) : <KeywordEmptyPanel title="尚未保存词条" description="先生成推荐问题并勾选保存，即可在这里查看。"/>
       ) : (
         <>
-          {onUseQuestions && batchItems.length > 0 && (
-            <div className="keyword-batch-actions" role="status">
-              <div><button type="button" onClick={() => setBatchSelection({})}>清空选择</button>
-              <button type="button" className="iw-primary" onClick={() => onUseQuestions(batchItems)}>批量加入优化清单（{batchItems.length}）</button></div>
-            </div>
-          )}
           <div className="saas-toolbar keyword-toolbar-saas">
             <div className="saas-search">
               <Search size={16} />
@@ -443,8 +428,7 @@ export default function ManagedKeywordTables({
                 </button>
               )}
             </div>
-            {(sourceTables.length > 1 ||
-              hasKeywordCategories ||
+            {(hasKeywordCategories ||
               subdivisionOptions.length > 0) && (
               <div className="filter-group">
                 {hasKeywordCategories && (
@@ -487,23 +471,11 @@ export default function ManagedKeywordTables({
                     </select>
                   </div>
                 )}
-                {sourceTables.length > 1 && (
-                  <div className="filter-item">
-                    <label htmlFor="managed-keyword-table">词表</label>
-                    <select
-                      id="managed-keyword-table"
-                      value={tableFilter}
-                      onChange={(event) => setTableFilter(event.target.value)}
-                    >
-                      <option value="all">全部词表</option>
-                      {sourceTables.map((table) => (
-                        <option key={table.id} value={table.id}>
-                          {safeText(table.title)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+              </div>
+            )}
+            {onUseQuestions && batchItems.length > 0 && (
+              <div className="keyword-batch-actions">
+                <button type="button" className="iw-primary" onClick={() => onUseQuestions(batchItems)}>批量加入优化清单（{batchItems.length}）</button>
               </div>
             )}
           </div>
@@ -658,13 +630,13 @@ export default function ManagedKeywordTables({
                                   <ChevronRight size={14} aria-hidden="true"/>
                                 </button> : optimizationState && onEvaluateQuestion ? <button type="button" className="keyword-evaluation-button keyword-evaluation-start"
                                   aria-label={`评估问题：${question}`}
-                                  title={evaluationJob ? "请先完成当前评估任务" : submittingEvaluation ? "正在提交当前词条的评估" : evaluationPending ? "请等待当前操作完成后再评估" : "评估当前词条"}
+                                  title={evaluationJob && !evaluating ? "本条尚未评估；当前只评估已提交的问题，完成后可单独评估本条" : submittingEvaluation ? "正在提交当前词条的评估" : evaluationPending ? "请等待当前操作完成后再评估" : "评估当前词条"}
                                   disabled={selectionDisabled || evaluationPending || Boolean(evaluationJob)}
                                   onClick={() => {
                                     if (!category) return;
                                     onEvaluateQuestion({question, category, tableId: sourceTableId, rowIndex, ...(dashboardRevision != null ? {dashboardRevision} : {})});
                                   }}>
-                                  <span>{evaluating ? evaluationJob?.status === "paused" ? "评估已暂停" : "评估中…" : submittingEvaluation ? "正在处理…" : "评估问题"}</span>
+                                  <span>{evaluating ? evaluationJob?.status === "paused" ? "评估已暂停" : "评估中…" : submittingEvaluation ? "正在处理…" : evaluationJob ? "待评估" : "评估问题"}</span>
                                   <ChevronRight size={14} aria-hidden="true"/>
                                 </button> :
                                   <small>{!optimizationState ? "优化状态尚未读取" : linked ? "已在优化清单 · 待评估" : "尚未加入优化"}</small>}

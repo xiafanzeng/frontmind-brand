@@ -151,3 +151,9 @@
   .fm-brand-theme .iw-workbench.iw-view-plan .iw-plan-question-heading h2 {font-size:21px;line-height:1.65}
   .fm-brand-theme .iw-workbench.iw-view-plan > .iw-steps {margin-bottom:24px}
 }
+
+.iw-workbench .iw-plan-empty-state {display:flex;align-items:flex-start;gap:16px;padding:26px 28px;border:1px solid #e8e0ef;border-radius:14px;background:#faf8fc;box-shadow:none}
+.iw-workbench .iw-plan-empty-icon {display:flex;align-items:center;justify-content:center;flex:0 0 40px;width:40px;height:40px;border-radius:12px;background:#efe7f7;color:#7545a0}
+.iw-workbench .iw-plan-empty-state h3 {margin:1px 0 8px;font-size:16px;line-height:1.6;font-weight:600;color:#4c3c59}
+.iw-workbench .iw-plan-empty-state p {margin:0;color:#8a7e94;font-size:13px;line-height:1.8}
+@media(max-width:640px){.iw-workbench .iw-plan-empty-state{padding:20px;gap:12px}}

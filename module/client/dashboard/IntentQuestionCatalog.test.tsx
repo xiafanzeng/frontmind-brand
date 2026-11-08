@@ -4,12 +4,12 @@ import IntentQuestionCatalog from './IntentQuestionCatalog';
 
 afterEach(cleanup);
 const q = {id:'q-stable',question:'如何管理企业知识？',category:'industry',subdivision:'',tableId:'t',rowIndex:7,sourceRevision:2};
-function setup() {
+function setup(patch:Record<string,unknown>={}) {
   const onViewPlan=vi.fn(), onGeneratePlan=vi.fn(), onOpenAnswer=vi.fn();
   const props={questions:[q],visible:[q],evaluations:[{questionId:q.id,value:80,support:50,points:[{title:'核验功能',status:'missing'},{title:'部署条件',status:'partial'},{title:'费用依据',status:'missing'}]}] as any,
     received:[q.id],integration:{onOpenAnswer},search:'',selected:[],pending:false,page:0,pageCount:1,total:1,savedPlanIds:[q.id],
     onSearch:vi.fn(),onToggle:vi.fn(),onSelectPage:vi.fn(),onClear:vi.fn(),onEvaluate:vi.fn(),onViewPlan,onGeneratePlan,onPage:vi.fn(),onHistory:vi.fn(),historyCount:9};
-  render(<IntentQuestionCatalog {...props}/>);
+  render(<IntentQuestionCatalog {...props} {...patch}/>);
   return {onViewPlan,onGeneratePlan,onOpenAnswer};
 }
 describe('approved catalog presentation with real question identities',()=>{
@@ -52,4 +52,17 @@ describe('approved catalog presentation with real question identities',()=>{
     fireEvent.click(answer);
     expect(onOpenAnswer).toHaveBeenCalledWith(q);
   });
+});
+
+it('评估完成但没有有效方案时显示生成入口',()=>{
+ const {onGeneratePlan,onViewPlan}=setup({savedPlanIds:[]});
+ expect(screen.queryByRole('button',{name:'查看优化方案'})).toBeNull();
+ fireEvent.click(screen.getByRole('button',{name:'生成优化方案'}));
+ expect(onGeneratePlan).toHaveBeenCalledWith(q.id);
+ expect(onViewPlan).not.toHaveBeenCalled();
+});
+it('对应问题方案生成期间显示真实进度而不是查看入口',()=>{
+ setup({savedPlanIds:[],activeJob:{id:'plan',kind:'plan',status:'running',questionIds:[q.id]}});
+ expect(screen.getByRole('button',{name:'方案生成中…'})).toHaveProperty('disabled',true);
+ expect(screen.queryByRole('button',{name:'查看优化方案'})).toBeNull();
 });
