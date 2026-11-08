@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { ImagePlus, X } from "lucide-react";
+import { FileText, ImagePlus, X } from "lucide-react";
 import "./website-revision-tools.css";
 
 export type WebsiteRevisionFieldsProps = {
@@ -11,7 +11,28 @@ export type WebsiteRevisionFieldsProps = {
 };
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const DOCUMENT_TYPES = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/plain",
+  "text/markdown",
+]);
+const ACCEPT_ATTRIBUTE = [
+  ...IMAGE_TYPES,
+  ...DOCUMENT_TYPES,
+  ".pdf",
+  ".docx",
+  ".txt",
+  ".md",
+].join(",");
 const MIB = 1024 * 1024;
+const IMAGE_MAX_BYTES = 8 * MIB;
+const DOCUMENT_MAX_BYTES = 10 * MIB;
+const TOTAL_MAX_BYTES = 32 * MIB;
+
+function isImage(file: File) {
+  return IMAGE_TYPES.has(file.type);
+}
 
 /** Controlled fields share the design step's single save/rebuild action. */
 export function WebsiteRevisionFields({
@@ -20,13 +41,17 @@ export function WebsiteRevisionFields({
   const id = useId();
   const fileInput = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const [previews, setPreviews] = useState<string[]>([]);
+  const [previews, setPreviews] = useState<(string | null)[]>([]);
 
   useEffect(() => {
-    if (typeof URL.createObjectURL !== "function") return;
-    const urls = files.map((file) => URL.createObjectURL(file));
+    if (typeof URL.createObjectURL !== "function") {
+      setPreviews(files.map(() => null));
+      return;
+    }
+    const urls = files.map((file) =>
+      isImage(file) ? URL.createObjectURL(file) : null);
     setPreviews(urls);
-    return () => urls.forEach((url) => URL.revokeObjectURL(url));
+    return () => urls.forEach((url) => url && URL.revokeObjectURL(url));
   }, [files]);
 
   function addFiles(additions: File[]) {
@@ -38,10 +63,16 @@ export function WebsiteRevisionFields({
         && current.lastModified === file.lastModified)) next.push(file);
     }
     let failure: string | null = null;
-    if (next.length > 8) failure = "一次最多添加 8 张图片。";
-    else if (next.some((file) => !IMAGE_TYPES.has(file.type))) failure = "仅支持 PNG、JPEG 或 WebP 图片。";
-    else if (next.some((file) => file.size < 1 || file.size > 8 * MIB)) failure = "每张图片须大于 0 字节且不超过 8 MiB。";
-    else if (next.reduce((total, file) => total + file.size, 0) > 32 * MIB) failure = "本次图片总大小不能超过 32 MiB。";
+    if (next.length > 8) failure = "一次最多添加 8 个附件。";
+    else if (next.some((file) => !IMAGE_TYPES.has(file.type) && !DOCUMENT_TYPES.has(file.type))) {
+      failure = "仅支持 PNG、JPEG、WebP 图片，或 PDF、DOCX、TXT、Markdown 文档。";
+    } else if (next.some((file) => isImage(file)
+      ? file.size < 1 || file.size > IMAGE_MAX_BYTES
+      : file.size < 1 || file.size > DOCUMENT_MAX_BYTES)) {
+      failure = "单张图片不超过 8 MiB，单个文档不超过 10 MiB。";
+    } else if (next.reduce((total, file) => total + file.size, 0) > TOTAL_MAX_BYTES) {
+      failure = "本次附件总大小不能超过 32 MiB。";
+    }
     setError(failure);
     if (!failure) onChange(text, next);
   }
@@ -79,8 +110,8 @@ export function WebsiteRevisionFields({
           className="sfp-revision-file-input"
           type="file"
           multiple
-          accept="image/png,image/jpeg,image/webp"
-          aria-label="添加修改参考图片"
+          accept={ACCEPT_ATTRIBUTE}
+          aria-label="添加修改参考图片或文档"
           disabled={disabled}
           onChange={(event) => {
             addFiles(Array.from(event.target.files ?? []));
@@ -88,16 +119,18 @@ export function WebsiteRevisionFields({
           }}
         />
         <button type="button" className="sfp-revision-add" disabled={disabled} onClick={() => fileInput.current?.click()}>
-          <ImagePlus size={16} aria-hidden="true" /> 添加参考图片
+          <ImagePlus size={16} aria-hidden="true" /> 添加图片或文档
         </button>
-        <p id={`${id}-limits`}>可粘贴或拖入；最多 8 张，单张 ≤ 8 MiB，总计 ≤ 32 MiB。</p>
+        <p id={`${id}-limits`}>可粘贴或拖入；最多 8 个，图片 ≤ 8 MiB、文档 ≤ 10 MiB、总计 ≤ 32 MiB。文档内容会作为建站资料，原件放入网站供下载。</p>
       </div>
       {error && <p role="alert" className="sfp-revision-error">{error}</p>}
       {files.length > 0 && (
-        <ul className="sfp-revision-files" aria-label="修改参考图片">
+        <ul className="sfp-revision-files" aria-label="修改参考附件">
           {files.map((file, index) => (
             <li key={`${file.name}:${file.lastModified}:${file.size}:${index}`}>
-              {previews[index] && <img src={previews[index]} alt={`参考图片 ${index + 1}：${file.name}`} />}
+              {previews[index]
+                ? <img src={previews[index]!} alt={`参考图片 ${index + 1}：${file.name}`} />
+                : <span className="sfp-revision-doc-icon" aria-hidden="true"><FileText size={28} /></span>}
               <div className="sfp-revision-file-info">
                 <span title={file.name}>{file.name}</span>
                 <small>{(file.size / MIB).toFixed(2)} MiB</small>
@@ -107,7 +140,7 @@ export function WebsiteRevisionFields({
               </div>
               <button
                 type="button"
-                aria-label={`移除参考图片 ${file.name}`}
+                aria-label={`移除参考附件 ${file.name}`}
                 disabled={disabled}
                 onClick={() => {
                   setError(null);

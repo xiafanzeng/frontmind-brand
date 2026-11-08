@@ -13,6 +13,7 @@
 .sfp-revision-files { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
 .sfp-revision-files li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px; border: 1px solid #eae6ef; border-radius: 9px; background: #fff; }
 .sfp-revision-files img { width: 44px; height: 44px; flex-shrink: 0; border-radius: 6px; object-fit: cover; }
+.sfp-revision-doc-icon { width: 44px; height: 44px; flex-shrink: 0; border-radius: 6px; border: 1px solid #eae6ef; background: #f6f2f9; color: #714292; display: flex; align-items: center; justify-content: center; }
 .sfp-revision-file-info { display: flex; flex-direction: column; flex: 1; gap: 3px; min-width: 0; }
 .sfp-revision-file-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .sfp-revision-file-info small { color: #85818e; font-size: 10px; }

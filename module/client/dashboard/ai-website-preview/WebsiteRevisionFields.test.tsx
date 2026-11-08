@@ -22,6 +22,12 @@ function image(name: string, size = 100, type = "image/png") {
   return file;
 }
 
+function documentFile(name: string, size = 4 * 1024 * 1024, type = "application/pdf") {
+  const file = new File(["doc"], name, { type, lastModified: 2000 });
+  Object.defineProperty(file, "size", { value: size });
+  return file;
+}
+
 function Fields({ disabled = false }: { disabled?: boolean }) {
   const [text, setText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -35,9 +41,24 @@ describe("website revision fields", () => {
     render(<WebsiteRevisionFields text="" files={[]} progress={[]} onChange={onChange} />);
     fireEvent.change(screen.getByRole("textbox", { name: "补充修改要求" }), { target: { value: "预约入口移到顶部" } });
     expect(onChange).toHaveBeenLastCalledWith("预约入口移到顶部", []);
-    fireEvent.change(screen.getByLabelText("添加修改参考图片"), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("添加修改参考图片或文档"), { target: { files: [file] } });
     expect(onChange).toHaveBeenLastCalledWith("", [file]);
     expect(screen.queryByRole("button", { name: /提交|生成/ })).toBeNull();
+  });
+
+  it("accepts reference documents alongside images and shows a document tile instead of a preview", () => {
+    const pdf = documentFile("产品手册.pdf");
+    const markdown = documentFile("公司介绍.md", 2 * 1024 * 1024, "text/markdown");
+    const view = render(<Fields />);
+    fireEvent.change(screen.getByLabelText("添加修改参考图片或文档"), { target: { files: [pdf, markdown, image("hero.png")] } });
+    expect(screen.getByText("产品手册.pdf")).toBeTruthy();
+    expect(screen.getByText("公司介绍.md")).toBeTruthy();
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(view.container.querySelectorAll(".sfp-revision-doc-icon")).toHaveLength(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "移除参考附件 产品手册.pdf" }));
+    expect(screen.queryByText("产品手册.pdf")).toBeNull();
+    expect(screen.getByText("公司介绍.md")).toBeTruthy();
   });
 
   it("accepts paste and drop, deduplicates files and releases removed preview URLs", async () => {
@@ -48,21 +69,21 @@ describe("website revision fields", () => {
     expect(screen.getByText("first.png")).toBeTruthy();
     fireEvent.drop(view.container.querySelector(".sfp-revision-drop")!, { dataTransfer: { files: [first, second] } });
     expect(screen.getAllByRole("img")).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "移除参考图片 first.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "移除参考附件 first.png" }));
     expect(screen.queryByText("first.png")).toBeNull();
     await waitFor(() => expect(revoked).toHaveBeenCalledWith("blob:first.png"));
     view.unmount();
     expect(revoked).toHaveBeenCalledWith("blob:second.webp");
   });
 
-  it("rejects unsupported, empty, oversized and excessive image batches without losing valid files", () => {
+  it("rejects unsupported, empty, oversized and excessive batches without losing valid files", () => {
     render(<Fields />);
-    const input = screen.getByLabelText("添加修改参考图片");
+    const input = screen.getByLabelText("添加修改参考图片或文档");
     fireEvent.change(input, { target: { files: [image("keep.png")] } });
     fireEvent.change(input, { target: { files: [image("unsafe.svg", 10, "image/svg+xml")] } });
     expect(screen.getByRole("alert").textContent).toContain("仅支持");
     fireEvent.change(input, { target: { files: [image("empty.png", 0)] } });
-    expect(screen.getByRole("alert").textContent).toContain("大于 0");
+    expect(screen.getByRole("alert").textContent).toContain("MiB");
     fireEvent.change(input, { target: { files: [image("large.png", 8 * 1024 * 1024 + 1)] } });
     expect(screen.getByRole("alert").textContent).toContain("不超过 8 MiB");
     fireEvent.change(input, { target: { files: Array.from({ length: 8 }, (_, index) => image(`extra${index}.png`)) } });
@@ -71,12 +92,18 @@ describe("website revision fields", () => {
     expect(screen.getByText("keep.png")).toBeTruthy();
   });
 
-  it("enforces the combined image limit and displays upload progress", () => {
+  it("enforces the document size ceiling and the combined attachment limit", () => {
     const onChange = vi.fn();
+    const first = render(<WebsiteRevisionFields text="" files={[]} progress={[]} onChange={onChange} />);
+    const input = screen.getByLabelText("添加修改参考图片或文档");
+    fireEvent.change(input, { target: { files: [documentFile("大文档.pdf", 10 * 1024 * 1024 + 1)] } });
+    expect(screen.getByRole("alert").textContent).toContain("不超过 10 MiB");
+    expect(onChange).not.toHaveBeenCalled();
+    first.unmount();
     const files = Array.from({ length: 4 }, (_, index) => image(`${index}.png`, 8 * 1024 * 1024));
     render(<WebsiteRevisionFields text="" files={files} progress={[42]} onChange={onChange} />);
-    fireEvent.change(screen.getByLabelText("添加修改参考图片"), { target: { files: [image("too-much.png", 1)] } });
-    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("添加修改参考图片或文档"), { target: { files: [image("too-much.png", 1)] } });
+    expect(onChange).not.toHaveBeenCalledWith(expect.anything(), expect.anything());
     expect(screen.getByRole("alert").textContent).toContain("32 MiB");
     expect((screen.getByRole("progressbar", { name: "0.png 上传进度" }) as HTMLProgressElement).value).toBe(42);
   });

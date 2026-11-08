@@ -235,6 +235,32 @@ import {
 /** Provider-model plan compliance is nondeterministic; allow one extra
  * targeted repair before declaring the plan stage exhausted. */
 const SITEOPS_CONTENT_PLAN_MAX_REPAIR_ATTEMPTS = 2 as const;
+/** Single-file ceiling for frozen revision inputs: images ≤ 8 MiB, documents ≤ 10 MiB. */
+export const SITEOPS_REVISION_INPUT_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Reference documents ride the frozen-media pipeline as `document` entries. */
+export function siteOpsRevisionMediaKind(
+  mimeType: string,
+): "image" | "document" {
+  return mimeType.startsWith("image/") ? "image" : "document";
+}
+
+const SITEOPS_REVISION_IMAGE_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+] as const;
+
+type SiteOpsRevisionImageMime =
+  (typeof SITEOPS_REVISION_IMAGE_MIME_TYPES)[number];
+
+function isSiteOpsRevisionImageMedia<T extends { mimeType: string }>(
+  asset: T,
+): asset is T & { mimeType: SiteOpsRevisionImageMime } {
+  return (SITEOPS_REVISION_IMAGE_MIME_TYPES as readonly string[]).includes(
+    asset.mimeType,
+  );
+}
 import {
   SITEOPS_NATIVE_TEMPLATE_WORKFLOW_VERSION,
   SITEOPS_NATIVE_VISUAL_WORKFLOW_VERSION,
@@ -322,19 +348,28 @@ const operationInputSchema = z
             schemaVersion: z.literal(1),
             localAssetId: z.string().uuid(),
             filename: z.string().trim().min(1).max(512),
-            mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+            mimeType: z.enum([
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "application/pdf",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              "text/plain",
+              "text/markdown",
+            ]),
             sizeBytes: z
               .number()
               .int()
               .positive()
-              .max(8 * 1024 * 1024),
+              .max(SITEOPS_REVISION_INPUT_MAX_BYTES),
             contentSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-            width: z.number().int().positive(),
-            height: z.number().int().positive(),
+            // Images keep real raster dimensions; documents freeze as 0.
+            width: z.number().int().nonnegative(),
+            height: z.number().int().nonnegative(),
             publicPath: z
               .string()
               .regex(
-                /^\/frontmind-user-media\/[a-f0-9]{64}\.(?:png|jpg|webp)$/u,
+                /^\/frontmind-user-media\/[a-f0-9]{64}\.(?:png|jpg|webp|pdf|docx|txt|md)$/u,
               ),
             siteOpsKnowledgeInputEpochId: z.string().uuid().nullable(),
           })
@@ -5198,7 +5233,7 @@ ${input.templateCoordinateInstruction ?? ""}
 
 ${input.hasCustomerFeedback ? "客户要求见 frontmind-customer-feedback-v1.json；严守事实/样式边界。" : ""}
 
-${input.hasRevisionMedia ? "用户图见 frontmind-user-media-manifest-v1.json；按 publicUrl 用于指定页，不转码/外引。" : ""}
+${input.hasRevisionMedia ? "用户图片与文档见 frontmind-user-media-manifest-v1.json；kind=image 按 publicUrl 用于指定页，不转码/外引；kind=document 读取内容作为网站资料来源，原件按 publicUrl 放入网站供下载，不转码/外引。" : ""}
 
 ${input.hasRevisionBaseline ? "修订基线见 frontmind-parent-content-plan-v1.json；仅改明确要求，其余保持，交付完整站。" : ""}
 
@@ -6027,6 +6062,7 @@ async function handleNativeReactSiteBuild(input: {
         parentSourceSha256: revisionBaseline.sourceSha256,
         preparedBaseSourceSha256: preparedSha256,
         files: allMedia.map((asset) => ({
+          kind: siteOpsRevisionMediaKind(asset.mimeType),
           filename: asset.filename,
           mimeType: asset.mimeType,
           sizeBytes: asset.sizeBytes,
@@ -6154,19 +6190,23 @@ async function handleNativeReactSiteBuild(input: {
     revisionDocuments.length > 0
       ? [...input.documents, ...revisionDocuments]
       : input.documents;
+  // The coverage inventory only tracks raster media; reference documents are
+  // delivered as plain Manus attachments and read as content sources.
   const supplementalRevisionMedia: SupplementalKnowledgeMedia[] =
-    revisionSource?.media.map((asset) => ({
-      id: siteOpsCustomerMediaPlanId(asset.publicPath),
-      sha256: asset.contentSha256,
-      path: asset.publicPath,
-      mimeType: asset.mimeType,
-      caption: asset.filename,
-      alt: asset.filename,
-      size: asset.sizeBytes,
-      width: asset.width,
-      height: asset.height,
-      sourceDocumentIds: asset.sourceDocumentIds,
-    })) ?? [];
+    revisionSource?.media
+      .filter(isSiteOpsRevisionImageMedia)
+      .map((asset) => ({
+        id: siteOpsCustomerMediaPlanId(asset.publicPath),
+        sha256: asset.contentSha256,
+        path: asset.publicPath,
+        mimeType: asset.mimeType,
+        caption: asset.filename,
+        alt: asset.filename,
+        size: asset.sizeBytes,
+        width: asset.width,
+        height: asset.height,
+        sourceDocumentIds: asset.sourceDocumentIds,
+      })) ?? [];
   const inventory = dynamicInformationArchitecture
     ? knowledgeCoverageInventoryFromSnapshot(
         input.context.snapshot,

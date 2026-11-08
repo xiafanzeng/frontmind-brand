@@ -2411,8 +2411,8 @@ describe("redesigned live website builder setup", () => {
     const instructions = screen.getByRole("textbox", { name: "补充修改要求" }) as HTMLTextAreaElement;
     fireEvent.change(instructions, { target: { value: "重置前的修改要求" } });
     const image = new File(["reference"], "reset-reference.png", { type: "image/png" });
-    fireEvent.change(screen.getByLabelText("添加修改参考图片"), { target: { files: [image] } });
-    const references = screen.getByRole("list", { name: "修改参考图片" });
+    fireEvent.change(screen.getByLabelText("添加修改参考图片或文档"), { target: { files: [image] } });
+    const references = screen.getByRole("list", { name: "修改参考附件" });
     fireEvent.click(screen.getByText("更多"));
     fireEvent.click(screen.getByRole("button", { name: "重新开始制作" }));
     fireEvent.click(screen.getByRole("button", { name: "确认重新开始" }));
@@ -2426,7 +2426,7 @@ describe("redesigned live website builder setup", () => {
       await waitFor(() => expect(screen.getByRole("heading", { name: "选择一个模板版式" })).toBeTruthy());
       fireEvent.click(screen.getByRole("button", { name: /网站设计/u }));
     await waitFor(() => expect((screen.getByRole("textbox", { name: "补充修改要求" }) as HTMLTextAreaElement).value).toBe(""));
-    expect(screen.queryByRole("list", { name: "修改参考图片" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "修改参考附件" })).toBeNull();
     expect(screen.getByText("助手试用未完成")).toBeTruthy();
     expect(onAction).toHaveBeenLastCalledWith({ action: "request_rebuild", input: {} });
   });
@@ -2451,7 +2451,7 @@ describe("redesigned live website builder setup", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "补充修改要求" }), {
       target: { value: instructions },
     });
-    fireEvent.change(screen.getByLabelText("添加修改参考图片"), {
+    fireEvent.change(screen.getByLabelText("添加修改参考图片或文档"), {
       target: { files: [image] },
     });
     fireEvent.click(screen.getByTestId("website-revision-submit"));
