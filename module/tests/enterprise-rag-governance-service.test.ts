@@ -5,8 +5,10 @@ import { describe, expect, it } from "vitest";
 import type { BrandKeywordPorts } from "../server/brand-keyword-ports.js";
 import {
   createEnterpriseRagGovernanceService,
+  enterpriseRagOptimizationRequestHash,
   enterpriseRagRegressionDatasetHash,
   enterpriseRagRegressionMetricsPass,
+  enterpriseRagReleaseRequestHash,
   enterpriseRagWorkspaceEvaluationChannelId,
 } from "../server/enterprise-rag-governance-service.js";
 import type { ModuleHttpCore } from "../server/http-api.js";
@@ -14,6 +16,7 @@ import { registerIntentSkillPorts } from "../server/intent-skill-runtime.js";
 
 const REQUEST_ID = "00000000-0000-4000-8000-000000000201";
 const PROJECT_ID = "00000000-0000-4000-8000-000000000299";
+const OTHER_PROJECT_ID = "00000000-0000-4000-8000-000000000399";
 
 function harness(environment: Record<string, string> = {}) {
   const versions = mysqlTable("governance_versions_test", {
@@ -117,9 +120,12 @@ function harness(environment: Record<string, string> = {}) {
     enterpriseRagOptimizationProposals: proposals, enterpriseRagRegressionRuns: regressions,
     enterpriseRagReleaseEvents: releaseEvents,
   } as unknown as BrandKeywordPorts);
-  const service = (access: "system_admin" | "delivery_admin") => {
+  const service = (
+    access: "system_admin" | "delivery_admin",
+    enterpriseProjectId: string | null = PROJECT_ID,
+  ) => {
     const core: ModuleHttpCore = {
-      context: () => ({ accountUserId: 42, actorUserId: 7, enterpriseProjectId: PROJECT_ID, businessOwnerId: "42", businessActorId: "7" }),
+      context: () => ({ accountUserId: 42, actorUserId: 7, enterpriseProjectId, businessOwnerId: "42", businessActorId: "7" }),
       database: async () => db,
       environment,
     };
@@ -191,6 +197,32 @@ describe("enterprise RAG governance safety boundary", () => {
     expect(rows.channels).toEqual([expect.objectContaining({ id: "global", scope: "global", activeVersionId: "rag-eval-1.4+skill-3.0.0", revision: 1 })]);
   });
 
+  it("binds optimization idempotency to the selected workspace before replay", async () => {
+    const { rows, service } = harness({ BRAND_RAG_GOVERNANCE_ENABLED: "true" });
+    await service("system_admin").initialize({ clientRequestId: REQUEST_ID });
+    const input = {
+      clientRequestId: "00000000-0000-4000-8000-000000000211",
+      scope: "workspace" as const,
+      caseIds: ["00000000-0000-4000-8000-000000000212"],
+    };
+    const existing = {
+      id: "00000000-0000-4000-8000-000000000213",
+      enterpriseProjectId: PROJECT_ID,
+      scope: "workspace",
+      clientRequestId: input.clientRequestId,
+      requestHash: enterpriseRagOptimizationRequestHash(input, PROJECT_ID),
+      status: "reserved",
+      createdByUserId: 7,
+    };
+    rows.proposals.push(existing);
+
+    await expect(service("delivery_admin").startOptimization(input)).resolves.toEqual(existing);
+    expect(enterpriseRagOptimizationRequestHash(input, PROJECT_ID))
+      .not.toBe(enterpriseRagOptimizationRequestHash(input, OTHER_PROJECT_ID));
+    await expect(service("delivery_admin", OTHER_PROJECT_ID).startOptimization(input))
+      .rejects.toMatchObject({ code: "IDEMPOTENCY_SCOPE_CONFLICT", status: 409 });
+  });
+
   it("computes the frozen regression dataset hash when the client omits it", async () => {
     const { rows, service } = harness({ BRAND_RAG_GOVERNANCE_ENABLED: "true" });
     await service("system_admin").initialize({ clientRequestId: REQUEST_ID });
@@ -257,6 +289,24 @@ describe("enterprise RAG governance safety boundary", () => {
     await expect(service("system_admin").channel(channelId)).resolves.toMatchObject({
       id: channelId, scope: "workspace", enterpriseProjectId: PROJECT_ID, activeVersionId: "candidate-v2", revision: 2,
     });
+    const rollbackRequest = {
+      clientRequestId: "00000000-0000-4000-8000-000000000236",
+      action: "rollback" as const,
+      channelId,
+      expectedRevision: 2,
+      reason: "restore built-in version",
+    };
+    const rollback = await service("system_admin").release("rag-eval-1.4+skill-3.0.0", rollbackRequest);
+    await expect(service("system_admin").release("rag-eval-1.4+skill-3.0.0", rollbackRequest))
+      .resolves.toEqual(rollback);
+    expect(enterpriseRagReleaseRequestHash("rag-eval-1.4+skill-3.0.0", rollbackRequest, {
+      channelScope: "workspace", enterpriseProjectId: PROJECT_ID,
+    })).not.toBe(enterpriseRagReleaseRequestHash("rag-eval-1.4+skill-3.0.0", rollbackRequest, {
+      channelScope: "workspace", enterpriseProjectId: OTHER_PROJECT_ID,
+    }));
+    await expect(service("system_admin", OTHER_PROJECT_ID)
+      .release("rag-eval-1.4+skill-3.0.0", rollbackRequest))
+      .rejects.toMatchObject({ code: "RELEASE_CHANNEL_MISMATCH", status: 403 });
     await expect(service("system_admin").release("candidate-v2", { ...request,
       clientRequestId: "00000000-0000-4000-8000-000000000234",
     })).rejects.toMatchObject({ code: "RELEASE_REVISION_CONFLICT" });

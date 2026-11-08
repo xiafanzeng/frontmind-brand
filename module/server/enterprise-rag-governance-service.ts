@@ -34,6 +34,27 @@ const releaseSchema = z.object({
   expectedRevision: z.number().int().positive(),
   reason: z.string().trim().min(1).max(2_000),
 }).strict();
+type OptimizationInput = z.infer<typeof optimizationSchema>;
+type ReleaseInput = z.infer<typeof releaseSchema>;
+type ReleaseScope = {
+  channelScope: "global" | "workspace";
+  enterpriseProjectId: string | null;
+};
+
+export function enterpriseRagOptimizationRequestHash(
+  input: OptimizationInput,
+  enterpriseProjectId: string | null,
+) {
+  return intentHash({ ...input, enterpriseProjectId });
+}
+
+export function enterpriseRagReleaseRequestHash(
+  versionId: string,
+  input: ReleaseInput,
+  scope: ReleaseScope,
+) {
+  return intentHash({ versionId, ...input, ...scope });
+}
 const releaseMetricsSchema = z.object({
   overallAgreementDelta: z.number().finite(),
   falseAcceptanceDelta: z.number().finite(),
@@ -261,12 +282,31 @@ export function createEnterpriseRagGovernanceService(core: ModuleHttpCore, reque
     if (input.scope === "workspace" && !context.enterpriseProjectId) throw new EnterpriseRagHumanReviewError("PROJECT_REQUIRED", "工作区优化任务必须绑定企业项目。", 409);
     const db = await database();
     await assertInitialized(db);
-    const requestHash = intentHash(input);
+    const requestedEnterpriseProjectId = input.scope === "workspace"
+      ? context.enterpriseProjectId
+      : null;
+    const requestHash = enterpriseRagOptimizationRequestHash(
+      input,
+      requestedEnterpriseProjectId,
+    );
+    const assertReplayScope = (candidate: any) => {
+      const matches = candidate.scope === input.scope &&
+        (input.scope === "workspace"
+          ? candidate.enterpriseProjectId === requestedEnterpriseProjectId
+          : candidate.enterpriseProjectId === null);
+      if (!matches) {
+        throw new EnterpriseRagHumanReviewError(
+          "IDEMPOTENCY_SCOPE_CONFLICT",
+          "优化任务请求标识已用于其他工作区或分析范围。",
+        );
+      }
+    };
     const existing = (await db.select().from(model.enterpriseRagOptimizationProposals).where(and(
       eq(model.enterpriseRagOptimizationProposals.createdByUserId, actor!.id),
       eq(model.enterpriseRagOptimizationProposals.clientRequestId, input.clientRequestId),
     )).limit(1))[0];
     if (existing) {
+      assertReplayScope(existing);
       if (existing.requestHash !== requestHash) throw new EnterpriseRagHumanReviewError("IDEMPOTENCY_CONFLICT", "优化任务请求标识已用于其他内容。");
       return existing;
     }
@@ -278,6 +318,7 @@ export function createEnterpriseRagGovernanceService(core: ModuleHttpCore, reque
           eq(model.enterpriseRagOptimizationProposals.clientRequestId, input.clientRequestId),
         )).limit(1).for("update"))[0];
         if (concurrentReplay) {
+          assertReplayScope(concurrentReplay);
           if (concurrentReplay.requestHash !== requestHash) throw new EnterpriseRagHumanReviewError("IDEMPOTENCY_CONFLICT", "优化任务请求标识已用于其他内容。");
           row = concurrentReplay;
           return;
@@ -312,6 +353,7 @@ export function createEnterpriseRagGovernanceService(core: ModuleHttpCore, reque
         eq(model.enterpriseRagOptimizationProposals.clientRequestId, input.clientRequestId),
       )).limit(1))[0];
       if (!replay) throw new EnterpriseRagHumanReviewError("OPTIMIZATION_CONCURRENT_WRITE", "并发优化任务正在结算，请重新读取。", 409);
+      assertReplayScope(replay);
       if (replay.requestHash !== requestHash) throw new EnterpriseRagHumanReviewError("IDEMPOTENCY_CONFLICT", "优化任务请求标识已用于其他内容。");
       return replay;
     }
@@ -421,7 +463,32 @@ export function createEnterpriseRagGovernanceService(core: ModuleHttpCore, reque
     if (input.action === "global" && input.channelId !== "global") {
       throw new EnterpriseRagHumanReviewError("RELEASE_CHANNEL_MISMATCH", "全局发布必须使用全局评估通道。", 400);
     }
-    const requestHash = intentHash({ versionId: target, ...input });
+    const assertReleaseChannelScope = (candidate: any) => {
+      const actionMatches = input.action === "rollback" ||
+        (input.action === "global" && candidate.scope === "global") ||
+        (input.action === "canary" && candidate.scope === "workspace");
+      if (!actionMatches) {
+        throw new EnterpriseRagHumanReviewError("RELEASE_CHANNEL_MISMATCH", "发布动作与通道范围不匹配。", 400);
+      }
+      if (candidate.scope === "workspace" && candidate.enterpriseProjectId !== context.enterpriseProjectId) {
+        throw new EnterpriseRagHumanReviewError("RELEASE_CHANNEL_MISMATCH", "评估通道不属于当前企业项目。", 403);
+      }
+    };
+    const preflightChannel = (await db.select().from(model.enterpriseRagEvaluationChannels)
+      .where(eq(model.enterpriseRagEvaluationChannels.id, input.channelId)).limit(1))[0];
+    if (!preflightChannel && input.action !== "canary") {
+      throw new EnterpriseRagHumanReviewError("RELEASE_INPUT_NOT_FOUND", "评估版本、回归结果或发布通道不存在。", 404);
+    }
+    if (preflightChannel) assertReleaseChannelScope(preflightChannel);
+    const releaseScope: ReleaseScope = preflightChannel
+      ? {
+          channelScope: preflightChannel.scope,
+          enterpriseProjectId: preflightChannel.scope === "workspace"
+            ? preflightChannel.enterpriseProjectId
+            : null,
+        }
+      : { channelScope: "workspace", enterpriseProjectId: context.enterpriseProjectId };
+    const requestHash = enterpriseRagReleaseRequestHash(target, input, releaseScope);
     const replay = (await db.select().from(model.enterpriseRagReleaseEvents).where(and(
       eq(model.enterpriseRagReleaseEvents.actorUserId, actor!.id),
       eq(model.enterpriseRagReleaseEvents.clientRequestId, input.clientRequestId),
@@ -451,6 +518,7 @@ export function createEnterpriseRagGovernanceService(core: ModuleHttpCore, reque
       }
       const channel = (await tx.select().from(model.enterpriseRagEvaluationChannels).where(eq(model.enterpriseRagEvaluationChannels.id, input.channelId)).limit(1).for("update"))[0];
       if (!version || !channel || (input.action !== "rollback" && !regression)) throw new EnterpriseRagHumanReviewError("RELEASE_INPUT_NOT_FOUND", "评估版本、回归结果或发布通道不存在。", 404);
+      assertReleaseChannelScope(channel);
       const concurrentReplay = (await tx.select().from(model.enterpriseRagReleaseEvents).where(and(
         eq(model.enterpriseRagReleaseEvents.actorUserId, actor!.id),
         eq(model.enterpriseRagReleaseEvents.clientRequestId, input.clientRequestId),
@@ -490,11 +558,6 @@ export function createEnterpriseRagGovernanceService(core: ModuleHttpCore, reque
           )).limit(1),
         ]);
         if (!canary[0] || !activeCanary[0]) throw new EnterpriseRagHumanReviewError("CANARY_REQUIRED", "候选评估版本必须先完成并保持至少一个工作区灰度发布。", 409);
-      }
-      const channelMatches = input.action === "rollback" || (input.action === "global" && channel.scope === "global") || (input.action === "canary" && channel.scope === "workspace");
-      if (!channelMatches) throw new EnterpriseRagHumanReviewError("RELEASE_CHANNEL_MISMATCH", "发布动作与通道范围不匹配。", 400);
-      if (channel.scope === "workspace" && channel.enterpriseProjectId !== context.enterpriseProjectId) {
-        throw new EnterpriseRagHumanReviewError("RELEASE_CHANNEL_MISMATCH", "评估通道不属于当前企业项目。", 403);
       }
       const event = { id: randomUUID(), channelId: channel.id, action: input.action, clientRequestId: input.clientRequestId, requestHash, fromVersionId: channel.activeVersionId, toVersionId: target, regressionRunId: regression?.id ?? null, actorUserId: actor!.id, reason: input.reason };
       await tx.insert(model.enterpriseRagReleaseEvents).values(event);
