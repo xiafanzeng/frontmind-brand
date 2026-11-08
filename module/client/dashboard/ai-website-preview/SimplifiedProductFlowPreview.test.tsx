@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnterpriseRagPreview } from "./EnterpriseRagPreview";
@@ -8,6 +9,7 @@ import {
   loadWebsiteDraft,
   SimplifiedWebsiteBuilderPreview,
 } from "./SimplifiedWebsiteBuilderPreview";
+import type { WebsiteEvaluationAuthorityView } from "./WebsiteEvaluationWorkspace";
 import { previewRagAnswer } from "./preview-copy";
 import {
   listEvaluationReports,
@@ -15,11 +17,27 @@ import {
   saveEvaluationReport,
 } from "./evaluation-report-store";
 
+const toastMock = vi.hoisted(() => ({
+  error: vi.fn(),
+  message: vi.fn(),
+  success: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({ toast: toastMock }));
+
 const draftStorageKey = "frontmind.website-builder.draft";
+const simplifiedProductPreviewStyles = readFileSync(
+  "client/dashboard/ai-website-preview/simplified-product-preview.css",
+  "utf8",
+);
 installRagPreviewFixtures(ragPreviewFixtures);
 
-beforeEach(() => window.localStorage.clear());
-
+beforeEach(() => {
+  window.localStorage.clear();
+  toastMock.error.mockClear();
+  toastMock.message.mockClear();
+  toastMock.success.mockClear();
+});
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
@@ -36,25 +54,88 @@ async function trialAssistantOnce(question = "FrontMind 可以帮企业做什么
   });
 }
 
+function completedWebsiteEvaluation(reportId = "report-first-assessment"): WebsiteEvaluationAuthorityView {
+  return {
+    buildId: "build-first-assessment",
+    status: "completed",
+    runId: "run-first-assessment",
+    reportId,
+    reportHash: `hash-${reportId}`,
+    reportUrl: `/website-evaluations/reports/${reportId}`,
+    score: 86,
+    recommendation: "recommended",
+    verdict: "推荐发布",
+    summary: "当前网站版本已完成建设评估。",
+    judgmentCoverage: 100,
+    brandReferenceCoverage: 100,
+    dimensions: [],
+    risks: [],
+    evidenceUpdatedLabel: "2026-11-08T14:35:12+08:00",
+  };
+}
+
 describe("simplified AI website preview", () => {
+  it("suppresses the Safari pointer focus rectangle without hiding keyboard focus", () => {
+    expect(simplifiedProductPreviewStyles).toMatch(
+      /\.sfp-root\[data-step\][^{]+\.sfp-steps[^{}]+button\s*\{[^}]*-webkit-tap-highlight-color:\s*transparent;/s,
+    );
+    expect(simplifiedProductPreviewStyles).toMatch(
+      /\.sfp-root\[data-step\][^{]+\.sfp-steps[^{}]+button:focus:not\(:focus-visible\)\s*\{[^}]*outline:\s*0;/s,
+    );
+    expect(simplifiedProductPreviewStyles).toMatch(
+      /\.sfp-root\[data-step\][^{]+\.sfp-steps[^{}]+button:focus-visible\s*\{[^}]*box-shadow:[^}]+outline:\s*0;/s,
+    );
+  });
+
   it("shows exactly three global steps and enters the merged website design step", () => {
     render(<SimplifiedWebsiteBuilderPreview />);
 
     const journey = screen.getByRole("list", { name: "网站建设流程" });
-    const workspaceActions = screen.getByRole("group", { name: "网站状态与操作" });
+    const leadingActions = screen.getByRole("group", { name: "草稿与返回" });
+    const workspaceActions = screen.getByRole("group", { name: "网站流程操作" });
     expect(screen.queryByText("从知识库快速搭建帮助中心")).toBeNull();
     expect(screen.queryByText("先完成网站建设与整体评估，再考虑域名和正式上线。")).toBeNull();
-    expect(journey.nextElementSibling).toBe(workspaceActions);
-    expect(within(workspaceActions).getByText("建设中")).toBeTruthy();
+    expect(journey.parentElement?.previousElementSibling).toBe(leadingActions);
+    expect(journey.parentElement?.nextElementSibling).toBe(workspaceActions);
+    expect(within(leadingActions).getByRole("button", { name: "保存" })).toBeTruthy();
+    expect((within(leadingActions).getByRole("button", { name: "返回" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(workspaceActions).getByRole("button", { name: "进入设计" })).toBeTruthy();
+    expect(document.querySelector(".sfp-draft-state")).toBeNull();
     expect(within(journey).getAllByRole("listitem")).toHaveLength(3);
     expect(within(journey).getByRole("button", { name: /选择模板$/ })).toBeTruthy();
-    expect(within(journey).getByRole("button", { name: /网站设计$/ })).toBeTruthy();
-    expect(within(journey).getByRole("button", { name: /建设评估$/ })).toBeTruthy();
+    const designStep = within(journey).getByRole("button", { name: /网站设计$/ }) as HTMLButtonElement;
+    const evaluationStep = within(journey).getByRole("button", { name: /建设评估$/ }) as HTMLButtonElement;
+    expect(designStep.disabled).toBe(true);
+    expect(evaluationStep.disabled).toBe(true);
     expect(within(journey).queryByRole("button", { name: /确认结构/ })).toBeNull();
     expect(within(journey).queryByRole("button", { name: /AI 助手/ })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "进入设计" }));
     expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+    expect(designStep.disabled).toBe(false);
+    expect(evaluationStep.disabled).toBe(true);
+  });
+
+  it("shows the shared shimmer state until the draft save feedback completes", async () => {
+    vi.useFakeTimers();
+    render(<SimplifiedWebsiteBuilderPreview />);
+
+    const save = screen.getByRole("button", { name: "保存" });
+    fireEvent.click(save);
+
+    const saving = screen.getByRole("button", { name: "正在保存" }) as HTMLButtonElement;
+    expect(saving.disabled).toBe(true);
+    expect(saving.getAttribute("aria-busy")).toBe("true");
+    expect(saving.classList.contains("is-running")).toBe(true);
+    expect(toastMock.success).not.toHaveBeenCalled();
+
+    await act(async () => vi.advanceTimersByTimeAsync(800));
+
+    const restored = screen.getByRole("button", { name: "保存" }) as HTMLButtonElement;
+    expect(restored.disabled).toBe(false);
+    expect(restored.hasAttribute("aria-busy")).toBe(false);
+    expect(restored.classList.contains("is-running")).toBe(false);
+    expect(toastMock.success).toHaveBeenCalledWith("草稿已保存");
   });
 
   it("renders four design sections with one knowledge projection and one preview device picker", () => {
@@ -253,7 +334,7 @@ describe("simplified AI website preview", () => {
     render(<SimplifiedWebsiteBuilderPreview />);
     expect((screen.getByRole("radio", { name: /知识帮助中心/ }) as HTMLInputElement).checked).toBe(true);
     expect(screen.queryByText("products:cloud")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "进入设计" }));
     expect(screen.getByText("共 5 个栏目，5 个启用")).toBeTruthy();
     expect((screen.getByLabelText("在网站中显示快速开始") as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText("在网站中显示产品与服务") as HTMLInputElement).checked).toBe(true);
@@ -277,21 +358,21 @@ describe("simplified AI website preview", () => {
     render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
 
     const panel = screen.getByTestId("website-config-checks");
-    expect(panel.textContent).toContain("配置检查项");
-    expect(panel.textContent).toContain("非计分检查");
-    expect(panel.textContent).toContain("不参与 40/40/20 加权评分");
+    expect(panel.textContent).toContain("发布检查");
+    expect(panel.textContent).not.toContain("配置检查项");
+    expect(panel.textContent).not.toContain("不计入评分");
     for (const id of ["C01", "C02", "C03", "C04"]) {
-      expect(panel.textContent).toContain(id);
+      expect(panel.textContent).not.toContain(id);
     }
     expect(panel.textContent).toContain("模板选择");
     expect(panel.textContent).toContain("页面结构");
-    expect(panel.textContent).toContain("网站信息与主题");
-    expect(panel.textContent).toContain("助手配置与真实试聊");
-    expect(panel.textContent).toContain("待确认");
+    expect(panel.textContent).toContain("网站设置");
+    expect(panel.textContent).toContain("助手试聊");
+    expect(panel.querySelectorAll("li.is-pending")).toHaveLength(4);
 
     // The assistant repair entry jumps straight into the assistant area.
     fireEvent.click(
-      within(panel).getByRole("button", { name: "查看助手设置" }),
+      within(panel).getByRole("button", { name: "查看助手" }),
     );
     expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
     const assistantSection = document.querySelector('[data-design-section="assistant"]');
@@ -392,19 +473,40 @@ describe("simplified AI website preview", () => {
     expect(screen.getByText("助手试用已完成")).toBeTruthy();
   });
 
-  it("requires one real trial and then goes directly from website design to evaluation", async () => {
+  it("starts assessment after one real trial and opens evaluation when the new report completes", async () => {
     const onStepChange = vi.fn();
-    render(<SimplifiedWebsiteBuilderPreview initialStep="design" onStepChange={onStepChange} />);
+    const onReevaluateWebsiteEvaluation = vi.fn(async () => undefined);
+    const view = render(<SimplifiedWebsiteBuilderPreview
+      initialStep="design"
+      onStepChange={onStepChange}
+      onReevaluateWebsiteEvaluation={onReevaluateWebsiteEvaluation}
+    />);
+    const journey = screen.getByRole("list", { name: "网站建设流程" });
+    const evaluationStep = within(journey).getByRole("button", { name: /建设评估$/ }) as HTMLButtonElement;
+    expect(evaluationStep.disabled).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
-    expect(screen.getByRole("status").textContent).toMatch(/右侧统一预览中提问一次/);
+    fireEvent.click(screen.getByRole("button", { name: "开始评估" }));
+    expect(toastMock.message).toHaveBeenCalledWith(expect.stringMatching(/右侧统一预览中提问一次/));
     expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
 
     await trialAssistantOnce();
     expect(screen.getAllByRole("button", { name: /来源：合成资料/ }).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始评估" }));
 
-    expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
+    await waitFor(() => expect(onReevaluateWebsiteEvaluation).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "建设评估" })).toBeNull();
+    expect(evaluationStep.disabled).toBe(true);
+
+    view.rerender(<SimplifiedWebsiteBuilderPreview
+      initialStep="design"
+      onStepChange={onStepChange}
+      onReevaluateWebsiteEvaluation={onReevaluateWebsiteEvaluation}
+      websiteEvaluation={completedWebsiteEvaluation()}
+    />);
+    await waitFor(() => expect(screen.getByRole("region", { name: "建设评估" })).toBeTruthy());
+    expect(evaluationStep.disabled).toBe(false);
+    expect(screen.queryByRole("heading", { name: "网站设计" })).toBeNull();
     expect(onStepChange).toHaveBeenLastCalledWith("evaluation");
     expect(screen.queryByRole("heading", { name: "配置 AI 助手" })).toBeNull();
   });
@@ -437,62 +539,65 @@ describe("simplified AI website preview", () => {
   });
 
   it("invalidates the one combined design step when any design field changes", async () => {
-    render(<SimplifiedWebsiteBuilderPreview />);
+    const onReevaluateWebsiteEvaluation = vi.fn(async () => undefined);
+    const view = render(<SimplifiedWebsiteBuilderPreview
+      initialStep="design"
+      onReevaluateWebsiteEvaluation={onReevaluateWebsiteEvaluation}
+    />);
 
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
     await trialAssistantOnce();
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
-    expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(2);
-
+    fireEvent.click(screen.getByRole("button", { name: "开始评估" }));
+    await waitFor(() => expect(onReevaluateWebsiteEvaluation).toHaveBeenCalledTimes(1));
+    view.rerender(<SimplifiedWebsiteBuilderPreview
+      initialStep="design"
+      onReevaluateWebsiteEvaluation={onReevaluateWebsiteEvaluation}
+      websiteEvaluation={completedWebsiteEvaluation("report-before-edit")}
+    />);
     const journey = screen.getByRole("list", { name: "网站建设流程" });
+    const evaluationStep = within(journey).getByRole("button", { name: /建设评估$/ }) as HTMLButtonElement;
+    await waitFor(() => expect(screen.getByRole("region", { name: "建设评估" })).toBeTruthy());
+    expect(evaluationStep.disabled).toBe(false);
+    expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(3);
+
     fireEvent.click(within(journey).getByRole("button", { name: /网站设计$/ }));
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+
     fireEvent.change(screen.getByLabelText("网站名称"), { target: { value: "更新后的帮助中心" } });
     expect(document.querySelectorAll('[data-complete="true"]')).toHaveLength(1);
+    expect(evaluationStep.disabled).toBe(true);
 
-    fireEvent.click(within(journey).getByRole("button", { name: /建设评估$/ }));
-    expect(screen.getByRole("button", { name: "确认当前建设草稿" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(evaluationStep);
+    expect(screen.queryByRole("region", { name: "建设评估" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
+    expect(document.querySelector(".sfp-actions")).toBeNull();
   });
 
-  it("shows an unassessed website-only 40/40/20 score without a RAG scoring group", () => {
+  it("shows an unassessed website without a fake score, empty radar, or RAG scoring group", () => {
     render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
 
-    expect(screen.queryByRole("heading", { name: "配置门槛（不计分）" })).toBeNull();
-    expect(screen.getByLabelText(/当前加权评估分/).textContent).toMatch(/—.*\/100.*暂定结果/);
-    expect(screen.getByText("当前建议：暂不建议发布")).toBeTruthy();
-    expect(screen.getByText("无法计算")).toBeTruthy();
-    expect(screen.getByText(/0 \+ 0 \+ 0 = 0 → — 分/)).toBeTruthy();
-    expect(screen.getByText("权重：网站内容与体验 40 分 · 企业事实与公开边界 40 分 · 流程与发布说明 20 分")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("尚无权威评估");
+    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
+    expect(screen.queryByLabelText("网站建设六维评分雷达图")).toBeNull();
+    expect(screen.queryByText(/\/100/)).toBeNull();
+    expect(screen.queryByText("网站质量")).toBeNull();
     expect(screen.queryByRole("heading", { name: "RAG 回答质量" })).toBeNull();
-    expect(within(screen.getByLabelText("关联的企业 RAG 评估")).getByText(/未关联评估快照；不影响网站得分或发布选择/)).toBeTruthy();
+    expect(screen.queryByLabelText("RAG 参考")).toBeNull();
   });
 
-  it("keeps publish confirmation available at low coverage and stores a separate risk decision", () => {
+  it("does not create a browser score, report, or publish decision in standalone mode", () => {
     render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
 
-    const releaseButton = screen.getByRole("button", { name: "进入发布确认" });
+    const releaseButton = screen.getByRole("button", { name: "完成发布" });
     expect(releaseButton.hasAttribute("disabled")).toBe(false);
     fireEvent.click(releaseButton);
-
-    const dialog = within(screen.getByRole("dialog", { name: "发布确认" }));
-    expect(dialog.getByText(/这些结果只提供质量建议，不会替你决定/)).toBeTruthy();
-    expect(dialog.getByText(/当前原型不会执行真实部署/)).toBeTruthy();
-    fireEvent.click(dialog.getByRole("button", { name: "我已了解风险，继续发布" }));
-
     expect(screen.queryByRole("dialog", { name: "发布确认" })).toBeNull();
-    expect(listPublishDecisions()).toEqual([
-      expect.objectContaining({
-        action: "publish",
-        mode: "accepted_risk",
-        riskAcknowledged: true,
-        evaluationReportIds: [expect.stringMatching(/^website-report-/)],
-      }),
-    ]);
-    expect(listEvaluationReports().map((report) => report.reportId)).toEqual(
-      listPublishDecisions()[0].evaluationReportIds,
-    );
+    expect(toastMock.message).toHaveBeenCalledWith(expect.stringMatching(/本地候选不生成浏览器评分或发布决定/));
+    expect(listPublishDecisions()).toEqual([]);
+    expect(listEvaluationReports()).toEqual([]);
   });
 
-  it("explicitly links a RAG snapshot without changing the website score", () => {
+  it("keeps legacy RAG snapshots out of the redesigned website assessment", () => {
     expect(saveEvaluationReport({
       reportId: "rag-report-linked",
       createdAt: "2026-10-23T08:00:00.000Z",
@@ -518,11 +623,10 @@ describe("simplified AI website preview", () => {
     })).toBe(true);
 
     render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
-    const scoreBefore = screen.getByLabelText(/当前加权评估分/).textContent;
-    fireEvent.click(screen.getByRole("button", { name: "关联最新 RAG 评估" }));
-
-    expect(within(screen.getByLabelText("关联的企业 RAG 评估")).getByText(/已关联 12\/100 · 1.0.0/)).toBeTruthy();
-    expect(screen.getByLabelText(/当前加权评估分/).textContent).toBe(scoreBefore);
+    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
+    expect(screen.queryByLabelText("RAG 参考")).toBeNull();
+    expect(screen.queryByRole("button", { name: /查找 RAG 评估/ })).toBeNull();
+    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
   });
 
   it("keeps direct answer details in the RAG workspace without restoring removed website shortcuts", async () => {

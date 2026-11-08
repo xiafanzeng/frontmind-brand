@@ -1409,6 +1409,287 @@ const siteOperations = mysqlTable(
     index("site_operations_build_idx").on(table.buildId, table.status),
   ],
 );
+/** One logical, restart-safe evaluation for one immutable website build. */
+const siteEvaluationRuns = mysqlTable(
+  "site_evaluation_runs",
+  {
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(
+      () => core.currentEnterpriseProjectId() ?? sql`NULL`,
+    ),
+    id: varchar("id", { length: 36 }).primaryKey(),
+    userId: int("user_id")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    buildId: varchar("build_id", { length: 36 })
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    stage: mysqlEnum("stage", ["build_readiness"])
+      .default("build_readiness")
+      .notNull(),
+    status: mysqlEnum("status", [
+      "queued",
+      "capturing",
+      "running",
+      "result_pending",
+      "completed",
+      "failed",
+    ])
+      .default("queued")
+      .notNull(),
+    admissionMode: mysqlEnum("admission_mode", ["shadow", "user"])
+      .default("user")
+      .notNull(),
+    evidenceFingerprint: varchar("evidence_fingerprint", { length: 64 }).notNull(),
+    evidenceManifestVersion: varchar("evidence_manifest_version", {
+      length: 64,
+    }).notNull(),
+    ruleVersion: varchar("rule_version", { length: 64 }).notNull(),
+    judgeVersion: varchar("judge_version", { length: 64 }).notNull(),
+    skillVersion: varchar("skill_version", { length: 64 }).notNull(),
+    model: varchar("model", { length: 128 }),
+    skillHash: varchar("skill_hash", { length: 64 }),
+    contractRevision: int("contract_revision", { unsigned: true }).notNull(),
+    idempotencyKeyHash: varchar("idempotency_key_hash", { length: 64 }).notNull(),
+    attemptCount: int("attempt_count", { unsigned: true }).default(0).notNull(),
+    automaticRetryCount: int("automatic_retry_count", { unsigned: true })
+      .default(0)
+      .notNull(),
+    leaseOwner: varchar("lease_owner", { length: 128 }),
+    leaseExpiresAt: timestamp("lease_expires_at"),
+    nextAttemptAt: timestamp("next_attempt_at"),
+    errorCode: varchar("error_code", { length: 128 }),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_evaluation_runs_coordinate_uq").on(
+      table.projectId,
+      table.buildId,
+      table.stage,
+      table.evidenceFingerprint,
+      table.ruleVersion,
+      table.judgeVersion,
+    ),
+    uniqueIndex("site_evaluation_runs_idempotency_uq").on(
+      table.projectId,
+      table.idempotencyKeyHash,
+    ),
+    index("site_evaluation_runs_lease_idx").on(
+      table.status,
+      table.nextAttemptAt,
+      table.leaseExpiresAt,
+      table.createdAt,
+    ),
+    index("site_evaluation_runs_build_idx").on(
+      table.buildId,
+      table.createdAt,
+    ),
+  ],
+);
+
+
+/** Append-only provider/capture attempts for a logical evaluation run. */
+const siteEvaluationAttempts = mysqlTable(
+  "site_evaluation_attempts",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    runId: varchar("run_id", { length: 36 })
+      .notNull()
+      .references(() => siteEvaluationRuns.id, { onDelete: "cascade" }),
+    ordinal: int("ordinal", { unsigned: true }).notNull(),
+    trigger: mysqlEnum("trigger", [
+      "automatic",
+      "automatic_retry",
+      "manual_retry",
+    ]).notNull(),
+    clientRequestId: varchar("client_request_id", { length: 128 }),
+    status: mysqlEnum("status", [
+      "queued",
+      "capturing",
+      "create_unknown",
+      "running",
+      "result_pending",
+      "completed",
+      "failed",
+    ])
+      .default("queued")
+      .notNull(),
+    providerOperationId: varchar("provider_operation_id", { length: 191 }),
+    providerTaskId: varchar("provider_task_id", { length: 191 }),
+    model: varchar("model", { length: 128 }),
+    runtime: json("runtime").$type<Record<string, unknown>>(),
+    usage: json("usage").$type<Record<string, unknown>>(),
+    errorCode: varchar("error_code", { length: 128 }),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_evaluation_attempts_run_ordinal_uq").on(
+      table.runId,
+      table.ordinal,
+    ),
+    uniqueIndex("site_evaluation_attempts_run_request_uq").on(
+      table.runId,
+      table.clientRequestId,
+    ),
+    index("site_evaluation_attempts_status_idx").on(
+      table.status,
+      table.createdAt,
+    ),
+  ],
+);
+
+
+/** Immutable canonical result. A run may commit at most one report. */
+const siteEvaluationReports = mysqlTable(
+  "site_evaluation_reports",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    runId: varchar("run_id", { length: 36 })
+      .notNull()
+      .references(() => siteEvaluationRuns.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    buildId: varchar("build_id", { length: 36 })
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    stage: mysqlEnum("stage", ["build_readiness"])
+      .default("build_readiness")
+      .notNull(),
+    evidenceFingerprint: varchar("evidence_fingerprint", { length: 64 }).notNull(),
+    evidenceLocalAssetId: varchar("evidence_local_asset_id", { length: 36 }),
+    evidenceHash: varchar("evidence_hash", { length: 64 }).notNull(),
+    ruleVersion: varchar("rule_version", { length: 64 }).notNull(),
+    judgeVersion: varchar("judge_version", { length: 64 }).notNull(),
+    skillVersion: varchar("skill_version", { length: 64 }).notNull(),
+    frozenEvidence: json("frozen_evidence").$type<Record<string, unknown>>().notNull(),
+    judgments: json("judgments").$type<Record<string, unknown>>().notNull(),
+    result: json("result").$type<Record<string, unknown>>().notNull(),
+    resultHash: varchar("result_hash", { length: 64 }).notNull(),
+    completedAt: timestamp("completed_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_evaluation_reports_run_uq").on(table.runId),
+    index("site_evaluation_reports_build_idx").on(
+      table.buildId,
+      table.createdAt,
+    ),
+    index("site_evaluation_reports_project_idx").on(
+      table.projectId,
+      table.createdAt,
+    ),
+    foreignKey({
+      name: "site_eval_reports_evidence_asset_fk",
+      columns: [table.evidenceLocalAssetId],
+      foreignColumns: [core.localAssets.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+
+/** Human review is supplementary and never updates the automatic report. */
+const siteEvaluationReviews = mysqlTable(
+  "site_evaluation_reviews",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    reportId: varchar("report_id", { length: 36 })
+      .notNull()
+      .references(() => siteEvaluationReports.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    reviewerUserId: int("reviewer_user_id")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    clientRequestId: varchar("client_request_id", { length: 128 }).notNull(),
+    disposition: mysqlEnum("disposition", ["agree", "concerns", "reject"]).notNull(),
+    checkReviews: json("check_reviews").$type<Record<string, unknown>>().notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_evaluation_reviews_report_request_uq").on(
+      table.reportId,
+      table.clientRequestId,
+    ),
+    index("site_evaluation_reviews_report_idx").on(
+      table.reportId,
+      table.createdAt,
+    ),
+  ],
+);
+
+
+/** Evaluation acknowledgement committed atomically with a release request. */
+const siteReleaseEvaluationDecisions = mysqlTable(
+  "site_release_evaluation_decisions",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    buildId: varchar("build_id", { length: 36 })
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    reportId: varchar("report_id", { length: 36 }),
+    runId: varchar("run_id", { length: 36 }),
+    reportHash: varchar("report_hash", { length: 64 }),
+    target: mysqlEnum("target", ["global", "mainland"]).notNull(),
+    expectedHeadDeploymentId: varchar("expected_head_deployment_id", {
+      length: 36,
+    }),
+    mode: mysqlEnum("mode", [
+      "follow_recommendation",
+      "accepted_risk",
+      "assessment_unavailable",
+    ]).notNull(),
+    acknowledgedRiskIds: json("acknowledged_risk_ids").$type<string[]>().notNull(),
+    reason: text("reason"),
+    actorUserId: int("actor_user_id")
+      .notNull()
+      .references(() => core.users.id, { onDelete: "cascade" }),
+    clientRequestId: varchar("client_request_id", { length: 128 }).notNull(),
+    siteOperationId: varchar("site_operation_id", { length: 36 }),
+    deploymentId: varchar("deployment_id", { length: 36 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_release_eval_project_request_uq").on(
+      table.projectId,
+      table.clientRequestId,
+    ),
+    uniqueIndex("site_release_eval_operation_uq").on(table.siteOperationId),
+    index("site_release_eval_build_idx").on(table.buildId, table.createdAt),
+    foreignKey({
+      name: "site_release_eval_report_fk",
+      columns: [table.reportId],
+      foreignColumns: [siteEvaluationReports.id],
+    }).onDelete("set null"),
+    foreignKey({
+      name: "site_release_eval_run_fk",
+      columns: [table.runId],
+      foreignColumns: [siteEvaluationRuns.id],
+    }).onDelete("set null"),
+    foreignKey({
+      name: "site_release_eval_operation_fk",
+      columns: [table.siteOperationId],
+      foreignColumns: [siteOperations.id],
+    }).onDelete("set null"),
+  ],
+);
 
 
 /**
@@ -1419,6 +1700,7 @@ const siteOperations = mysqlTable(
  * allowing a future lifecycle state to be introduced without rebuilding a
  * customer-facing table.
  */
+
 const visualCandidatePools = mysqlTable(
   "visual_candidate_pools",
   {
@@ -2534,7 +2816,7 @@ const enterpriseRagReleaseEvents = mysqlTable(
   ],
 );
 
-return { brandIntentWorkspaces, jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, ragStarterQuestionSets, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles, responseLogicEntries, responseLogicEvaluations, enterpriseRagHumanReviews, enterpriseRagReviewCases, enterpriseRagReviewCaseEvents, enterpriseRagEvaluationVersions, enterpriseRagEvaluationChannels, enterpriseRagOptimizationProposals, enterpriseRagRegressionRuns, enterpriseRagRegressionResults, enterpriseRagReleaseEvents };
+return { brandIntentWorkspaces, jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, ragStarterQuestionSets, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, siteEvaluationRuns, siteEvaluationAttempts, siteEvaluationReports, siteEvaluationReviews, siteReleaseEvaluationDecisions, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles, responseLogicEntries, responseLogicEvaluations, enterpriseRagHumanReviews, enterpriseRagReviewCases, enterpriseRagReviewCaseEvents, enterpriseRagEvaluationVersions, enterpriseRagEvaluationChannels, enterpriseRagOptimizationProposals, enterpriseRagRegressionRuns, enterpriseRagRegressionResults, enterpriseRagReleaseEvents };
 }
 export type BrandSchema = ReturnType<typeof createBrandSchema>;
 
@@ -2577,6 +2859,16 @@ export type SiteProject = BrandSchema["siteProjects"]["$inferSelect"];
 export type SiteBuild = BrandSchema["siteBuilds"]["$inferSelect"];
 
 export type SiteOperation = BrandSchema["siteOperations"]["$inferSelect"];
+
+export type SiteEvaluationRun = BrandSchema["siteEvaluationRuns"]["$inferSelect"];
+
+export type SiteEvaluationAttempt = BrandSchema["siteEvaluationAttempts"]["$inferSelect"];
+
+export type SiteEvaluationReport = BrandSchema["siteEvaluationReports"]["$inferSelect"];
+
+export type SiteEvaluationReview = BrandSchema["siteEvaluationReviews"]["$inferSelect"];
+
+export type SiteReleaseEvaluationDecision = BrandSchema["siteReleaseEvaluationDecisions"]["$inferSelect"];
 
 export type SiteDeployment = BrandSchema["siteDeployments"]["$inferSelect"];
 

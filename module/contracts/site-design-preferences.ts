@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { siteWebsiteEvaluationInputsDraftSchema } from "./website-build-inputs.js";
 
 export const SITE_DESIGN_PREFERENCES_SCHEMA_VERSION = 1 as const;
 export const SITE_DESIGN_RECOMMENDATION_SCHEMA_VERSION = 1 as const;
@@ -161,6 +162,7 @@ export const siteDesignPreferencesSaveInputSchema = z
     expectedProjectRevision: z.number().int().positive(),
     expectedDesignRevision: z.number().int().nonnegative(),
     draft: siteDesignPreferencesDraftSchema,
+    websiteEvaluationInputs: siteWebsiteEvaluationInputsDraftSchema.optional(),
   })
   .strict();
 

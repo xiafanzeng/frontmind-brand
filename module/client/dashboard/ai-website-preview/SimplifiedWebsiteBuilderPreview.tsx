@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type SetStateAction } from "react";
 import {
+  ArrowLeft,
   Bot,
   Check,
   CircleAlert,
-  ExternalLink,
   FileText,
   Globe2,
   LayoutTemplate,
@@ -14,6 +14,7 @@ import {
   Smartphone,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import type { SiteOpsConversationPanelProps } from "../siteops/SiteOpsConversationPanel";
 import {
   siteDesignPreferencesDraftSchema,
@@ -25,6 +26,14 @@ import {
   type SiteDesignRecommendationInput,
   type SiteDesignTemplateCoordinate,
 } from "../../../contracts/site-design-preferences";
+import {
+  siteWebsiteEvaluationInputsDraftSchema,
+  type SiteWebsiteEvaluationInputsDraft,
+} from "../../../contracts/website-build-inputs";
+import {
+  websiteBuildEvaluationDecisionSchema,
+  type WebsiteBuildEvaluationDecision,
+} from "../../../contracts/website-build-evaluation-run";
 import {
   previewKnowledgeCollectionCount,
   previewKnowledgeFragmentCount,
@@ -38,25 +47,14 @@ import { WebsiteDomainPublishPanel, getWebsitePublishState, type WebsitePublishT
 import { WebsiteRevisionFields } from "./WebsiteRevisionFields";
 import { WebsiteOperationHistory, WebsiteRestartAction } from "./WebsiteOperationHistory";
 import { usePreviewDialog } from "./qa-widget/usePreviewDialog";
+import { listEvaluationReports } from "./evaluation-report-store";
 import {
-  findLatestEvaluationReport,
-  getEvaluationReportById,
-  listEvaluationReports,
-  saveEvaluationReport,
-  savePublishDecisionWithReports,
-  type EvaluationReportSnapshot,
-  type EvaluationSubjectRef,
-} from "./evaluation-report-store";
-import {
-  websiteBuildEvaluationSkill,
-  type WebsiteBuildEvaluationCheckStatus,
-  type WebsiteBuildEvaluationOutput,
-} from "./website-build-evaluation-skill";
-import {
-  buildWebsiteEvaluationJudgmentsFromSiteOps,
-  siteOpsWebsiteEvaluationObservedAt,
-  siteOpsWebsiteEvaluationVersion,
-} from "./website-build-siteops-evidence";
+  WebsiteEvaluationWorkspace,
+  type WebsiteEvaluationAuthorityView,
+  type WebsiteEvaluationManualReviewInput,
+  type WebsiteEvaluationRepairTarget,
+  type WebsiteEvaluationRunStatus,
+} from "./WebsiteEvaluationWorkspace";
 import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
 import "./simplified-product-preview.css";
 
@@ -74,10 +72,10 @@ export function normalizeWebsiteBuildStep(value: unknown): BuildStep | null {
 /** Design-step focus area. Legacy step=structure maps to the site section and
  * step=assistant to the assistant section; evaluation repair entries target
  * the exact area they audit. */
-export type WebsiteDesignSection = "site" | "pages" | "theme" | "assistant" | "domain";
+export type WebsiteDesignSection = "site" | "pages" | "theme" | "assistant" | "evaluation-inputs" | "domain";
 
 export function normalizeWebsiteDesignSection(value: unknown): WebsiteDesignSection | null {
-  if (value === "site" || value === "pages" || value === "theme" || value === "assistant" || value === "domain") {
+  if (value === "site" || value === "pages" || value === "theme" || value === "assistant" || value === "evaluation-inputs" || value === "domain") {
     return value;
   }
   return null;
@@ -91,9 +89,27 @@ export type SimplifiedWebsiteBuilderPreviewProps = {
   onStepChange?: (step: BuildStep) => void;
   /** Real SiteOps state/actions supplied by the connected production adapter. */
   siteOps?: SiteOpsConversationPanelProps;
+  /** Server-authoritative run/report view. Omission never falls back to browser scoring. */
+  websiteEvaluation?: WebsiteEvaluationAuthorityView | null;
+  onRetryWebsiteEvaluation?: () => void;
+  onLoadMoreWebsiteEvaluationHistory?: () => void;
+  onSubmitWebsiteEvaluationReview?: (input: WebsiteEvaluationManualReviewInput) => Promise<void>;
+  /** Local fixture hook; live mode submits a real SiteOps revision instead. */
+  onReevaluateWebsiteEvaluation?: () => void | Promise<void>;
+  websiteEvaluationAdmission?: {
+    mode: "off" | "shadow" | "allowlist" | "live";
+    required: boolean;
+    userVisible: boolean;
+  };
   /** Separates live drafts and audit evidence by account/workspace. */
   storageScope?: string;
 };
+
+type WebsiteAssessmentRequest = Readonly<{
+  baselineBuildId: string | null;
+  baselineReportId: string | null;
+  acceptCurrentCompleted: boolean;
+}>;
 
 type LiveReleaseCoordinates = {
   target: WebsitePublishTarget;
@@ -102,127 +118,100 @@ type LiveReleaseCoordinates = {
   knowledgeSnapshotId: string | null;
   buildId: string;
   expectedHeadDeploymentId: string | null;
+  evaluationRunId: string | null;
+  evaluationReportId: string | null;
+  evaluationReportHash: string | null;
+  evaluationMode: WebsiteBuildEvaluationDecision["mode"] | null;
 };
+
+type WebsiteEvaluationInputsForm = {
+  logoAssetId: string;
+  logoSha256: string;
+  primaryColor: string;
+  secondaryColors: string;
+  fontPreferences: string;
+  toneKeywords: string;
+  forbiddenPhrases: string;
+  visitorGoal: string;
+  entryRouteId: string;
+  successCriteria: string;
+  requiredRouteIds: string[];
+  assistantRequired: boolean;
+  visitorTaskConfirmed: boolean;
+};
+
+const emptyWebsiteEvaluationInputsForm = (): WebsiteEvaluationInputsForm => ({
+  logoAssetId: "",
+  logoSha256: "",
+  primaryColor: "",
+  secondaryColors: "",
+  fontPreferences: "",
+  toneKeywords: "",
+  forbiddenPhrases: "",
+  visitorGoal: "",
+  entryRouteId: "",
+  successCriteria: "",
+  requiredRouteIds: [],
+  assistantRequired: false,
+  visitorTaskConfirmed: false,
+});
+
+function splitEvaluationInputList(value: string) {
+  return Array.from(new Set(value
+    .split(/[\n,，]/u)
+    .map((item) => item.trim())
+    .filter(Boolean)));
+}
+
+function liveEvaluationDecisionContext(
+  evaluation: WebsiteEvaluationAuthorityView | null,
+) {
+  const immutableReportReady = Boolean(
+    evaluation?.status === "completed"
+    && evaluation.reportId
+    && evaluation.reportHash,
+  );
+  const mode: WebsiteBuildEvaluationDecision["mode"] = !immutableReportReady
+    ? "assessment_unavailable"
+    : evaluation?.recommendation === "recommended"
+      ? "follow_recommendation"
+      : "accepted_risk";
+  const riskIds = mode === "accepted_risk"
+    ? Array.from(new Set([
+        ...(evaluation?.criticalRiskIds ?? []),
+        "quality_recommendation",
+      ]))
+    : mode === "assessment_unavailable"
+      ? ["assessment_unavailable"]
+      : [];
+  return {
+    mode,
+    runId: evaluation?.runId ?? null,
+    reportId: immutableReportReady ? evaluation?.reportId ?? null : null,
+    reportHash: immutableReportReady ? evaluation?.reportHash ?? null : null,
+    riskIds,
+  };
+}
 
 const steps: ReadonlyArray<{
   id: BuildStep;
-  number: string;
   label: string;
 }> = [
-  { id: "template", number: "1", label: "选择模板" },
-  { id: "design", number: "2", label: "网站设计" },
-  { id: "evaluation", number: "3", label: "建设评估" },
+  { id: "template", label: "选择模板" },
+  { id: "design", label: "网站设计" },
+  { id: "evaluation", label: "建设评估" },
 ];
 
-type EvaluationStatus =
-  | "passed"
-  | "partial"
-  | "failed"
-  | "unexecuted"
-  | "pending"
-  | "blocked"
-  | "not-applicable";
-
-type EvaluationCheck = {
-  id: string;
-  title: string;
-  detail: string;
-  status: EvaluationStatus;
-  statusLabel: string;
-  weight?: number;
-  critical?: boolean;
-  actionLabel?: string;
-  onAction?: () => void;
+const BUILD_STEP_INDEX: Record<BuildStep, 0 | 1 | 2> = {
+  template: 0,
+  design: 1,
+  evaluation: 2,
 };
 
-const WEBSITE_CHECK_STATUS_LABELS: Record<WebsiteBuildEvaluationCheckStatus, string> = {
-  passed: "已通过",
-  partial: "部分通过",
-  failed: "未通过",
-  pending: "待执行",
-  not_applicable: "不适用",
-};
-
-function sameEvaluationSubject(
-  left: EvaluationSubjectRef,
-  right: EvaluationSubjectRef,
-) {
-  return left.kind === right.kind && left.id === right.id && left.version === right.version;
-}
-
-type WebsiteEvaluationReportState = {
-  report: EvaluationReportSnapshot;
-  persisted: boolean;
-};
-
-function recoverOrSaveWebsiteEvaluationReport(input: {
-  storage: Pick<Storage, "getItem" | "setItem"> | null | undefined;
-  subject: EvaluationSubjectRef;
-  result: WebsiteBuildEvaluationOutput;
-}): WebsiteEvaluationReportState {
-  const resultJson = JSON.stringify(input.result);
-  const recovered = listEvaluationReports(input.storage).find((report) =>
-    report.result.skillId === input.result.skillId
-    && sameEvaluationSubject(report.subject, input.subject)
-    && JSON.stringify(report.result) === resultJson,
-  );
-  if (recovered) return { report: recovered, persisted: true };
-  const report: EvaluationReportSnapshot = {
-    reportId: `website-report-${crypto.randomUUID()}`,
-    createdAt: new Date().toISOString(),
-    subject: input.subject,
-    result: input.result,
-  };
-  return {
-    report,
-    persisted: saveEvaluationReport(report, input.storage),
-  };
-}
-
-const LIVE_SITEOPS_STATUS_LABELS: Record<string, string> = {
-  loading: "正在连接真实建站服务",
-  select_snapshot: "等待关联知识库",
-  collecting_brief: "等待载入真实模板",
-  visual_searching: "正在载入真实模板",
-  awaiting_visual_selection: "请选择真实模板",
-  preparing: "正在准备网站",
-  building: "正在生成网站",
-  preview_ready: "真实预览已生成",
-  approved: "网站已通过构建检查",
-  live: "网站已发布",
-  attention_required: "建站需要处理",
-  failed: "建站失败",
-  cancelled: "建站已取消",
-};
-
-const LINKED_RAG_REPORT_STORAGE_KEY = "frontmind.website-builder.linked-rag-report.v1";
-
-function draftVersion(value: unknown) {
-  const text = JSON.stringify(value);
-  let hash = 2_166_136_261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return `draft-v2-${(hash >>> 0).toString(16)}`;
-}
+const DRAFT_SAVE_FEEDBACK_MS = 800;
 
 function scopedStorageKey(key: string, scope?: string) {
   return scope ? `${key}.${encodeURIComponent(scope)}` : key;
-}
-
-function loadLinkedRagReportId(
-  storageScope?: string,
-  auditStorage?: Pick<Storage, "getItem" | "setItem"> | null,
-) {
-  try {
-    const reportId = localStorage.getItem(
-      scopedStorageKey(LINKED_RAG_REPORT_STORAGE_KEY, storageScope),
-    );
-    return reportId && getEvaluationReportById(reportId, auditStorage)?.result.skillId === "enterprise-rag-evaluation" ? reportId : null;
-  } catch {
-    return null;
-  }
 }
 
 const templates = [
@@ -784,14 +773,41 @@ export function SimplifiedWebsiteBuilderPreview({
   onOpenRag,
   onStepChange,
   siteOps,
+  websiteEvaluation: authoritativeWebsiteEvaluation,
+  websiteEvaluationAdmission: explicitWebsiteEvaluationAdmission,
+  onRetryWebsiteEvaluation,
+  onLoadMoreWebsiteEvaluationHistory,
+  onSubmitWebsiteEvaluationReview,
+  onReevaluateWebsiteEvaluation,
   storageScope,
 }: SimplifiedWebsiteBuilderPreviewProps) {
   const normalizedInitialStep = normalizeWebsiteBuildStep(initialStep) ?? "template";
   const auditStorage = useMemo(() => scopedEvaluationStorage(storageScope), [storageScope]);
+  const legacyWebsiteReports = useMemo(() => listEvaluationReports(auditStorage)
+    .filter((report) => report.result.skillId === "website-build-evaluation")
+    .map((report) => ({
+      reportId: report.reportId,
+      score: report.result.score,
+      createdAt: report.createdAt,
+      version: report.result.version,
+    })), [auditStorage]);
   const [draftSeed] = useState<WebsiteDraftV2>(() => loadWebsiteDraft(storageScope, {
     requireAssistantTrial: !siteOps,
   }));
   const [activeStep, setActiveStep] = useState<BuildStep>(normalizedInitialStep);
+  const [highestUnlockedStep, setHighestUnlockedStep] = useState<0 | 1 | 2>(
+    () => Math.max(
+      BUILD_STEP_INDEX[normalizedInitialStep],
+      draftSeed.completedStepIds.includes("evaluation")
+        ? BUILD_STEP_INDEX.evaluation
+        : draftSeed.completedStepIds.includes("template")
+          || draftSeed.completedStepIds.includes("design")
+          ? BUILD_STEP_INDEX.design
+          : BUILD_STEP_INDEX.template,
+    ) as 0 | 1 | 2,
+  );
+  const [assessmentRequest, setAssessmentRequest] =
+    useState<WebsiteAssessmentRequest | null>(null);
   const [focusedSection, setFocusedSection] = useState<WebsiteDesignSection | null>(
     () => normalizeWebsiteDesignSection(initialSection),
   );
@@ -868,25 +884,30 @@ export function SimplifiedWebsiteBuilderPreview({
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [templateUrl, setTemplateUrl] = useState(draftSeed.templateSourceUrl);
   const [notice, setNotice] = useState("");
+  const [draftSavePending, setDraftSavePending] = useState(false);
   const [liveAction, setLiveAction] = useState<string | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [localReevaluatePending, setLocalReevaluatePending] = useState(false);
+  const [localEvaluationDraftDirty, setLocalEvaluationDraftDirty] = useState(false);
   const [revisionText, setRevisionText] = useState("");
   const [revisionFiles, setRevisionFiles] = useState<File[]>([]);
   const [revisionProgress, setRevisionProgress] = useState<number[]>([]);
+  const [websiteEvaluationInputsForm, setWebsiteEvaluationInputsForm] =
+    useState<WebsiteEvaluationInputsForm>(emptyWebsiteEvaluationInputsForm);
   const revisionEditSequenceRef = useRef(0);
   const hasRevisionRequirements = Boolean(revisionText.trim() || revisionFiles.length);
-  const [storageAvailable, setStorageAvailable] = useState(true);
-  const [linkedRagReportId, setLinkedRagReportId] = useState<string | null>(
-    () => loadLinkedRagReportId(storageScope, auditStorage),
-  );
-  const [liveEvaluationReportState, setLiveEvaluationReportState] =
-    useState<WebsiteEvaluationReportState | null>(null);
-  const liveEvaluationReport = liveEvaluationReportState?.report ?? null;
-  const liveEvaluationReportPersisted = liveEvaluationReportState?.persisted === true;
-  const [releaseReport, setReleaseReport] = useState<EvaluationReportSnapshot | null>(null);
+  const [, setStorageAvailable] = useState(true);
+  const [liveReleaseOpen, setLiveReleaseOpen] = useState(false);
+  const [releaseAcknowledgedRiskIds, setReleaseAcknowledgedRiskIds] = useState<string[]>([]);
+  const [releaseReason, setReleaseReason] = useState("");
   const [liveReleaseCoordinates, setLiveReleaseCoordinates] =
     useState<LiveReleaseCoordinates | null>(null);
+  const [repairFocusTarget, setRepairFocusTarget] =
+    useState<WebsiteEvaluationRepairTarget | null>(null);
   const didMountDraftRef = useRef(false);
+  const draftSavePendingRef = useRef(false);
+  const lastSiteOpsNoticeRef = useRef("");
+  const lastErrorToastRef = useRef("");
   const appliedLiveBriefKeyRef = useRef<string | null>(null);
   const designEditSequenceRef = useRef(0);
   const liveBriefHydrationRef = useRef<{
@@ -924,11 +945,13 @@ export function SimplifiedWebsiteBuilderPreview({
   const [appliedRecommendation, setAppliedRecommendation] =
     useState<AppliedSiteDesignRecommendation | null>(null);
   const closeReleaseConfirmation = () => {
-    setReleaseReport(null);
+    setLiveReleaseOpen(false);
     setLiveReleaseCoordinates(null);
+    setReleaseAcknowledgedRiskIds([]);
+    setReleaseReason("");
   };
   const releaseDialogRef = usePreviewDialog(
-    releaseReport !== null,
+    liveReleaseOpen,
     closeReleaseConfirmation,
   );
   const [assistantTrialOpen, setAssistantTrialOpen] = useState(false);
@@ -936,6 +959,13 @@ export function SimplifiedWebsiteBuilderPreview({
   const assistantTrialDialogRef = usePreviewDialog(assistantTrialOpen, closeAssistantTrial);
 
   const liveObservation = siteOps?.observation ?? null;
+  const websiteEvaluationAdmission = explicitWebsiteEvaluationAdmission
+    ?? liveObservation?.websiteEvaluationAdmission
+    ?? (siteOps
+      ? { mode: "off" as const, required: false, userVisible: false }
+      : { mode: "live" as const, required: true, userVisible: true });
+  const websiteEvaluationRequired = websiteEvaluationAdmission.required;
+  const websiteEvaluationVisible = websiteEvaluationAdmission.userVisible;
   const liveCandidates = useMemo(
     () => liveObservation
       ? [
@@ -1074,15 +1104,6 @@ export function SimplifiedWebsiteBuilderPreview({
       && siteDesignRecommendationCoordinateKey(currentRecommendationCoordinate)
         !== appliedRecommendation.coordinateKey,
   );
-  const liveWebsiteJudgments = useMemo(
-    () => liveObservation
-      ? buildWebsiteEvaluationJudgmentsFromSiteOps(liveObservation)
-      : null,
-    [liveObservation],
-  );
-  const liveEvaluationObservedAt = liveObservation
-    ? siteOpsWebsiteEvaluationObservedAt(liveObservation)
-    : null;
   const liveRevisionEditable = Boolean(
     latestBuild?.id
     && liveObservation
@@ -1238,6 +1259,14 @@ export function SimplifiedWebsiteBuilderPreview({
   const structureReady = enabledPages.length > 0;
   const brandReady = Boolean(siteName.trim() && siteGoal.trim());
   const assistantReady = Boolean(assistantName.trim() && welcome.trim());
+  const visitorTaskDraftReady = Boolean(
+    websiteEvaluationInputsForm.visitorGoal.trim()
+    && websiteEvaluationInputsForm.entryRouteId
+    && splitEvaluationInputList(websiteEvaluationInputsForm.successCriteria).length > 0
+    && websiteEvaluationInputsForm.requiredRouteIds.includes(
+      websiteEvaluationInputsForm.entryRouteId,
+    ),
+  );
   // A completed server build confirms the live configuration independently of
   // the owner's assistant trial. Trial evidence stays separate and truthful;
   // the illustrative offline flow retains its existing trial requirement.
@@ -1246,7 +1275,6 @@ export function SimplifiedWebsiteBuilderPreview({
   const designComplete = structureReady && brandReady && assistantReady && (siteOps
     ? liveBuildCompleted && designDraftSynced
     : assistantVerified && completedStepSet.has("design"));
-  const canComplete = templateComplete && designComplete;
   // These checks never feed the 40/40/20 weighted score. In live mode, complete
   // configuration gates draft confirmation while the real trial is recorded
   // separately; opening an assessment never claims that trial has passed.
@@ -1274,21 +1302,21 @@ export function SimplifiedWebsiteBuilderPreview({
         ? designComplete ? "主栏目与真实页面已确认。" : "设计步骤尚未整体确认。"
         : "尚未启用任何主栏目。",
       onAction: () => goTo("design", "pages"),
-      actionLabel: "查看页面与栏目",
+      actionLabel: "查看页面",
     },
     {
       id: "C03",
-      title: "网站信息与主题",
+      title: "网站设置",
       passed: brandReady && designComplete,
       detail: brandReady
         ? designComplete ? "网站名称、建站目标与主题已确认。" : "设计步骤尚未整体确认。"
         : "网站名称或建站目标待补全。",
       onAction: () => goTo("design", "site"),
-      actionLabel: "查看网站基础",
+      actionLabel: "查看设置",
     },
     {
       id: "C04",
-      title: siteOps ? "助手真实试聊" : "助手配置与真实试聊",
+      title: "助手试聊",
       passed: assistantVerified && (Boolean(siteOps) || designComplete),
       detail: assistantVerified
         ? "助手配置有效且已完成一次真实问答。"
@@ -1296,44 +1324,15 @@ export function SimplifiedWebsiteBuilderPreview({
           ? "尚未完成真实试聊，可随时试用助手；不影响查看建设评估。"
           : "需在预览中完成一次助手问答。",
       onAction: () => goTo("design", "assistant"),
-      actionLabel: "查看助手设置",
+      actionLabel: "查看助手",
     },
   ];
-  const configurationConfirmedCount = configurationChecks
-    .filter((check) => check.passed)
-    .length;
   const completedSteps: Record<BuildStep, boolean> = {
     template: templateComplete,
     design: designComplete,
-    evaluation: false,
+    evaluation: highestUnlockedStep === BUILD_STEP_INDEX.evaluation
+      && authoritativeWebsiteEvaluation?.status === "completed",
   };
-  const websiteSubject = latestBuild && liveObservation
-    ? {
-        kind: "website-build",
-        id: latestBuild.id,
-        version: siteOpsWebsiteEvaluationVersion(liveObservation),
-      }
-    : {
-        kind: "website-build",
-        id: "frontmind-ai-website",
-        version: draftVersion({
-          selectedTemplateId: effectiveSelectedTemplateId,
-          templateUrl,
-          design: {
-            featuredPageIds: enabledPages.map((page) => page.id),
-            siteName,
-            siteGoal,
-            siteAccent,
-            assistant: {
-              name: assistantName,
-              welcome,
-              accentMode: assistantFollowsSite ? "follow_site" : "custom",
-              customAccent: assistantAccent,
-            },
-          },
-        }),
-      };
-
   // Real-build progress strip: elapsed time and the finest stage the server
   // exposes (buildPhase beats the coarse execution-step stage).
   const [buildClockNow, setBuildClockNow] = useState(() => Date.now());
@@ -1474,6 +1473,29 @@ export function SimplifiedWebsiteBuilderPreview({
           ?? current.assistantAccent,
         assistantTested: assistantIdentityChanged ? false : current.assistantTested,
       };
+    });
+    const brandKit = brief.brandKitV1;
+    const visitorTask = brief.visitorTaskV1;
+    const defaultEntryRoute = brief.routes.find(
+      (route) => route.sourceDocumentIds.length > 0,
+    )?.id ?? "";
+    setWebsiteEvaluationInputsForm({
+      logoAssetId: brandKit?.logo?.assetId ?? "",
+      logoSha256: brandKit?.logo?.sha256 ?? "",
+      primaryColor: brandKit?.primaryColor ?? "",
+      secondaryColors: brandKit?.secondaryColors.join("\n") ?? "",
+      fontPreferences: brandKit?.fontPreferences.join("\n") ?? "",
+      toneKeywords: brandKit?.toneKeywords.join("\n") ?? "",
+      forbiddenPhrases: brandKit?.forbiddenPhrases.join("\n") ?? "",
+      visitorGoal: visitorTask?.goal ?? brief.conversionGoal,
+      entryRouteId: visitorTask?.entryRouteId ?? defaultEntryRoute,
+      successCriteria: visitorTask?.successCriteria.join("\n") ?? "",
+      requiredRouteIds: visitorTask?.requiredRouteIds
+        ?? (defaultEntryRoute ? [defaultEntryRoute] : []),
+      assistantRequired: visitorTask?.assistantRequired ?? false,
+      // Confirmation coordinates are never copied into the browser payload.
+      // Their presence only proves the server previously confirmed this draft.
+      visitorTaskConfirmed: Boolean(visitorTask),
     });
     liveBriefHydrationRef.current = {
       projectId,
@@ -1661,6 +1683,10 @@ export function SimplifiedWebsiteBuilderPreview({
       pageProjection,
     });
     setCompletedStepIds((current) => current.filter((step) => step !== "design"));
+    setHighestUnlockedStep((current) => current === BUILD_STEP_INDEX.evaluation
+      ? BUILD_STEP_INDEX.design
+      : current);
+    setAssessmentRequest(null);
     setIsConfirmed(false);
     if (attempt.userInitiated) {
       setNotice("已刷新推荐；手动修改过的字段保持不变。");
@@ -1681,31 +1707,86 @@ export function SimplifiedWebsiteBuilderPreview({
     liveObservation?.brief?.routes,
   ]);
 
-  useEffect(() => setActiveStep(normalizedInitialStep), [normalizedInitialStep]);
+  useEffect(() => {
+    if (!notice) return;
+    toast.message(notice);
+    setNotice("");
+  }, [notice]);
+
+  useEffect(() => {
+    const message = siteOps?.notice?.trim() ?? "";
+    if (!message || lastSiteOpsNoticeRef.current === message) return;
+    lastSiteOpsNoticeRef.current = message;
+    toast.message(message);
+  }, [siteOps?.notice]);
+
+  useEffect(() => {
+    const message = (liveError || siteOps?.error || "").trim();
+    if (!message) {
+      lastErrorToastRef.current = "";
+      return;
+    }
+    if (lastErrorToastRef.current === message) return;
+    lastErrorToastRef.current = message;
+    toast.error(message, siteOps?.onRefresh
+      ? {
+          action: {
+            label: "重新载入",
+            onClick: () => { void siteOps.onRefresh?.(); },
+          },
+        }
+      : undefined);
+  }, [liveError, siteOps?.error, siteOps?.onRefresh]);
+
+  useEffect(() => {
+    if (BUILD_STEP_INDEX[normalizedInitialStep] <= highestUnlockedStep) {
+      setActiveStep(normalizedInitialStep);
+    }
+    // A newly completed assessment only unlocks the third step. It must not
+    // navigate away from the design step by replaying the original prop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedInitialStep]);
   useEffect(
     () => setFocusedSection(normalizeWebsiteDesignSection(initialSection)),
     [initialSection],
   );
-  // Focus one design config area: scroll it into view and flash a highlight.
+  // Focus the most precise server-provided repair coordinate available.
   useEffect(() => {
-    if (activeStep !== "design" || !focusedSection) return;
-    const node = document.querySelector<HTMLElement>(
-      `[data-design-section="${focusedSection}"]`,
+    if (activeStep !== "design") return;
+    const exactRoute = repairFocusTarget?.routeId
+      ? Array.from(document.querySelectorAll<HTMLElement>("[data-route-id]"))
+          .find((candidate) => candidate.dataset.routeId === repairFocusTarget.routeId)
+      : null;
+    const exactAnchor = repairFocusTarget?.anchor
+      ? document.getElementById(repairFocusTarget.anchor)
+      : null;
+    const targetSection = normalizeWebsiteDesignSection(
+      repairFocusTarget?.sectionId ?? focusedSection,
     );
+    const node = exactRoute
+      ?? exactAnchor
+      ?? (targetSection
+        ? document.querySelector<HTMLElement>(`[data-design-section="${targetSection}"]`)
+        : null);
     if (!node) return;
-    if (node instanceof HTMLDetailsElement) node.open = true;
+    const disclosure = node instanceof HTMLDetailsElement
+      ? node
+      : node.closest("details");
+    if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
     node.scrollIntoView?.({ behavior: "smooth", block: "center" });
-    node.classList.add("is-section-focus");
+    node.classList.add(exactRoute || exactAnchor ? "is-repair-focus" : "is-section-focus");
     const timer = window.setTimeout(() => {
+      node.classList.remove("is-repair-focus");
       node.classList.remove("is-section-focus");
     }, 2_400);
     return () => {
       window.clearTimeout(timer);
+      node.classList.remove("is-repair-focus");
       node.classList.remove("is-section-focus");
     };
-  }, [activeStep, focusedSection]);
+  }, [activeStep, focusedSection, repairFocusTarget]);
 
-  useEffect(() => {
+  const persistCurrentDraft = useCallback(() => {
     const saved = saveWebsiteDraft({
       version: 2,
       updatedAt: Date.now(),
@@ -1737,7 +1818,12 @@ export function SimplifiedWebsiteBuilderPreview({
       },
     }, storageScope);
     setStorageAvailable(saved);
+    return saved;
   }, [assistantAccent, assistantFollowsSite, assistantName, assistantTested, completedStepIds, designComplete, isConfirmed, isLiveBuilder, pages, selectedTemplateId, siteAccent, siteGoal, siteName, storageScope, templateComplete, templateUrl, welcome]);
+
+  useEffect(() => {
+    persistCurrentDraft();
+  }, [persistCurrentDraft]);
 
   useEffect(() => {
     if (!didMountDraftRef.current) {
@@ -1789,9 +1875,30 @@ export function SimplifiedWebsiteBuilderPreview({
 
   const invalidateSteps = (...stepIds: BuildStep[]) => {
     designEditSequenceRef.current += 1;
+    setLocalEvaluationDraftDirty(true);
     const invalidated = new Set(stepIds);
+    if (invalidated.has("template")) {
+      setHighestUnlockedStep(0);
+    } else if (invalidated.has("design")) {
+      setHighestUnlockedStep((current) => current === 2 ? 1 : current);
+    }
+    if (invalidated.has("template") || invalidated.has("design")) {
+      setAssessmentRequest(null);
+    }
     setCompletedStepIds((current) => current.filter((step) => !invalidated.has(step)));
     setIsConfirmed(false);
+  };
+
+  const updateWebsiteEvaluationInputs = (
+    next: Partial<WebsiteEvaluationInputsForm>,
+    visitorTaskChanged = false,
+  ) => {
+    invalidateSteps("design");
+    setWebsiteEvaluationInputsForm((current) => ({
+      ...current,
+      ...next,
+      ...(visitorTaskChanged ? { visitorTaskConfirmed: false } : {}),
+    }));
   };
 
   // A plain refetch only helps while the failed request still targets the
@@ -1862,28 +1969,41 @@ export function SimplifiedWebsiteBuilderPreview({
     );
   };
 
-  const goTo = (step: BuildStep, section?: WebsiteDesignSection) => {
+  const goTo = (step: BuildStep, section?: WebsiteDesignSection, unlock = false) => {
+    if (!unlock && BUILD_STEP_INDEX[step] > highestUnlockedStep) {
+      toast.message(step === "evaluation"
+        ? "建设评估完成后即可进入第三步"
+        : "请先完成模板选择");
+      return;
+    }
+    if (unlock) {
+      const targetIndex = BUILD_STEP_INDEX[step];
+      setHighestUnlockedStep((current) => current < targetIndex ? targetIndex : current);
+    }
     if (section) setFocusedSection(section);
     setActiveStep(step);
     setNotice("");
     onStepChange?.(step);
   };
 
-  const handleWebsiteResetAccepted = () => {
-    setRevisionText("");
-    setRevisionFiles([]);
-    setRevisionProgress([]);
-    revisionEditSequenceRef.current += 1;
-    liveBriefHydrationRef.current = null;
-    appliedLiveBriefKeyRef.current = null;
-    setAssistantTested(false);
-    setCompletedStepIds([]);
-    setIsConfirmed(false);
-    goTo("template");
-  };
-
-  const goPrevious = () => {
-    if (stepIndex > 0) goTo(steps[stepIndex - 1].id);
+  const saveCurrentDraft = async () => {
+    if (draftSavePendingRef.current) return;
+    draftSavePendingRef.current = true;
+    setDraftSavePending(true);
+    try {
+      // Persist immediately, then keep the feedback state visible long enough
+      // for the shared left-to-right shimmer to register perceptually.
+      const saved = persistCurrentDraft();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, DRAFT_SAVE_FEEDBACK_MS));
+      if (saved) {
+        toast.success("草稿已保存");
+      } else {
+        toast.error("草稿暂时无法写入浏览器，本次页面中的修改仍会保留。");
+      }
+    } finally {
+      draftSavePendingRef.current = false;
+      setDraftSavePending(false);
+    }
   };
 
   const createLiveDesignPreferencesDraft = () => {
@@ -1926,6 +2046,80 @@ export function SimplifiedWebsiteBuilderPreview({
     return draft.data satisfies SiteDesignPreferencesDraft;
   };
 
+  const createWebsiteEvaluationInputsDraft = (): SiteWebsiteEvaluationInputsDraft => {
+    if (!websiteEvaluationInputsForm.visitorTaskConfirmed) {
+      throw new Error("请先确认核心访客任务，再开始生成或提交改版。");
+    }
+    const hasLogoCoordinate = Boolean(
+      websiteEvaluationInputsForm.logoAssetId.trim()
+      || websiteEvaluationInputsForm.logoSha256.trim(),
+    );
+    if (
+      hasLogoCoordinate
+      && (!websiteEvaluationInputsForm.logoAssetId.trim()
+        || !websiteEvaluationInputsForm.logoSha256.trim())
+    ) {
+      throw new Error("Logo 坐标需要同时填写公开资产 ID 和 SHA-256。");
+    }
+    const hasBrandKit = Boolean(
+      hasLogoCoordinate
+      || websiteEvaluationInputsForm.primaryColor.trim()
+      || websiteEvaluationInputsForm.secondaryColors.trim()
+      || websiteEvaluationInputsForm.fontPreferences.trim()
+      || websiteEvaluationInputsForm.toneKeywords.trim()
+      || websiteEvaluationInputsForm.forbiddenPhrases.trim(),
+    );
+    const candidate = {
+      brandKitV1: hasBrandKit
+        ? {
+            schemaVersion: 1 as const,
+            ...(hasLogoCoordinate
+              ? {
+                  logo: {
+                    assetId: websiteEvaluationInputsForm.logoAssetId.trim(),
+                    sha256: websiteEvaluationInputsForm.logoSha256.trim().toLowerCase(),
+                  },
+                }
+              : {}),
+            ...(websiteEvaluationInputsForm.primaryColor.trim()
+              ? { primaryColor: websiteEvaluationInputsForm.primaryColor.trim() }
+              : {}),
+            secondaryColors: splitEvaluationInputList(
+              websiteEvaluationInputsForm.secondaryColors,
+            ),
+            fontPreferences: splitEvaluationInputList(
+              websiteEvaluationInputsForm.fontPreferences,
+            ),
+            toneKeywords: splitEvaluationInputList(
+              websiteEvaluationInputsForm.toneKeywords,
+            ),
+            forbiddenPhrases: splitEvaluationInputList(
+              websiteEvaluationInputsForm.forbiddenPhrases,
+            ),
+          }
+        : null,
+      visitorTaskV1: {
+        schemaVersion: 1 as const,
+        goal: websiteEvaluationInputsForm.visitorGoal.trim(),
+        entryRouteId: websiteEvaluationInputsForm.entryRouteId,
+        successCriteria: splitEvaluationInputList(
+          websiteEvaluationInputsForm.successCriteria,
+        ),
+        requiredRouteIds: websiteEvaluationInputsForm.requiredRouteIds,
+        assistantRequired: websiteEvaluationInputsForm.assistantRequired,
+      },
+    };
+    const parsed = siteWebsiteEvaluationInputsDraftSchema.safeParse(candidate);
+    if (!parsed.success) {
+      throw new Error(
+        parsed.error.issues[0]?.message
+          ? `建设评估输入无效：${parsed.error.issues[0].message}`
+          : "建设评估输入无效，请检查访客任务和 Brand Kit。",
+      );
+    }
+    return parsed.data;
+  };
+
   const saveLiveDesignPreferences = async () => {
     if (!siteOps?.onSaveDesignPreferences || !liveObservation) {
       throw new Error("真实建站服务当前不能保存网站设计，请刷新后重试。");
@@ -1935,6 +2129,9 @@ export function SimplifiedWebsiteBuilderPreview({
       expectedProjectRevision: liveObservation.project.revision,
       expectedDesignRevision: currentDesignRevision,
       draft: createLiveDesignPreferencesDraft(),
+      ...(websiteEvaluationRequired
+        ? { websiteEvaluationInputs: createWebsiteEvaluationInputsDraft() }
+        : {}),
     });
     return observation;
   };
@@ -1959,6 +2156,14 @@ export function SimplifiedWebsiteBuilderPreview({
     if (!selectedCandidate || selectedCandidate.executionAdmitted === false) {
       setNotice(selectedCandidate?.executionUnavailableReason || "请选择一个可用于真实生成的模板。");
       return false;
+    }
+    if (websiteEvaluationRequired) {
+      try {
+        createWebsiteEvaluationInputsDraft();
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "请先补全并确认核心访客任务。");
+        return false;
+      }
     }
     const submittedEditSequence = designEditSequenceRef.current;
     const submissionStillCurrent = () =>
@@ -2006,6 +2211,14 @@ export function SimplifiedWebsiteBuilderPreview({
         ? "请至少选择一个真实主栏目后再提交修改。"
         : "当前真实构建不能提交修改，请等待构建完成或刷新状态后重试。");
       return false;
+    }
+    if (websiteEvaluationRequired) {
+      try {
+        createWebsiteEvaluationInputsDraft();
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "请先补全并确认核心访客任务。");
+        return false;
+      }
     }
     const submittedEditSequence = designEditSequenceRef.current;
     const submittedRevisionSequence = revisionEditSequenceRef.current;
@@ -2066,18 +2279,41 @@ export function SimplifiedWebsiteBuilderPreview({
       setNotice("请补充助手名称和欢迎语。");
       return;
     }
+    if (activeStep === "template") {
+      setCompletedStepIds((current) => current.includes("template")
+        ? current
+        : [...current, "template"]);
+      goTo("design", undefined, true);
+      return;
+    }
+    if (activeStep === "design" && highestUnlockedStep >= BUILD_STEP_INDEX.evaluation) {
+      goTo("evaluation");
+      return;
+    }
+    const nextAssessmentRequest: WebsiteAssessmentRequest = {
+      baselineBuildId: currentWebsiteEvaluation?.buildId ?? latestBuild?.id ?? null,
+      baselineReportId: currentWebsiteEvaluation?.reportId ?? null,
+      acceptCurrentCompleted: Boolean(
+        siteOps
+        && currentWebsiteEvaluation?.status === "completed"
+        && currentWebsiteEvaluation.reportId,
+      ),
+    };
     if (activeStep === "design" && siteOps && templateSelectionOpen) {
-      // First real build: submit and stay until a real website is generated.
+      // First real build: submit and stay until its automatic evaluation has
+      // produced an immutable report. The third step remains locked meanwhile.
       const accepted = await submitLiveConfigurationAndBuild();
       if (!accepted) return;
-      setNotice("网站已开始生成；完成后即可进入建设评估，也可随时试用 AI 助手。");
+      setAssessmentRequest({ ...nextAssessmentRequest, acceptCurrentCompleted: false });
+      setNotice("网站已开始生成并将自动评估；评估完成后才会解锁第三步。");
       return;
     }
     if (activeStep === "design" && siteOps && liveRevisionEditable) {
       if (!designDraftSynced || hasRevisionRequirements) {
         const accepted = await submitLiveRevision();
         if (!accepted) return;
-        setNotice("改版要求已提交；新版本完成后即可进入建设评估，生成期间也可查看当前检查状态。");
+        setAssessmentRequest({ ...nextAssessmentRequest, acceptCurrentCompleted: false });
+        setNotice("改版要求已提交；新版本评估完成后才会重新解锁第三步。");
         return;
       }
     }
@@ -2090,208 +2326,121 @@ export function SimplifiedWebsiteBuilderPreview({
       setNotice("请先在右侧统一预览中提问一次并得到回答，完成助手试用后再继续。");
       return;
     }
-    setCompletedStepIds((current) => current.includes(activeStep) ? current : [...current, activeStep]);
-    goTo(steps[stepIndex + 1].id);
+    if (activeStep !== "design") return;
+    setCompletedStepIds((current) => current.includes("design")
+      ? current
+      : [...current, "design"]);
+    if (siteOps) {
+      setAssessmentRequest(nextAssessmentRequest);
+      if (websiteEvaluationRunStatus === "failed" && onRetryWebsiteEvaluation) {
+        onRetryWebsiteEvaluation();
+        setNotice("已重新提交建设评估；完成前第三步保持锁定。");
+      } else if (nextAssessmentRequest.acceptCurrentCompleted) {
+        setNotice("当前网站版本已完成评估，正在解锁第三步。");
+      } else {
+        setNotice("已等待当前网站的自动评估；完成前第三步保持锁定。");
+      }
+      return;
+    }
+    if (!onReevaluateWebsiteEvaluation) {
+      setNotice("当前本地预览未启用自动评估。");
+      return;
+    }
+    setAssessmentRequest({ ...nextAssessmentRequest, acceptCurrentCompleted: false });
+    setLocalReevaluatePending(true);
+    try {
+      await onReevaluateWebsiteEvaluation();
+    } catch (error) {
+      setAssessmentRequest(null);
+      toast.error(error instanceof Error ? error.message : "建设评估未能开始，请重试。");
+    } finally {
+      setLocalReevaluatePending(false);
+    }
   };
 
-  const defaultWebsiteQualityChecks: EvaluationCheck[] = [
-    {
-      id: "website-content-structure",
-      title: "版本、目标问题覆盖与信息结构",
-      detail: "需绑定知识与草稿版本，并用目标访客问题核对栏目和正文；当前只有栏目骨架",
-      status: "pending",
-      statusLabel: "待核实",
-      weight: 20,
-      actionLabel: "查看结构",
-      onAction: () => goTo("design", "pages"),
-    },
-    {
-      id: "website-navigation-contact",
-      title: "导航与联系入口",
-      detail: "需逐页检查导航、返回路径和联系入口是否可达，当前尚未执行",
-      status: "unexecuted",
-      statusLabel: "未执行",
-      weight: 10,
-      actionLabel: "查看结构",
-      onAction: () => goTo("design", "pages"),
-    },
-    {
-      id: "website-responsive-accessibility",
-      title: "窄屏与键盘可用性",
-      detail: "手机预览只能辅助观察，仍需完成窄屏、键盘焦点与可读性检查",
-      status: "unexecuted",
-      statusLabel: "未执行",
-      weight: 10,
-      actionLabel: "手机预览",
-      onAction: () => {
-        setDevice("mobile");
-        goTo("design");
-      },
-    },
-  ];
-
-  const defaultTrustBoundaryChecks: EvaluationCheck[] = [
-    {
-      id: "website-facts-evidence",
-      title: "企业事实与证据",
-      detail: "需为身份、产品和能力声明绑定可追溯来源；示例知识不能代替正式证据",
-      status: "pending",
-      statusLabel: "待核实",
-      weight: 20,
-      critical: true,
-      actionLabel: "查看知识范围",
-      onAction: onOpenRag ?? (() => goTo("design")),
-    },
-    {
-      id: "website-public-boundary",
-      title: "公开范围与来源展示",
-      detail: "隐藏来源只改变展示方式，不会扩大可公开范围；仍需确认公开授权与展示边界",
-      status: "pending",
-      statusLabel: "待核实",
-      weight: 20,
-      critical: true,
-      actionLabel: "查看来源设置",
-      onAction: onOpenRag ?? (() => goTo("design")),
-    },
-  ];
-
-  const defaultFlowAndPublishChecks: EvaluationCheck[] = [
-    {
-      id: "website-flow-recovery",
-      title: "建站流程、反馈与失败恢复",
-      detail: "需走查阶段、按钮、字段反馈和失败后的恢复路径；组件测试不能代替正式评估证据",
-      status: "unexecuted",
-      statusLabel: "未执行",
-      weight: 15,
-      actionLabel: "返回流程起点",
-      onAction: () => goTo("template"),
-    },
-    {
-      id: "website-draft-release-state",
-      title: "草稿、发布与正式生效",
-      detail: "草稿确认、发布决定和真实部署是三个独立状态；当前原型只记录发布决定",
-      status: "unexecuted",
-      statusLabel: "未执行",
-      weight: 5,
-      critical: true,
-    },
-  ];
-
-  const liveJudgmentsById = new Map(
-    (liveWebsiteJudgments ?? []).map((item) => [item.checkId, item]),
-  );
-  const applyLiveJudgments = (checks: EvaluationCheck[]) => checks.map((check) => {
-    const liveJudgment = liveJudgmentsById.get(
-      check.id as Parameters<typeof websiteBuildEvaluationSkill.evaluate>[0]["judgments"][number]["checkId"],
-    );
-    if (!liveJudgment) return check;
-    return {
-      ...check,
-      detail: liveJudgment.summary,
-      status: liveJudgment.status === "not_applicable"
-        ? "not-applicable" as const
-        : liveJudgment.status,
-      statusLabel: WEBSITE_CHECK_STATUS_LABELS[liveJudgment.status],
-    };
-  });
-  const websiteQualityChecks = applyLiveJudgments(defaultWebsiteQualityChecks);
-  const trustBoundaryChecks = applyLiveJudgments(defaultTrustBoundaryChecks);
-  const flowAndPublishChecks = applyLiveJudgments(defaultFlowAndPublishChecks);
-
-  const scoreGroups = [
-    { id: "content-experience", label: "网站内容与体验", checks: websiteQualityChecks },
-    { id: "facts-public-boundary", label: "企业事实与公开边界", checks: trustBoundaryChecks },
-    { id: "flow-release-clarity", label: "流程与发布说明", checks: flowAndPublishChecks },
-  ];
-  const scoredChecks = scoreGroups.flatMap((group) => group.checks);
-  const applicableChecks = scoredChecks.filter((check) => check.status !== "not-applicable");
-  const judgedChecks = applicableChecks.filter((check) =>
-    check.status === "passed" || check.status === "partial" || check.status === "failed",
-  );
-  const linkedRagReport = linkedRagReportId ? getEvaluationReportById(linkedRagReportId, auditStorage) : null;
-  const latestRagReport = findLatestEvaluationReport(
-    { skillId: "enterprise-rag-evaluation" },
-    auditStorage,
-  );
-  const toSkillStatus = (status: EvaluationStatus): WebsiteBuildEvaluationCheckStatus => {
-    if (status === "not-applicable") return "not_applicable";
-    if (status === "passed" || status === "partial" || status === "failed") return status;
-    return "pending";
-  };
-  const websiteEvaluation = websiteBuildEvaluationSkill.evaluate({
-    judgments: liveWebsiteJudgments ?? scoredChecks.map((check) => ({
-      checkId: check.id as Parameters<typeof websiteBuildEvaluationSkill.evaluate>[0]["judgments"][number]["checkId"],
-      status: toSkillStatus(check.status),
-      summary: check.detail,
-      evidenceIds: ["passed", "partial", "failed"].includes(check.status) ? [`website-preview:${check.id}`] : [],
-    })),
-    relatedReportIds: linkedRagReport ? [linkedRagReport.reportId] : [],
-  });
-  const earnedWeight = websiteEvaluation.dimensions.reduce((sum, dimension) => sum + (dimension.score ?? 0), 0);
-  const weightedScore = websiteEvaluation.score;
-  const judgmentCoverage = Math.round(websiteEvaluation.coverage);
-  const unresolvedCriticalChecks = websiteEvaluation.risks.filter((risk) => risk.severity === "critical" || risk.severity === "high");
-  const formatPoints = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(1);
-  const scoreGroupEarnedPoints = websiteEvaluation.dimensions.map((dimension) => dimension.score ?? 0);
-  const scoreIsProvisional = websiteEvaluation.status !== "completed";
-  const recommendation = {
-    recommended: "建议发布",
-    publish_with_risk: "可知情发布",
-    not_recommended: "暂不建议发布",
-  }[websiteEvaluation.recommendation];
-  const recommendationDetail = websiteEvaluation.summary;
-  const recommendationBadge = "仅作建议，不限制发布";
-  const websiteEvaluationFingerprint = JSON.stringify(websiteEvaluation);
-
+  const currentWebsiteEvaluation = authoritativeWebsiteEvaluation
+    && websiteEvaluationVisible
+    && (!siteOps || (latestBuild && authoritativeWebsiteEvaluation.buildId === latestBuild.id))
+    ? authoritativeWebsiteEvaluation
+    : null;
+  const websiteEvaluationRunStatus: WebsiteEvaluationRunStatus = siteOps && !websiteEvaluationVisible
+    ? "disabled"
+    : ["failed", "attention_required", "cancelled"].includes(liveBuildStatus)
+    ? "build_failed"
+    : liveBuildInFlight
+      ? "building"
+      : currentWebsiteEvaluation?.status
+        ?? (siteOps && latestBuild ? "not_evaluated" : "idle");
+  const displayedWebsiteEvaluation = currentWebsiteEvaluation?.status === websiteEvaluationRunStatus
+    ? currentWebsiteEvaluation
+    : null;
   useEffect(() => {
-    if (!siteOps || websiteEvaluation.status === "not_run") {
-      setLiveEvaluationReportState(null);
+    if (!assessmentRequest
+      || websiteEvaluationRunStatus !== "completed"
+      || !currentWebsiteEvaluation?.reportId) {
       return;
     }
-    const reportState = recoverOrSaveWebsiteEvaluationReport({
-      storage: auditStorage,
-      subject: websiteSubject,
-      result: websiteEvaluation,
+    const completedFreshAssessment = assessmentRequest.acceptCurrentCompleted
+      || currentWebsiteEvaluation.reportId !== assessmentRequest.baselineReportId
+      || currentWebsiteEvaluation.buildId !== assessmentRequest.baselineBuildId;
+    if (!completedFreshAssessment) return;
+    setHighestUnlockedStep(BUILD_STEP_INDEX.evaluation);
+    setCompletedStepIds((current) => {
+      const next = new Set(current);
+      next.add("template");
+      next.add("design");
+      return [...next];
     });
-    setLiveEvaluationReportState((current) =>
-      current?.report.reportId === reportState.report.reportId
-      && current.persisted === reportState.persisted
-        ? current
-        : reportState,
-    );
+    setAssessmentRequest(null);
+    setNotice("");
+    setActiveStep("evaluation");
+    onStepChange?.("evaluation");
+    toast.success("建设评估已完成，正在查看结果");
   }, [
-    auditStorage,
-    siteOps,
-    websiteEvaluation.status,
-    websiteEvaluationFingerprint,
-    websiteSubject.id,
-    websiteSubject.kind,
-    websiteSubject.version,
+    assessmentRequest,
+    currentWebsiteEvaluation?.buildId,
+    currentWebsiteEvaluation?.reportId,
+    onStepChange,
+    websiteEvaluationRunStatus,
   ]);
-
-  const linkLatestRagReport = () => {
-    if (!latestRagReport) {
-      setNotice("尚无可关联的企业 RAG 评估快照。先在企业 RAG 页完成一次自动评估或人工复核。");
+  const recommendation = displayedWebsiteEvaluation?.verdict ?? "尚无权威评估";
+  const failedBuildStep = [...(liveObservation?.executionSteps ?? [])]
+    .filter((step) => step.buildId === latestBuild?.id
+      && ["failed", "attention_required", "cancelled"].includes(step.status))
+    .sort((left, right) => Date.parse(right.completedAt ?? right.startedAt)
+      - Date.parse(left.completedAt ?? left.startedAt))[0];
+  const buildFailureSummary = [
+    failedBuildStep
+      ? `${failedBuildStep.label}（${failedBuildStep.stage}）${failedBuildStep.status === "cancelled" ? "已取消" : "未完成"}`
+      : null,
+    liveError || siteOps?.error || siteOps?.notice || null,
+  ].filter((item): item is string => Boolean(item)).join("；")
+    || "网站构建没有形成可检查的完整版本，请返回设计步骤检查输入并重新生成。";
+  const repairWebsiteEvaluationTarget = (target: WebsiteEvaluationRepairTarget) => {
+    setRepairFocusTarget(target);
+    if (target.kind === "knowledge") {
+      onOpenRag?.();
+      if (!onOpenRag) goTo("design", "pages");
       return;
     }
-    setLinkedRagReportId(latestRagReport.reportId);
-    try {
-      localStorage.setItem(
-        scopedStorageKey(LINKED_RAG_REPORT_STORAGE_KEY, storageScope),
-        latestRagReport.reportId,
-      );
-    } catch { /* session state still works */ }
-    setNotice("已关联最新企业 RAG 评估快照；该结果只作参考，不参与网站建设得分。");
-  };
-
-  const unlinkRagReport = () => {
-    setLinkedRagReportId(null);
-    try {
-      localStorage.removeItem(
-        scopedStorageKey(LINKED_RAG_REPORT_STORAGE_KEY, storageScope),
-      );
-    } catch { /* session state still works */ }
-    setNotice("已取消关联企业 RAG 评估；网站建设评分和发布选择均不受影响。");
+    if (target.kind === "assistant") {
+      goTo("design", "assistant");
+      return;
+    }
+    if (target.kind === "route") {
+      goTo("design", "pages");
+      return;
+    }
+    if (target.kind === "brand_kit") {
+      goTo("design", "evaluation-inputs");
+      return;
+    }
+    if (target.kind === "design_preferences") {
+      goTo("design", "theme");
+      return;
+    }
+    const section = normalizeWebsiteDesignSection(target.sectionId);
+    goTo("design", section ?? undefined);
   };
 
   const openReleaseConfirmation = (target: WebsitePublishTarget = "global_excluding_cn") => {
@@ -2302,66 +2451,39 @@ export function SimplifiedWebsiteBuilderPreview({
           : publishState?.reason ?? "正在读取发布条件，请刷新后重试。");
       return;
     }
-    let report: EvaluationReportSnapshot;
     if (siteOps) {
-      const reportState = liveEvaluationReportState
-        && sameEvaluationSubject(liveEvaluationReportState.report.subject, websiteSubject)
-        && JSON.stringify(liveEvaluationReportState.report.result) === websiteEvaluationFingerprint
-        ? liveEvaluationReportState
-        : recoverOrSaveWebsiteEvaluationReport({
-            storage: auditStorage,
-            subject: websiteSubject,
-            result: websiteEvaluation,
-          });
-      setLiveEvaluationReportState(reportState);
-      report = reportState.report;
-    } else {
-      report = {
-        reportId: `website-report-${crypto.randomUUID()}`,
-        createdAt: new Date().toISOString(),
-        subject: websiteSubject,
-        result: websiteEvaluation,
-      };
+      if (!liveObservation || !latestBuild) return;
+      const evaluation = websiteEvaluationVisible
+        ? liveEvaluationDecisionContext(currentWebsiteEvaluation)
+        : null;
+      setLiveReleaseCoordinates({
+        target,
+        projectId: liveObservation.project.id,
+        projectRevision: liveObservation.project.revision,
+        knowledgeSnapshotId:
+          liveObservation.project.currentKnowledgeSnapshotId ?? null,
+        buildId: latestBuild.id,
+        expectedHeadDeploymentId: publishState?.headDeploymentId ?? null,
+        evaluationRunId: evaluation?.runId ?? null,
+        evaluationReportId: evaluation?.reportId ?? null,
+        evaluationReportHash: evaluation?.reportHash ?? null,
+        evaluationMode: evaluation?.mode ?? null,
+      });
+      setReleaseAcknowledgedRiskIds([]);
+      setReleaseReason("");
+      setLiveReleaseOpen(true);
+      return;
     }
-    setLiveReleaseCoordinates(
-      siteOps && liveObservation && latestBuild
-        ? {
-            target,
-            projectId: liveObservation.project.id,
-            projectRevision: liveObservation.project.revision,
-            knowledgeSnapshotId:
-              liveObservation.project.currentKnowledgeSnapshotId ?? null,
-            buildId: latestBuild.id,
-            expectedHeadDeploymentId: publishState?.headDeploymentId ?? null,
-          }
-        : null,
-    );
-    setReleaseReport(report);
+    setNotice("本地候选不生成浏览器评分或发布决定；请连接服务端权威评估后再确认发布。");
   };
 
   const confirmReleaseDecision = async () => {
-    if (!releaseReport) return;
-    const relatedReports = releaseReport.result.relatedReportIds.flatMap((reportId) => {
-      const report = getEvaluationReportById(reportId, auditStorage);
-      return report ? [report] : [];
-    });
-    const reports = [releaseReport, ...relatedReports];
-    const riskIds = Array.from(new Set(reports.flatMap((report) => report.result.risks.map((risk) => risk.id))));
-    const acceptedRisk = riskIds.length > 0 || reports.some((report) => report.result.recommendation !== "recommended");
-    const decision = {
-      decisionId: `publish-decision-${crypto.randomUUID()}`,
-      createdAt: new Date().toISOString(),
-      subject: releaseReport.subject,
-      action: "publish" as const,
-      mode: acceptedRisk ? "accepted_risk" as const : "follow_recommendation" as const,
-      evaluationReportIds: reports.map((report) => report.reportId),
-      acknowledgedRiskIds: acceptedRisk ? riskIds : [],
-      riskAcknowledged: acceptedRisk,
-      note: siteOps ? `SiteOps ${liveReleaseCoordinates?.target === "mainland_cn" ? "publish_mainland" : "publish_global"} request acknowledged by the server.` : null,
-    };
     if (siteOps) {
       const target = liveReleaseCoordinates?.target ?? "global_excluding_cn";
       const publishState = liveObservation ? getWebsitePublishState(liveObservation, target) : null;
+      const currentEvaluation = websiteEvaluationVisible
+        ? liveEvaluationDecisionContext(currentWebsiteEvaluation)
+        : null;
       const currentCoordinates = liveObservation && latestBuild
         ? {
             target,
@@ -2371,6 +2493,10 @@ export function SimplifiedWebsiteBuilderPreview({
               liveObservation.project.currentKnowledgeSnapshotId ?? null,
             buildId: latestBuild.id,
             expectedHeadDeploymentId: publishState?.headDeploymentId ?? null,
+            evaluationRunId: currentEvaluation?.runId ?? null,
+            evaluationReportId: currentEvaluation?.reportId ?? null,
+            evaluationReportHash: currentEvaluation?.reportHash ?? null,
+            evaluationMode: currentEvaluation?.mode ?? null,
           }
         : null;
       if (
@@ -2390,6 +2516,32 @@ export function SimplifiedWebsiteBuilderPreview({
         setNotice("真实发布条件已经变化，未提交请求也未写入成功审计；请返回检查状态。");
         return;
       }
+      const missingAcknowledgement = currentEvaluation?.riskIds.some(
+        (riskId) => !releaseAcknowledgedRiskIds.includes(riskId),
+      ) ?? false;
+      if (
+        currentEvaluation
+        && currentEvaluation.mode !== "follow_recommendation"
+        && (missingAcknowledgement || !releaseReason.trim())
+      ) {
+        setNotice("请逐项确认当前风险并填写继续发布的理由。");
+        return;
+      }
+      const evaluationDecision = currentEvaluation
+        ? websiteBuildEvaluationDecisionSchema.parse({
+            mode: currentEvaluation.mode,
+            buildId: liveReleaseCoordinates.buildId,
+            runId: currentEvaluation.runId,
+            reportId: currentEvaluation.reportId,
+            reportHash: currentEvaluation.reportHash,
+            acknowledgedRiskIds: currentEvaluation.mode === "follow_recommendation"
+              ? []
+              : currentEvaluation.riskIds,
+            reason: currentEvaluation.mode === "follow_recommendation"
+              ? ""
+              : releaseReason.trim(),
+          })
+        : null;
       const action = target === "mainland_cn" ? "publish_mainland" : "publish_global";
       const published = await runLiveAction(action, {
         action,
@@ -2397,77 +2549,196 @@ export function SimplifiedWebsiteBuilderPreview({
           buildId: liveReleaseCoordinates.buildId,
           expectedHeadDeploymentId:
             liveReleaseCoordinates.expectedHeadDeploymentId ?? undefined,
+          ...(evaluationDecision ? { evaluationDecision } : {}),
         },
       });
       if (!published) return;
-      const saved = savePublishDecisionWithReports({
-        reports: [releaseReport],
-        decision,
-      }, auditStorage);
-      if (saved) {
-        setLiveEvaluationReportState({ report: releaseReport, persisted: true });
-      }
       closeReleaseConfirmation();
-      setNotice(`${saved ? "服务端已受理发布，并记录本次发布决定" : "服务端已受理发布，但本地审计存储不可用"}；部署结果将继续同步，尚不表示已经上线。`);
+      setNotice("服务端已原子受理发布与评估决定；部署结果将继续同步，尚不表示已经上线。");
       return;
     }
-    const saved = savePublishDecisionWithReports({
-      reports: [releaseReport],
-      decision,
-    }, auditStorage);
-    closeReleaseConfirmation();
-    setNotice(`${saved ? "已记录发布决定" : "已确认继续发布，但浏览器记录存储不可用"}；当前原型未执行真实部署。`);
+    setNotice("本地候选不会在浏览器记录发布决定。");
+  };
+  const currentLiveEvaluationDecision = websiteEvaluationVisible
+    ? liveEvaluationDecisionContext(currentWebsiteEvaluation)
+    : null;
+  const liveReleaseRiskOptions = (currentLiveEvaluationDecision?.riskIds ?? []).map((riskId) => {
+    if (riskId === "quality_recommendation") {
+      return {
+        id: riskId,
+        title: "评估建议先修复",
+        summary: "当前报告结论不是“推荐发布”。",
+      };
+    }
+    if (riskId === "assessment_unavailable") {
+      return {
+        id: riskId,
+        title: "评估结果不可用",
+        summary: "当前评估尚未完成、已失败或没有不可变报告。",
+      };
+    }
+    const risk = currentWebsiteEvaluation?.risks.find((item) => item.id === riskId);
+    return {
+      id: riskId,
+      title: risk?.title ?? riskId,
+      summary: risk?.summary ?? "该关键风险来自当前不可变评估报告。",
+    };
+  });
+  const liveReleaseInformed = Boolean(
+    currentLiveEvaluationDecision
+    && currentLiveEvaluationDecision.mode !== "follow_recommendation",
+  );
+  const liveReleaseCanConfirm = !liveReleaseInformed || (
+    liveReleaseRiskOptions.every((risk) => releaseAcknowledgedRiskIds.includes(risk.id))
+    && Boolean(releaseReason.trim())
+  );
+
+  const assessmentAwaitingCompletion = Boolean(
+    assessmentRequest
+    && highestUnlockedStep < BUILD_STEP_INDEX.evaluation
+    && !["failed", "build_failed", "disabled"].includes(websiteEvaluationRunStatus),
+  );
+  const designActionRunning = Boolean(
+    liveAction === "configure_and_build"
+    || liveAction === "submit_revision"
+    || liveBuildInFlight
+    || localReevaluatePending
+    || assessmentAwaitingCompletion,
+  );
+  const liveDesignHasNewChanges = Boolean(
+    liveRevisionEditable && (!designDraftSynced || hasRevisionRequirements),
+  );
+  const completedEvaluationAvailable = websiteEvaluationRunStatus === "completed"
+    && Boolean(currentWebsiteEvaluation?.reportId);
+  const designPrimaryMode: "generate" | "regenerate" | "evaluate" = highestUnlockedStep === BUILD_STEP_INDEX.evaluation
+    && completedEvaluationAvailable
+    ? "evaluate"
+    : siteOps
+      ? templateSelectionOpen
+        ? "generate"
+        : liveDesignHasNewChanges
+          ? "regenerate"
+          : completedEvaluationAvailable
+            ? "evaluate"
+            : "generate"
+      : "generate";
+  const workflowPrimaryLabel = activeStep === "template"
+    ? "进入设计"
+    : activeStep === "evaluation"
+      ? "完成发布"
+      : designActionRunning
+        ? "正在生成"
+        : designPrimaryMode === "generate"
+          ? "开始评估"
+          : designPrimaryMode === "regenerate"
+            ? "重新生成"
+            : "查看评估";
+  const workflowPrimaryDisabled = activeStep === "template"
+    ? !templateReady || Boolean(siteOps && liveInteractionPending)
+    : activeStep === "evaluation"
+      ? Boolean(siteOps && liveInteractionPending)
+      : Boolean(
+          designActionRunning
+          || (designPrimaryMode !== "evaluate" && (!assistantReady || !brandReady || !structureReady))
+          || (siteOps && (
+            liveInteractionPending
+            || (designPrimaryMode === "generate" && !templateSelectionOpen && !liveBuildCompleted)
+          ))
+        );
+  const workflowPrimaryTestId = siteOps && activeStep === "design"
+    ? designPrimaryMode === "generate" && templateSelectionOpen
+      ? "website-build-start"
+      : designPrimaryMode === "regenerate"
+        ? "website-revision-submit"
+        : undefined
+    : undefined;
+
+  const handleWebsiteResetAccepted = () => {
+    setRevisionText("");
+    setRevisionFiles([]);
+    setRevisionProgress([]);
+    revisionEditSequenceRef.current += 1;
+    liveBriefHydrationRef.current = null;
+    appliedLiveBriefKeyRef.current = null;
+    setAssistantTested(false);
+    setCompletedStepIds([]);
+    setHighestUnlockedStep(BUILD_STEP_INDEX.template);
+    setAssessmentRequest(null);
+    setIsConfirmed(false);
+    goTo("template");
   };
 
-  const releaseRelatedReports = releaseReport?.result.relatedReportIds.flatMap((reportId) => {
-    const report = getEvaluationReportById(reportId, auditStorage);
-    return report ? [report] : [];
-  }) ?? [];
-  const releaseRisks = releaseReport
-    ? [releaseReport, ...releaseRelatedReports].flatMap((report) => report.result.risks)
-    : [];
-  const releaseHasRisks = Boolean(releaseReport && (
-    releaseRisks.length > 0
-    || [releaseReport, ...releaseRelatedReports].some((report) => report.result.recommendation !== "recommended")
-  ));
+  const handleWorkflowBack = () => {
+    if (activeStep === "evaluation") {
+      goTo("design");
+      return;
+    }
+    if (activeStep === "design") goTo("template");
+  };
 
-  const renderEvaluationGroup = (dimensionId: string, title: string, checks: EvaluationCheck[]) => {
-    const hasWeightedChecks = checks.some((check) => check.weight);
-    const dimension = websiteEvaluation.dimensions.find((item) => item.id === dimensionId);
-    return (
-      <section className="sfp-eval-group">
-        <header>
-          <div><h3>{title}</h3></div>
-          {hasWeightedChecks && (
-            <span>
-              {formatPoints(dimension?.score ?? 0)}/{dimension?.maxScore ?? checks.reduce((sum, check) => sum + (check.weight ?? 0), 0)} 分
-            </span>
-          )}
-        </header>
-        <div className="sfp-check-list">
-          {checks.map((check) => (
-            <article
-              key={check.id}
-              className={`is-${check.status}`}
-              data-testid={siteOps ? "website-evaluation-check" : undefined}
-            >
-              <span>{check.status === "passed" ? <Check size={17} /> : <CircleAlert size={17} />}</span>
-              <div>
-                <div className="sfp-check-title">
-                  <strong>{check.title}</strong>
-                  {check.critical && <em className="is-critical">关键风险</em>}
-                </div>
-                <small>{check.detail}</small>
-              </div>
-              <div className="sfp-check-action">
-                <b>{check.statusLabel}</b>
-                {check.actionLabel && check.onAction && <button type="button" aria-label={`${check.actionLabel}：${check.title}`} onClick={check.onAction}>{check.actionLabel}</button>}
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-    );
+  const handleWorkflowPrimary = async () => {
+    if (activeStep === "evaluation") {
+      openReleaseConfirmation();
+      return;
+    }
+    if (activeStep === "design" && designPrimaryMode === "evaluate") {
+      if (completedEvaluationAvailable && highestUnlockedStep < BUILD_STEP_INDEX.evaluation) {
+        setAssessmentRequest(null);
+        setCompletedStepIds((current) => current.includes("design")
+          ? current
+          : [...current, "design"]);
+        goTo("evaluation", undefined, true);
+      } else {
+        goTo("evaluation");
+      }
+      return;
+    }
+    await goNext();
+  };
+
+  const reevaluatePending = siteOps
+    ? liveAction === "submit_revision" || liveBuildInFlight
+    : localReevaluatePending;
+  const reevaluateDisabledReason = reevaluatePending
+    ? "正在生成新网站版本"
+    : websiteEvaluationRunStatus !== "completed"
+      ? "当前报告完成后才能重新评估"
+      : siteOps
+        ? !liveRevisionEditable
+          ? "当前构建暂不支持重新评估"
+          : !liveDesignHasNewChanges
+            ? "请先修改网站内容或设置"
+            : !structureReady || !brandReady || !assistantReady
+              ? "请先补全页面、网站与助手设置"
+              : websiteEvaluationRequired
+                && (!visitorTaskDraftReady || !websiteEvaluationInputsForm.visitorTaskConfirmed)
+                ? "请先确认核心访客任务"
+                : null
+        : !onReevaluateWebsiteEvaluation
+          ? "当前本地预览未启用重新评估"
+          : !localEvaluationDraftDirty
+            ? "请先修改网站内容或设置"
+            : null;
+
+  const reevaluateWebsite = async () => {
+    if (reevaluateDisabledReason) {
+      toast.message(reevaluateDisabledReason);
+      return;
+    }
+    if (siteOps) {
+      await submitLiveRevision();
+      return;
+    }
+    if (!onReevaluateWebsiteEvaluation) return;
+    setLocalReevaluatePending(true);
+    try {
+      await onReevaluateWebsiteEvaluation();
+      setLocalEvaluationDraftDirty(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重新评估未能开始，请重试。");
+    } finally {
+      setLocalReevaluatePending(false);
+    }
   };
 
   return (
@@ -2476,56 +2747,55 @@ export function SimplifiedWebsiteBuilderPreview({
       data-step={activeStep}
       data-testid={siteOps ? "website-builder-live-root" : undefined}
     >
-      <div className="sfp-workspace-bar">
-        <ol className="sfp-steps" aria-label="网站建设流程">
-          {steps.map((step) => (
-            <li key={step.id} className={step.id === activeStep ? "is-active" : completedSteps[step.id] ? "is-done" : ""} data-complete={completedSteps[step.id]}>
-              <button type="button" onClick={() => goTo(step.id)} aria-current={step.id === activeStep ? "step" : undefined}>
-                <span>{completedSteps[step.id] && step.id !== activeStep ? <Check size={16} /> : step.number}</span>
-                <span><strong>{step.label}</strong></span>
-              </button>
-            </li>
-          ))}
-        </ol>
-
-        <div className="sfp-heading-actions sfp-workspace-actions" role="group" aria-label="网站状态与操作">
-        {siteOps && displayedBuild?.previewUrl && (
-          <a className="sfp-button sfp-button--primary sfp-view-website" href={displayedBuild.previewUrl} target="_blank" rel="noopener noreferrer" title={`查看构建 v${displayedBuild.ordinal}（新窗口）`}>
-            <ExternalLink size={16} /> 查看网站
-          </a>
-        )}
-        {siteOps && displayedBuild?.sourceUrl && (
-          <a className="sfp-button sfp-button--ghost sfp-view-website" href={displayedBuild.sourceUrl} download>下载源码</a>
-        )}
-        <div className={`sfp-draft-state ${storageAvailable ? "" : "is-session-only"}`}>
-          <i />
-          <span>
-            <strong>
-              {siteOps
-                ? LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus
-                : isConfirmed ? "草稿已确认" : "建设中"}
-            </strong>
-            <small>
-              {siteOps
-                ? `真实 SiteOps · 项目版本 ${liveObservation?.project.revision ?? "—"}`
-                : storageAvailable ? `本地草稿 · ${isConfirmed ? "草稿确认状态已保存" : "配置已自动保存"}` : "仅本次页面保存"}
-            </small>
-          </span>
+      <div className="sfp-workflow-row">
+        <div className="sfp-workflow-leading-actions" role="group" aria-label="草稿与返回">
+          <button
+            type="button"
+            className={`sfp-button sfp-button--primary sfp-workflow-save${draftSavePending ? " is-running" : ""}`}
+            aria-busy={draftSavePending || undefined}
+            disabled={draftSavePending}
+            onClick={() => { void saveCurrentDraft(); }}
+          >
+            {draftSavePending ? "正在保存" : "保存"}
+          </button>
+          <button
+            type="button"
+            className="sfp-workflow-back sfp-button sfp-button--ghost"
+            aria-label="返回"
+            disabled={activeStep === "template"}
+            onClick={handleWorkflowBack}
+          >
+            <ArrowLeft aria-hidden="true" size={18} strokeWidth={2} />
+          </button>
         </div>
+        <div className="sfp-workspace-bar">
+          <ol className="sfp-steps" aria-label="网站建设流程">
+            {steps.map((step) => {
+              const locked = BUILD_STEP_INDEX[step.id] > highestUnlockedStep;
+              const stateClass = step.id === activeStep ? "is-active" : completedSteps[step.id] ? "is-done" : "";
+              return (
+              <li key={step.id} className={`${stateClass}${locked ? " is-locked" : ""}`} data-complete={completedSteps[step.id]}>
+                <button type="button" disabled={locked} onClick={() => goTo(step.id)} aria-current={step.id === activeStep ? "step" : undefined}>
+                  <span className="sfp-step-label"><strong>{step.label}</strong></span>
+                </button>
+              </li>
+              );
+            })}
+          </ol>
+        </div>
+        <div className="sfp-workflow-actions" role="group" aria-label="网站流程操作">
+          <button
+            type="button"
+            className={`sfp-button sfp-button--primary${activeStep === "design" && designActionRunning ? " is-running" : ""}`}
+            data-testid={workflowPrimaryTestId}
+            aria-busy={activeStep === "design" && designActionRunning || undefined}
+            disabled={workflowPrimaryDisabled}
+            onClick={() => { void handleWorkflowPrimary(); }}
+          >
+            {workflowPrimaryLabel}
+          </button>
         </div>
       </div>
-
-      {(notice || siteOps?.notice) && <div className="sfp-notice" role="status">{notice || siteOps?.notice}</div>}
-      {(liveError || siteOps?.error) && (
-        <div className="sfp-notice" role="alert">
-          {liveError || siteOps?.error}
-          {siteOps?.onRefresh && (
-            <button type="button" onClick={() => siteOps.onRefresh?.()}>
-              <RefreshCw size={15} />重新载入
-            </button>
-          )}
-        </div>
-      )}
 
       <div className="sfp-step-content">
         {activeStep === "template" && (
@@ -2754,7 +3024,7 @@ export function SimplifiedWebsiteBuilderPreview({
                   <summary>共 {pages.length} 个栏目，{enabledPages.length} 个启用</summary>
               <div className="sfp-page-list">
                 {pages.map((page, index) => (
-                  <div key={page.id} className={!page.enabled ? "is-muted" : ""}>
+                  <div key={page.id} data-route-id={page.id} className={!page.enabled ? "is-muted" : ""}>
                     <span className="sfp-page-icon"><PanelTop size={16} /></span>
                     <span><strong>{page.name}</strong><small>{page.detail}</small></span>
                     <label className="sfp-switch">
@@ -2821,6 +3091,196 @@ export function SimplifiedWebsiteBuilderPreview({
                   </span>
                 </div>}
               </div>
+
+              {siteOps && websiteEvaluationRequired && (
+                <div className="sfp-design-section sfp-evaluation-inputs" data-design-section="evaluation-inputs">
+                  <header>
+                    <span>5</span>
+                    <div>
+                      <h3>建设评估输入</h3>
+                      <p>Brand Kit 可选；核心访客任务必须确认，与下一次构建一起冻结。</p>
+                    </div>
+                  </header>
+                  <details className="sfp-evaluation-inputs__group">
+                    <summary>Brand Kit（可选）</summary>
+                    <div className="sfp-form-grid sfp-evaluation-inputs__fields">
+                      <label>
+                        <span className="sfp-field-heading"><span className="sfp-field-title">公开 Logo 资产 ID</span></span>
+                        <input
+                          aria-label="公开 Logo 资产 ID"
+                          list="website-public-logo-assets"
+                          maxLength={191}
+                          value={websiteEvaluationInputsForm.logoAssetId}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => updateWebsiteEvaluationInputs({ logoAssetId: event.currentTarget.value })}
+                        />
+                        <datalist id="website-public-logo-assets">
+                          {(liveObservation?.brief?.publicAssetIds ?? []).map((assetId) => (
+                            <option key={assetId} value={assetId} />
+                          ))}
+                        </datalist>
+                      </label>
+                      <label>
+                        <span className="sfp-field-heading"><span className="sfp-field-title">Logo SHA-256</span></span>
+                        <input
+                          aria-label="Logo SHA-256"
+                          maxLength={64}
+                          value={websiteEvaluationInputsForm.logoSha256}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => updateWebsiteEvaluationInputs({ logoSha256: event.currentTarget.value })}
+                        />
+                      </label>
+                      <label>
+                        <span className="sfp-field-heading"><span className="sfp-field-title">主品牌色</span></span>
+                        <input
+                          aria-label="主品牌色"
+                          placeholder="#6f35a5"
+                          maxLength={7}
+                          value={websiteEvaluationInputsForm.primaryColor}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => updateWebsiteEvaluationInputs({ primaryColor: event.currentTarget.value })}
+                        />
+                      </label>
+                      <label>
+                        <span className="sfp-field-heading"><span className="sfp-field-title">辅助色</span></span>
+                        <textarea
+                          aria-label="辅助色"
+                          placeholder="每行一个六位色值"
+                          value={websiteEvaluationInputsForm.secondaryColors}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => updateWebsiteEvaluationInputs({ secondaryColors: event.currentTarget.value })}
+                        />
+                      </label>
+                      <label>
+                        <span className="sfp-field-heading"><span className="sfp-field-title">字体偏好</span></span>
+                        <textarea
+                          aria-label="字体偏好"
+                          placeholder="每行一个字体"
+                          value={websiteEvaluationInputsForm.fontPreferences}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => updateWebsiteEvaluationInputs({ fontPreferences: event.currentTarget.value })}
+                        />
+                      </label>
+                      <label>
+                        <span className="sfp-field-heading"><span className="sfp-field-title">语调关键词</span></span>
+                        <textarea
+                          aria-label="语调关键词"
+                          placeholder="专业、克制、清晰"
+                          value={websiteEvaluationInputsForm.toneKeywords}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => updateWebsiteEvaluationInputs({ toneKeywords: event.currentTarget.value })}
+                        />
+                      </label>
+                      <label className="sfp-evaluation-inputs__wide">
+                        <span className="sfp-field-heading"><span className="sfp-field-title">禁用表达</span></span>
+                        <textarea
+                          aria-label="禁用表达"
+                          placeholder="每行一条"
+                          value={websiteEvaluationInputsForm.forbiddenPhrases}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => updateWebsiteEvaluationInputs({ forbiddenPhrases: event.currentTarget.value })}
+                        />
+                      </label>
+                    </div>
+                  </details>
+                  <fieldset className="sfp-evaluation-inputs__group">
+                    <legend>核心访客任务（必填）</legend>
+                    <div className="sfp-form-grid sfp-evaluation-inputs__fields">
+                      <label className="sfp-evaluation-inputs__wide">
+                        <span className="sfp-field-heading"><span className="sfp-field-title">任务目标</span></span>
+                        <textarea
+                          aria-label="核心访客任务目标"
+                          maxLength={500}
+                          value={websiteEvaluationInputsForm.visitorGoal}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => updateWebsiteEvaluationInputs({ visitorGoal: event.currentTarget.value }, true)}
+                        />
+                      </label>
+                      <label>
+                        <span className="sfp-field-heading"><span className="sfp-field-title">入口路由</span></span>
+                        <select
+                          aria-label="核心访客任务入口路由"
+                          value={websiteEvaluationInputsForm.entryRouteId}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => {
+                            const entryRouteId = event.currentTarget.value;
+                            updateWebsiteEvaluationInputs({
+                              entryRouteId,
+                              requiredRouteIds: entryRouteId
+                                ? Array.from(new Set([
+                                    entryRouteId,
+                                    ...websiteEvaluationInputsForm.requiredRouteIds,
+                                  ]))
+                                : websiteEvaluationInputsForm.requiredRouteIds,
+                            }, true);
+                          }}
+                        >
+                          <option value="">请选择</option>
+                          {pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}
+                        </select>
+                      </label>
+                      <label>
+                        <span className="sfp-field-heading"><span className="sfp-field-title">成功条件</span></span>
+                        <textarea
+                          aria-label="核心访客任务成功条件"
+                          placeholder="每行一条"
+                          maxLength={4_000}
+                          value={websiteEvaluationInputsForm.successCriteria}
+                          disabled={!liveConfigurationEditable}
+                          onChange={(event) => updateWebsiteEvaluationInputs({ successCriteria: event.currentTarget.value }, true)}
+                        />
+                      </label>
+                    </div>
+                    <fieldset className="sfp-evaluation-inputs__routes">
+                      <legend>必经路由</legend>
+                      {pages.map((page) => (
+                        <label key={page.id}>
+                          <input
+                            type="checkbox"
+                            checked={websiteEvaluationInputsForm.requiredRouteIds.includes(page.id)}
+                            disabled={!liveConfigurationEditable || page.id === websiteEvaluationInputsForm.entryRouteId}
+                            onChange={(event) => updateWebsiteEvaluationInputs({
+                              requiredRouteIds: event.currentTarget.checked
+                                ? Array.from(new Set([...websiteEvaluationInputsForm.requiredRouteIds, page.id]))
+                                : websiteEvaluationInputsForm.requiredRouteIds.filter((routeId) => routeId !== page.id),
+                            }, true)}
+                          />
+                          <span>{page.name}</span>
+                        </label>
+                      ))}
+                    </fieldset>
+                    <label className="sfp-evaluation-inputs__toggle">
+                      <input
+                        type="checkbox"
+                        checked={websiteEvaluationInputsForm.assistantRequired}
+                        disabled={!liveConfigurationEditable}
+                        onChange={(event) => updateWebsiteEvaluationInputs({ assistantRequired: event.currentTarget.checked }, true)}
+                      />
+                      <span>核心任务必须使用 AI 助手</span>
+                    </label>
+                    <label className="sfp-evaluation-inputs__confirm">
+                      <input
+                        type="checkbox"
+                        aria-label="确认核心访客任务"
+                        checked={websiteEvaluationInputsForm.visitorTaskConfirmed}
+                        disabled={!liveConfigurationEditable || !visitorTaskDraftReady}
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked;
+                          invalidateSteps("design");
+                          setWebsiteEvaluationInputsForm((current) => ({
+                            ...current,
+                            visitorTaskConfirmed: checked,
+                          }));
+                        }}
+                      />
+                      <span>
+                        <strong>我已核对任务目标、入口、成功条件与必经路由</strong>
+                        <small>服务端会在保存时生成确认坐标；浏览器不会伪造确认时间或用户 ID。</small>
+                      </span>
+                    </label>
+                  </fieldset>
+                </div>
+              )}
             </section>
             {siteOps ? (
               <section className="sfp-panel sfp-builder-tools-panel" aria-label="建站管理">
@@ -2872,8 +3332,7 @@ export function SimplifiedWebsiteBuilderPreview({
                     setRevisionFiles(files);
                     setRevisionProgress([]);
                     setAssistantTested(false);
-                    setIsConfirmed(false);
-                    setCompletedStepIds((current) => current.filter((step) => step !== "design"));
+                    invalidateSteps("design");
                   }}
                 />
               )}
@@ -2907,200 +3366,41 @@ export function SimplifiedWebsiteBuilderPreview({
         )}
 
         {activeStep === "evaluation" && (
-          <div className="sfp-evaluation-layout">
-            <section className="sfp-panel sfp-evaluation-main">
-              <div className="sfp-section-heading">
-                <div><h2>建设检查与评估</h2><p>网站专属检查按 40/40/20 加权；RAG 评估独立关联，不参与网站得分。</p></div>
-                <aside className="sfp-eval-heading-meta">
-                  <span className="sfp-eval-run-state" data-testid={siteOps ? "website-evaluation-status" : undefined}><i />{
-                    siteOps
-                      ? websiteEvaluation.status === "completed"
-                        ? liveEvaluationReportPersisted
-                          ? "真实证据评估已完成并保存"
-                          : liveEvaluationReport
-                            ? "真实证据评估已完成（仅本次会话，未持久化）"
-                            : "真实证据评估已完成"
-                        : websiteEvaluation.status === "pending"
-                          ? "真实证据评估待补全"
-                          : websiteEvaluation.status === "failed"
-                            ? "真实证据评估输入异常"
-                            : "等待真实 SiteOps 证据"
-                      : "质量评估未完成"
-                  }</span>
-                  <span
-                    className={`sfp-eval-score ${(weightedScore ?? 0) >= 85 ? "is-high" : (weightedScore ?? 0) >= 70 ? "is-medium" : "is-low"}`}
-                    aria-label={`当前加权评估分：${weightedScore ?? "未形成"}，满分 100 分，${scoreIsProvisional ? "暂定结果" : "最终分"}`}
-                    data-testid={siteOps ? "website-evaluation-score" : undefined}
-                  >
-                    <span><strong>{weightedScore ?? "—"}</strong><small>/100</small></span>
-                    <em>{scoreIsProvisional ? "暂定结果" : "最终分"}</em>
-                  </span>
-                </aside>
-              </div>
-              <div className="sfp-eval-context" aria-label="本次评估范围">
-                <span><small>项目</small><strong>FrontMind AI 专用官网</strong></span>
-                <span><small>被测对象</small><strong>{siteOps ? latestBuild ? `真实构建 #${latestBuild.ordinal}` : "真实建站项目" : "当前本地网站草稿"}</strong></span>
-                <span><small>草稿与知识版本</small><strong>{siteOps ? liveObservation?.knowledgeSnapshots[0]?.label ?? "等待真实知识版本" : `${previewKnowledgeCollectionCount} 个示例集合 · 正式版本未绑定`}</strong></span>
-                <span><small>页面与问题范围</small><strong>{siteOps
-                  ? `${liveObservation?.brief?.routes.length ?? 0} 个真实路由 · ${new Set(liveObservation?.brief?.routes.flatMap((route) => route.sourceDocumentIds) ?? []).size} 个知识来源`
-                  : `${enabledPages.length} 个栏目 · 目标问题清单待补`}</strong></span>
-                <span><small>公开范围</small><strong>{siteOps
-                  ? latestGlobalDeployment?.publicUrl
-                    ? `已公开 · ${latestGlobalDeployment.publicUrl}`
-                    : liveObservation?.domainState?.displayDomain
-                      ? `${liveObservation.domainState.displayDomain} · DNS ${liveObservation.domainState.dnsStatus ?? "未确认"} · 尚无 active 公开部署`
-                      : "未选择域名 · 尚无 active 公开部署"
-                  : "范围与确认人未记录"}</strong></span>
-                <span><small>执行记录</small><strong data-testid={siteOps ? "website-evaluation-report-id" : undefined}>{siteOps
-                  ? liveEvaluationReport
-                    ? liveEvaluationReportPersisted
-                      ? `可恢复报告 ${liveEvaluationReport.reportId} · 证据更新 ${liveEvaluationObservedAt ? new Date(liveEvaluationObservedAt).toLocaleString("zh-CN") : "—"}`
-                      : `本次会话评估未持久化 · 证据更新 ${liveEvaluationObservedAt ? new Date(liveEvaluationObservedAt).toLocaleString("zh-CN") : "—"}`
-                    : `真实 SiteOps · ${LIVE_SITEOPS_STATUS_LABELS[liveBuildStatus] ?? liveBuildStatus}`
-                  : "本地预览 · 评估人和时间待补"}</strong></span>
-              </div>
-              <div className="sfp-eval-summary is-pending">
-                <CircleAlert size={22} />
-                <span>
-                  <strong>当前建议：{recommendation}</strong>
-                  <small>{recommendationDetail}</small>
-                </span>
-                <b>{recommendationBadge}</b>
-              </div>
-              <div className="sfp-eval-metrics" aria-label="评估摘要">
-                <span><small>{siteOps ? "配置与试用检查" : "配置确认"}</small><strong>{configurationConfirmedCount}/4</strong></span>
-                <span><small>判定覆盖率</small><strong>{judgmentCoverage}%</strong></span>
-                <span><small>完全通过率</small><strong>{judgedChecks.length > 0 ? `${Math.round((judgedChecks.filter((check) => check.status === "passed").length / judgedChecks.length) * 100)}%` : "无法计算"}</strong></span>
-                <span><small>关键风险提示</small><strong>{unresolvedCriticalChecks.length}</strong></span>
-              </div>
-              <section className="sfp-config-checks" aria-label="配置检查项" data-testid="website-config-checks">
-                <header>
-                  <strong>配置检查项</strong>
-                  <small>{siteOps
-                    ? "非计分检查：配置完整性用于确认草稿，真实试聊单独记录，不阻止查看评估；不参与 40/40/20 加权评分。"
-                    : "非计分检查，只作为草稿确认门槛；不参与 40/40/20 加权评分，RAG 评估也不进入网站得分。"}</small>
-                </header>
-                <ul>
-                  {configurationChecks.map((check) => (
-                    <li key={check.id} className={check.passed ? "is-passed" : ""}>
-                      <span className="sfp-config-check-id">{check.id}</span>
-                      <div>
-                        <strong>{check.title}</strong>
-                        <small>{check.detail}</small>
-                      </div>
-                      <b>{check.passed ? "已确认" : siteOps && check.id === "C04" ? "待试用" : "待确认"}</b>
-                      <button type="button" onClick={check.onAction}>{check.actionLabel}</button>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-              <section className="sfp-score-formula" aria-label="加权评估分计算结果">
-                <header>
-                  <strong>加权评分</strong>
-                  <code>{scoreGroupEarnedPoints.map(formatPoints).join(" + ")} = {formatPoints(earnedWeight)} → {weightedScore ?? "—"} 分</code>
-                </header>
-                <small className="sfp-score-weight-note">权重：网站内容与体验 40 分 · 企业事实与公开边界 40 分 · 流程与发布说明 20 分</small>
-              </section>
-              <section className="sfp-rag-evaluation-reference" aria-label="关联的企业 RAG 评估">
-                <div>
-                  <span><Bot size={18} /></span>
-                  <p>
-                    <strong>企业 RAG 评估 · 独立结果</strong>
-                    <small>{linkedRagReport ? `已关联 ${linkedRagReport.result.score ?? "—"}/100 · ${linkedRagReport.result.version}` : "未关联评估快照；不影响网站得分或发布选择"}</small>
-                    {linkedRagReport && <small>报告 ID：{linkedRagReport.reportId}</small>}
-                  </p>
-                </div>
-                <div>
-                  {linkedRagReport
-                    ? <button type="button" onClick={unlinkRagReport}>取消关联</button>
-                    : <button type="button" onClick={linkLatestRagReport}>{latestRagReport ? "关联最新 RAG 评估" : "查找 RAG 评估"}</button>}
-                  {onOpenRag && <button type="button" onClick={onOpenRag}>打开 RAG 评估</button>}
-                </div>
-              </section>
-              {renderEvaluationGroup("content-experience", "网站内容与体验", websiteQualityChecks)}
-              {renderEvaluationGroup("facts-public-boundary", "企业事实与公开边界", trustBoundaryChecks)}
-              {renderEvaluationGroup("flow-release-clarity", "流程与发布说明", flowAndPublishChecks)}
-            </section>
-          </div>
+          <WebsiteEvaluationWorkspace
+            status={websiteEvaluationRunStatus}
+            score={websiteEvaluationRunStatus === "completed" ? displayedWebsiteEvaluation?.score ?? null : null}
+            verdict={recommendation}
+            summary={websiteEvaluationRunStatus === "build_failed"
+              ? buildFailureSummary
+              : displayedWebsiteEvaluation?.summary ?? "服务端权威报告尚未就绪；浏览器不会代为计分。"}
+            reportId={displayedWebsiteEvaluation?.reportId ?? null}
+            reportUrl={displayedWebsiteEvaluation?.reportUrl ?? null}
+            evidenceUpdatedLabel={displayedWebsiteEvaluation?.evidenceUpdatedLabel
+              ?? (latestBuild?.createdAt
+              ? new Date(latestBuild.createdAt).toLocaleString("zh-CN")
+              : "尚无可确认的证据更新时间")}
+            judgmentCoverage={displayedWebsiteEvaluation?.judgmentCoverage ?? 0}
+            dimensions={displayedWebsiteEvaluation?.dimensions ?? []}
+            risks={displayedWebsiteEvaluation?.risks ?? []}
+            technicalChecks={configurationChecks}
+            history={displayedWebsiteEvaluation?.history ?? []}
+            historyHasMore={displayedWebsiteEvaluation?.historyHasMore}
+            historyLoadingMore={displayedWebsiteEvaluation?.historyLoadingMore}
+            reviews={displayedWebsiteEvaluation?.reviews}
+            reviewsLoading={displayedWebsiteEvaluation?.reviewsLoading}
+            reviewsError={displayedWebsiteEvaluation?.reviewsError}
+            legacyReports={legacyWebsiteReports}
+            onRepairTarget={repairWebsiteEvaluationTarget}
+            onRetry={onRetryWebsiteEvaluation}
+            onReevaluate={reevaluateWebsite}
+            reevaluatePending={reevaluatePending}
+            reevaluateDisabledReason={reevaluateDisabledReason}
+            onLoadMoreHistory={onLoadMoreWebsiteEvaluationHistory}
+            onManualReview={onSubmitWebsiteEvaluationReview}
+          />
         )}
       </div>
 
-      <footer className="sfp-actions">
-        <button type="button" className="sfp-button sfp-button--ghost" onClick={goPrevious} disabled={stepIndex === 0}>上一步</button>
-        <span>{stepIndex + 1} / {steps.length} · {steps[stepIndex].label}</span>
-        {activeStep === "evaluation" ? (
-          <div className="sfp-action-cluster">
-            <button
-              type="button"
-              className="sfp-button sfp-button--ghost"
-              disabled={!canComplete}
-              aria-describedby={!canComplete ? "sfp-confirmation-requirement" : undefined}
-              onClick={() => {
-                setIsConfirmed(true);
-                setNotice("当前建设草稿已确认。此操作只确认建站配置，不表示质量评估通过或网站已经发布。");
-              }}
-            >
-              {isConfirmed ? "草稿已确认" : "确认当前建设草稿"}
-            </button>
-            {!canComplete && <span id="sfp-confirmation-requirement" className="sfp-visually-hidden">请先依次确认模板和网站设计。</span>}
-            <button
-              type="button"
-              className="sfp-button sfp-button--primary"
-              onClick={() => siteOps ? goTo("design", "domain") : openReleaseConfirmation()}
-            >
-              {siteOps ? "域名与发布" : "进入发布确认"}
-            </button>
-          </div>
-        ) : (
-          <div className="sfp-action-cluster">
-          {siteOps && activeStep === "design" && latestBuild && (!liveRevisionEditable || !designDraftSynced) && (
-            <button type="button" className="sfp-button sfp-button--ghost" onClick={() => goTo("evaluation")}>
-              查看建设评估
-            </button>
-          )}
-          {siteOps && activeStep === "design" && latestBuild && liveRevisionEditable && designDraftSynced && (
-            <button
-              type="button"
-              className="sfp-button sfp-button--ghost"
-              data-testid="website-rebuild-submit"
-              disabled={liveInteractionPending}
-              onClick={() => { void submitLiveRevision(); }}
-            >
-              <RefreshCw size={16} /> 重新生成网站
-            </button>
-          )}
-          <button
-            type="button"
-            className="sfp-button sfp-button--primary"
-            data-testid={siteOps && activeStep === "design"
-              ? templateSelectionOpen
-                ? "website-build-start"
-                : liveRevisionEditable
-                  ? "website-revision-submit"
-                  : undefined
-              : undefined}
-            disabled={Boolean(siteOps && (
-              liveInteractionPending
-              || (activeStep === "template" && !templateReady)
-              || (activeStep === "design" && templateSelectionOpen && (!assistantReady || !brandReady || !structureReady))
-              || (activeStep === "design" && liveRevisionEditable && (!assistantReady || !brandReady || !structureReady))
-              || (activeStep === "design" && !templateSelectionOpen && !liveRevisionEditable && !liveBuildCompleted)
-            ))}
-            onClick={goNext}
-          >
-            {siteOps && activeStep === "template"
-              ? "继续配置真实 brief"
-              : siteOps && activeStep === "design" && templateSelectionOpen
-                ? liveAction === "configure_and_build" ? "正在保存配置并生成…" : "保存真实配置并生成网站"
-                : siteOps && activeStep === "design" && liveRevisionEditable
-                  ? liveAction === "submit_revision" ? "正在提交修改…" : designDraftSynced ? "进入建设评估" : "提交修改并重新生成"
-                : siteOps && activeStep === "design" && liveBuildInFlight
-                  ? "网站生成中…"
-                : "继续"}
-          </button>
-          </div>
-        )}
-      </footer>
       {siteOps && assistantTrialOpen && embeddableBuild && (
         <div className="sfp-release-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeAssistantTrial(); }}>
           <section ref={assistantTrialDialogRef} className="sfp-release-dialog sfp-assistant-trial-dialog" role="dialog" aria-modal="true" aria-label="试用 AI 助手" tabIndex={-1}>
@@ -3111,24 +3411,75 @@ export function SimplifiedWebsiteBuilderPreview({
           </section>
         </div>
       )}
-      {releaseReport && (
+      {liveReleaseOpen && (
         <div className="sfp-release-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeReleaseConfirmation(); }}>
           <section ref={releaseDialogRef} className="sfp-release-dialog" role="dialog" aria-modal="true" aria-label="发布确认" tabIndex={-1}>
             <button type="button" className="sfp-release-dialog__close" aria-label="关闭发布确认" onClick={closeReleaseConfirmation}><X size={18} /></button>
-            <small>发布决定与质量评估分开记录</small>
+            <small>发布与评估决定将由服务端原子记录</small>
             <h2>确认是否继续发布</h2>
-            <p>网站评估当前为“{recommendation}”，{releaseRelatedReports.length > 0 ? "并已冻结关联的企业 RAG 评估快照" : "未关联企业 RAG 评估快照"}。这些结果只提供质量建议，不会替你决定。</p>
-            <dl>
-              {siteOps && <div><dt>发布目标</dt><dd>{liveReleaseCoordinates?.target === "mainland_cn" ? "中国大陆站点" : "海外站点"} · 构建 #{latestBuild?.ordinal}</dd></div>}
-              <div><dt>网站评估</dt><dd>{releaseReport.result.score ?? "—"}/100 · {releaseReport.result.version}</dd></div>
-              <div><dt>关联 RAG</dt><dd>{releaseRelatedReports.length > 0 ? `${releaseRelatedReports[0].result.score ?? "—"}/100 · ${releaseRelatedReports[0].result.version} · ${releaseRelatedReports[0].reportId}` : "未关联"}</dd></div>
-              <div><dt>风险提示</dt><dd>{releaseRisks.length} 项</dd></div>
-            </dl>
-            {releaseRisks.length > 0 && <ul>{releaseRisks.map((risk) => <li key={risk.id}><strong>{risk.title}</strong><span>{risk.summary}</span></li>)}</ul>}
-            <div className="sfp-release-note"><CircleAlert size={18} /><span>{siteOps ? `继续会提交${liveReleaseCoordinates?.target === "mainland_cn" ? "中国大陆" : "海外"}站点发布；服务端仍会检查构建版本、部署目标和域名条件。发布完成前保留当前线上版本。` : "继续只会记录你的发布决定；当前原型不会执行真实部署。真实发布仍需通过构建、部署目标和域名配置等技术检查。"}</span></div>
+            {siteOps && (
+              <>
+                <p>
+                  {!currentLiveEvaluationDecision
+                    ? "当前项目未向用户启用建设评估，本次继续使用原有技术发布门禁。"
+                    : currentLiveEvaluationDecision.mode === "follow_recommendation"
+                    ? "当前不可变报告结论为“推荐发布”。"
+                    : currentLiveEvaluationDecision.mode === "accepted_risk"
+                      ? "当前不可变报告结论为“修复后发布”或“暂缓发布”；如继续发布，需要逐项确认风险并说明理由。"
+                      : "当前没有可用的不可变评估报告；如继续发布，需要明确确认评估不可用并说明理由。"}
+                </p>
+                <dl>
+                  <div><dt>发布目标</dt><dd>{liveReleaseCoordinates?.target === "mainland_cn" ? "中国大陆站点" : "海外站点"} · 构建 #{latestBuild?.ordinal}</dd></div>
+                  <div>
+                    <dt>网站评估</dt>
+                    <dd>
+                      {currentLiveEvaluationDecision?.reportId && currentWebsiteEvaluation
+                        ? `${currentWebsiteEvaluation.score}/100 · ${currentWebsiteEvaluation.verdict}`
+                        : "当前无可用报告"}
+                    </dd>
+                  </div>
+                  {currentLiveEvaluationDecision && (
+                    <div><dt>评估坐标</dt><dd>{currentLiveEvaluationDecision.reportId ?? "assessment_unavailable"}</dd></div>
+                  )}
+                </dl>
+                {liveReleaseRiskOptions.length > 0 && (
+                  <fieldset className="sfp-release-acknowledgements">
+                    <legend>需要逐项确认</legend>
+                    {liveReleaseRiskOptions.map((risk) => (
+                      <label key={risk.id}>
+                        <input
+                          type="checkbox"
+                          aria-label={`确认风险：${risk.title}`}
+                          checked={releaseAcknowledgedRiskIds.includes(risk.id)}
+                          onChange={(event) => {
+                            const checked = event.currentTarget.checked;
+                            setReleaseAcknowledgedRiskIds((current) => checked
+                              ? Array.from(new Set([...current, risk.id]))
+                              : current.filter((riskId) => riskId !== risk.id));
+                          }}
+                        />
+                        <span><strong>{risk.title}</strong><small>{risk.summary}</small></span>
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
+                {liveReleaseInformed && (
+                  <label className="sfp-release-reason">
+                    <span>继续发布理由</span>
+                    <textarea
+                      aria-label="继续发布理由"
+                      maxLength={2_000}
+                      value={releaseReason}
+                      onChange={(event) => setReleaseReason(event.currentTarget.value)}
+                    />
+                  </label>
+                )}
+              </>
+            )}
+            <div className="sfp-release-note"><CircleAlert size={18} /><span>继续会提交{liveReleaseCoordinates?.target === "mainland_cn" ? "中国大陆" : "海外"}站点发布；服务端会重新检查构建、报告哈希、部署头和技术门禁。</span></div>
             <div className="sfp-release-dialog__actions">
-              <button type="button" className="sfp-button sfp-button--ghost" onClick={closeReleaseConfirmation}>{siteOps ? "返回网站设计" : "返回评估"}</button>
-              <button type="button" className="sfp-button sfp-button--primary" disabled={Boolean(siteOps && (liveInteractionPending || !livePublishEligible || !designDraftSynced))} onClick={confirmReleaseDecision}>{liveAction === "publish_global" || liveAction === "publish_mainland" ? "正在提交真实发布…" : releaseHasRisks ? "我已了解风险，继续发布" : "确认继续发布"}</button>
+              <button type="button" className="sfp-button sfp-button--ghost" onClick={closeReleaseConfirmation}>返回网站设计</button>
+              <button type="button" className="sfp-button sfp-button--primary" disabled={Boolean(liveInteractionPending || !livePublishEligible || !designDraftSynced || !liveReleaseCanConfirm)} onClick={confirmReleaseDecision}>{liveAction === "publish_global" || liveAction === "publish_mainland" ? "正在提交真实发布…" : liveReleaseInformed ? "确认风险并继续发布" : "确认继续发布"}</button>
             </div>
           </section>
         </div>

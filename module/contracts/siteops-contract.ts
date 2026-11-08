@@ -420,6 +420,14 @@ export const siteOpsObservationV1Schema = z
           .strict(),
       })
       .strict(),
+    websiteEvaluationAdmission: z
+      .object({
+        mode: z.enum(["off", "shadow", "allowlist", "live"]),
+        required: z.boolean(),
+        userVisible: z.boolean(),
+      })
+      .strict()
+      .optional(),
     aliyunConnection: siteOpsAliyunConnectionProjectionSchema,
     domainState: siteOpsDomainStateProjectionSchema.nullable(),
     project: siteOpsProjectProjectionSchema,

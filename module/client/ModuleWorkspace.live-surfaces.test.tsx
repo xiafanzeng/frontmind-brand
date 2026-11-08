@@ -1,12 +1,19 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WebsiteBuildEvaluationReport } from "../contracts/website-build-evaluation-run";
 
 const mocks = vi.hoisted(() => ({
   knowledgeProps: null as null | Record<string, unknown>,
   diagnosticProps: null as null | Record<string, unknown>,
   ragProps: null as null | Record<string, unknown>,
   websiteProps: null as null | Record<string, unknown>,
+  websiteReportProps: null as null | Record<string, unknown>,
   websiteSettingsProps: null as null | Record<string, unknown>,
+}));
+
+vi.mock("./host", () => ({
+  projectWorkspaceUrl: (path: string) => path,
+  requestWorkspaceNavigation: (navigate: () => void) => navigate(),
 }));
 
 vi.mock("./components/EmbeddedKnowledgeBasePanel", () => ({
@@ -42,6 +49,12 @@ vi.mock(
     },
   }),
 );
+vi.mock("./dashboard/ai-website-preview/WebsiteEvaluationReportPage", () => ({
+  default: (props: Record<string, unknown>) => {
+    mocks.websiteReportProps = props;
+    return <div data-testid="website-authority-report" />;
+  },
+}));
 
 import ModuleWorkspace, { type BrandPage, type ModuleContext } from "./ModuleWorkspace";
 
@@ -60,9 +73,9 @@ afterEach(() => {
   mocks.diagnosticProps = null;
   mocks.ragProps = null;
   mocks.websiteProps = null;
+  mocks.websiteReportProps = null;
   mocks.websiteSettingsProps = null;
 });
-
 describe("ModuleWorkspace redesigned live routes", () => {
   it("keeps the original knowledge conversation and cards separate from diagnostics", () => {
     history.replaceState({}, "", "/?view=knowledge&diagnosis=task&diagnosticView=expanded");
@@ -214,6 +227,60 @@ describe("ModuleWorkspace redesigned live routes", () => {
     );
 
     expect(screen.getByTestId("fixture-website")).toBeTruthy();
+    expect(screen.queryByTestId("live-designed-website")).toBeNull();
+  });
+
+  it("opens a query-selected authoritative website report instead of the builder", () => {
+    history.replaceState({}, "", "/?view=website&websiteReport=report-authority-1");
+    render(
+      <ModuleWorkspace
+        context={context}
+        page="website"
+        keywordData={keywordData}
+      />,
+    );
+
+    expect(screen.getByTestId("website-authority-report")).toBeTruthy();
+    expect(screen.queryByTestId("live-designed-website")).toBeNull();
+    expect(mocks.websiteReportProps?.reportId).toBe("report-authority-1");
+    expect(String(mocks.websiteReportProps?.returnUrl)).toContain("view=website");
+    expect(String(mocks.websiteReportProps?.returnUrl)).toContain("step=evaluation");
+  });
+
+  it("opens an injected immutable report from preview mode without using the builder", () => {
+    const previewReport = { reportId: "report-local-authority-1" } as WebsiteBuildEvaluationReport;
+    history.replaceState({}, "", "/?view=website&websiteReport=report-local-authority-1");
+    render(
+      <ModuleWorkspace
+        context={context}
+        page="website"
+        keywordData={keywordData}
+        preview
+        previewWebsiteEvaluationReport={previewReport}
+      />,
+    );
+
+    expect(screen.getByTestId("website-authority-report")).toBeTruthy();
+    expect(screen.queryByTestId("live-designed-website")).toBeNull();
+    expect(mocks.websiteReportProps).toMatchObject({
+      reportId: "report-local-authority-1",
+      initialReport: previewReport,
+    });
+  });
+
+  it("fails closed when a query-selected preview report fixture is unavailable", () => {
+    history.replaceState({}, "", "/?view=website&websiteReport=report-unknown");
+    render(
+      <ModuleWorkspace
+        context={context}
+        page="website"
+        keywordData={keywordData}
+        preview
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent).toContain("未找到这份建设评估报告");
+    expect(screen.queryByTestId("website-authority-report")).toBeNull();
     expect(screen.queryByTestId("live-designed-website")).toBeNull();
   });
 
