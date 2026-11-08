@@ -5,6 +5,14 @@ import {
   persistedSiteDesignPreferencesSchema,
   type SiteDesignPreferences,
 } from "./site-design-preferences.js";
+import {
+  siteBrandKitV1Schema,
+  siteVisitorTaskV1Schema,
+} from "./website-build-inputs.js";
+export {
+  siteBrandKitV1Schema,
+  siteVisitorTaskV1Schema,
+} from "./website-build-inputs.js";
 
 /** Every persisted/runtime workflow coordinate must satisfy this shared
  * boundary before quota reservation or build persistence begins. */
@@ -601,8 +609,32 @@ export const siteBriefSchema = z
     publicAssetIds: z.array(z.string().max(191)).max(100).default([]),
     unknowns: z.array(z.string().trim().min(1).max(500)).max(50).default([]),
     designPreferences: persistedSiteDesignPreferencesSchema.optional(),
+    brandKitV1: siteBrandKitV1Schema.optional(),
+    visitorTaskV1: siteVisitorTaskV1Schema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const routeIds = new Set(value.routes.map(({ id }) => id));
+    if (value.visitorTaskV1) {
+      for (const [index, routeId] of value.visitorTaskV1.requiredRouteIds.entries()) {
+        if (!routeIds.has(routeId)) {
+          context.addIssue({
+            code: "custom",
+            path: ["visitorTaskV1", "requiredRouteIds", index],
+            message: "Visitor task route must exist in the frozen Brief",
+          });
+        }
+      }
+    }
+    const logoAssetId = value.brandKitV1?.logo?.assetId;
+    if (logoAssetId && !value.publicAssetIds.includes(logoAssetId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["brandKitV1", "logo", "assetId"],
+        message: "Brand Kit logo must be a public frozen asset",
+      });
+    }
+  });
 
 export function readSiteDesignPreferencesFromBrief(
   value: unknown,

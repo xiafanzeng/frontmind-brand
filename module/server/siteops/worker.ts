@@ -27,9 +27,10 @@ import {
   type FormalBuildArtifactStaging,
 } from "./build-artifact-checkpoint.js";
 import type { SiteOpsWorkerCore } from "./worker-core.js";
+import { reserveAutomaticWebsiteEvaluation } from "../website-evaluation-automatic.js";
 export function createSiteOpsWorker(core: SiteOpsWorkerCore) {
-const { runWithStoredEnterpriseProjectScope, runWithStoredEnterpriseProjectCleanupScope, enterpriseAccountOwnerPredicate, enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate, enterpriseOwnerPredicate, getDb, finalizePendingTwentyFirstCredentialRevocations, runtimeErrorForLog, localAssets, messages } = core;
-const { siteBuilds, siteDeployments, siteOperations, siteProjects, socialPackages, websiteStyleSampleBatches, websiteStyleSamples } = core.tables;
+const { runWithStoredEnterpriseProjectScope, runWithStoredEnterpriseProjectCleanupScope, enterpriseAccountOwnerPredicate, enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate, enterpriseOwnerPredicate, getDb, finalizePendingTwentyFirstCredentialRevocations, runtimeErrorForLog, wakeWebsiteEvaluationWorker, localAssets, messages } = core;
+const { siteBuilds, siteDeployments, siteEvaluationRuns, siteOperations, siteProjects, socialPackages, websiteStyleSampleBatches, websiteStyleSamples } = core.tables;
 
 
 const DEFAULT_LEASE_MS = 2 * 60_000;
@@ -1039,6 +1040,8 @@ function fallbackMarkerMatchesOperation(input: {
 
 type BuildArtifactVerification = {
   projection: ReturnType<typeof siteOpsBuildArtifactProjection>;
+  bindings: BuildArtifactBindings;
+  build: typeof siteBuilds.$inferSelect;
   mode: "initial" | "fallback_bind" | "formal_upgrade";
   quotaPeriodId: string | null;
   quotaState: "reserved" | "consumed" | "released" | null;
@@ -1229,6 +1232,8 @@ async function verifiedBuildArtifactProjection(
       userId: operation.userId,
       projectId: operation.projectId,
     }),
+    bindings,
+    build,
     mode: fallbackBind
       ? "fallback_bind"
       : formalUpgrade
@@ -1895,6 +1900,32 @@ async function finalize(
       .for("update");
     const project = projectRows[0];
     if (!project) return result.status;
+    if (
+      locked.buildId &&
+      !unsuccessful &&
+      buildArtifactVerification &&
+      result.result?.buildCheckpoint === "preview_ready"
+    ) {
+      await reserveAutomaticWebsiteEvaluation({
+        tx,
+        tables: { siteEvaluationRuns },
+        environment: process.env,
+        build: {
+          enterpriseProjectId: project.enterpriseProjectId,
+          userId: locked.userId,
+          projectId: locked.projectId,
+          buildId: locked.buildId,
+          knowledgeSnapshotId:
+            buildArtifactVerification.build.knowledgeSnapshotId,
+          knowledgeArchiveHash:
+            buildArtifactVerification.build.knowledgeArchiveHash,
+          brief: buildArtifactVerification.build.brief,
+          selectionHash: buildArtifactVerification.build.selectionHash,
+          artifactBindings: buildArtifactVerification.bindings,
+          now,
+        },
+      });
+    }
     let liveHeadConflict = false;
     if (!unsuccessful && result.projectStatus === "live") {
       const deploymentRows = await tx
@@ -2098,6 +2129,19 @@ async function runSiteOpsWorkerSweep(options?: { max?: number }) {
     else if (finalizedStatus === "succeeded") summary.succeeded += 1;
     else if (finalizedStatus === "failed") summary.failed += 1;
     else summary.attentionRequired += 1;
+    if (
+      (finalizedStatus === "succeeded" || finalizedStatus === "pending") &&
+      (operation.kind === "site_build" || operation.kind === "build_revision")
+    ) {
+      try {
+        wakeWebsiteEvaluationWorker?.();
+      } catch (error) {
+        console.error(
+          "[SiteOpsWorker] website_evaluation_wake_failed",
+          runtimeErrorForLog(error),
+        );
+      }
+    }
   }
   await finalizePendingTwentyFirstCredentialRevocations().catch((error) => {
     console.error(

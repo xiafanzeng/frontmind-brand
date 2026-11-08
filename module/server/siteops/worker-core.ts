@@ -16,4 +16,6 @@ export interface SiteOpsWorkerCore {
   enterpriseSiteProfileOwnerPredicate(userId: number): SQL;
   finalizePendingTwentyFirstCredentialRevocations(): Promise<unknown>;
   runtimeErrorForLog(error: unknown): unknown;
+  /** Best-effort post-commit wake-up; the evaluation sweeper remains authoritative. */
+  wakeWebsiteEvaluationWorker?: () => void;
 }

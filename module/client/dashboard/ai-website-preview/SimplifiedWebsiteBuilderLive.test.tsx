@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SiteOpsObservationV1 } from "../../../contracts/siteops-contract";
 import type {
+  SiteDesignPreferencesSaveInput,
   SiteDesignRecommendationInput,
   SiteDesignRecommendationOutput,
 } from "../../../contracts/site-design-preferences";
@@ -25,6 +26,15 @@ import {
   saveEvaluationReport,
 } from "./evaluation-report-store";
 import { scopedEvaluationStorage } from "./scoped-evaluation-storage";
+import type { WebsiteEvaluationAuthorityView } from "./WebsiteEvaluationWorkspace";
+
+const toastMock = vi.hoisted(() => ({
+  error: vi.fn(),
+  message: vi.fn(),
+  success: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({ toast: toastMock }));
 
 const KNOWLEDGE_COORDINATE = {
   id: "22222222-2222-4222-8222-222222222222",
@@ -178,8 +188,48 @@ function liveBuildObservation(
     executionUnavailableReason: null,
     templateCoordinate: TEMPLATE_COORDINATE,
   };
+  const frozenBrief = {
+    companyName: "测试企业",
+    primaryLanguage: "zh-CN" as const,
+    contacts: [],
+    offerings: ["企业服务"],
+    audience: ["客户"],
+    conversionGoal: "帮助客户找到答案",
+    contentInventory: {
+      schemaVersion: 1 as const,
+      source: "frozen_knowledge_snapshot" as const,
+      entries: [],
+    },
+    routes: [
+      {
+        id: "help",
+        slug: "/help",
+        title: "帮助中心",
+        sourceDocumentIds: ["document-1"],
+      },
+    ],
+    verifiedFacts: [],
+    publicAssetIds: [],
+    unknowns: [],
+    visitorTaskV1: {
+      schemaVersion: 1 as const,
+      goal: "帮助客户找到答案",
+      entryRouteId: "help",
+      successCriteria: ["客户找到所需答案"],
+      requiredRouteIds: ["help"],
+      assistantRequired: false,
+      generatedFromBriefHash: "b".repeat(64),
+      confirmedAt: "2026-10-23T00:30:00.000Z",
+      confirmedByUserId: 7,
+    },
+  };
   return {
     ...base,
+    websiteEvaluationAdmission: {
+      mode: "live",
+      required: true,
+      userVisible: true,
+    },
     project: {
       ...base.project,
       status: interactionState,
@@ -197,30 +247,7 @@ function liveBuildObservation(
           icpVerifiedAt: null,
         }
       : base.domainState,
-    brief: {
-      companyName: "测试企业",
-      primaryLanguage: "zh-CN",
-      contacts: [],
-      offerings: ["企业服务"],
-      audience: ["客户"],
-      conversionGoal: "帮助客户找到答案",
-      contentInventory: {
-        schemaVersion: 1,
-        source: "frozen_knowledge_snapshot",
-        entries: [],
-      },
-      routes: [
-        {
-          id: "help",
-          slug: "/help",
-          title: "帮助中心",
-          sourceDocumentIds: ["document-1"],
-        },
-      ],
-      verifiedFacts: [],
-      publicAssetIds: [],
-      unknowns: [],
-    },
+    brief: frozenBrief,
     visualCandidates: [candidate],
     visualGeneration: {
       ...base.visualGeneration,
@@ -351,6 +378,11 @@ function recommendableObservation(): SiteOpsObservationV1 {
         title,
         sourceDocumentIds: [`source_${id}`],
       })),
+      visitorTaskV1: {
+        ...base.brief!.visitorTaskV1!,
+        entryRouteId: "home",
+        requiredRouteIds: ["home"],
+      },
     },
   };
 }
@@ -413,16 +445,76 @@ function designRecommendation(
   };
 }
 
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  window.localStorage.clear();
+  toastMock.error.mockClear();
+  toastMock.message.mockClear();
+  toastMock.success.mockClear();
+});
 afterEach(cleanup);
 
-function openDomainPublishConfirmation() {
-  const evaluationEntry = screen.queryByRole("button", { name: "域名与发布" });
-  if (evaluationEntry) fireEvent.click(evaluationEntry);
-  const panel = screen.getByTestId("website-domain-publish");
-  const summary = panel.querySelector("summary");
-  if (summary && !summary.closest("details")?.open) fireEvent.click(summary);
-  fireEvent.click(within(panel).getByTestId("website-publish-request"));
+function openDomainPublishConfirmation(target: "global_excluding_cn" | "mainland_cn" = "global_excluding_cn") {
+  if (target === "mainland_cn") {
+    const panel = screen.getByTestId("website-domain-publish");
+    const summary = panel.querySelector("summary");
+    if (summary && !summary.closest("details")?.open) fireEvent.click(summary);
+    fireEvent.click(within(panel).getByTestId("website-publish-request"));
+  } else {
+  const journey = screen.getByRole("list", { name: "网站建设流程" });
+  fireEvent.click(within(journey).getByRole("button", { name: /建设评估/ }));
+  fireEvent.click(screen.getByRole("button", { name: "完成发布" }));
+  }
+  const unavailable = screen.queryByLabelText("确认风险：评估结果不可用");
+  if (unavailable) {
+    fireEvent.click(unavailable);
+    fireEvent.change(screen.getByLabelText("继续发布理由"), {
+      target: { value: "评估暂不可用，已完成人工检查。" },
+    });
+  }
+}
+
+function unavailableEvaluationDecision(buildId: string) {
+  return {
+    mode: "assessment_unavailable",
+    buildId,
+    runId: null,
+    reportId: null,
+    reportHash: null,
+    acknowledgedRiskIds: ["assessment_unavailable"],
+    reason: "评估暂不可用，已完成人工检查。",
+  };
+}
+
+function authoritativeReleaseEvaluation(
+  recommendation: "recommended" | "repair_or_continue" | "not_recommended",
+): WebsiteEvaluationAuthorityView {
+  return {
+    buildId: "44444444-4444-4444-8444-444444444444",
+    status: "completed",
+    runId: "55555555-5555-4555-8555-555555555555",
+    reportId: "report-release-1",
+    reportHash: "c".repeat(64),
+    reportUrl: "/?view=website&websiteReport=report-release-1",
+    score: recommendation === "recommended" ? 92 : 68,
+    recommendation,
+    verdict: recommendation === "recommended"
+      ? "推荐发布"
+      : recommendation === "repair_or_continue"
+        ? "修复后发布"
+        : "暂缓发布",
+    summary: "服务端权威报告。",
+    judgmentCoverage: 100,
+    brandReferenceCoverage: 50,
+    dimensions: [],
+    risks: recommendation === "recommended" ? [] : [{
+      id: "risk-core-task",
+      title: "核心任务中断",
+      summary: "联系路径未到达成功条件。",
+      severity: "critical",
+      target: { kind: "route", routeId: "home" },
+    }],
+    criticalRiskIds: recommendation === "recommended" ? [] : ["risk-core-task"],
+  };
 }
 
 describe("redesigned live website builder setup", () => {
@@ -1612,43 +1704,43 @@ describe("redesigned live website builder setup", () => {
 
   it("opens assessment for a completed site without claiming an unperformed assistant trial", async () => {
     const current = approvedBuildWithDesignPreferences();
+    const evaluation = authoritativeReleaseEvaluation("recommended");
     const scope = "live:assessment-without-trial";
     const onAction = vi.fn(async () => undefined);
     const onSubmitRevision = vi.fn(async () => undefined);
     const onSaveDesignPreferences = vi.fn(async () => current);
     const props = { observation: current, onAction, onSubmitRevision, onSaveDesignPreferences };
-    const view = render(<SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={props} storageScope={scope} />);
+    const view = render(<SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={props} websiteEvaluation={evaluation} storageScope={scope} />);
     await waitFor(() => expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站"));
     expect(screen.getByText("助手试用未完成")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "进入建设评估" }));
-    expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
-    const trialCheck = screen.getByText("助手真实试聊").closest("li")!;
-    expect(trialCheck.textContent).toContain("待试用");
+    fireEvent.click(screen.getByRole("button", { name: "查看评估" }));
+    expect(screen.getByRole("region", { name: "建设评估" })).toBeTruthy();
+    const trialCheck = screen.getByText("助手试聊").closest("li")!;
+    expect(trialCheck.textContent).toContain("尚未完成真实试聊");
     expect(trialCheck.classList.contains("is-passed")).toBe(false);
-    expect(screen.getByText(/配置完整性用于确认草稿，真实试聊单独记录/)).toBeTruthy();
-    const confirm = screen.getByRole("button", { name: "确认当前建设草稿" }) as HTMLButtonElement;
-    expect(confirm.disabled).toBe(false);
-    fireEvent.click(confirm);
+    expect(screen.getByText("发布检查")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => {
       const draft = JSON.parse(window.localStorage.getItem(`${WEBSITE_DRAFT_STORAGE_KEY}.${encodeURIComponent(scope)}`) ?? "{}");
       expect(draft.design.assistant.tested).toBe(false);
       expect(draft.completedStepIds).toEqual(["template", "design"]);
-      expect(draft.confirmed).toBe(true);
+      expect(draft.confirmed).toBe(false);
     });
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith("草稿已保存"), { timeout: 1_600 });
     expect(onAction).not.toHaveBeenCalled();
     expect(onSubmitRevision).not.toHaveBeenCalled();
     expect(onSaveDesignPreferences).not.toHaveBeenCalled();
 
     view.unmount();
-    render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" siteOps={props} storageScope={scope} />);
-    await waitFor(() => expect(screen.getByText("助手真实试聊").closest("li")!.textContent).toContain("待试用"));
+    render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" siteOps={props} websiteEvaluation={evaluation} storageScope={scope} />);
+    await waitFor(() => expect(screen.getByText("助手试聊").closest("li")!.textContent).toContain("尚未完成真实试聊"));
     fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /网站设计/ }));
     expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站");
     expect(screen.getByText("助手试用未完成")).toBeTruthy();
   });
 
-  it.each(["design", "revision"] as const)("keeps unsent %s changes when assessment is opened without rebuilding", async (change) => {
+  it.each(["design", "revision"] as const)("keeps unsent %s changes and relocks assessment until rebuilding", async (change) => {
     const current = approvedBuildWithDesignPreferences();
     const onAction = vi.fn(async () => undefined);
     const onSubmitRevision = vi.fn(async () => undefined);
@@ -1657,15 +1749,16 @@ describe("redesigned live website builder setup", () => {
     await waitFor(() => expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站"));
     const input = change === "design" ? screen.getByLabelText("网站名称") : screen.getByRole("textbox", { name: "补充修改要求" });
     fireEvent.change(input, { target: { value: "尚未提交的修改内容" } });
-    expect(screen.getByRole("button", { name: "提交修改并重新生成" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新生成" })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "查看建设评估" }));
-    expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
-    expect(screen.getByText("真实构建 #1")).toBeTruthy();
+    const evaluationStep = within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /建设评估/ }) as HTMLButtonElement;
+    expect(evaluationStep.disabled).toBe(true);
+    fireEvent.click(evaluationStep);
+    expect(screen.queryByRole("region", { name: "建设评估" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
     expect(onAction).not.toHaveBeenCalled();
     expect(onSubmitRevision).not.toHaveBeenCalled();
     expect(onSaveDesignPreferences).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /网站设计/ }));
     expect((change === "design" ? screen.getByLabelText("网站名称") : screen.getByRole("textbox", { name: "补充修改要求" })) as HTMLInputElement).toHaveProperty("value", "尚未提交的修改内容");
   });
 
@@ -1687,23 +1780,31 @@ describe("redesigned live website builder setup", () => {
     };
     const onAction = vi.fn(async () => undefined);
     render(<SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ observation: current, onAction }} storageScope={`live:assessment-building-${hasOlderPreview}`} />);
-    const submit = screen.getByRole("button", { name: "网站生成中…" }) as HTMLButtonElement;
+    const submit = screen.getByRole("button", { name: "正在生成" }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "查看建设评估" }));
-    expect(screen.getByText("真实构建 #2")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "确认当前建设草稿" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("页面结构").closest("li")!.classList.contains("is-passed")).toBe(false);
+    expect(submit.getAttribute("aria-busy")).toBe("true");
+    const evaluationStep = within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /建设评估/ }) as HTMLButtonElement;
+    expect(evaluationStep.disabled).toBe(true);
+    fireEvent.click(evaluationStep);
+    expect(screen.queryByRole("button", { name: "确认当前建设草稿" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "建设评估" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
+    expect(screen.queryByLabelText("网站建设六维评分雷达图")).toBeNull();
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("does not mark ungenerated configuration complete when its assessment is inspected", () => {
+  it("does not unlock assessment for ungenerated configuration", () => {
     const current = liveBuildObservation("awaiting_visual_selection");
     const onAction = vi.fn(async () => undefined);
     render(<SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ observation: current, onAction }} storageScope="live:assessment-not-built" />);
-    expect(screen.queryByRole("button", { name: "查看建设评估" })).toBeNull();
-    fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /建设评估/ }));
-    expect((screen.getByRole("button", { name: "确认当前建设草稿" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("页面结构").closest("li")!.classList.contains("is-passed")).toBe(false);
+    expect(screen.getByRole("button", { name: "开始评估" })).toBeTruthy();
+    const evaluationStep = within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /建设评估/ }) as HTMLButtonElement;
+    expect(evaluationStep.disabled).toBe(true);
+    fireEvent.click(evaluationStep);
+    expect(screen.queryByRole("button", { name: "确认当前建设草稿" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "建设评估" })).toBeNull();
+    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
     expect(onAction).not.toHaveBeenCalled();
   });
 
@@ -1751,8 +1852,7 @@ describe("redesigned live website builder setup", () => {
       );
 
       expect(screen.queryByTitle("真实构建预览")).toBeNull();
-      expect(screen.getByRole("link", { name: "查看网站" }).getAttribute("href"))
-        .toBe(previewUrl);
+      expect(screen.queryByRole("link", { name: "查看网站" })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "试用 AI 助手" }));
       await waitFor(() => {
         const frame = screen.getByTitle("真实构建预览") as HTMLIFrameElement;
@@ -1847,7 +1947,7 @@ describe("redesigned live website builder setup", () => {
     }
   });
 
-  it("validates bridge trials and allows another trial after revision instructions are cleared", async () => {
+  it("validates bridge trials and invalidates stale credit after revision instructions change", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -1962,8 +2062,8 @@ describe("redesigned live website builder setup", () => {
         expect(screen.getByText("助手试用已完成")).toBeTruthy(),
       );
 
-      // Editing revision requirements suspends credit for this build. Clearing
-      // them restores the same iframe binding, which must accept a new trial.
+      // Editing revision requirements suspends credit for this build. A report
+      // from the now-stale iframe binding cannot unlock the next step.
       const revisionInstructions = screen.getByRole("textbox", { name: "补充修改要求" });
       fireEvent.change(revisionInstructions, { target: { value: "请修改首页标题" } });
       expect(screen.getByText("助手试用未完成")).toBeTruthy();
@@ -1973,40 +2073,12 @@ describe("redesigned live website builder setup", () => {
       expect(screen.getByText("助手试用未完成")).toBeTruthy();
       expect(screen.getByTitle("真实构建预览")).toBe(frame);
       dispatch(report({}));
-      await waitFor(() =>
-        expect(screen.getByText("助手试用已完成")).toBeTruthy(),
-      );
-      fireEvent.click(screen.getByRole("button", { name: "关闭助手试用" }));
-      fireEvent.click(screen.getByRole("button", { name: "进入建设评估" }));
-      expect(screen.getByRole("heading", { name: "建设检查与评估" })).toBeTruthy();
+      expect(screen.getByText("助手试用未完成")).toBeTruthy();
+      const evaluationStep = within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /建设评估/ }) as HTMLButtonElement;
+      expect(evaluationStep.disabled).toBe(true);
       expect(onAction).not.toHaveBeenCalled();
       expect(onSubmitRevision).not.toHaveBeenCalled();
       expect(onSaveDesignPreferences).not.toHaveBeenCalled();
-      fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /网站设计/ }));
-
-      // An unsent site title changes configuration completeness, while the
-      // genuine trial of the frozen site's unchanged assistant remains true.
-      fireEvent.change(screen.getByLabelText("网站名称"), {
-        target: { value: "尚未提交的网站标题" },
-      });
-      expect(screen.getByText("助手试用已完成")).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "查看建设评估" }));
-      const trialCheck = screen.getByText("助手真实试聊").closest("li")!;
-      expect(trialCheck.classList.contains("is-passed")).toBe(true);
-      expect(trialCheck.textContent).toContain("助手配置有效且已完成一次真实问答");
-      expect(trialCheck.textContent).toContain("已确认");
-      expect(onAction).not.toHaveBeenCalled();
-      expect(onSubmitRevision).not.toHaveBeenCalled();
-      expect(onSaveDesignPreferences).not.toHaveBeenCalled();
-      fireEvent.click(within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /网站设计/ }));
-
-      // Renaming the assistant invalidates the completed trial again.
-      fireEvent.change(screen.getByLabelText("助手名称"), {
-        target: {value: "新名字助手"},
-      });
-      await waitFor(() =>
-        expect(screen.getByText("助手试用未完成")).toBeTruthy(),
-      );
       view.unmount();
     } finally {
       vi.unstubAllGlobals();
@@ -2107,7 +2179,7 @@ describe("redesigned live website builder setup", () => {
     expect(screen.getAllByTestId("website-template-card")).toHaveLength(1);
     expect(screen.getByText("真实帮助中心模板")).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: /真实帮助中心模板/ }));
-    fireEvent.click(screen.getByRole("button", { name: "继续配置真实 brief" }));
+    fireEvent.click(screen.getByRole("button", { name: "进入设计" }));
 
     fireEvent.change(screen.getByLabelText("网站名称"), {
       target: { value: "远山客户帮助中心" },
@@ -2151,7 +2223,21 @@ describe("redesigned live website builder setup", () => {
         knowledgeSnapshot: KNOWLEDGE_COORDINATE,
         template: TEMPLATE_COORDINATE,
       },
+      websiteEvaluationInputs: {
+        brandKitV1: null,
+        visitorTaskV1: {
+          schemaVersion: 1,
+          goal: "帮助客户找到答案",
+          entryRouteId: "help",
+          successCriteria: ["客户找到所需答案"],
+          requiredRouteIds: ["help"],
+          assistantRequired: false,
+        },
+      },
     });
+    expect(saved?.websiteEvaluationInputs?.visitorTaskV1).not.toHaveProperty("confirmedAt");
+    expect(saved?.websiteEvaluationInputs?.visitorTaskV1).not.toHaveProperty("confirmedByUserId");
+    expect(saved?.websiteEvaluationInputs?.visitorTaskV1).not.toHaveProperty("generatedFromBriefHash");
     expect(saved?.draft).not.toHaveProperty("siteLanguage");
     expect(saved?.draft).not.toHaveProperty("officialUrl");
     expect(saved?.draft).not.toHaveProperty("brandMark");
@@ -2160,6 +2246,123 @@ describe("redesigned live website builder setup", () => {
         input: { sampleId: "33333333-3333-4333-8333-333333333333" },
       }));
     expect(events).toEqual(["save", "select"]);
+  });
+
+  it("blocks an admitted build until the visitor task is confirmed and saves only the browser draft fields", async () => {
+    const admitted = liveBuildObservation("awaiting_visual_selection");
+    const observationWithoutTask: SiteOpsObservationV1 = {
+      ...admitted,
+      brief: admitted.brief
+        ? { ...admitted.brief, visitorTaskV1: undefined }
+        : null,
+    };
+    const onAction = vi.fn(async () => undefined);
+    const onSaveDesignPreferences = vi.fn(async (
+      _input: SiteDesignPreferencesSaveInput,
+    ) => observationWithoutTask);
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{
+          observation: observationWithoutTask,
+          onAction,
+          onSaveDesignPreferences,
+        }}
+        storageScope="live:7:evaluation-inputs-required"
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("website-build-start")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("website-build-start"));
+    expect(toastMock.message).toHaveBeenCalledWith(expect.stringMatching(/请先确认核心访客任务/));
+    expect(onSaveDesignPreferences).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("核心访客任务成功条件"), {
+      target: { value: "客户找到所需答案" },
+    });
+    fireEvent.change(screen.getByLabelText("主品牌色"), {
+      target: { value: "#315b8a" },
+    });
+    fireEvent.change(screen.getByLabelText("语调关键词"), {
+      target: { value: "专业\n清晰" },
+    });
+    const confirm = screen.getByLabelText("确认核心访客任务") as HTMLInputElement;
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    fireEvent.click(screen.getByTestId("website-build-start"));
+
+    await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
+    expect(onSaveDesignPreferences.mock.calls[0]?.[0].websiteEvaluationInputs).toEqual({
+      brandKitV1: {
+        schemaVersion: 1,
+        primaryColor: "#315b8a",
+        secondaryColors: [],
+        fontPreferences: [],
+        toneKeywords: ["专业", "清晰"],
+        forbiddenPhrases: [],
+      },
+      visitorTaskV1: {
+        schemaVersion: 1,
+        goal: "帮助客户找到答案",
+        entryRouteId: "help",
+        successCriteria: ["客户找到所需答案"],
+        requiredRouteIds: ["help"],
+        assistantRequired: false,
+      },
+    });
+    expect(onAction).toHaveBeenCalledWith({
+      action: "select_visual",
+      input: { sampleId: "33333333-3333-4333-8333-333333333333" },
+    });
+  });
+
+  it("keeps legacy MODE=off builds and publishing free of evaluation inputs and decisions", async () => {
+    const waiting = liveBuildObservation("awaiting_visual_selection");
+    const { websiteEvaluationAdmission: _admission, ...legacyWaiting } = waiting;
+    const onSaveDesignPreferences = vi.fn(async (
+      _input: SiteDesignPreferencesSaveInput,
+    ) => legacyWaiting);
+    const onAction = vi.fn(async () => undefined);
+    const first = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="design"
+        siteOps={{
+          observation: legacyWaiting,
+          onAction,
+          onSaveDesignPreferences,
+        }}
+        storageScope="live:7:evaluation-mode-off-build"
+      />,
+    );
+    expect(screen.queryByText("建设评估输入")).toBeNull();
+    fireEvent.click(screen.getByTestId("website-build-start"));
+    await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
+    expect(onSaveDesignPreferences.mock.calls[0]?.[0]).not.toHaveProperty("websiteEvaluationInputs");
+    first.unmount();
+
+    const approved = liveBuildObservation("approved");
+    const { websiteEvaluationAdmission: _approvedAdmission, ...legacyApproved } = approved;
+    const publish = vi.fn(async () => undefined);
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="evaluation"
+        siteOps={{ observation: legacyApproved, onAction: publish }}
+        storageScope="live:7:evaluation-mode-off-publish"
+      />,
+    );
+    expect(screen.getAllByText("建设评估当前未启用或不展示")).toHaveLength(1);
+    expect(screen.queryByTestId("website-evaluation-waiting")).toBeNull();
+    openDomainPublishConfirmation();
+    expect(screen.queryByLabelText(/确认风险/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "确认继续发布" }));
+    await waitFor(() => expect(publish).toHaveBeenCalledWith({
+      action: "publish_global",
+      input: {
+        buildId: approved.builds[0]!.id,
+        expectedHeadDeploymentId: undefined,
+      },
+    }));
   });
 
   it("keeps edits made during a pending save and does not build or advance an older design", async () => {
@@ -2225,7 +2428,7 @@ describe("redesigned live website builder setup", () => {
 
     saveRequest.resolve(echoedObservation);
     await waitFor(() =>
-      expect(screen.getByText(/保存期间网站设计已更新/)).toBeTruthy(),
+      expect(toastMock.message).toHaveBeenCalledWith(expect.stringMatching(/保存期间网站设计已更新/)),
     );
     expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
       .toBe("保存期间继续编辑的网站名称");
@@ -2234,8 +2437,9 @@ describe("redesigned live website builder setup", () => {
     expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
   });
 
-  it("rebuilds an approved website from the synced draft without revision requirements", async () => {
+  it("opens assessment for a synced approved website without creating a duplicate revision", async () => {
     const approved = approvedBuildWithDesignPreferences();
+    const evaluation = authoritativeReleaseEvaluation("recommended");
     const onAction = vi.fn(async () => undefined);
     const onSaveDesignPreferences = vi.fn(async () => approved);
     const onSubmitRevision = vi.fn(async (
@@ -2246,6 +2450,7 @@ describe("redesigned live website builder setup", () => {
       <SimplifiedWebsiteBuilderPreview
         initialStep="design"
         siteOps={{ observation: approved, onAction, onSaveDesignPreferences, onSubmitRevision }}
+        websiteEvaluation={evaluation}
         onStepChange={onStepChange}
         storageScope="live:7:rebuild-without-requirements"
       />,
@@ -2253,17 +2458,14 @@ describe("redesigned live website builder setup", () => {
     await waitFor(() =>
       expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站"),
     );
-    expect(screen.getByRole("button", { name: "进入建设评估" })).toBeTruthy();
-    const rebuild = screen.getByTestId("website-rebuild-submit") as HTMLButtonElement;
-    expect(rebuild.disabled).toBe(false);
-    fireEvent.click(rebuild);
-    await waitFor(() => expect(onSaveDesignPreferences).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(onSubmitRevision).toHaveBeenCalledTimes(1));
-    const revision = onSubmitRevision.mock.calls[0]?.[0];
-    expect(revision?.text).toBe(buildLiveSiteOpsRevisionMessage());
-    expect(revision?.files).toEqual([]);
+    expect(screen.getByRole("button", { name: "查看评估" })).toBeTruthy();
+    expect(screen.queryByTestId("website-rebuild-submit")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "查看评估" }));
+    expect(screen.getByRole("region", { name: "建设评估" })).toBeTruthy();
+    expect(onSaveDesignPreferences).not.toHaveBeenCalled();
+    expect(onSubmitRevision).not.toHaveBeenCalled();
     expect(onAction).not.toHaveBeenCalled();
-    expect(onStepChange).not.toHaveBeenCalledWith("evaluation");
+    expect(onStepChange).toHaveBeenCalledWith("evaluation");
   });
 
   it("submits an existing real build revision without selecting or publishing again", async () => {
@@ -2372,13 +2574,17 @@ describe("redesigned live website builder setup", () => {
         <SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ ...siteOps, observation: saved }} onStepChange={onStepChange} storageScope={scope} />,
       );
       saveRequest.resolve(saved);
-      await waitFor(() => expect(screen.getByText(
-        failureMode === "newer-edit" ? /保存期间网站设计已更新/ : "改版服务暂时不可用",
-      )).toBeTruthy());
+      await waitFor(() => {
+        if (failureMode === "newer-edit") {
+          expect(toastMock.message).toHaveBeenCalledWith(expect.stringMatching(/保存期间网站设计已更新/));
+        } else {
+          expect(toastMock.error).toHaveBeenCalledWith("改版服务暂时不可用", undefined);
+        }
+      });
       expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
         .toBe(failureMode === "newer-edit" ? "保存期间的新设计 B" : "保存中的设计 A");
-      expect(screen.getByRole("link", { name: "查看网站" }).getAttribute("href")).toBe(approved.builds[0]!.previewUrl);
-      expect(screen.getByTestId("website-revision-submit").textContent).toBe("提交修改并重新生成");
+      expect(screen.queryByRole("link", { name: "查看网站" })).toBeNull();
+      expect(screen.getByTestId("website-revision-submit").textContent).toBe("重新生成");
       expect((screen.getByTestId("website-publish-request") as HTMLButtonElement).disabled).toBe(true);
       expect(onSubmitRevision).toHaveBeenCalledTimes(failureMode === "newer-edit" ? 0 : 1);
       expect(onAction).not.toHaveBeenCalled();
@@ -2389,7 +2595,7 @@ describe("redesigned live website builder setup", () => {
           <SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ ...siteOps, observation: saved }} storageScope={scope} />,
         );
         await waitFor(() => expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("保存中的设计 A"));
-        expect(screen.getByRole("link", { name: "查看网站" }).getAttribute("href")).toBe(approved.builds[0]!.previewUrl);
+        expect(screen.queryByRole("link", { name: "查看网站" })).toBeNull();
         expect((screen.getByTestId("website-publish-request") as HTMLButtonElement).disabled).toBe(true);
       }
     },
@@ -2424,7 +2630,7 @@ describe("redesigned live website builder setup", () => {
     expect(instructions.value).toBe("重置前的修改要求");
     resetRequest.resolve(undefined);
       await waitFor(() => expect(screen.getByRole("heading", { name: "选择一个模板版式" })).toBeTruthy());
-      fireEvent.click(screen.getByRole("button", { name: /网站设计/u }));
+      fireEvent.click(screen.getByRole("button", { name: "进入设计" }));
     await waitFor(() => expect((screen.getByRole("textbox", { name: "补充修改要求" }) as HTMLTextAreaElement).value).toBe(""));
     expect(screen.queryByRole("list", { name: "修改参考附件" })).toBeNull();
     expect(screen.getByText("助手试用未完成")).toBeTruthy();
@@ -2514,7 +2720,7 @@ describe("redesigned live website builder setup", () => {
     revisionRequest.resolve(undefined);
 
     await waitFor(() =>
-      expect(screen.getByText(/改版任务提交期间网站设计已更新/)).toBeTruthy(),
+      expect(toastMock.message).toHaveBeenCalledWith(expect.stringMatching(/改版任务提交期间网站设计已更新/)),
     );
     expect((screen.getByLabelText("站点简介 / 建站目标") as HTMLTextAreaElement).value)
       .toBe("改版提交期间继续编辑的新目标");
@@ -2625,7 +2831,7 @@ describe("redesigned live website builder setup", () => {
     expect(screen.getByText("服务端已绑定此模板")).toBeTruthy();
   });
 
-  it("isolates live drafts and RAG report provenance from preview storage", () => {
+  it("isolates live drafts and keeps legacy RAG reports out of website assessment", () => {
     window.localStorage.setItem(WEBSITE_DRAFT_STORAGE_KEY, JSON.stringify({
       version: 1,
       updatedAt: Date.now(),
@@ -2678,9 +2884,8 @@ describe("redesigned live website builder setup", () => {
 
     expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("FrontMind 帮助中心");
     fireEvent.click(screen.getByRole("button", { name: /建设评估/ }));
-    expect(screen.getByRole("button", { name: "查找 RAG 评估" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "查找 RAG 评估" }));
-    expect(screen.getByText(/尚无可关联的企业 RAG 评估快照/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /查找 RAG 评估/ })).toBeNull();
+    expect(screen.queryByLabelText("RAG 参考")).toBeNull();
   });
 
   it("shows the true approved build and records publish audit only after the server accepts it", async () => {
@@ -2698,8 +2903,8 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    expect(screen.getByText("网站已通过构建检查")).toBeTruthy();
-    expect(screen.getByText(/真实 SiteOps · 项目版本/)).toBeTruthy();
+    expect(screen.queryByText("网站已通过构建检查")).toBeNull();
+    expect(document.querySelector(".sfp-draft-state")).toBeNull();
     expect(screen.queryByTestId("siteops-build-status")).toBeNull();
 
     openDomainPublishConfirmation();
@@ -2711,16 +2916,91 @@ describe("redesigned live website builder setup", () => {
         input: {
           buildId: "44444444-4444-4444-8444-444444444444",
           expectedHeadDeploymentId: undefined,
+          evaluationDecision: unavailableEvaluationDecision(
+            "44444444-4444-4444-8444-444444444444",
+          ),
         },
       }),
     );
     expect(listPublishDecisions(auditStorage)).toEqual([]);
     acceptPublish?.();
-    await waitFor(() => expect(listPublishDecisions(auditStorage)).toHaveLength(1));
-    expect(screen.getByText(/服务端已受理发布/).textContent).toContain("尚不表示已经上线");
+    await waitFor(() => expect(toastMock.message).toHaveBeenCalledWith(expect.stringMatching(/服务端已原子受理发布与评估决定/)));
+    expect(listPublishDecisions(auditStorage)).toEqual([]);
+    expect(toastMock.message).toHaveBeenCalledWith(expect.stringContaining("尚不表示已经上线"));
   });
 
-  it("evaluates real SiteOps evidence and restores the same immutable report after reload", async () => {
+  it("publishes a recommended immutable report with follow_recommendation coordinates", async () => {
+    const onAction = vi.fn(async () => undefined);
+    const evaluation = authoritativeReleaseEvaluation("recommended");
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="evaluation"
+        siteOps={{ observation: liveBuildObservation("approved"), onAction }}
+        websiteEvaluation={evaluation}
+        storageScope="live:7:recommended-release"
+      />,
+    );
+    openDomainPublishConfirmation();
+    expect(screen.queryByLabelText("继续发布理由")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "确认继续发布" }));
+    await waitFor(() => expect(onAction).toHaveBeenCalledWith({
+      action: "publish_global",
+      input: {
+        buildId: evaluation.buildId,
+        expectedHeadDeploymentId: undefined,
+        evaluationDecision: {
+          mode: "follow_recommendation",
+          buildId: evaluation.buildId,
+          runId: evaluation.runId,
+          reportId: evaluation.reportId,
+          reportHash: evaluation.reportHash,
+          acknowledgedRiskIds: [],
+          reason: "",
+        },
+      },
+    }));
+  });
+
+  it("requires every critical risk, the quality recommendation and a reason before accepted_risk publishing", async () => {
+    const onAction = vi.fn(async () => undefined);
+    const evaluation = authoritativeReleaseEvaluation("not_recommended");
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="evaluation"
+        siteOps={{ observation: liveBuildObservation("approved"), onAction }}
+        websiteEvaluation={evaluation}
+        storageScope="live:7:accepted-risk-release"
+      />,
+    );
+    openDomainPublishConfirmation();
+    const submit = screen.getByRole("button", { name: "确认风险并继续发布" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText("确认风险：核心任务中断"));
+    fireEvent.click(screen.getByLabelText("确认风险：评估建议先修复"));
+    fireEvent.change(screen.getByLabelText("继续发布理由"), {
+      target: { value: "已安排线下补救并由负责人批准。" },
+    });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() => expect(onAction).toHaveBeenCalledWith({
+      action: "publish_global",
+      input: {
+        buildId: evaluation.buildId,
+        expectedHeadDeploymentId: undefined,
+        evaluationDecision: {
+          mode: "accepted_risk",
+          buildId: evaluation.buildId,
+          runId: evaluation.runId,
+          reportId: evaluation.reportId,
+          reportHash: evaluation.reportHash,
+          acknowledgedRiskIds: ["risk-core-task", "quality_recommendation"],
+          reason: "已安排线下补救并由负责人批准。",
+        },
+      },
+    }));
+  });
+
+  it("marks a build without a reserved run as historical instead of inventing a queued evaluation", () => {
     const storageScope = "live:7:website-evaluation-recovery";
     const auditStorage = scopedEvaluationStorage(storageScope);
     const siteOps = { observation: liveBuildObservation("approved") };
@@ -2732,15 +3012,12 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("真实证据评估已完成并保存")).toBeTruthy();
-      expect(listEvaluationReports(auditStorage)).toHaveLength(1);
-    });
-    expect(screen.getByLabelText(/当前加权评估分/).textContent).not.toContain("—");
-    expect(screen.getAllByText("部分通过").length).toBeGreaterThan(0);
-    expect(screen.getByLabelText("评估摘要").textContent).toContain("完全通过率29%");
-    const report = listEvaluationReports(auditStorage)[0]!;
-    expect(screen.getByText(new RegExp(report.reportId))).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("此构建无权威评估");
+    expect(screen.queryByTestId("website-evaluation-waiting")).toBeNull();
+    expect(screen.getByText(/历史构建不会补评/)).toBeTruthy();
+    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
+    expect(screen.queryByLabelText("网站建设六维评分雷达图")).toBeNull();
+    expect(listEvaluationReports(auditStorage)).toEqual([]);
 
     first.unmount();
     render(
@@ -2751,14 +3028,58 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText(new RegExp(report.reportId))).toBeTruthy(),
-    );
-    expect(listEvaluationReports(auditStorage).map(({ reportId }) => reportId))
-      .toEqual([report.reportId]);
+    expect(screen.getByRole("status").textContent).toContain("此构建无权威评估");
+    expect(listEvaluationReports(auditStorage)).toEqual([]);
   });
 
-  it("keeps a completed evaluation session-only when audit storage rejects the report", async () => {
+  it("renders a completed score only from the injected server-authoritative view", () => {
+    const storageScope = "live:7:website-evaluation-authority";
+    const auditStorage = scopedEvaluationStorage(storageScope);
+    const dimensionLabels = ["访客任务", "品牌一致性", "事实与证据", "信息架构", "视觉与可用性", "助手集成与边界"];
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="evaluation"
+        siteOps={{ observation: liveBuildObservation("approved") }}
+        storageScope={storageScope}
+        websiteEvaluation={{
+          buildId: "44444444-4444-4444-8444-444444444444",
+          status: "completed",
+          reportId: "server-report-1",
+          reportUrl: "/website-evaluations/reports/server-report-1",
+          score: 0,
+          verdict: "不建议发布",
+          summary: "关键任务在移动端中断，分数保持真实值。",
+          judgmentCoverage: 100,
+          brandReferenceCoverage: 50,
+          dimensions: dimensionLabels.map((label, index) => ({
+            id: `dimension-${index}`,
+            label,
+            weight: index === 0 || index === 2 ? 20 : 15,
+            score: index === 0 ? 0 : 80,
+            summary: `${label}的服务端判定。`,
+            evidenceIds: [`evidence-${index}`],
+          })),
+          risks: [{
+            id: "risk-mobile-task",
+            title: "核心任务中断",
+            summary: "320 视口的成功条件不可达。",
+            severity: "critical",
+            target: { kind: "route", routeId: "home" },
+          }],
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("website-evaluation-gauge-value").textContent).toBe("0");
+    expect(screen.getByTestId("website-evaluation-score").getAttribute("aria-label"))
+      .toBe("网站建设评估最终分 0 分");
+    expect(screen.getByRole("img", { name: /网站建设六维评分雷达图/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "生成报告" }).getAttribute("target")).toBe("_blank");
+    expect(screen.queryByText("server-report-1")).toBeNull();
+    expect(listEvaluationReports(auditStorage)).toEqual([]);
+  });
+
+  it("does not invent a session-only report when audit storage is unavailable", () => {
     const storageScope = "live:7:website-evaluation-storage-failure";
     const auditStorage = scopedEvaluationStorage(storageScope);
     const setItem = vi.spyOn(window.Storage.prototype, "setItem").mockImplementation(() => {
@@ -2774,15 +3095,10 @@ describe("redesigned live website builder setup", () => {
         />,
       );
 
-      await waitFor(() =>
-        expect(screen.getByTestId("website-evaluation-status").textContent)
-          .toContain("仅本次会话，未持久化"),
-      );
-      expect(screen.getByTestId("website-evaluation-report-id").textContent)
-        .toContain("本次会话评估未持久化");
-      expect(screen.getByTestId("website-evaluation-report-id").textContent)
-        .not.toContain("website-report-");
-      expect(screen.queryByText("真实证据评估已完成并保存")).toBeNull();
+      expect(screen.getByRole("status").textContent)
+        .toContain("此构建无权威评估");
+      expect(screen.queryByTestId("website-evaluation-report-id")).toBeNull();
+      expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
       expect(listEvaluationReports(auditStorage)).toEqual([]);
     } finally {
       setItem.mockRestore();
@@ -2818,11 +3134,9 @@ describe("redesigned live website builder setup", () => {
         storageScope="live:7:workspace-a"
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "域名与发布" }));
+    fireEvent.click(screen.getByRole("button", { name: "完成发布" }));
 
-    expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
-    expect(screen.getByTestId("website-domain-publish")).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "发布确认" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "发布确认" })).toBeTruthy();
     expect(onAction).not.toHaveBeenCalled();
   });
 
@@ -2857,6 +3171,9 @@ describe("redesigned live website builder setup", () => {
         input: {
           buildId: "44444444-4444-4444-8444-444444444444",
           expectedHeadDeploymentId: headId,
+          evaluationDecision: unavailableEvaluationDecision(
+            "44444444-4444-4444-8444-444444444444",
+          ),
         },
       }),
     );
@@ -2893,7 +3210,7 @@ describe("redesigned live website builder setup", () => {
     fireEvent.click(screen.getByRole("button", { name: /继续发布|确认继续发布/ }));
 
     await waitFor(() =>
-      expect(screen.getByText(/真实发布条件已经变化/)).toBeTruthy(),
+      expect(toastMock.message).toHaveBeenCalledWith(expect.stringMatching(/真实发布条件已经变化/)),
     );
     expect(onAction).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -2920,7 +3237,7 @@ describe("redesigned live website builder setup", () => {
     );
 
     fireEvent.change(screen.getByLabelText("发布区域"), { target: { value: "mainland_cn" } });
-    openDomainPublishConfirmation();
+    openDomainPublishConfirmation("mainland_cn");
     expect(screen.getByRole("dialog", { name: "发布确认" }).textContent).toContain("中国大陆站点");
     // The confirmation owns its target even if another render changes the form selection.
     fireEvent.change(screen.getByLabelText("发布区域"), { target: { value: "global_excluding_cn" } });
@@ -2928,7 +3245,11 @@ describe("redesigned live website builder setup", () => {
 
     await waitFor(() => expect(onAction).toHaveBeenCalledWith({
       action: "publish_mainland",
-      input: { buildId: approved.builds[0]!.id, expectedHeadDeploymentId: mainlandHead },
+      input: {
+        buildId: approved.builds[0]!.id,
+        expectedHeadDeploymentId: mainlandHead,
+        evaluationDecision: unavailableEvaluationDecision(approved.builds[0]!.id),
+      },
     }));
   });
 
@@ -2945,7 +3266,7 @@ describe("redesigned live website builder setup", () => {
       <SimplifiedWebsiteBuilderPreview initialStep="design" siteOps={{ observation: current, onAction }} storageScope={scope} />,
     );
     fireEvent.change(screen.getByLabelText("发布区域"), { target: { value: "mainland_cn" } });
-    openDomainPublishConfirmation();
+    openDomainPublishConfirmation("mainland_cn");
     view.rerender(
       <SimplifiedWebsiteBuilderPreview
         initialStep="design"
@@ -2958,7 +3279,7 @@ describe("redesigned live website builder setup", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /继续发布|确认继续发布/ }));
 
-    await waitFor(() => expect(screen.getByText(/真实发布条件已经变化/)).toBeTruthy());
+    await waitFor(() => expect(toastMock.message).toHaveBeenCalledWith(expect.stringMatching(/真实发布条件已经变化/)));
     expect(onAction).not.toHaveBeenCalled();
     expect(listPublishDecisions(scopedEvaluationStorage(scope))).toEqual([]);
   });

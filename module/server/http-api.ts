@@ -25,6 +25,11 @@ import {
  EnterpriseRagHumanReviewError,
 } from "@frontmind/module-brand/server/enterprise-rag-human-review-service";
 import {createEnterpriseRagGovernanceService} from "@frontmind/module-brand/server/enterprise-rag-governance-service";
+import {
+ createWebsiteEvaluationService,
+ WebsiteEvaluationError,
+ type WebsiteEvaluationStore,
+} from "./website-evaluation-service.js";
 
 import type { DiagnosticCollectionPort } from "./diagnostic-monitor.js";
 
@@ -38,6 +43,8 @@ export interface ModuleHttpCore {
  intentQuestionCatalog?(request:Request):Promise<IntentQuestion[]>;
  responseLogicHost?:ResponseLogicHostPorts;
  diagnosticCollection?:DiagnosticCollectionPort;
+ /** Optional test/host adapter. Production defaults to the module SQL store. */
+ websiteEvaluationStore?:WebsiteEvaluationStore;
 }
 
 /** Add new module-owned APIs here. Mounted in both Dashboard and the development subdomain. */
@@ -162,6 +169,52 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
  router.post("/rag-evaluation-versions/:versionId/releases",async(req,res)=>{
   try {res.setHeader("Cache-Control","no-store");res.status(201).json(await createEnterpriseRagGovernanceService(core,req).release(req.params.versionId,req.body));}
   catch(error){sendRagReviewError(res,error);}
+ });
+ const sendWebsiteEvaluationError=(res:Response,error:unknown)=>{
+  const known=error instanceof WebsiteEvaluationError;
+  const invalid=error instanceof z.ZodError;
+  res.status(known?error.status:invalid?400:503).json({error:{
+   code:known?error.code:invalid?"INVALID_INPUT":"WEBSITE_EVALUATION_UNAVAILABLE",
+   message:known?error.message:invalid?"网站评估请求格式不正确。":"网站评估暂不可用，请稍后重试。",
+  }});
+ };
+ // SiteOps automatically reserves website evaluations. Browser requests only
+ // restore, retry or append review; no ordinary start endpoint is exposed.
+ router.get("/website-evaluations",async(req,res)=>{
+  try {
+   res.setHeader("Cache-Control","no-store");
+   res.json(await createWebsiteEvaluationService(core,req).latest(req.query.projectId,req.query.buildId,req.query.cursor));
+  } catch(error) {sendWebsiteEvaluationError(res,error);}
+ });
+ router.get("/website-evaluations/runs/:runId",async(req,res)=>{
+  try {
+   res.setHeader("Cache-Control","no-store");
+   res.json(await createWebsiteEvaluationService(core,req).observe(req.params.runId));
+  } catch(error) {sendWebsiteEvaluationError(res,error);}
+ });
+ router.post("/website-evaluations/runs/:runId/retry",async(req,res)=>{
+  try {
+   res.setHeader("Cache-Control","no-store");
+   res.status(202).json(await createWebsiteEvaluationService(core,req).retry(req.params.runId,req.body));
+  } catch(error) {sendWebsiteEvaluationError(res,error);}
+ });
+ router.get("/website-evaluations/reports/:reportId",async(req,res)=>{
+  try {
+   res.setHeader("Cache-Control","no-store");
+   res.json(await createWebsiteEvaluationService(core,req).report(req.params.reportId));
+  } catch(error) {sendWebsiteEvaluationError(res,error);}
+ });
+ router.get("/website-evaluations/reports/:reportId/reviews",async(req,res)=>{
+  try {
+   res.setHeader("Cache-Control","no-store");
+   res.json({reviews:await createWebsiteEvaluationService(core,req).reviews(req.params.reportId)});
+  } catch(error) {sendWebsiteEvaluationError(res,error);}
+ });
+ router.post("/website-evaluations/reports/:reportId/reviews",async(req,res)=>{
+  try {
+   res.setHeader("Cache-Control","no-store");
+   res.status(201).json(await createWebsiteEvaluationService(core,req).appendReview(req.params.reportId,req.body));
+  } catch(error) {sendWebsiteEvaluationError(res,error);}
  });
  for (const [path, method] of [["/intent/command","command"],["/intent/execute","execute"],["/intent/rollback","rollback"],["/intent/control","control"]] as const) {
   router.post(path, async (req,res) => {
@@ -290,7 +343,7 @@ export function createModuleHttpApi(core:ModuleHttpCore):Router {
   const context=core.context(req);
   res.setHeader("Cache-Control","no-store");
   res.json({module:"brand",apiVersion:1,workspaceId:context.enterpriseProjectId,
-   features:["diagnostics", "knowledge", "keywords", "intent-workbench", "response-logic", "enterprise-qa", "enterprise-rag-evaluation", "enterprise-rag-human-review", "siteops"]});
+   features:["diagnostics", "knowledge", "keywords", "intent-workbench", "response-logic", "enterprise-qa", "enterprise-rag-evaluation", "enterprise-rag-human-review", "website-evaluation", "siteops"]});
  });
  return router;
 }

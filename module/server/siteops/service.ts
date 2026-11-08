@@ -61,9 +61,12 @@ let siteBuildInputAssets:BrandSchema['siteBuildInputAssets'];
 let siteBuilds:BrandSchema['siteBuilds'];
 let siteDeployments:BrandSchema['siteDeployments'];
 let siteDnsRecords:BrandSchema['siteDnsRecords'];
+let siteEvaluationReports:BrandSchema['siteEvaluationReports'];
+let siteEvaluationRuns:BrandSchema['siteEvaluationRuns'];
 let siteOperations:BrandSchema['siteOperations'];
 let siteProjects:BrandSchema['siteProjects'];
 let siteProviderConnections:BrandSchema['siteProviderConnections'];
+let siteReleaseEvaluationDecisions:BrandSchema['siteReleaseEvaluationDecisions'];
 let socialPackages:BrandSchema['socialPackages'];
 let visualCandidatePoolPages:BrandSchema['visualCandidatePoolPages'];
 let visualCandidatePools:BrandSchema['visualCandidatePools'];
@@ -104,7 +107,7 @@ let siteOpsQuotaPeriodIds:SiteOpsServiceCore['siteOpsQuotaPeriodIds'];
 let SiteOpsQuotaError:SiteOpsServiceCore['SiteOpsQuotaError'];
 let persistSiteOpsArtifact:SiteOpsServiceCore['persistSiteOpsArtifact'];
 export function configureSiteOpsServiceCore(core:SiteOpsServiceCore){
- ({knowledgeBaseSnapshots,siteBuildInputAssets,siteBuilds,siteDeployments,siteDnsRecords,siteOperations,siteProjects,siteProviderConnections,socialPackages,visualCandidatePoolPages,visualCandidatePools,websiteStyleSampleBatches,websiteStyleSamples}=core.tables);
+ ({knowledgeBaseSnapshots,siteBuildInputAssets,siteBuilds,siteDeployments,siteDnsRecords,siteEvaluationReports,siteEvaluationRuns,siteOperations,siteProjects,siteProviderConnections,siteReleaseEvaluationDecisions,socialPackages,visualCandidatePoolPages,visualCandidatePools,websiteStyleSampleBatches,websiteStyleSamples}=core.tables);
  ({readSiteOpsCredentialReadiness,lockSiteOpsIdentity,readActiveSiteOpsProviderCredential,readActiveSiteOpsAiCredential,readPinnedSiteOpsProviderCredential,assertSiteOpsActor,lockCustomerProjectBusinessWrite,enterpriseWorkspaceUserId,getEnterpriseProjectScope,enterpriseAccountOwnerPredicate,enterpriseSiteProfileTable,enterpriseSiteProfileOwnerPredicate,enterpriseOwnerPredicate,enterpriseProjectUrl,runWithSiteOpsOAuthProjectScope,AuthServiceError,credentialProfileProjection,getDb,ownedFileContentResolver,getServicePortal,getServicePortalReadOnly,getTwentyFirstCredentialStatus,AliyunProviderError,bindAliyunCustomerAccountFromOAuth,disconnectAliyunCustomerConnection,getAliyunCustomerConnectionStatus,listAliyunCustomerDomains,createAliyunOAuthAuthorization,inspectEsaRuntimeConfiguration,assertSiteOpsServiceEntitlement,reserveSiteOpsQuota,siteOpsQuotaPeriodIds,SiteOpsQuotaError,persistSiteOpsArtifact,messages,conversations,conversationTurns,localAssets}=core);
 }
 
@@ -162,6 +165,15 @@ import {
   type SiteOpsActInput,
   type SiteBrief,
 } from "../../contracts/siteops.js";
+import {
+  websiteBuildEvaluationDecisionSchema,
+  type WebsiteBuildEvaluationDecision,
+} from "../../contracts/website-build-evaluation-run.js";
+import {
+  websiteEvaluationAdmissionProjection,
+  websiteEvaluationProjectEligible,
+} from "../website-evaluation-automatic.js";
+import { verifyWebsiteEvaluationReportIntegrity } from "../website-evaluation-runtime.js";
 import {
   canonicalSiteDesignDraftJson,
   siteDesignKnowledgeSnapshotCoordinateSchema,
@@ -375,6 +387,30 @@ export function normalizeSiteOpsDomain(value: string) {
     throw new SiteOpsServiceError("INVALID_INPUT", "域名格式不正确。", 400);
   }
   return { domain: ascii, domainUnicode: domainToUnicode(ascii) || withoutDot };
+}
+
+export function requireWebsiteEvaluationVisitorTask(input: {
+  brief: unknown;
+  projectId: string;
+  environment?: Readonly<Record<string, string | undefined>>;
+}) {
+  if (
+    !websiteEvaluationProjectEligible({
+      projectId: input.projectId,
+      environment: input.environment,
+    })
+  ) {
+    return null;
+  }
+  const brief = siteBriefSchema.safeParse(input.brief);
+  if (!brief.success || !brief.data.visitorTaskV1) {
+    throw new SiteOpsServiceError(
+      "STATE_CONFLICT",
+      "开始制作前必须确认核心访客任务、入口、成功条件和必经页面。",
+      409,
+    );
+  }
+  return brief.data.visitorTaskV1;
 }
 
 export function isSiteOpsIcpApprovedForCurrentDomain(input: {
@@ -2388,7 +2424,7 @@ type SiteDesignRecommendationSnapshotCandidate =
   SiteOpsKnowledgeSnapshotCandidate &
     Pick<
       typeof knowledgeBaseSnapshots.$inferSelect,
-      "id" | "version" | "createdAt"
+      "id" | "version" | "createdAt" | "assets"
     >;
 
 /**
@@ -3320,6 +3356,10 @@ async function projectObservationOnce(
     schemaVersion: 1 as const,
     executionKind: "site_ops" as const,
     serviceReadiness,
+    websiteEvaluationAdmission: websiteEvaluationAdmissionProjection({
+      projectId: input.project.id,
+      environment: process.env,
+    }),
     aliyunConnection: connectionRows[0]
       ? {
           configured: connectionRows[0].status === "active",
@@ -3603,12 +3643,67 @@ export function siteBriefForRevision(
   currentProjectBrief: unknown,
 ) {
   const frozenParent = siteBriefSchema.parse(parentBrief);
+  const currentBrief = siteBriefSchema.parse(currentProjectBrief);
   const currentPreferences = readSiteDesignPreferencesFromBrief(
-    currentProjectBrief,
+    currentBrief,
   );
-  return currentPreferences
+  const withCurrentDesign = currentPreferences
     ? applySiteDesignPreferencesToBrief(frozenParent, currentPreferences)
     : frozenParent;
+  return siteBriefSchema.parse({
+    ...withCurrentDesign,
+    brandKitV1: currentBrief.brandKitV1,
+    visitorTaskV1: currentBrief.visitorTaskV1,
+  });
+}
+
+export function freezeWebsiteEvaluationInputs(input: {
+  brief: unknown;
+  draft: NonNullable<
+    z.infer<typeof siteDesignPreferencesSaveInputSchema>["websiteEvaluationInputs"]
+  >;
+  actorUserId: number;
+  now?: Date;
+}) {
+  const brief = siteBriefSchema.parse(input.brief);
+  const withoutVisitorTask = siteBriefSchema.parse({
+    ...brief,
+    brandKitV1: input.draft.brandKitV1 ?? undefined,
+    visitorTaskV1: undefined,
+  });
+  return siteBriefSchema.parse({
+    ...withoutVisitorTask,
+    visitorTaskV1: {
+      ...input.draft.visitorTaskV1,
+      generatedFromBriefHash: hashSiteOpsRequest(withoutVisitorTask),
+      confirmedAt: (input.now ?? new Date()).toISOString(),
+      confirmedByUserId: input.actorUserId,
+    },
+  });
+}
+
+export function requireWebsiteBrandKitLogoCoordinate(input: {
+  brandKit: {
+    logo?: { assetId: string; sha256: string };
+  } | null;
+  publicAssetIds: readonly string[];
+  assets: ReadonlyArray<{ id?: string; sha256?: string }>;
+}) {
+  const logo = input.brandKit?.logo;
+  if (!logo) return null;
+  const asset = input.assets.find(({ id }) => id === logo.assetId);
+  if (
+    !input.publicAssetIds.includes(logo.assetId) ||
+    !asset ||
+    asset.sha256?.toLowerCase() !== logo.sha256.toLowerCase()
+  ) {
+    throw new SiteOpsServiceError(
+      "REVISION_CONFLICT",
+      "Brand Kit Logo 与当前公开知识资产不一致，请刷新后重新确认。",
+      409,
+    );
+  }
+  return logo;
 }
 
 /** Persists only the structured design draft; it never starts or advances a build. */
@@ -3703,19 +3798,31 @@ export async function saveSiteDesignPreferences(
         desc(knowledgeBaseSnapshots.id),
       )
       .limit(200);
-    requireCurrentSiteDesignRecommendationSnapshot(
+    const currentSnapshot = requireCurrentSiteDesignRecommendationSnapshot(
       snapshotRows,
       input.draft.knowledgeSnapshot,
     );
+    requireWebsiteBrandKitLogoCoordinate({
+      brandKit: input.websiteEvaluationInputs?.brandKitV1 ?? null,
+      publicAssetIds: brief.data.publicAssetIds,
+      assets: currentSnapshot.assets,
+    });
 
     const preferences = finalizeSiteDesignPreferencesDraft(
       input.draft,
       input.expectedDesignRevision + 1,
     );
-    const nextBrief = applySiteDesignPreferencesToBrief(
+    const designBrief = applySiteDesignPreferencesToBrief(
       brief.data,
       preferences,
     );
+    const nextBrief = input.websiteEvaluationInputs
+      ? freezeWebsiteEvaluationInputs({
+          brief: designBrief,
+          draft: input.websiteEvaluationInputs,
+          actorUserId: actor.id,
+        })
+      : designBrief;
     await tx
       .update(siteProjects)
       .set({
@@ -4697,6 +4804,7 @@ export function parseSiteOpsActionPayload(
         .object({
           buildId: uuidSchema,
           expectedHeadDeploymentId: optionalUuidSchema,
+          evaluationDecision: websiteBuildEvaluationDecisionSchema.optional(),
         })
         .strict()
         .parse(raw);
@@ -5840,6 +5948,11 @@ async function selectVisualSample(
       409,
     );
   }
+  requireWebsiteEvaluationVisitorTask({
+    brief: input.project.brief,
+    projectId: input.project.id,
+    environment: process.env,
+  });
   const buildAttemptRows = await tx
     .select({ id: siteBuilds.id, status: siteBuilds.status })
     .from(siteBuilds)
@@ -6489,6 +6602,11 @@ async function handleRevision(
       409,
     );
   }
+  requireWebsiteEvaluationVisitorTask({
+    brief: input.project.brief,
+    projectId: input.project.id,
+    environment: process.env,
+  });
   const rows = await tx
     .select()
     .from(siteBuilds)
@@ -6760,6 +6878,165 @@ async function handleRevision(
     .where(eq(siteProjects.id, input.project.id));
 }
 
+type WebsiteReleaseEvaluationRunCoordinate = {
+  id: string;
+  buildId: string;
+  status: string;
+};
+
+type WebsiteReleaseEvaluationReportCoordinate = {
+  id: string;
+  runId: string;
+  buildId: string;
+  resultHash: string;
+  result: unknown;
+};
+
+/**
+ * Revalidates the immutable assessment coordinate immediately before release.
+ * SiteOps remains the only technical gate; this function only makes an
+ * informed quality decision durable and rejects stale browser state.
+ */
+export function validateWebsiteReleaseEvaluationDecision(input: {
+  decision?: WebsiteBuildEvaluationDecision;
+  decisionRequired?: boolean;
+  buildId: string;
+  latestRun: WebsiteReleaseEvaluationRunCoordinate | null;
+  latestReport: WebsiteReleaseEvaluationReportCoordinate | null;
+}) {
+  if (!input.decision) {
+    if (input.decisionRequired || input.latestRun || input.latestReport) {
+      throw new SiteOpsServiceError(
+        "REVISION_CONFLICT",
+        "建设评估状态已变化，请刷新并确认评估结论后再发布。",
+        409,
+      );
+    }
+    return null;
+  }
+  const decision = websiteBuildEvaluationDecisionSchema.parse(input.decision);
+  if (decision.buildId !== input.buildId) {
+    throw new SiteOpsServiceError(
+      "REVISION_CONFLICT",
+      "待发布版本已变化，请刷新评估结论后重试。",
+      409,
+    );
+  }
+
+  if (decision.mode === "assessment_unavailable") {
+    if (input.latestReport || input.latestRun?.status === "completed") {
+      throw new SiteOpsServiceError(
+        "REVISION_CONFLICT",
+        "建设评估已完成，请刷新并基于最新报告确认发布。",
+        409,
+      );
+    }
+    if (decision.runId !== (input.latestRun?.id ?? null)) {
+      throw new SiteOpsServiceError(
+        "REVISION_CONFLICT",
+        "建设评估任务已变化，请刷新后重新确认。",
+        409,
+      );
+    }
+    if (
+      decision.acknowledgedRiskIds.length !== 1 ||
+      decision.acknowledgedRiskIds[0] !== "assessment_unavailable"
+    ) {
+      throw new SiteOpsServiceError(
+        "REVISION_CONFLICT",
+        "无评估结论的风险确认已变化，请刷新后重新确认。",
+        409,
+      );
+    }
+    return decision;
+  }
+
+  const reportRow = input.latestReport;
+  if (
+    !input.latestRun ||
+    input.latestRun.status !== "completed" ||
+    input.latestRun.buildId !== input.buildId ||
+    !reportRow ||
+    reportRow.buildId !== input.buildId ||
+    input.latestRun.id !== reportRow.runId ||
+    decision.reportId !== reportRow.id ||
+    decision.reportHash !== reportRow.resultHash ||
+    decision.runId !== reportRow.runId
+  ) {
+    throw new SiteOpsServiceError(
+      "REVISION_CONFLICT",
+      "建设评估报告已变化，请刷新后重新确认。",
+      409,
+    );
+  }
+  let report;
+  try {
+    report = verifyWebsiteEvaluationReportIntegrity(
+      reportRow.result,
+      reportRow.resultHash,
+    );
+  } catch {
+    throw new SiteOpsServiceError(
+      "STATE_CONFLICT",
+      "建设评估报告内容摘要不一致，暂不能据此发布。",
+      409,
+    );
+  }
+  if (
+    report.reportId !== reportRow.id ||
+    report.runId !== reportRow.runId ||
+    report.buildId !== reportRow.buildId ||
+    report.reportHash !== reportRow.resultHash
+  ) {
+    throw new SiteOpsServiceError(
+      "STATE_CONFLICT",
+      "建设评估报告坐标不完整，暂不能据此发布。",
+      409,
+    );
+  }
+  if (decision.mode === "follow_recommendation") {
+    if (report.verdict !== "recommended") {
+      throw new SiteOpsServiceError(
+        "STATE_CONFLICT",
+        "当前评估建议先修复；如需继续发布，请逐项确认风险并填写理由。",
+        409,
+      );
+    }
+    if (decision.acknowledgedRiskIds.length > 0 || decision.reason) {
+      throw new SiteOpsServiceError(
+        "INVALID_INPUT",
+        "遵循发布建议时不应附带风险接受记录。",
+        400,
+      );
+    }
+    return decision;
+  }
+
+  const requiredRiskIds = new Set(report.criticalRisks.map(({ id }) => id));
+  if (report.verdict !== "recommended") {
+    requiredRiskIds.add("quality_recommendation");
+  }
+  const acknowledgedRiskIds = new Set(decision.acknowledgedRiskIds);
+  const hasUnknownRisk = [...acknowledgedRiskIds].some(
+    (id) => !requiredRiskIds.has(id),
+  );
+  const hasUnacknowledgedRisk = [...requiredRiskIds].some(
+    (id) => !acknowledgedRiskIds.has(id),
+  );
+  if (
+    requiredRiskIds.size === 0 ||
+    hasUnknownRisk ||
+    hasUnacknowledgedRisk
+  ) {
+    throw new SiteOpsServiceError(
+      "REVISION_CONFLICT",
+      "风险清单已变化，请刷新并逐项重新确认。",
+      409,
+    );
+  }
+  return decision;
+}
+
 async function handlePublish(
   tx: any,
   input: {
@@ -6768,7 +7045,11 @@ async function handlePublish(
     turnId: string;
     requestId: string;
     requestHash: string;
-    payload: { buildId: string; expectedHeadDeploymentId?: string };
+    payload: {
+      buildId: string;
+      expectedHeadDeploymentId?: string;
+      evaluationDecision?: WebsiteBuildEvaluationDecision;
+    };
     target: "global_excluding_cn" | "mainland_cn";
   },
 ) {
@@ -6830,6 +7111,64 @@ async function handlePublish(
       409,
     );
   }
+  const [evaluationRunRows, evaluationReportRows] = await Promise.all([
+    tx
+      .select({
+        id: siteEvaluationRuns.id,
+        buildId: siteEvaluationRuns.buildId,
+        status: siteEvaluationRuns.status,
+      })
+      .from(siteEvaluationRuns)
+      .where(
+        and(
+          eq(siteEvaluationRuns.projectId, input.project.id),
+          eq(siteEvaluationRuns.buildId, build.id),
+          eq(siteEvaluationRuns.admissionMode, "user"),
+          eq(
+            siteEvaluationRuns.userId,
+            enterpriseWorkspaceUserId(input.actor.id),
+          ),
+        ),
+      )
+      .orderBy(desc(siteEvaluationRuns.createdAt))
+      .limit(1),
+    tx
+      .select({
+        id: siteEvaluationReports.id,
+        runId: siteEvaluationReports.runId,
+        buildId: siteEvaluationReports.buildId,
+        resultHash: siteEvaluationReports.resultHash,
+        result: siteEvaluationReports.result,
+      })
+      .from(siteEvaluationReports)
+      .innerJoin(
+        siteEvaluationRuns,
+        eq(siteEvaluationRuns.id, siteEvaluationReports.runId),
+      )
+      .where(
+        and(
+          eq(siteEvaluationReports.projectId, input.project.id),
+          eq(siteEvaluationReports.buildId, build.id),
+          eq(siteEvaluationRuns.admissionMode, "user"),
+          eq(
+            siteEvaluationReports.userId,
+            enterpriseWorkspaceUserId(input.actor.id),
+          ),
+        ),
+      )
+      .orderBy(desc(siteEvaluationReports.createdAt))
+      .limit(1),
+  ]);
+  const evaluationDecision = validateWebsiteReleaseEvaluationDecision({
+    decision: input.payload.evaluationDecision,
+    decisionRequired: websiteEvaluationAdmissionProjection({
+      projectId: input.project.id,
+      environment: process.env,
+    }).userVisible,
+    buildId: build.id,
+    latestRun: evaluationRunRows[0] ?? null,
+    latestReport: evaluationReportRows[0] ?? null,
+  });
   const currentHead =
     input.target === "mainland_cn"
       ? input.project.mainlandLiveDeploymentId
@@ -6895,6 +7234,25 @@ async function handlePublish(
     domainRevision: profile.domainRevision,
     status: "reserved",
   });
+  if (evaluationDecision) {
+    await tx.insert(siteReleaseEvaluationDecisions).values({
+      id: randomUUID(),
+      projectId: input.project.id,
+      buildId: build.id,
+      reportId: evaluationDecision.reportId,
+      runId: evaluationDecision.runId,
+      reportHash: evaluationDecision.reportHash,
+      target: input.target === "mainland_cn" ? "mainland" : "global",
+      expectedHeadDeploymentId: currentHead,
+      mode: evaluationDecision.mode,
+      acknowledgedRiskIds: evaluationDecision.acknowledgedRiskIds,
+      reason: evaluationDecision.reason || null,
+      actorUserId: input.actor.id,
+      clientRequestId: input.requestId,
+      siteOperationId: operationId,
+      deploymentId,
+    });
+  }
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
     userId: enterpriseWorkspaceUserId(input.actor.id),
@@ -7551,6 +7909,7 @@ export async function actOnSiteOpsFast(
           payload: payload as {
             buildId: string;
             expectedHeadDeploymentId?: string;
+            evaluationDecision?: WebsiteBuildEvaluationDecision;
           },
           target:
             input.action === "publish_mainland"

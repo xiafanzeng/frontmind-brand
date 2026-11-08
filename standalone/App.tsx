@@ -4,7 +4,7 @@ import {liveIntentWorkbenchApi} from "../module/client/dashboard/intent-workbenc
 import {projectPreviewKnowledge} from "./knowledge-preview";
 import {createPreviewAnswerVisual} from "./response-logic-preview-visual";
 import {ModuleShell} from "@frontmind/module-ui/dashboard/ModuleShell";
-import {lazy,Suspense,useEffect,useMemo,useState} from 'react';
+import {lazy,Suspense,useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {useLocation,useSearch} from 'wouter';
 import {Toaster} from 'sonner';
 import {BRAND_MODULE_LABEL,BRAND_MODULE_SIDEBAR_LABEL} from '../module/client/module-label';
@@ -12,6 +12,7 @@ import ModuleWorkspace,{type ModuleContext} from '../module/client/ModuleWorkspa
 import {EnterpriseRagPreview} from '../module/client/dashboard/ai-website-preview/EnterpriseRagPreview';
 import {loadRagPreviewFixtures} from '../module/client/dashboard/ai-website-preview/rag-preview-fixture-loader';
 import {SimplifiedWebsiteBuilderPreview,normalizeWebsiteBuildStep,normalizeWebsiteDesignSection,type BuildStep} from '../module/client/dashboard/ai-website-preview/SimplifiedWebsiteBuilderPreview';
+import type {WebsiteEvaluationAuthorityView,WebsiteEvaluationManualReviewInput,WebsiteEvaluationReviewView} from '../module/client/dashboard/ai-website-preview/WebsiteEvaluationWorkspace';
 import {configureBrandApiHooks} from '../module/client/api-hooks';
 import {KnowledgeBaseUploadProvider} from '../module/client/lib/knowledge-base-upload-manager';
 import {brandHost} from '../module/client/host';
@@ -20,6 +21,15 @@ import {installBrandHost,liveConversations} from './host';
 import {createPreviewRpc,previewConversations} from './preview';
 import {previewKnowledgeProgress,previewKnowledgeSnapshot} from './preview-data';
 import {createIntentPreviewApi} from './intent-preview';
+import {
+ createNextWebsiteEvaluationPreviewRevision,
+ createWebsiteEvaluationPreview,
+ resolveWebsiteEvaluationPreviewReport,
+ resolveWebsiteEvaluationPreviewSelection,
+ WEBSITE_EVALUATION_PREVIEW_FLOW_INTERVAL_MS,
+ WEBSITE_EVALUATION_PREVIEW_STAGES,
+ type WebsiteEvaluationPreviewStage,
+} from './website-evaluation-preview';
 import {resolveStandaloneBrandPage,standaloneBrandViewUrl,standaloneBrandPages as pages,standaloneRagReportUrl,resolveStandaloneRagReport} from './routes';
 import frontmindWordmarkUrl from '../vendor/module-ui/src/assets/frontmind-wordmark.svg';
 import type {RagReportUrlBuilder} from '../module/client/dashboard/ai-website-preview/rag-report-navigation';
@@ -35,11 +45,91 @@ const noPreviewExamples:ReadonlySet<string>=new Set();
 const progressModule={id:'progress',label:'进度监控',color:'#b45309',views:[]};
 const contentModule={id:'content',label:'内容制作',color:'#0e7490',views:[]};
 const publishModule={id:'publish',label:'媒体发布',color:'#be123c',views:[]};
+function localReviewDispositionLabel(disposition:WebsiteEvaluationManualReviewInput['disposition']){
+ return disposition==='agree'?'认可计划':disposition==='reject'?'不采纳':'需要调整';
+}
+function useWebsiteEvaluationPreview(search:string,enabled:boolean):{
+ evaluation:WebsiteEvaluationAuthorityView|undefined;
+ submitReview:((input:WebsiteEvaluationManualReviewInput)=>Promise<void>)|undefined;
+ reevaluate:(()=>Promise<void>)|undefined;
+}{
+ const selection=useMemo(()=>resolveWebsiteEvaluationPreviewSelection(search),[search]);
+ const [flowStage,setFlowStage]=useState<WebsiteEvaluationPreviewStage>(()=>selection.stage);
+ const [generation,setGeneration]=useState(0);
+ const [reducedMotion,setReducedMotion]=useState(()=>typeof window!=='undefined'&&Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches));
+ const [addedReviews,setAddedReviews]=useState<WebsiteEvaluationReviewView[]>([]);
+ const reviewSequence=useRef(0);
+ const generationRef=useRef(0);
+ const reevaluationTimersRef=useRef<number[]>([]);
+ useEffect(()=>{const media=window.matchMedia?.('(prefers-reduced-motion: reduce)');if(!media)return;const update=()=>setReducedMotion(media.matches);update();media.addEventListener?.('change',update);return()=>media.removeEventListener?.('change',update);},[]);
+ useEffect(()=>{
+  if(!enabled)return;
+  if(!selection.flow){setFlowStage(selection.stage);return;}
+  if(reducedMotion){setFlowStage('completed');return;}
+  setFlowStage('queued');
+  const timers=WEBSITE_EVALUATION_PREVIEW_STAGES.slice(1).map((stage,index)=>window.setTimeout(()=>setFlowStage(stage),WEBSITE_EVALUATION_PREVIEW_FLOW_INTERVAL_MS*(index+1)));
+  return()=>timers.forEach(timer=>window.clearTimeout(timer));
+ },[enabled,reducedMotion,selection.flow,selection.stage]);
+ useEffect(()=>()=>{
+  reevaluationTimersRef.current.forEach(timer=>window.clearTimeout(timer));
+  reevaluationTimersRef.current=[];
+ },[]);
+ const stage=selection.flow?flowStage:selection.stage;
+ const activeStage=generation>0?flowStage:stage;
+ const baseEvaluation=useMemo(()=>enabled?createWebsiteEvaluationPreview(activeStage,generation):undefined,[activeStage,enabled,generation]);
+ useEffect(()=>{setAddedReviews([]);reviewSequence.current=0;},[baseEvaluation?.reportId]);
+ const submitReview=useCallback(async(input:WebsiteEvaluationManualReviewInput)=>{
+  if(!baseEvaluation?.reportId)throw new Error('当前本地预览没有可评审的报告。');
+  reviewSequence.current+=1;
+  const review:WebsiteEvaluationReviewView={
+   reviewId:`review-local-session-${reviewSequence.current}`,
+   reviewerLabel:'本地产品复核',
+   disposition:input.disposition,
+   dispositionLabel:localReviewDispositionLabel(input.disposition),
+   repairItem:input.repairItem,
+   note:input.note,
+   createdAt:new Date().toISOString(),
+  };
+  setAddedReviews(current=>[...current,review]);
+ },[baseEvaluation?.reportId]);
+ const reevaluate=useCallback(async()=>{
+  if(!enabled)return;
+  reevaluationTimersRef.current.forEach(timer=>window.clearTimeout(timer));
+  reevaluationTimersRef.current=[];
+  const revision=createNextWebsiteEvaluationPreviewRevision(generationRef.current);
+  generationRef.current=revision.generation;
+  setGeneration(revision.generation);
+  setFlowStage('queued');
+  if(reducedMotion){setFlowStage('completed');return;}
+  for(const nextStage of WEBSITE_EVALUATION_PREVIEW_STAGES.slice(1)){
+   await new Promise<void>(resolve=>{
+    const timer=window.setTimeout(()=>{
+     reevaluationTimersRef.current=reevaluationTimersRef.current.filter(item=>item!==timer);
+     setFlowStage(nextStage);
+     resolve();
+    },WEBSITE_EVALUATION_PREVIEW_FLOW_INTERVAL_MS);
+    reevaluationTimersRef.current.push(timer);
+   });
+  }
+ },[enabled,reducedMotion]);
+ const evaluation=useMemo(()=>baseEvaluation?{
+  ...baseEvaluation,
+  reviews:[...(baseEvaluation.reviews??[]),...addedReviews],
+ }:undefined,[addedReviews,baseEvaluation]);
+ return {
+  evaluation,
+  submitReview:baseEvaluation?.status==='completed'?submitReview:undefined,
+  reevaluate:enabled?reevaluate:undefined,
+ };
+}
 function Runtime({context,preview}:{context:ModuleContext;preview:boolean}){
  const runtime=useMemo(()=>{const adapter=createBrandApi(preview?createPreviewRpc(context.workspace.id):liveRpc);configureBrandApiHooks(adapter.api);installBrandHost(context,preview?previewConversations():liveConversations,preview);return adapter;},[context,preview]);
  const intentApi=useMemo(()=>preview?createIntentPreviewApi(context.workspace.id):undefined,[preview,context.workspace.id]);
  const answerVisual=useMemo(()=>preview?createPreviewAnswerVisual(context.workspace.id):undefined,[preview,context.workspace.id]);
  const [path,navigate]=useLocation();const search=useSearch();const params=new URLSearchParams(search);
+ const websiteEvaluationPreview=useWebsiteEvaluationPreview(search,preview);
+ const websiteEvaluation=websiteEvaluationPreview.evaluation;
+ const previewWebsiteEvaluationReport=preview?resolveWebsiteEvaluationPreviewReport(params.get('websiteReport')):undefined;
  const requestedRaw=params.get('view')??(path==='/'?'knowledge':path.slice(1));
  const requestedExample=params.get('example');
  const [previewExampleIds,setPreviewExampleIds]=useState<ReadonlySet<string>|null>(preview?null:noPreviewExamples);
@@ -71,7 +161,7 @@ function Runtime({context,preview}:{context:ModuleContext;preview:boolean}){
  if(preview&&requestedExample!==null&&previewExampleIds===null)return <p role="status">正在打开预览评估记录…</p>;
  if(reportRoute)return <Suspense fallback={<p role="status">正在打开评估说明与记录…</p>}><RagEvaluationReportPage storageScopeKey={preview?'preview':`live:${context.workspace.ownerUserId}:${context.workspace.id}`} preview={preview} coordinate={reportRoute.coordinate} exampleId={preview?reportRoute.exampleId:undefined} contextError={reportRoute.error} returnUrl={brandHost().projectWorkspaceUrl('/?view=enterprise-qa')} brandMarkSrc={frontmindWordmarkUrl}/></Suspense>;
  return <KnowledgeOptimizationContext.Provider value={page==="knowledge"&&knowledgeReceipt?.scope===knowledgeScope&&knowledgeReceipt.receipt.id===requestedReceipt?knowledgeReceipt.receipt:undefined}><ModuleShell module={selectedModule} navigationModules={[{...brandModule,label:BRAND_MODULE_SIDEBAR_LABEL,views:brandPages.map(([id,label])=>({id,label}))},{...intentModule,views:intentPages.map(([id,label])=>({id,label}))},...(preview?[progressModule,contentModule,publishModule]:[]),{...extensionsModule,views:extensionPages.map(([id,label])=>({id,label}))}]} views={selectedPages.map(([id,label])=>({id,label}))} activeView={page==='response-logic'?'intent':page} onSelectView={selectView} preview={preview} showViewTabs={page!=='knowledge'}><div className={`brand-page brand-page--${page}`}>
- <ModuleWorkspace context={context} page={page} preview={preview} responseLogicVisual={answerVisual} onOpenKnowledge={(nodeId,receipt)=>brandHost().requestWorkspaceNavigation(()=>{if(receipt)setKnowledgeReceipt({scope:knowledgeScope,receipt});navigate(`/?view=knowledge${nodeId?`&knowledgeNode=${encodeURIComponent(nodeId)}`:""}${receipt?`&intentReceipt=${encodeURIComponent(receipt.id)}`:""}`);})} intentApi={intentApi} onIntentSectionChange={section=>navigate(`/?view=${section==='universe'?'keywords':'intent'}`)} onEnterResponseLogic={()=>navigate('/?view=response-logic')} onResponseLogicBack={()=>navigate('/?view=intent')} keywordData={{tables:dashboard.data?.payload?.keywordTables??[],revision:dashboard.data?.revision??null,loading:dashboard.isLoading,error:dashboard.error,knowledgePublished:Boolean(knowledge.data?.snapshot)}} previewKnowledge={previewKnowledgeData} previewQa={preview?<EnterpriseRagPreview storageScopeKey="preview" buildReportUrl={buildReportUrl} onOpenWebsite={()=>navigate(returnStep&&returnStep!=='template'?`/?view=website&step=${returnStep}`:'/?view=website')} onOpenWebsiteAssistant={()=>navigate('/?view=website&step=design&section=assistant')} websiteEntryLabel={returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}/>:undefined} previewSiteOps={preview?<SimplifiedWebsiteBuilderPreview storageScope="preview" initialStep={websiteStep} initialSection={websiteSection} onOpenRag={()=>navigate(`/?view=enterprise-qa&returnStep=${websiteStep}`)} onStepChange={step=>navigate(step==='template'?'/?view=website':`/?view=website&step=${step}`,{replace:true})}/>:undefined} enterpriseRagNavigation={{buildReportUrl,onOpenWebsite:()=>navigate(returnStep&&returnStep!=='template'?`/?view=website&step=${returnStep}`:'/?view=website'),onOpenWebsiteAssistant:()=>navigate('/?view=website&step=design&section=assistant'),websiteEntryLabel:returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}} websiteBuilderNavigation={{initialStep:websiteStep,initialSection:websiteSection,onOpenRag:()=>navigate(`/?view=enterprise-qa&returnStep=${websiteStep}`),onStepChange:step=>navigate(step==='template'?'/?view=website':`/?view=website&step=${step}`,{replace:true})}}/>
+ <ModuleWorkspace context={context} page={page} preview={preview} responseLogicVisual={answerVisual} onOpenKnowledge={(nodeId,receipt)=>brandHost().requestWorkspaceNavigation(()=>{if(receipt)setKnowledgeReceipt({scope:knowledgeScope,receipt});navigate(`/?view=knowledge${nodeId?`&knowledgeNode=${encodeURIComponent(nodeId)}`:""}${receipt?`&intentReceipt=${encodeURIComponent(receipt.id)}`:""}`);})} intentApi={intentApi} onIntentSectionChange={section=>navigate(`/?view=${section==='universe'?'keywords':'intent'}`)} onEnterResponseLogic={()=>navigate('/?view=response-logic')} onResponseLogicBack={()=>navigate('/?view=intent')} keywordData={{tables:dashboard.data?.payload?.keywordTables??[],revision:dashboard.data?.revision??null,loading:dashboard.isLoading,error:dashboard.error,knowledgePublished:Boolean(knowledge.data?.snapshot)}} previewKnowledge={previewKnowledgeData} previewWebsiteEvaluationReport={previewWebsiteEvaluationReport} previewQa={preview?<EnterpriseRagPreview storageScopeKey="preview" buildReportUrl={buildReportUrl} onOpenWebsite={()=>navigate(returnStep&&returnStep!=='template'?`/?view=website&step=${returnStep}`:'/?view=website')} onOpenWebsiteAssistant={()=>navigate('/?view=website&step=design&section=assistant')} websiteEntryLabel={returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}/>:undefined} previewSiteOps={preview?<SimplifiedWebsiteBuilderPreview storageScope="preview" initialStep={websiteStep} initialSection={websiteSection} websiteEvaluation={websiteEvaluation} onReevaluateWebsiteEvaluation={websiteEvaluationPreview.reevaluate} onSubmitWebsiteEvaluationReview={websiteEvaluationPreview.submitReview} onOpenRag={()=>navigate(`/?view=enterprise-qa&returnStep=${websiteStep}`)} onStepChange={step=>navigate(step==='template'?'/?view=website':`/?view=website&step=${step}`,{replace:true})}/>:undefined} enterpriseRagNavigation={{buildReportUrl,onOpenWebsite:()=>navigate(returnStep&&returnStep!=='template'?`/?view=website&step=${returnStep}`:'/?view=website'),onOpenWebsiteAssistant:()=>navigate('/?view=website&step=design&section=assistant'),websiteEntryLabel:returnStep?`返回网站建设的${websiteReturnLabels[returnStep]}`:'开始网站建设'}} websiteBuilderNavigation={{initialStep:websiteStep,initialSection:websiteSection,onOpenRag:()=>navigate(`/?view=enterprise-qa&returnStep=${websiteStep}`),onStepChange:step=>navigate(step==='template'?'/?view=website':`/?view=website&step=${step}`,{replace:true})}}/>
  </div><Toaster richColors/></ModuleShell></KnowledgeOptimizationContext.Provider>;
 }
 export default function App({preview=false}:{preview?:boolean}){
