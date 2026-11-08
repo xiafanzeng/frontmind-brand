@@ -567,6 +567,85 @@ describe("redesigned live website builder setup", () => {
     ) as HTMLInputElement).disabled).toBe(false);
   });
 
+  it("offers a confirmed fresh cycle when the template screen is showing a frozen catalog", async () => {
+    const approved = liveBuildObservation("approved");
+    const onAction = vi.fn(async () => undefined);
+    render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="template"
+        siteOps={{
+          observation: {
+            ...approved,
+            rebuildRequest: { ...approved.rebuildRequest, allowed: true },
+          },
+          onAction,
+        }}
+        storageScope="live:7:frozen-template-refresh"
+      />,
+    );
+
+    expect(screen.getByText("当前展示的是本次制作已冻结的模板")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("siteops-template-catalog-refresh-action"));
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "重新开始并使用最新版模板" })).toBeTruthy();
+    expect(screen.getByText(/清理当前未发布的制作任务、模板选择和未提交的修改/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认重新开始" }));
+    await waitFor(() => expect(onAction).toHaveBeenCalledWith({
+      action: "request_rebuild",
+      input: {},
+    }));
+  });
+
+  it("does not offer a catalog reset without a frozen completed cycle", () => {
+    const approved = liveBuildObservation("approved");
+    const view = render(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="template"
+        siteOps={{ observation: approved, onAction: vi.fn() }}
+        storageScope="live:7:no-template-refresh"
+      />,
+    );
+    expect(screen.queryByTestId("siteops-template-catalog-refresh")).toBeNull();
+
+    const selectable = liveBuildObservation("awaiting_visual_selection");
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="template"
+        siteOps={{
+          observation: {
+            ...selectable,
+            rebuildRequest: { ...selectable.rebuildRequest, allowed: true },
+          },
+          onAction: vi.fn(),
+        }}
+        storageScope="live:7:active-template-selection"
+      />,
+    );
+    expect(screen.queryByTestId("siteops-template-catalog-refresh")).toBeNull();
+
+    const failedBeforeBuild: SiteOpsObservationV1 = {
+      ...selectable,
+      project: { ...selectable.project, status: "failed" },
+      interactionState: "failed",
+      rebuildRequest: { ...selectable.rebuildRequest, allowed: true },
+      visualGeneration: {
+        ...selectable.visualGeneration,
+        status: "retryable_error",
+        retryAction: "start",
+        failureCategory: "render_failed",
+      },
+    };
+    view.rerender(
+      <SimplifiedWebsiteBuilderPreview
+        initialStep="template"
+        siteOps={{ observation: failedBeforeBuild, onAction: vi.fn() }}
+        storageScope="live:7:failed-before-build"
+      />,
+    );
+    expect(screen.queryByTestId("siteops-template-catalog-refresh")).toBeNull();
+  });
+
   it("lists only source-backed routes as toggleable columns", async () => {
     const current = recommendableObservation();
     const withSourcelessRoute: SiteOpsObservationV1 = {
