@@ -52,6 +52,7 @@ function conversationContext(
     }),
     settleGeneralChatDispatch: vi.fn(),
     deleteConversation: vi.fn(),
+    deleteConversationConfirmed: vi.fn(async () => ({ ok: true as const })),
     flushConversation: vi.fn(async () => true),
     rollbackPendingKnowledgeBaseTurn: vi.fn(),
     addMessage: vi.fn((_id, message) => conversation.messages.push(message as never)),
@@ -224,6 +225,8 @@ describe("enterprise QA controller", () => {
           id: "task-existing",
           purpose: "enterprise_qa",
           status: "running",
+          canStop: true,
+          stopCapabilityReason: null,
         }),
       })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ status: "cancelled" }) });
@@ -249,6 +252,26 @@ describe("enterprise QA controller", () => {
     expect(mocks.fetch.mock.calls[1][0]).toBe(
       "/api/frontmind/v2/tasks/task-existing/stop",
     );
+  });
+
+  it("fails closed without a server-confirmed stop capability", async () => {
+    mocks.context = conversationContext("task-existing");
+    mocks.context.activeConversation!.status = "running";
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "task-existing",
+        purpose: "enterprise_qa",
+        status: "running",
+        canStop: false,
+        stopCapabilityReason: "当前任务供应商不支持停止。",
+      }),
+    });
+    const { result } = renderHook(() => useEnterpriseQaController());
+    await waitFor(() => expect(result.current.stopCapabilityReason).toBe("当前任务供应商不支持停止。"));
+    expect(result.current.canStop).toBe(false);
+    await act(async () => expect(await result.current.stop()).toBe(false));
+    expect(mocks.fetch.mock.calls.some(([path]) => String(path).endsWith("/stop"))).toBe(false);
   });
 
   it("exposes and retries the retained pending dispatch without duplicating the message", async () => {

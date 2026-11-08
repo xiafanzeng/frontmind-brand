@@ -6,6 +6,7 @@ import {
   ConversationPurposeProvider,
   projectWorkspaceUrl,
   setWorkbenchTaskQuery,
+  type ConversationDeleteResult,
   useConversation,
 } from "../host";
 import { useEnterpriseQaController } from "../use-enterprise-qa-controller";
@@ -41,6 +42,7 @@ type EnterpriseRagLiveWorkspaceProps = EnterpriseRagWorkspaceProps & {
   retryCurrentPublication: () => void;
   allowConversationCreation: boolean;
 };
+type ActiveDeleteMarker = { id: string; phase: "pending" | "reconcile" };
 
 function conversationDeletionBlocked(conversation: Conversation) {
   if (hasUnresolvedGeneralChatDispatch(conversation.messages)) return true;
@@ -64,9 +66,11 @@ function EnterpriseRagLiveWorkspace({
   const workspace = useConversation();
   const starterQuestions = useRagStarterQuestions(true);
   const creating = useRef(false);
-  const pendingDelete = useRef<{ id: string; wasActive: boolean; resolve: (ok: boolean) => void } | null>(null);
-  const deletingIdRef = useRef<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deletingIdsRef = useRef(new Set<string>());
+  const activeDeleteMarkerRef = useRef<ActiveDeleteMarker | null>(null);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(() => new Set());
+  const [reconcileRequest, setReconcileRequest] = useState<{ marker: ActiveDeleteMarker; revision: number } | null>(null);
+  const reconcileRevisionRef = useRef(0);
   const [newDraft, setNewDraft] = useState<{ key: string; explicit: boolean } | null>(() => ({ key: `draft:${crypto.randomUUID()}`, explicit: true }));
   const [draftAdoptedFrom, setDraftAdoptedFrom] = useState<string>();
   const [selectedAnswerKey, setSelectedAnswerKey] = useState<string | null>(null);
@@ -76,18 +80,12 @@ function EnterpriseRagLiveWorkspace({
   workspaceRef.current = workspace;
   const activeIdRef = useRef(active?.id ?? null);
   useEffect(() => {
-    // The host clears an active row while acknowledging its deletion. Keep
-    // the last explicit selection until the removal effect can choose the
-    // successor; explicit history/new-draft navigation updates this ref
-    // synchronously and therefore remains authoritative during that window.
-    if (active?.id) activeIdRef.current = active.id;
-    else if (!pendingDelete.current) activeIdRef.current = null;
+    // Core may implicitly select a neighboring row after removing the active
+    // one. While deletion is unresolved, only explicit user navigation may
+    // replace this ref; the host fallback must not displace the blank draft.
+    if (activeDeleteMarkerRef.current) return;
+    activeIdRef.current = active?.id ?? null;
   }, [active?.id]);
-  useEffect(() => () => {
-    pendingDelete.current?.resolve(false);
-    pendingDelete.current = null;
-    deletingIdRef.current = null;
-  }, []);
   const conversations = workspace.state.conversations.filter(item =>
     item.purpose === "enterprise_qa" || (!item.purpose && item.workbenchAgentId === "enterprise-qa"),
   ).sort((a, b) =>
@@ -127,8 +125,7 @@ function EnterpriseRagLiveWorkspace({
     onOpenWebsiteAssistant ??
     (() => navigateWithinWorkspace("/?view=website&step=design"));
 
-  const startNewConversation = useCallback(() => {
-    if (creating.current) return;
+  const openBlankDraft = useCallback(() => {
     activeIdRef.current = null;
     setNewDraft({ key: `draft:${crypto.randomUUID()}`, explicit: true });
     setDraftAdoptedFrom(undefined);
@@ -137,45 +134,52 @@ function EnterpriseRagLiveWorkspace({
     history.replaceState(history.state, "", url);
   }, []);
 
-  // The host deletion API reports errors via syncError and changes the list
-  // only after the server confirms removal. Keep the selection until then.
+  const startNewConversation = useCallback(() => {
+    if (creating.current) return;
+    activeDeleteMarkerRef.current = null;
+    setReconcileRequest(null);
+    openBlankDraft();
+  }, [openBlankDraft]);
+
+  // Confirmed deletion removes a row only after the server ACK. If the viewed
+  // row was deleted, wait for every concurrent request before opening a fresh
+  // blank draft; deleting an older row never changes the current selection.
   useEffect(() => {
-    const pending = pendingDelete.current;
-    if (!pending) return;
-    if (workspace.syncError) {
-      pendingDelete.current = null;
-      deletingIdRef.current = null;
-      setDeletingId(null);
-      pending.resolve(false);
+    const marker = activeDeleteMarkerRef.current;
+    if (!marker || marker.phase !== "pending" || deletingIds.size > 0 || conversations.some(item => item.id === marker.id)) return;
+    activeDeleteMarkerRef.current = null;
+    if (activeIdRef.current !== marker.id) return;
+    openBlankDraft();
+  }, [conversations, deletingIds, openBlankDraft]);
+
+  const refreshConversationHistory = useCallback(async () => {
+    const marker = activeDeleteMarkerRef.current;
+    await workspaceRef.current.refreshConversations();
+    if (marker?.phase === "reconcile" && activeDeleteMarkerRef.current === marker)
+      setReconcileRequest({ marker, revision: ++reconcileRevisionRef.current });
+  }, []);
+
+  // Settle an ambiguous response only from the render produced by the GET.
+  // The promise continuation itself still holds the pre-refresh context value.
+  useEffect(() => {
+    if (!reconcileRequest || workspace.loading) return;
+    const { marker } = reconcileRequest;
+    setReconcileRequest(null);
+    if (activeDeleteMarkerRef.current !== marker) return;
+    if (workspace.syncError) return;
+    if (activeIdRef.current !== marker.id) {
+      activeDeleteMarkerRef.current = null;
       return;
     }
-    if (conversations.some(item => item.id === pending.id)) return;
-    pendingDelete.current = null;
-    deletingIdRef.current = null;
-    setDeletingId(null);
-    if (!pending.wasActive || activeIdRef.current !== pending.id) {
-      pending.resolve(true);
-      return;
+    const stillExists = conversations.some(item => item.id === marker.id);
+    activeDeleteMarkerRef.current = null;
+    if (!stillExists) openBlankDraft();
+    else if (workspace.activeConversation?.id !== marker.id) {
+      activeIdRef.current = marker.id;
+      workspace.setActive(marker.id);
+      setWorkbenchTaskQuery(marker.id);
     }
-    const next = conversations[0];
-    if (next) {
-      // setActive updates the host asynchronously from React's perspective;
-      // prevent the following auto-create effect from racing that update.
-      creating.current = true;
-      activeIdRef.current = next.id;
-      workspace.setActive(next.id);
-      setWorkbenchTaskQuery(next.id);
-    } else {
-      activeIdRef.current = null;
-      setNewDraft({ key: `draft:${crypto.randomUUID()}`, explicit: true });
-      setDraftAdoptedFrom(undefined);
-      setSelectedAnswerKey(null);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("workbenchTask");
-      window.history.replaceState(window.history.state, "", url);
-    }
-    pending.resolve(true);
-  }, [workspace.state.conversations, workspace.activeConversation, workspace.syncError]);
+  }, [conversations, openBlankDraft, reconcileRequest, workspace.activeConversation?.id, workspace.loading, workspace.setActive, workspace.syncError]);
 
   // Opening or refreshing this page always starts at an independent blank draft.
   // History hydration never becomes a navigation action.
@@ -212,7 +216,8 @@ function EnterpriseRagLiveWorkspace({
   const conversationKnowledgeReady = localTaskId
     ? Boolean(boundTaskKnowledgeBase)
     : allowConversationCreation;
-  const canCompose = conversationReady && conversationKnowledgeReady;
+  const activeDeleting = Boolean(active?.id && deletingIds.has(active.id));
+  const canCompose = conversationReady && conversationKnowledgeReady && !activeDeleting;
 
   const steering = controller.steering;
   const persistedQuestion = userMessage?.content || "";
@@ -260,6 +265,8 @@ function EnterpriseRagLiveWorkspace({
     busy: controller.busy,
     running: controller.running,
     runningTurnId: steering?.turnId ?? active?.execution?.timeline.findLast(entry => entry.userMessageId === userMessage?.id || userMessage?.serverSequence !== undefined && entry.userSequence === userMessage.serverSequence)?.turnId,
+    canStop: controller.canStop,
+    stopCapabilityReason: controller.stopCapabilityReason,
     steeringSupported: steering?.supported === true,
     onSteer: controller.steer,
     onFollowup: controller.enqueueFollowup,
@@ -296,6 +303,7 @@ function EnterpriseRagLiveWorkspace({
     onStartNewConversation: startNewConversation,
     onOpenKnowledge: () => navigateWithinWorkspace("/?view=knowledge"),
     starterQuestions: {
+      loading: starterQuestions.loading,
       current: starterQuestions.data?.current
         ? { id: starterQuestions.data.current.id, questions: starterQuestions.data.current.questions }
         : null,
@@ -330,38 +338,43 @@ function EnterpriseRagLiveWorkspace({
       loading: !workspace.hydrated || workspace.loading,
       error: workspace.syncError || undefined,
       busy: historyBusy,
-      deletingId,
-      onOpen: () => { void workspace.refreshConversations(); },
+      deletingIds: [...deletingIds],
+      onOpen: () => { void refreshConversationHistory(); },
       onSelect: (id: string) => {
-        if (deletingIdRef.current === id) return false;
+        if (deletingIdsRef.current.has(id)) return false;
         const item = workspaceRef.current.state.conversations.find(candidate => candidate.id === id && (candidate.purpose === "enterprise_qa" || (!candidate.purpose && candidate.workbenchAgentId === "enterprise-qa")));
         if (!item) return false;
+        activeDeleteMarkerRef.current = null;
+        setReconcileRequest(null);
         setNewDraft(null); setDraftAdoptedFrom(undefined); setSelectedAnswerKey(null);
         activeIdRef.current = id;
         workspaceRef.current.setActive(id);
         setWorkbenchTaskQuery(id);
         return true;
       },
-      onDelete: (id: string) => {
+      onDelete: async (id: string): Promise<ConversationDeleteResult> => {
         const item = workspaceRef.current.state.conversations.find(candidate => candidate.id === id && (candidate.purpose === "enterprise_qa" || (!candidate.purpose && candidate.workbenchAgentId === "enterprise-qa")));
-        if (!item || (id === activeIdRef.current && controller.pendingDispatch) || conversationDeletionBlocked(item) || pendingDelete.current) return Promise.resolve(false);
-        return new Promise<boolean>(resolve => {
-          workspaceRef.current.clearSyncError();
-          pendingDelete.current = { id, wasActive: id === activeIdRef.current, resolve };
-          deletingIdRef.current = id;
-          setDeletingId(id);
-          const fail = () => {
-            if (pendingDelete.current?.id !== id) return;
-            pendingDelete.current = null;
-            deletingIdRef.current = null;
-            setDeletingId(null);
-            resolve(false);
-          };
-          try {
-            const result = workspaceRef.current.deleteConversation(id);
-            if (result && typeof result.then === "function") void result.then(ok => { if (!ok) fail(); }, fail);
-          } catch { fail(); }
-        });
+        if (!item) return { ok: true };
+        if (deletingIdsRef.current.has(id)) return { ok: false, reason: "unknown", message: "该对话正在删除，请稍候。" };
+        if (id === activeIdRef.current && controller.pendingDispatch) return { ok: false, reason: "unanswered_dispatch", message: "该对话仍有未完成请求，请等待回答完成后再删除。" };
+        if (conversationDeletionBlocked(item)) return { ok: false, reason: hasUnresolvedGeneralChatDispatch(item.messages) ? "unanswered_dispatch" : "active_turn", message: "该对话仍在回答中，请等待完成后再删除。" };
+        workspaceRef.current.clearSyncError();
+        const wasActive = id === activeIdRef.current;
+        if (wasActive) activeDeleteMarkerRef.current = { id, phase: "pending" };
+        const nextDeleting = new Set(deletingIdsRef.current); nextDeleting.add(id); deletingIdsRef.current = nextDeleting; setDeletingIds(nextDeleting);
+        let result: ConversationDeleteResult;
+        try { result = await workspaceRef.current.deleteConversationConfirmed(id); }
+        catch (error) { result = { ok: false, reason: error instanceof TypeError ? "network_error" : "unknown", message: error instanceof Error ? error.message : "删除失败，请稍后重试。" }; }
+        if (result.ok && wasActive && activeDeleteMarkerRef.current?.id === id && activeIdRef.current === id) {
+          activeDeleteMarkerRef.current = null;
+          setReconcileRequest(null);
+          openBlankDraft();
+        } else if (!result.ok && wasActive && activeDeleteMarkerRef.current?.id === id) {
+          if (result.reason === "network_error" || result.reason === "unknown") activeDeleteMarkerRef.current = { id, phase: "reconcile" };
+          else activeDeleteMarkerRef.current = null;
+        }
+        const remaining = new Set(deletingIdsRef.current); remaining.delete(id); deletingIdsRef.current = remaining; setDeletingIds(remaining);
+        return result;
       },
     },
   };

@@ -171,17 +171,20 @@ export function useRagStarterQuestions(enabled = true) {
       return next;
     } catch (cause) {
       const next = cause instanceof Error ? cause : new Error("预设问题更新失败。");
+      let conflictRefreshed = false;
       if (next instanceof RagStarterQuestionsApiError && next.status === 409) {
         conflicted.current = true;
         try {
           const latest = await liveRagStarterQuestionsApi.read();
           if (current === generation.current) {
             setData(latest);
+            setError(null);
             conflicted.current = false;
+            conflictRefreshed = true;
           }
         } catch { /* Keep the last readable DTO and the original conflict. */ }
       }
-      if (current === generation.current) setError(next);
+      if (current === generation.current && !conflictRefreshed) setError(next);
       throw next;
     } finally {
       mutating.current = false;

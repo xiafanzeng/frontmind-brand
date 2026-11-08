@@ -76,6 +76,9 @@
 @keyframes rag-history-loading { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .rag-conversation-popover__loading svg { animation:none; } }
 .rag-conversation-popover h3 { margin: 0; color: #1d1d1f; font-size: 16px; font-weight: 600; line-height: 24px; }
+.rag-conversation-popover__multi { margin-left:auto; min-height:36px; padding:4px 8px; border:0; border-radius:8px; background:transparent; color:#7542b0; cursor:pointer; }
+.rag-conversation-popover__multi:hover:not(:disabled) { background:rgba(118,118,128,.09); }
+.rag-conversation-popover__multi:disabled { opacity:.45; cursor:default; }
 .rag-conversation-popover__message, .rag-conversation-popover__hint { margin: 0; padding: 12px; color: #636366; font-size: 14px; line-height: 1.5; }
 .rag-conversation-popover__message[role="alert"] { color: #a1324d; }
 .rag-conversation-popover__hint { padding-block: 4px 8px; font-size: 12px; }
@@ -88,12 +91,14 @@
 .rag-conversation-popover__title { overflow-wrap: anywhere; }
 .rag-conversation-popover__subtitle { color: #77777d; font-size: 12px; overflow-wrap: anywhere; }
 .rag-conversation-popover__check { flex: none; color: #7542b0; }
+.rag-conversation-popover__selector { display:inline-flex; flex:0 0 40px; align-items:center; justify-content:center; width:40px; height:44px; padding:0; border:0; border-radius:10px; background:transparent; color:#7542b0; cursor:pointer; }
+.rag-conversation-popover__selector:hover:not(:disabled) { background:rgba(118,118,128,.09); }
+.rag-conversation-popover__selector:disabled { opacity:.45; cursor:default; }
 .rag-conversation-popover__remove { display: inline-flex; flex: 0 0 44px; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: #77777d; cursor: pointer; }
 .rag-conversation-popover__remove:hover:not(:disabled) { color: #a1324d; background: rgba(118, 118, 128, .09); }
 .rag-conversation-popover__choice:disabled, .rag-conversation-popover__remove:disabled, .rag-conversation-popover__staged button:disabled { cursor: default; opacity: .45; }
 .rag-conversation-popover__staged { display:flex; align-items:center; gap:8px; min-width:0; width:100%; min-height:44px; padding-left:12px; }
 .rag-conversation-popover__staged-title { flex:1 1 auto; min-width:0; color:#77777d; overflow-wrap:anywhere; }
-.rag-conversation-popover__staged-title small { font-size:12px; white-space:nowrap; }
 .rag-conversation-popover__staged button { flex:none; min-height:44px; padding:8px 12px; border:0; border-radius:10px; background:transparent; color:#7542b0; cursor:pointer; }
 .rag-conversation-popover__staged button:hover:not(:disabled) { background:rgba(118,118,128,.09); }
 .rag-conversation-popover :is(button):focus-visible { outline: 2px solid #7542b0; outline-offset: -2px; }
@@ -102,6 +107,15 @@
 .rag-conversation-popover__recovery button { min-height:36px; padding:4px 8px; border:0; border-radius:8px; background:transparent; color:#7542b0; cursor:pointer; }
 .rag-conversation-popover__recovery button:hover:not(:disabled) { background:rgba(118,118,128,.09); }
 .rag-conversation-popover__recovery button:disabled { opacity:.45; cursor:default; }
+.rag-conversation-popover__failure { color:#a1324d; font-size:12px; line-height:18px; overflow-wrap:anywhere; }
+.rag-conversation-popover__item.has-error { background:rgba(161,50,77,.04); }
+.rag-conversation-popover__row-loading { flex:none; color:#7542b0; animation:rag-history-loading 1s linear infinite; }
+.rag-conversation-popover__selection-bar { position:sticky; bottom:-8px; z-index:1; display:flex; align-items:center; gap:8px; min-height:52px; margin:8px -8px -8px; padding:8px 12px; border-top:1px solid rgba(60,60,67,.12); background:rgba(255,255,255,.96); backdrop-filter:blur(12px); }
+.rag-conversation-popover__selection-bar span { flex:1 1 auto; color:#636366; font-size:12px; }
+.rag-conversation-popover__selection-bar button { min-height:36px; padding:4px 10px; border:1px solid rgba(60,60,67,.16); border-radius:9px; background:#fff; color:#7542b0; cursor:pointer; }
+.rag-conversation-popover__selection-bar button.is-delete { border-color:#a1324d; color:#a1324d; }
+.rag-conversation-popover__selection-bar button:hover:not(:disabled) { background:rgba(118,118,128,.07); }
+.rag-conversation-popover__selection-bar button:disabled { opacity:.45; cursor:default; }
 
 .rag-conversation-popover__examples { flex: none; margin-top:16px; padding-top:16px; border-top:1px solid rgba(0,0,0,.08); }
 .rag-conversation-popover__examples h4 { margin:0 0 8px; color:#86868b; font-size:12px; font-weight:400; }

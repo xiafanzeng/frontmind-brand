@@ -1,4 +1,5 @@
 import { Router, type Request } from "express";
+import { isConversationDeleteResult, type ConversationDeleteResult } from "../contracts/conversation-delete.js";
 
 export type BrandConversationPurpose = "knowledge" | "enterprise_qa";
 export interface BrandConversationSnapshot {
@@ -9,6 +10,7 @@ export interface BrandConversationStore {
   list(request: Request): Promise<BrandConversationSnapshot[]>;
   save(request: Request, snapshot: BrandConversationSnapshot): Promise<unknown>;
   delete(request: Request, id: string): Promise<unknown>;
+  deleteConfirmed(request: Request, id: string, purpose: BrandConversationPurpose): Promise<ConversationDeleteResult>;
 }
 export class BrandConversationAccessError extends Error { readonly status = 403; }
 /** Saved workflow/task metadata owns the purpose; a browser title does not. */
@@ -76,6 +78,22 @@ export function createBrandConversationRouter(store: BrandConversationStore): Ro
       res.json({success: true});
     } catch (error) {
       res.status(error instanceof BrandConversationAccessError ? 403 : 400).json({error: error instanceof BrandConversationAccessError ? error.message : "BRAND_SNAPSHOT_REJECTED"});
+    }
+  });
+  router.post("/conversations/delete-confirmed", async (req, res) => {
+    const { purpose, id } = req.body ?? {};
+    if (!isPurpose(purpose) || typeof id !== "string" || !id || id.length > 128)
+      return void res.status(400).json({ error: "BRAND_CONVERSATION_DELETE_INVALID" });
+    try {
+      const existing = (await store.list(req)).map(normalizeSavedBrandConversation).find(item => item.id === id);
+      if (!existing) return void res.json({ ok: true } satisfies ConversationDeleteResult);
+      if (brandConversationPurpose(existing) !== purpose) throw new BrandConversationAccessError("BRAND_CONVERSATION_PURPOSE_MISMATCH");
+      const result = await store.deleteConfirmed(req, id, purpose);
+      if (!isConversationDeleteResult(result)) return void res.status(503).json({ error: "BRAND_CONVERSATION_DELETE_RESPONSE_INVALID" });
+      res.json(result);
+    } catch (error) {
+      if (error instanceof BrandConversationAccessError) return void res.status(403).json({ error: error.message });
+      res.status(503).json({ error: "BRAND_CONVERSATION_DELETE_UNAVAILABLE" });
     }
   });
   return router;

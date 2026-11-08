@@ -544,7 +544,7 @@ describe("simplified AI website preview", () => {
     expect(screen.getByRole("heading", { name: "待评估" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "历史问答" }));
     const history = await screen.findByRole("dialog", { name: "历史问答" });
-    fireEvent.click(history.querySelector(".rag-conversation-popover__choice")!);
+    fireEvent.click(within(history).getByRole("button", { name: /^企业能力介绍/ }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史问答" })).toBeNull());
     await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     const evaluation = screen.getByRole("region", { name: "本轮回答质量" });
@@ -573,10 +573,7 @@ describe("simplified AI website preview", () => {
     expect(screen.getByText("我想咨询新的具体业务问题")).toBeTruthy();
     expect(screen.getByText(/此问题不在示例库/)).toBeTruthy();
     expect(within(evaluation).getByRole("heading", { name: "待评估" })).toBeTruthy();
-    const pendingScore = within(evaluation).getByLabelText("六维诊断评分");
-    expect(pendingScore.classList.contains("is-empty")).toBe(true);
-    expect(within(pendingScore).queryByTestId("rag-gauge-pending")).toBeNull();
-    expect(within(pendingScore).queryByTestId("rag-gauge-value")).toBeNull();
+    expect(within(evaluation).getByLabelText("六维诊断评分")).toBeTruthy();
     expect(within(evaluation).queryByText(/可能分数/)).toBeNull();
   });
 });

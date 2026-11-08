@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useRef, type ComponentType, type 
 import type { Conversation, LocalMessage } from "./conversation-types";
 import type { KnowledgeBaseObservationDto, KnowledgeBaseProgressDto } from "../contracts/knowledge-base-public-progress";
 import type { WorkbenchStatePatch, WorkbenchTaskState } from "@frontmind/module-ui/contracts/workbench-task";
+import type { ConversationDeleteResult } from "../contracts/conversation-delete";
+export type { ConversationDeleteFailureReason, ConversationDeleteResult } from "../contracts/conversation-delete";
 
 export interface BrandConversationContext {
   workbenchScopeKey?:string;state:{conversations:Conversation[];activeConversationId?:string|null};activeConversation:Conversation|null;
@@ -10,6 +12,7 @@ export interface BrandConversationContext {
   setActive(id:string):void;updateStatus(id:string,status:Conversation["status"],extra?:{taskId?:string;previousResponseId?:string;clearTaskPointer?:boolean;executionKind?:"general_chat_v2"|"response_logic";completedAt?:number;startedAt?:number}):void;
   settleQueuedGeneralChatDispatch?(id:string,requestId:string):void;
   settleGeneralChatDispatch(id:string,requestId:string):void;deleteConversation(id:string):void|Promise<boolean>;
+  deleteConversationConfirmed(id:string):Promise<ConversationDeleteResult>;
   flushConversation(id:string):Promise<boolean>;rollbackPendingKnowledgeBaseTurn(id:string,requestId:string):void;
   addMessage(id:string,message:LocalMessage):void;updateTitle(id:string,title:string):void;settleKnowledgeBaseStartFailure(id:string,requestId:string):void;
   registerKnowledgeBaseConversation(id:string):void;wakeKnowledgeBaseConversation(id:string):void;

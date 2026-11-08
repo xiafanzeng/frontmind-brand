@@ -91,8 +91,7 @@ describe("RAG starter-question client API", () => {
       revision: 3,
       current: { id: "00000000-0000-4000-8000-000000000031" },
     });
-    expect(hook.result.current.error).toBeInstanceOf(RagStarterQuestionsApiError);
-    expect((hook.result.current.error as RagStarterQuestionsApiError).status).toBe(409);
+    expect(hook.result.current.error).toBeNull();
     mocks.fetch.mockResolvedValueOnce(json(dto({ revision: 4 })));
     await act(async () => {
       await hook.result.current.confirm(["保留的编辑一", "保留的编辑二", "保留的编辑三"]);

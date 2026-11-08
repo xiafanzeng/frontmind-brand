@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
+  const deleteConversation = vi.fn();
   const knowledgeBase = (prefix: string, version: number) => ({
     snapshotId: `${prefix}-snapshot`,
     version,
@@ -42,7 +43,10 @@ const mocks = vi.hoisted(() => {
     retryTask: vi.fn(),
     createConversation: vi.fn(),
     setActive: vi.fn(),
-    deleteConversation: vi.fn(),
+    deleteConversation,
+    deleteConversationConfirmed: vi.fn(async (id: string) => await deleteConversation(id) === false
+      ? { ok: false as const, reason: "unknown" as "unknown" | "network_error", message: "删除失败" }
+      : { ok: true as const }),
     refreshConversations: vi.fn(async () => {}),
     clearSyncError: vi.fn(),
     conversations: [] as Array<Record<string, unknown>>,
@@ -111,6 +115,7 @@ vi.mock("../host", () => ({
     createConversation: mocks.createConversation,
     setActive: mocks.setActive,
     deleteConversation: mocks.deleteConversation,
+    deleteConversationConfirmed: mocks.deleteConversationConfirmed,
     refreshConversations: mocks.refreshConversations,
     clearSyncError: mocks.clearSyncError,
     syncError: mocks.syncError,
@@ -218,6 +223,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.createConversation.mockReturnValue("new-conversation");
   mocks.deleteConversation.mockReset();
+  mocks.deleteConversationConfirmed.mockClear();
 });
 
 afterEach(cleanup);
@@ -263,34 +269,36 @@ describe("connected redesigned enterprise RAG workspace", () => {
     expect((mocks.active.messages as Array<{ timestamp: number }>)[1]?.timestamp).toBe(legacySeconds);
   });
 
-  it("waits for deletion to succeed before selecting the next conversation", () => {
+  it("keeps a fresh blank draft when the host falls back to a neighboring conversation after confirmed deletion", async () => {
     mocks.conversations = [
       { ...activeConversation(), title: "企业问答", updatedAt: 100 },
       { ...activeConversation(), id: "survivor", title: "另一会话", updatedAt: 10 },
     ];
     const view = renderHistory();
-    const history = (mocks.received?.live as { conversationHistory: { onDelete:(id:string)=>void } }).conversationHistory;
-    act(() => { void history.onDelete("conversation-1"); });
+    const history = (mocks.received?.live as { conversationHistory: { onDelete:(id:string)=>Promise<{ok:boolean}> } }).conversationHistory;
+    await act(async () => { expect(await history.onDelete("conversation-1")).toEqual({ok:true}); });
     expect(mocks.setActive).not.toHaveBeenCalled();
     expect(mocks.deleteConversation).toHaveBeenCalledWith("conversation-1");
-    mocks.active = null;
-    mocks.conversations = [mocks.conversations[1]];
+    expect(mocks.received?.live).toMatchObject({ conversationReady: true, answer: "", conversationHistory: { activeId: null } });
+    mocks.active = mocks.conversations[1];
+    mocks.conversations = [mocks.active];
     view.rerender(<EnterpriseRagWorkspace />);
-    expect(mocks.setActive).toHaveBeenCalledWith("survivor");
-    expect(mocks.setWorkbenchTaskQuery).toHaveBeenCalledWith("survivor");
+    expect(mocks.setActive).not.toHaveBeenCalled();
+    expect(mocks.setWorkbenchTaskQuery).not.toHaveBeenCalled();
+    expect(mocks.received?.live).toMatchObject({ conversationReady: true, answer: "", conversationHistory: { activeId: null } });
     expect(mocks.createConversation).not.toHaveBeenCalled();
   });
 
   it("atomically opens a usable blank draft after deleting the only conversation", async () => {
     mocks.conversations = [{ ...activeConversation(), updatedAt: 100 }];
     const view = renderHistory();
-    type History = { onDelete:(id:string)=>Promise<boolean> };
-    let pending!: Promise<boolean>;
+    type History = { onDelete:(id:string)=>Promise<{ok:boolean}> };
+    let pending!: Promise<{ok:boolean}>;
     act(() => { pending = (mocks.received?.live as {conversationHistory:History}).conversationHistory.onDelete("conversation-1"); });
     mocks.active = null;
     mocks.conversations = [];
     act(() => { view.rerender(<EnterpriseRagWorkspace />); });
-    await act(async () => { expect(await pending).toBe(true); });
+    await act(async () => { expect(await pending).toEqual({ok:true}); });
     expect(mocks.received?.live).toMatchObject({
       conversationReady: true,
       canCompose: true,
@@ -307,47 +315,34 @@ describe("connected redesigned enterprise RAG workspace", () => {
     let settle!: (value:boolean) => void;
     mocks.deleteConversation.mockReturnValue(new Promise<boolean>(resolve => { settle = resolve; }));
     renderHistory();
-    type History = { deletingId?:string|null; onDelete:(id:string)=>void|Promise<boolean> };
-    let pending: void | Promise<boolean>;
+    type History = { deletingIds?:string[]; onDelete:(id:string)=>Promise<{ok:boolean}> };
+    let pending!: Promise<{ok:boolean}>;
     act(() => { pending = (mocks.received?.live as {conversationHistory:History}).conversationHistory.onDelete("conversation-1"); });
     const history = (mocks.received?.live as {conversationHistory:History}).conversationHistory;
-    expect(history.deletingId).toBe("conversation-1");
+    expect(history.deletingIds).toEqual(["conversation-1"]);
     act(() => { history.onDelete("conversation-1"); });
     expect(mocks.deleteConversation).toHaveBeenCalledOnce();
     await act(async () => { settle(false); await pending; });
-    expect((mocks.received?.live as {conversationHistory:History}).conversationHistory.deletingId).toBeNull();
+    expect((mocks.received?.live as {conversationHistory:History}).conversationHistory.deletingIds).toEqual([]);
     expect(mocks.setActive).not.toHaveBeenCalled();
   });
 
-  it("serializes staged deletions until each removal is observed, including void-return hosts", async () => {
+  it("allows independent confirmed deletions to run concurrently", async () => {
     mocks.conversations = [
       { ...activeConversation(), id: "conversation-1", updatedAt: 3 },
       { ...activeConversation(), id: "second", updatedAt: 2 },
       { ...activeConversation(), id: "third", updatedAt: 1 },
     ];
-    const view = renderHistory();
-    const history = (mocks.received?.live as {conversationHistory:{onDelete:(id:string)=>Promise<boolean>;onSelect:(id:string)=>boolean}}).conversationHistory;
-    act(() => { expect(history.onSelect("third")).toBe(true); });
-    let first!: Promise<boolean>;
-    act(() => { first = history.onDelete("conversation-1"); });
-    act(() => {
-      expect(history.onSelect("conversation-1")).toBe(false);
-      expect(history.onSelect("third")).toBe(true);
-    });
-    let settled = false; void first.then(() => { settled = true; });
-    await act(async () => { await Promise.resolve(); });
-    expect(settled).toBe(false);
-    mocks.active = { ...activeConversation(), id: "third" };
-    mocks.conversations = mocks.conversations.filter(item => item.id !== "conversation-1");
-    act(() => { view.rerender(<EnterpriseRagWorkspace />); });
-    await act(async () => { expect(await first).toBe(true); });
-    let second!: Promise<boolean>;
-    act(() => { second = history.onDelete("second"); });
+    const resolvers: Array<(value:boolean)=>void> = [];
+    mocks.deleteConversation.mockImplementation(() => new Promise<boolean>(resolve => { resolvers.push(resolve); }));
+    renderHistory();
+    const history = (mocks.received?.live as {conversationHistory:{deletingIds:string[];onDelete:(id:string)=>Promise<{ok:boolean}>;onSelect:(id:string)=>boolean}}).conversationHistory;
+    let first!: Promise<{ok:boolean}>; let second!: Promise<{ok:boolean}>;
+    act(() => { first = history.onDelete("conversation-1"); second = history.onDelete("second"); });
+    expect(mocks.deleteConversation).toHaveBeenNthCalledWith(1, "conversation-1");
     expect(mocks.deleteConversation).toHaveBeenNthCalledWith(2, "second");
-    mocks.conversations = mocks.conversations.filter(item => item.id !== "second");
-    act(() => { view.rerender(<EnterpriseRagWorkspace />); });
-    await act(async () => { expect(await second).toBe(true); });
-    expect(mocks.setWorkbenchTaskQuery).toHaveBeenLastCalledWith("third");
+    expect((mocks.received?.live as {conversationHistory:{deletingIds:string[]}}).conversationHistory.deletingIds).toEqual(expect.arrayContaining(["conversation-1","second"]));
+    await act(async () => { resolvers.forEach(resolve => resolve(true)); expect(await first).toEqual({ok:true}); expect(await second).toEqual({ok:true}); });
   });
 
   it("keeps a new blank draft selected when the previously active conversation finishes deleting", async () => {
@@ -356,14 +351,14 @@ describe("connected redesigned enterprise RAG workspace", () => {
       { ...activeConversation(), id: "survivor", updatedAt: 1 },
     ];
     const view = renderHistory();
-    type History = { onDelete:(id:string)=>Promise<boolean> };
-    let pending!: Promise<boolean>;
+    type History = { onDelete:(id:string)=>Promise<{ok:boolean}> };
+    let pending!: Promise<{ok:boolean}>;
     act(() => { pending = (mocks.received?.live as {conversationHistory:History}).conversationHistory.onDelete("conversation-1"); });
     act(() => { (mocks.received?.live as {onStartNewConversation:()=>void}).onStartNewConversation(); });
     mocks.active = null;
     mocks.conversations = mocks.conversations.filter(item => item.id !== "conversation-1");
     act(() => { view.rerender(<EnterpriseRagWorkspace />); });
-    await act(async () => { expect(await pending).toBe(true); });
+    await act(async () => { expect(await pending).toEqual({ok:true}); });
     expect(mocks.setActive).not.toHaveBeenCalled();
     expect(mocks.received?.live).toMatchObject({ conversationReady: true, answer: "" });
   });
@@ -414,17 +409,89 @@ describe("connected redesigned enterprise RAG workspace", () => {
     expect(mocks.deleteConversation).not.toHaveBeenCalled();
   });
 
-  it("resolves a void-host deletion as failed when synchronization reports an error", async () => {
+  it("preserves a row when confirmed deletion reports failure", async () => {
     mocks.conversations = [{ ...activeConversation(), updatedAt: 1 }];
-    const view = renderHistory();
-    const history = (mocks.received?.live as {conversationHistory:{onDelete:(id:string)=>Promise<boolean>}}).conversationHistory;
-    let pending!: Promise<boolean>;
+    mocks.deleteConversation.mockResolvedValue(false);
+    renderHistory();
+    const history = (mocks.received?.live as {conversationHistory:{onDelete:(id:string)=>Promise<{ok:boolean;message?:string}>}}).conversationHistory;
+    let pending!: Promise<{ok:boolean;message?:string}>;
     act(() => { pending = history.onDelete("conversation-1"); });
-    mocks.syncError = "网络异常，未删除";
-    act(() => { view.rerender(<EnterpriseRagWorkspace />); });
-    await act(async () => { expect(await pending).toBe(false); });
+    await act(async () => { expect(await pending).toMatchObject({ok:false,message:"删除失败"}); });
     expect(mocks.setActive).not.toHaveBeenCalled();
-    expect((mocks.received?.live as {conversationHistory:{deletingId:string|null}}).conversationHistory.deletingId).toBeNull();
+    expect((mocks.received?.live as {conversationHistory:{deletingIds:string[]}}).conversationHistory.deletingIds).toEqual([]);
+  });
+
+  it("reconciles an uncertain active deletion to a blank draft despite host neighbor fallback", async () => {
+    const survivor = { ...activeConversation(), id: "survivor", title: "另一会话", updatedAt: 1 };
+    mocks.conversations = [{ ...activeConversation(), updatedAt: 2 }, survivor];
+    mocks.deleteConversationConfirmed.mockResolvedValueOnce({ ok: false, reason: "network_error", message: "删除结果尚未确认" });
+    const view = renderHistory();
+    type History = { onDelete:(id:string)=>Promise<{ok:boolean}>;onOpen:()=>void };
+    const history = (mocks.received?.live as {conversationHistory:History}).conversationHistory;
+    await act(async () => { expect(await history.onDelete("conversation-1")).toMatchObject({ ok: false }); });
+    mocks.refreshConversations.mockImplementationOnce(async () => {
+      mocks.conversations = [survivor];
+      mocks.active = survivor;
+      view.rerender(<EnterpriseRagWorkspace />);
+    });
+    await act(async () => { history.onOpen(); await Promise.resolve(); });
+    expect(mocks.active).toBe(survivor);
+    expect(mocks.received?.live).toMatchObject({ conversationReady: true, answer: "", conversationHistory: { activeId: null } });
+    expect(mocks.setActive).not.toHaveBeenCalledWith("survivor");
+  });
+
+  it("keeps the original active conversation when uncertain deletion reconciliation finds it", async () => {
+    mocks.conversations = [{ ...activeConversation(), updatedAt: 1 }];
+    mocks.deleteConversationConfirmed.mockResolvedValueOnce({ ok: false, reason: "unknown", message: "需要重新核对" });
+    renderHistory();
+    type History = { onDelete:(id:string)=>Promise<{ok:boolean}>;onOpen:()=>void };
+    const history = (mocks.received?.live as {conversationHistory:History}).conversationHistory;
+    await act(async () => { expect(await history.onDelete("conversation-1")).toMatchObject({ ok: false }); });
+    await act(async () => { history.onOpen(); await Promise.resolve(); });
+    expect(mocks.received?.live).toMatchObject({ answer: "真实回答", conversationHistory: { activeId: "conversation-1" } });
+    expect(mocks.setActive).not.toHaveBeenCalled();
+  });
+
+  it("retains uncertain reconciliation across a failed GET and blanks after a later authoritative absence", async () => {
+    const survivor = { ...activeConversation(), id: "survivor", title: "另一会话", updatedAt: 1 };
+    mocks.conversations = [{ ...activeConversation(), updatedAt: 2 }, survivor];
+    mocks.deleteConversationConfirmed.mockResolvedValueOnce({ ok: false, reason: "network_error", message: "需要重新核对" });
+    const view = renderHistory();
+    type History = { onDelete:(id:string)=>Promise<{ok:boolean}>;onOpen:()=>void };
+    let history = (mocks.received?.live as {conversationHistory:History}).conversationHistory;
+    await act(async () => { await history.onDelete("conversation-1"); });
+    mocks.refreshConversations.mockImplementationOnce(async () => {
+      mocks.syncError = "历史记录读取失败";
+      view.rerender(<EnterpriseRagWorkspace />);
+    });
+    await act(async () => { history.onOpen(); await Promise.resolve(); });
+    expect(mocks.received?.live).toMatchObject({ answer: "真实回答", conversationHistory: { activeId: "conversation-1" } });
+    history = (mocks.received?.live as {conversationHistory:History}).conversationHistory;
+    mocks.refreshConversations.mockImplementationOnce(async () => {
+      mocks.syncError = "";
+      mocks.conversations = [survivor];
+      mocks.active = survivor;
+      view.rerender(<EnterpriseRagWorkspace />);
+    });
+    await act(async () => { history.onOpen(); await Promise.resolve(); });
+    expect(mocks.received?.live).toMatchObject({ conversationReady: true, answer: "", conversationHistory: { activeId: null } });
+  });
+
+  it("cancels uncertain-delete reconciliation after an explicit history selection", async () => {
+    const survivor = { ...activeConversation(), id: "survivor", title: "另一会话", updatedAt: 1 };
+    mocks.conversations = [{ ...activeConversation(), updatedAt: 2 }, survivor];
+    mocks.deleteConversationConfirmed.mockResolvedValueOnce({ ok: false, reason: "network_error", message: "需要重新核对" });
+    const view = renderHistory();
+    type History = { onDelete:(id:string)=>Promise<{ok:boolean}>;onOpen:()=>void;onSelect:(id:string)=>boolean };
+    let history = (mocks.received?.live as {conversationHistory:History}).conversationHistory;
+    await act(async () => { await history.onDelete("conversation-1"); });
+    act(() => { expect(history.onSelect("survivor")).toBe(true); });
+    mocks.active = survivor;
+    mocks.conversations = [survivor];
+    view.rerender(<EnterpriseRagWorkspace />);
+    history = (mocks.received?.live as {conversationHistory:History}).conversationHistory;
+    await act(async () => { history.onOpen(); await Promise.resolve(); });
+    expect(mocks.received?.live).toMatchObject({ answer: "真实回答", conversationHistory: { activeId: "survivor" } });
   });
 
   it("allows selection while preserving pending-message deletion protection", () => {

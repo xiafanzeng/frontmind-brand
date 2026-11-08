@@ -1638,6 +1638,43 @@
   color: var(--fm-brand-ink);
 }
 
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "copy actions";
+  align-items: start;
+  gap: var(--fm-brand-space-3);
+  margin-bottom: 48px;
+  padding-top: 16px;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading > div:first-child { grid-area: copy; min-width: 0; }
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading > .rag-toolbar {
+  grid-area: actions;
+  justify-self: end;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin: 0;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-heading h1 {
+  margin-bottom: 16px;
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -.022em;
+}
+
+.fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .sfp-heading p { margin: 0; font-size: 14px; line-height: 22px; }
+
+@container sfp (max-width: 760px) {
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "actions" "copy";
+  }
+  .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .erag-heading > .rag-toolbar { justify-self: start; justify-content: flex-start; }
+}
+
 .fm-brand-theme[data-brand-page="enterprise-qa"] .rag-eval-root .rag-toolbar .rag-report-link {
   display: inline-flex;
   align-items: flex-start;
