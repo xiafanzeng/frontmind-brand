@@ -279,7 +279,7 @@ function validateOptimizationConsistency(
 
 export function createResponseLogicOptimizationRouter(core: JudgeCore): import("express").Router {
   const router = Router();
-  const resolveContext = createJudgeContextResolver(core);
+  const resolveContext = createJudgeContextResolver(core, {adoptCurrentQuestion: true});
 
   function optimizationFailure(res: Response, error: unknown) {
     if (core.sendAiBillingError(res, error)) return;

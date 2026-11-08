@@ -21,7 +21,7 @@ export function createResponseLogicRegenerationRouter(core: ResponseLogicApiPort
   readResult(events: ReadonlyArray<ManusV2MessageEvent>): Result | null;
 }): import("express").Router {
   const router = Router();
-  const resolveContext = createJudgeContextResolver(core);
+  const resolveContext = createJudgeContextResolver(core, {adoptCurrentQuestion: true});
   const error = (res: Response, status: number, code: string, message: string) => judgeError(res, status, code, message);
   const failure = (res: Response, cause: unknown) => {
     if (core.sendAiBillingError(res, cause)) return;

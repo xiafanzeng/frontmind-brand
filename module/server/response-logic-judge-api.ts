@@ -530,8 +530,13 @@ export function compactKnowledgeForVerification(snapshot: NonNullable<KnowledgeS
 
 /** Shared prologue: auth, capability, configured question, record, revision.
  * Reused by the judge router and the optimizer router so both endpoints bind
- * requests to the exact same record/revision/fingerprint semantics. */
-export function createJudgeContextResolver(core: JudgeCore) {
+ * requests to the exact same record/revision/fingerprint semantics.
+ * With adoptCurrentQuestion, a ledger question edit no longer fails the
+ * request: the context (and every downstream idempotency key/turn input)
+ * binds to the CURRENT question text, so re-evaluating or regenerating after
+ * editing a question works in one click instead of dead-ending until a
+ * manual draft re-save refreshes the stored basis. */
+export function createJudgeContextResolver(core: JudgeCore, options: {adoptCurrentQuestion?: boolean} = {}) {
   return async function resolveContext(
     req: CoreRequest,
     res: Response,
@@ -555,7 +560,7 @@ export function createJudgeContextResolver(core: JudgeCore) {
       judgeError(res, 422, "RESPONSE_LOGIC_QUESTION_NOT_CONFIGURED", "当前问题尚未由管理员配置");
       return null;
     }
-    const record = await core.getResponseLogicEntry(workspaceUserId, questionId);
+    let record = await core.getResponseLogicEntry(workspaceUserId, questionId);
     if (!record) {
       judgeError(res, 404, "RESPONSE_LOGIC_RECORD_MISSING", "当前问题还没有应答逻辑内容");
       return null;
@@ -572,23 +577,29 @@ export function createJudgeContextResolver(core: JudgeCore) {
       return null;
     }
     // Question-basis currency: the record's stored question basis must still
-    // match the current ledger question (text and intent). An edit committed
-    // after this record was last saved makes every judge/optimization task
-    // for it stale — starting or polling one must fail closed so the client's
-    // context-key state machine drops the old result instead of presenting it
-    // as current. Re-saving the draft under the new question text restores
-    // the basis and unblocks evaluation.
+    // match the current ledger question (text and intent). When the basis is
+    // stale, either fail closed (stale results must never be presented as
+    // current) or — for flows that operate on the current question by design —
+    // adopt the current text in-memory. Stale-task reuse is impossible either
+    // way: idempotency keys embed the current question hash, so an edit
+    // produces new tasks, and the client's context-key state machine drops
+    // the old key's result. The stored basis itself is refreshed by the next
+    // versioned draft save.
     if (
       configuredQuestion.question !== record.question ||
       (configuredQuestion.intent ?? "") !== (record.intent ?? "")
     ) {
-      judgeError(
-        res,
-        409,
-        "RESPONSE_LOGIC_QUESTION_CONTEXT_STALE",
-        "问题已变化，请刷新后重新评估或生成",
-      );
-      return null;
+      if (!options.adoptCurrentQuestion) {
+        judgeError(
+          res,
+          409,
+          "RESPONSE_LOGIC_QUESTION_CONTEXT_STALE",
+          "问题已变化，请刷新后重新评估或生成",
+        );
+        return null;
+      }
+      record = {...record, question: configuredQuestion.question,
+        intent: configuredQuestion.intent ?? null};
     }
     const logic: LogicSections = {
       concern: record.draft.concern,
@@ -607,7 +618,7 @@ export function createJudgeContextResolver(core: JudgeCore) {
 
 export function createResponseLogicJudgeRouter(core: JudgeCore): import("express").Router {
   const router = Router();
-  const resolveContext = createJudgeContextResolver(core);
+  const resolveContext = createJudgeContextResolver(core, {adoptCurrentQuestion: true});
 
   function judgeFailure(res: Response, error: unknown) {
     if (core.sendAiBillingError(res, error)) return;
