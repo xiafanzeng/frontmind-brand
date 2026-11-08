@@ -201,15 +201,18 @@
 @media(max-width:800px){.iw-workbench{padding:4px 0 18px}.iw-header{align-items:flex-start;flex-direction:column}.iw-header-tools{width:100%;gap:8px}.iw-search{flex:1;max-width:none;min-width:150px}.iw-header-tools>.iw-primary{width:100%}.iw-score-cards{grid-template-columns:1fr 1fr}.iw-toolbar{flex-wrap:wrap}.iw-toolbar>span{margin-left:0}.iw-sticky{flex-wrap:wrap;bottom:8px}.iw-sticky>div{flex-wrap:wrap}.iw-steps{font-size:12px;padding:12px 10px;gap:6px}.iw-steps>div{gap:5px}.iw-comparison{grid-template-columns:1fr}.iw-workbench table{min-width:700px}.iw-batch-row>b{flex:1 0 100%}.iw-todo-list label{flex-wrap:wrap}.iw-task label{flex-wrap:wrap}.iw-workbench .brand-keyword-workspace .saas-toolbar{padding:16px}.iw-workbench .brand-keyword-workspace .saas-search{min-width:0;width:100%;flex:auto}.iw-modal button{white-space:normal}}
 @media(max-width:480px){.iw-score-cards{grid-template-columns:1fr}.iw-steps>div{gap:4px}.iw-steps i{margin-left:0}.iw-header h1{font-size:22px}.iw-universe-header h1{font-size:26px}}
 @media(prefers-reduced-motion:reduce){.iw-spinner{animation:none}}
-/* Elastic entrance (approved v3): the keyword page toggles the hidden attribute, which
-   rebuilds its boxes, so this replays on every entry without remounting state. */
-@keyframes iw-pop-in{from{opacity:0;transform:translateY(16px) scale(.97)}60%{opacity:1;transform:translateY(-3px)}to{opacity:1;transform:none}}
-.iw-enter>*{animation:iw-pop-in .5s cubic-bezier(.32,1.3,.45,1) both}
-.iw-enter>*:nth-child(n+2){animation-delay:70ms}
-.iw-enter .iw-catalog-table tbody tr{animation:iw-pop-in .5s cubic-bezier(.32,1.3,.45,1) both;animation-delay:calc(140ms + var(--i,0) * 70ms)}
-@media(prefers-reduced-motion:reduce){.iw-enter>*,.iw-enter .iw-catalog-table tbody tr{animation:none}}
+/* Rise-in entrance (approved v4): negative translateY can never extend the
+   scrollable area, so entrances no longer flash scrollbars; a mild settle
+   curve keeps a hint of spring without overshooting containers. */
+@keyframes iw-rise-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+@keyframes iw-chip-in{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:none}}
+.iw-enter>*{animation:iw-rise-in .42s cubic-bezier(.3,1.12,.34,1) both}
+.iw-enter>*:nth-child(n+2){animation-delay:50ms}
+.iw-enter .iw-catalog-table tbody tr{animation:iw-rise-in .42s cubic-bezier(.3,1.12,.34,1) both;animation-delay:calc(90ms + var(--i,0) * 45ms)}
+.iw-enter .iw-catalog-table .iw-score-link{animation:iw-chip-in .38s cubic-bezier(.34,1.45,.5,1) both;animation-delay:calc(150ms + var(--i,0) * 45ms)}
+@media(prefers-reduced-motion:reduce){.iw-enter>*,.iw-enter .iw-catalog-table tbody tr,.iw-enter .iw-catalog-table .iw-score-link{animation:none}}
 /* Undo bar replacing the delete confirmation dialog. */
-.iw-undo-bar{display:flex;align-items:center;gap:12px;margin-bottom:14px;padding:10px 16px;border:1px solid #ded0e8;border-radius:10px;background:#faf7fc;color:#667085;font-size:13px;animation:iw-pop-in .3s ease both}
+.iw-undo-bar{display:flex;align-items:center;gap:12px;margin-bottom:14px;padding:10px 16px;border:1px solid #ded0e8;border-radius:10px;background:#faf7fc;color:#667085;font-size:13px;animation:iw-rise-in .3s cubic-bezier(.3,1.12,.34,1) both}
 .iw-undo-bar b{flex:1;min-width:0;font-weight:550;color:#344054;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .iw-undo-bar>button{border:0;background:transparent;min-height:28px;color:#7545a0;font-weight:600;cursor:pointer}
 .iw-undo-bar>button:last-child{color:#98a2b3;font-weight:400}

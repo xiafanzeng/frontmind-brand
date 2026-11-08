@@ -36,7 +36,26 @@ vi.mock("./response-logic-runtime-host.js", async () => {
           }),
         },
         saveResponseLogic: {
-          useMutation: () => ({ mutateAsync: async (input: unknown) => input }),
+          useMutation: () => ({
+            mutateAsync: async (input: unknown) => ({
+              record: {
+                id: "rec-save",
+                questionId: (input as { questionId?: string }).questionId ?? "q-1",
+                groupId: "g",
+                groupTitle: "t",
+                question: "Q1",
+                intent: "",
+                summary: "",
+                conversationId: "conv-1",
+                lastTaskId: null,
+                draft: (input as { draft?: unknown }).draft,
+                revision: 3,
+                version: 0,
+                createdAt: 0,
+                updatedAt: 0,
+              },
+            }),
+          }),
         },
       },
     },
@@ -379,5 +398,96 @@ describe("terminal failures", () => {
     // Still loading (task may still be running) — never a fake success/failure.
     expect(screen.getByText("正在生成应答逻辑…")).toBeTruthy();
     expect(screen.queryByText("生成未完成")).toBeNull();
+  });
+});
+
+describe("publish success notice lifecycle (5s auto-dismiss, hover pause, close button)", () => {
+  const setup = async (questionId: string) => {
+    vi.useFakeTimers();
+    h.isLoading = false;
+    h.records = [
+      record({
+        questionId,
+        lastTaskId: null,
+        draft: { ...emptyDraft, concern: "c1" },
+      }),
+    ];
+    h.router = async () => respondJson({}, 404);
+    render(
+      <ResponseLogicWorkspace
+        preview={false}
+        questionGroups={groups(questionId, "Q1")}
+        initialQuestionId={questionId}
+      />,
+    );
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+    return screen.getByRole("button", { name: /更新应答逻辑/ });
+  };
+
+  const flush = async (ms: number) => {
+    // Drain microtask chains scheduled by timer callbacks, then advance the clock.
+    for (let i = 0; i < 4; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+    if (ms > 0) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    }
+  };
+
+  it("shows the notice after a formal update and auto-dismisses it after 5 seconds", async () => {
+    const publish = await setup("q-n1");
+    fireEvent.click(publish);
+    await flush(0);
+    const notice = screen.getByText("应答逻辑已更新");
+    expect(notice.closest(".rl-single-page-footer-notice")).toBeTruthy();
+    // No hover/auto-dismiss copy inside the box; countdown strip and × exist.
+    expect(notice.closest(".rl-single-page-footer-notice")?.textContent).not.toMatch(/悬停|自动消失/);
+    expect(document.querySelector(".rl-notice-countdown")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "关闭更新提示" })).toBeTruthy();
+    await flush(4_999);
+    expect(screen.getByText("应答逻辑已更新")).toBeTruthy();
+    await flush(300);
+    expect(screen.queryByText("应答逻辑已更新")).toBeNull();
+  });
+
+  it("closes immediately via × and re-publishing brings the notice back with a fresh countdown", async () => {
+    const publish = await setup("q-n2");
+    fireEvent.click(publish);
+    await flush(0);
+    fireEvent.click(screen.getByRole("button", { name: "关闭更新提示" }));
+    await flush(300);
+    expect(screen.queryByText("应答逻辑已更新")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /更新应答逻辑/ }));
+    await flush(0);
+    expect(screen.getByText("应答逻辑已更新")).toBeTruthy();
+    await flush(5_300);
+    expect(screen.queryByText("应答逻辑已更新")).toBeNull();
+  });
+
+  it("pauses the countdown while hovered and resumes when the pointer leaves", async () => {
+    const publish = await setup("q-n3");
+    fireEvent.click(publish);
+    await flush(0);
+    const notice = screen
+      .getByText("应答逻辑已更新")
+      .closest(".rl-single-page-footer-notice") as HTMLElement;
+    fireEvent.mouseEnter(notice);
+    await flush(8_000);
+    // Frozen: 8 simulated seconds passed while hovered and it stayed visible.
+    expect(screen.getByText("应答逻辑已更新")).toBeTruthy();
+    fireEvent.mouseLeave(notice);
+    await flush(5_000);
+    // 5s of resumed countdown just elapsed: the closing fade-out started.
+    expect(screen.getByText("应答逻辑已更新")).toBeTruthy();
+    await flush(300);
+    expect(screen.queryByText("应答逻辑已更新")).toBeNull();
   });
 });

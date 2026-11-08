@@ -1297,6 +1297,10 @@ function ResponseLogicQuestionEditor({
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState("");
   const [publishNotice, setPublishNotice] = useState("");
+  const [publishNoticeClosing, setPublishNoticeClosing] = useState(false);
+  const [publishNoticeSeq, setPublishNoticeSeq] = useState(0);
+  const publishNoticeTimer = useRef<number | undefined>(undefined);
+  const publishNoticeDeadline = useRef(0);
   const [uploadingMaterials, setUploadingMaterials] = useState(false);
   const [stashStatus, setStashStatus] = useState<ResponseLogicStashStatus>({
     state: "idle",
@@ -1885,6 +1889,51 @@ function ResponseLogicQuestionEditor({
 
   /* ------------------------------ formal update -------------------------- */
 
+  /* The success notice auto-dismisses after 5s; hovering freezes the remaining
+     time so it cannot vanish mid-read. One timer ref serves both the countdown
+     and the closing fade-out; while paused it stores the remaining ms. */
+  const clearPublishNoticeTimer = useCallback(() => {
+    if (publishNoticeTimer.current !== undefined) {
+      window.clearTimeout(publishNoticeTimer.current);
+      publishNoticeTimer.current = undefined;
+    }
+  }, []);
+
+  useEffect(() => () => clearPublishNoticeTimer(), [clearPublishNoticeTimer]);
+
+  const hidePublishNotice = useCallback(() => {
+    clearPublishNoticeTimer();
+    setPublishNoticeClosing(true);
+    publishNoticeTimer.current = window.setTimeout(() => {
+      setPublishNotice("");
+      setPublishNoticeClosing(false);
+    }, 240);
+  }, [clearPublishNoticeTimer]);
+
+  const schedulePublishNoticeHide = useCallback((delayMs: number) => {
+    clearPublishNoticeTimer();
+    publishNoticeDeadline.current = Date.now() + delayMs;
+    publishNoticeTimer.current = window.setTimeout(hidePublishNotice, delayMs);
+  }, [clearPublishNoticeTimer, hidePublishNotice]);
+
+  const pausePublishNoticeCountdown = useCallback(() => {
+    if (publishNoticeTimer.current === undefined) return;
+    window.clearTimeout(publishNoticeTimer.current);
+    publishNoticeTimer.current = undefined;
+    publishNoticeDeadline.current = Math.max(
+      0,
+      publishNoticeDeadline.current - Date.now(),
+    );
+  }, []);
+
+  const resumePublishNoticeCountdown = useCallback(() => {
+    if (publishNoticeTimer.current !== undefined || !publishNotice) return;
+    publishNoticeTimer.current = window.setTimeout(
+      hidePublishNotice,
+      publishNoticeDeadline.current,
+    );
+  }, [hidePublishNotice, publishNotice]);
+
   // "Unpublished changes", not "unsaved changes": fully stashed edits that
   // differ from the published confirmation (or exist without one) must keep
   // the formal update action available.
@@ -1897,6 +1946,8 @@ function ResponseLogicQuestionEditor({
     if (publishing || generating) return;
     setPublishing(true);
     setPublishError("");
+    clearPublishNoticeTimer();
+    setPublishNoticeClosing(false);
     setPublishNotice("");
     try {
       // Wait for any in-flight stash/material work before freezing content.
@@ -1912,7 +1963,10 @@ function ResponseLogicQuestionEditor({
         }),
       );
       applyAuthoritativeRecord(record);
+      setPublishNoticeClosing(false);
       setPublishNotice("应答逻辑已更新");
+      setPublishNoticeSeq((seq) => seq + 1);
+      schedulePublishNoticeHide(5000);
     } catch (error) {
       // The previous formal version and the local edits are both preserved.
       setPublishError(
@@ -1921,7 +1975,7 @@ function ResponseLogicQuestionEditor({
     } finally {
       setPublishing(false);
     }
-  }, [applyAuthoritativeRecord, generating, publishing, stashQueue]);
+  }, [applyAuthoritativeRecord, clearPublishNoticeTimer, generating, publishing, schedulePublishNoticeHide, stashQueue]);
 
   const copyDraft = useCallback(async () => {
     try {
@@ -2308,8 +2362,26 @@ function ResponseLogicQuestionEditor({
         </div>
       )}
       {publishNotice && (
-        <div className="rl-single-page-footer-notice" role="status">
+        <div
+          className={`rl-single-page-footer-notice${publishNoticeClosing ? " rl-notice-closing" : ""}`}
+          role="status"
+          onMouseEnter={pausePublishNoticeCountdown}
+          onMouseLeave={resumePublishNoticeCountdown}
+        >
           {publishNotice}
+          <i
+            className="rl-notice-countdown"
+            key={publishNoticeSeq}
+            aria-hidden="true"
+          />
+          <button
+            type="button"
+            className="rl-notice-close"
+            aria-label="关闭更新提示"
+            onClick={hidePublishNotice}
+          >
+            ×
+          </button>
         </div>
       )}
     </section>
