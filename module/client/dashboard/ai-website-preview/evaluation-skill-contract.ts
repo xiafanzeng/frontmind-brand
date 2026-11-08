@@ -59,6 +59,7 @@ export interface EvaluationRisk {
  */
 export interface EvaluationResult {
   answerVerdict?: "usable" | "usable_with_improvements" | "unusable" | "pending";
+  policyBand?: "excellent" | "usable" | "improve" | "unusable" | "pending";
   skillId: string;
   version: string;
   status: EvaluationStatus;
@@ -218,6 +219,7 @@ function parseUniqueRecords<Item>(
 export function parseEvaluationResult(value: unknown): EvaluationResult | null {
   if (!isRecord(value)) return null;
   if (value.answerVerdict !== undefined && !isOneOf(value.answerVerdict, ["usable", "usable_with_improvements", "unusable", "pending"] as const)) return null;
+  if (value.policyBand !== undefined && !isOneOf(value.policyBand, ["excellent", "usable", "improve", "unusable", "pending"] as const)) return null;
   if ([...forbiddenPublicationFields].some((field) => field in value)) {
     return null;
   }
@@ -252,8 +254,13 @@ export function parseEvaluationResult(value: unknown): EvaluationResult | null {
   if (value.answerVerdict === "usable_with_improvements" && (value.status !== "completed" || value.recommendation !== "publish_with_risk" || risks.some(risk => risk.severity === "critical" || risk.severity === "high"))) return null;
   if (value.answerVerdict === "pending" && (value.status === "completed" || value.recommendation === "recommended")) return null;
   if (value.answerVerdict === "unusable" && value.recommendation !== "not_recommended") return null;
+  if ((value.policyBand === "excellent" || value.policyBand === "usable") && value.answerVerdict !== "usable") return null;
+  if (value.policyBand === "improve" && value.answerVerdict !== "usable_with_improvements") return null;
+  if (value.policyBand === "unusable" && value.answerVerdict !== "unusable") return null;
+  if (value.policyBand === "pending" && value.answerVerdict !== "pending") return null;
   return {
     ...(value.answerVerdict === undefined ? {} : { answerVerdict: value.answerVerdict as EvaluationResult["answerVerdict"] }),
+    ...(value.policyBand === undefined ? {} : { policyBand: value.policyBand as EvaluationResult["policyBand"] }),
     skillId: value.skillId,
     version: value.version,
     status: value.status,

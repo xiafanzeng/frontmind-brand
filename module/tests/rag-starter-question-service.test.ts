@@ -9,6 +9,7 @@ import { reserveRagStarterQuestionSet } from "../server/rag-starter-question-res
 import {
   bootstrapCurrentProjectRagStarterQuestions,
   createRagStarterQuestionService,
+  RAG_STARTER_PROVIDER_INSTRUCTION,
   ragStarterCredentialUnavailableCode,
   ragStarterLateResultDisposition,
   ragStarterManagedBaseRuntime,
@@ -806,6 +807,16 @@ describe("RAG starter-question worker fences", () => {
     await runRagStarterQuestionWorkerSweep();
     expect(h.provider.client.createTask).toHaveBeenCalledTimes(1);
     expect(h.setRows[0]).toMatchObject({ status: "running" });
+    const uploadedInput = JSON.parse(Buffer.from(
+      h.provider.client.uploadFile.mock.calls[0]![0].bytes,
+    ).toString("utf8"));
+    expect(uploadedInput.instruction).toBe(RAG_STARTER_PROVIDER_INSTRUCTION);
+    expect(uploadedInput.instruction).toContain("第一次接触该企业");
+    expect(uploadedInput.instruction).toContain("三题至少覆盖两类客户意图");
+    expect(uploadedInput.instruction).toContain("哪些信息仍需核验");
+    expect(ragStarterProviderCreatePrompt(
+      h.taskRows[0]!.providerRuntime.ragStarterQuestions.operationToken,
+    )).toContain("真实访客");
     const runtime = h.taskRows[0]!.providerRuntime.ragStarterQuestions;
     h.provider.client.listAllMessages.mockResolvedValue([{
       type: "structured_output_result",
@@ -831,6 +842,45 @@ describe("RAG starter-question worker fences", () => {
     expect(h.taskRows[0]).toMatchObject({ providerState: "completed" });
     expect(h.provider.client.listAllMessages).toHaveBeenCalledTimes(2);
     expect(h.provider.client.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects internal-governance wording without publishing or creating a second task", async () => {
+    const h = harness();
+    h.provider.enableCredential();
+    await bootstrapCurrentProjectRagStarterQuestions({
+      accountUserId: 42,
+      enterpriseProjectId: PROJECT_ID,
+    });
+
+    await runRagStarterQuestionWorkerSweep();
+    expect(h.provider.client.createTask).toHaveBeenCalledTimes(1);
+    const runtime = h.taskRows[0]!.providerRuntime.ragStarterQuestions;
+    h.provider.client.listAllMessages.mockResolvedValue([{
+      type: "structured_output_result",
+      structured_output_result: {
+        operationToken: runtime.operationToken,
+        inputHash: runtime.inputHash,
+        questions: [
+          { text: "医学美容科公开介绍了哪些服务，哪些信息仍需核验？", sourceAliases: ["KB-001"] },
+          { text: "你们可以帮助我解决哪些问题？", sourceAliases: ["KB-001"] },
+          { text: "如何预约咨询？", sourceAliases: ["KB-001"] },
+        ],
+      },
+    }]);
+
+    await runRagStarterQuestionWorkerSweep();
+    expect(h.setRows[0]).toMatchObject({
+      status: "attention_required",
+      questions: null,
+      errorCode: "RESULT_INVALID",
+    });
+    expect(h.taskRows[0]).toMatchObject({ providerState: "failed" });
+    expect(h.provider.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.provider.client.uploadFile).toHaveBeenCalledTimes(1);
+
+    await runRagStarterQuestionWorkerSweep();
+    expect(h.provider.client.createTask).toHaveBeenCalledTimes(1);
+    expect(h.provider.client.uploadFile).toHaveBeenCalledTimes(1);
   });
 
   it("reconciles an outcome-unknown create by operation token without a second create call", async () => {

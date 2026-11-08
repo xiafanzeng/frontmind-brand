@@ -5,6 +5,26 @@ export const ENTERPRISE_RAG_EVALUATION_OPERATION_TYPE =
   "brand_rag_answer_evaluation";
 export const ENTERPRISE_RAG_EVALUATION_CONTRACT_REVISION = 3;
 export const ENTERPRISE_RAG_JUDGE_VERSION = "3.0.0";
+export const ENTERPRISE_RAG_BUILTIN_EVALUATION_VERSION_ID =
+  "rag-eval-1.4+skill-3.0.0";
+/** The legacy runtime froze the shipped evaluation Skill, but did not expose a
+ * separately versioned provider prompt template. Keep that distinction
+ * explicit instead of relabelling the Skill hash as a prompt hash. */
+export const ENTERPRISE_RAG_BUILTIN_EVALUATION_MANIFEST = {
+  schemaVersion: 1,
+  evaluationVersionId: ENTERPRISE_RAG_BUILTIN_EVALUATION_VERSION_ID,
+  legacySkillVersion: "3.0.0",
+  legacySkillHash: "a896a41b17ad05790bf647ca4e08d8cf9a46db27388b4321808d7dc891f4715f",
+  promptTemplateFrozen: false,
+  ruleVersion: "rag-eval-1.4",
+  scoringVersion: "3.0.0",
+  judgeVersion: "3.0.0",
+  modelPolicy: "frozen_by_report",
+  policyPack: null,
+  policyPackHash: null,
+} as const;
+export const ENTERPRISE_RAG_BUILTIN_EVALUATION_MANIFEST_HASH =
+  "c29ff39a3ac1d17903e53b8ef5a703606f91472f2263d58215a4c2438ea64a5a";
 
 export const ENTERPRISE_RAG_DIMENSION_IDS = [
   "intent",
@@ -33,6 +53,135 @@ export const ENTERPRISE_RAG_CLAIM_IDS = Array.from(
 export type EnterpriseRagDimensionId =
   (typeof ENTERPRISE_RAG_DIMENSION_IDS)[number];
 export type EnterpriseRagGateId = (typeof ENTERPRISE_RAG_GATE_IDS)[number];
+
+const evaluationVersionCitationSchema = z.object({
+  id: z.string().trim().min(1).max(191),
+  text: z.string().trim().min(1).max(1_600),
+  citedCaseIds: z.array(z.string().uuid()).min(1).max(500),
+}).strict();
+
+/** Declarative only. The evaluator reads these fields as frozen data and never
+ * executes generated code or tool instructions. Existing safety checks remain
+ * a floor; a candidate pack may refine or tighten them, never remove them. */
+export const enterpriseRagEvaluationPolicyPackSchema = z.object({
+  schemaVersion: z.literal(1),
+  /** Human-readable proposal notes. They remain lineage only and are never
+   * interpolated into a production provider prompt. */
+  promptClauses: z.array(evaluationVersionCitationSchema).min(1).max(80),
+  scoringChecks: z.array(evaluationVersionCitationSchema.extend({
+    dimensionId: z.enum(ENTERPRISE_RAG_DIMENSION_IDS),
+    minimumLevel: z.number().int().min(0).max(4),
+    onBelow: z.enum(["improve", "block"]),
+  })).min(1).max(80),
+  riskRules: z.array(evaluationVersionCitationSchema.extend({
+    riskId: z.enum(ENTERPRISE_RAG_GATE_IDS),
+    blockedStatuses: z.array(z.enum(["failed", "pending"])).min(1).max(2),
+  })).min(1).max(80),
+  thresholds: z.object({
+    excellent: z.number().min(0).max(100),
+    usable: z.number().min(0).max(100),
+    improve: z.number().min(0).max(100),
+  }).strict(),
+}).strict().superRefine((pack, context) => {
+  if (!(pack.thresholds.excellent >= pack.thresholds.usable &&
+    pack.thresholds.usable >= pack.thresholds.improve)) {
+    context.addIssue({
+      code: "custom",
+      path: ["thresholds"],
+      message: "evaluation thresholds must be monotonic",
+    });
+  }
+});
+export type EnterpriseRagEvaluationPolicyPack = z.infer<typeof enterpriseRagEvaluationPolicyPackSchema>;
+
+export type EnterpriseRagPolicyDecisionSignals = {
+  status: "not_run" | "pending" | "completed" | "failed";
+  score: number | null;
+  answerVerdict?: "usable" | "usable_with_improvements" | "unusable" | "pending";
+  riskSeverities: Array<"low" | "medium" | "high" | "critical">;
+  dimensions: Array<{ id: EnterpriseRagDimensionId; level: number | null }>;
+  gates: Array<{ id: EnterpriseRagGateId; status: "passed" | "failed" | "pending" }>;
+};
+
+export type EnterpriseRagPolicyDecision = {
+  answerVerdict: "usable" | "usable_with_improvements" | "unusable" | "pending";
+  policyBand?: "excellent" | "usable" | "improve" | "unusable" | "pending";
+  reasonCodes: string[];
+};
+
+/**
+ * The one executable policy path shared by production scoring and offline
+ * regression. Proposal prose is deliberately absent: released versions may
+ * only transform the frozen structured evaluator signals below.
+ */
+export function evaluateEnterpriseRagPolicyDecision(
+  signals: EnterpriseRagPolicyDecisionSignals,
+  policyPack: EnterpriseRagEvaluationPolicyPack | undefined,
+): EnterpriseRagPolicyDecision {
+  const baseVerdict = signals.answerVerdict ?? "unusable";
+  if (!policyPack || signals.status !== "completed" || signals.score === null || baseVerdict === "pending") {
+    return { answerVerdict: baseVerdict, reasonCodes: ["base_verdict"] };
+  }
+
+  const reasons = new Set<string>(["base_verdict"]);
+  const thresholds = policyPack.thresholds;
+  const thresholdVerdict = signals.score < thresholds.improve
+    ? "unusable"
+    : signals.score < thresholds.usable
+      ? "usable_with_improvements"
+      : "usable";
+  const ranks = { unusable: 0, usable_with_improvements: 1, usable: 2 } as const;
+  let answerVerdict = baseVerdict;
+
+  if (signals.riskSeverities.includes("critical")) {
+    answerVerdict = "unusable";
+    reasons.add("critical_risk_floor");
+  } else if (ranks[thresholdVerdict] < ranks[answerVerdict]) {
+    answerVerdict = thresholdVerdict;
+    reasons.add("threshold_downgrade");
+  } else if (baseVerdict === "usable_with_improvements" && thresholdVerdict === "usable") {
+    const everyGatePassed = signals.gates.length === ENTERPRISE_RAG_GATE_IDS.length &&
+      signals.gates.every((gate) => gate.status === "passed");
+    const noElevatedRisk = !signals.riskSeverities.some((severity) => severity === "high" || severity === "critical");
+    const everyCheckSatisfied = policyPack.scoringChecks.every((check) => {
+      const level = signals.dimensions.find((dimension) => dimension.id === check.dimensionId)?.level;
+      return level !== null && level !== undefined && level >= check.minimumLevel;
+    });
+    if (everyGatePassed && noElevatedRisk && everyCheckSatisfied) {
+      answerVerdict = "usable";
+      reasons.add("safe_threshold_promotion");
+    }
+  }
+
+  for (const check of policyPack.scoringChecks) {
+    const level = signals.dimensions.find((dimension) => dimension.id === check.dimensionId)?.level;
+    if (level === null || level === undefined || level >= check.minimumLevel) continue;
+    const constrained = check.onBelow === "block" ? "unusable" : "usable_with_improvements";
+    if (ranks[constrained] < ranks[answerVerdict]) {
+      answerVerdict = constrained;
+      reasons.add(`dimension:${check.dimensionId}:${check.onBelow}`);
+    }
+  }
+  for (const rule of policyPack.riskRules) {
+    const status = signals.gates.find((gate) => gate.id === rule.riskId)?.status;
+    if (status && rule.blockedStatuses.includes(status as "failed" | "pending")) {
+      answerVerdict = "unusable";
+      reasons.add(`risk:${rule.riskId}:${status}`);
+    }
+  }
+
+  return {
+    answerVerdict,
+    policyBand: answerVerdict === "unusable"
+      ? "unusable"
+      : answerVerdict === "usable_with_improvements"
+        ? "improve"
+        : signals.score >= thresholds.excellent
+          ? "excellent"
+          : "usable",
+    reasonCodes: [...reasons],
+  };
+}
 
 export type EnterpriseRagEvaluationSource = {
   id: string;
@@ -73,6 +222,10 @@ export type EnterpriseRagEvaluationFrozenInput = {
     skillVersion: string;
     ruleVersion: string;
     judgeVersion: "1.0.0" | "2.0.0" | "3.0.0";
+    /** Absent only on historical snapshots created before version governance. */
+    evaluationVersionId?: string;
+    evaluationManifestHash?: string;
+    policyPack?: EnterpriseRagEvaluationPolicyPack;
   };
 };
 
@@ -928,6 +1081,12 @@ export function validateEnterpriseRagJudgeOutput(
 
 export type EnterpriseRagEvaluationResultPayload = {
   answerVerdict?: "usable" | "usable_with_improvements" | "unusable" | "pending";
+  /** Original immutable evaluator verdict before a released deterministic
+   * policy is applied. Absent on built-in/legacy reports with no policy. */
+  policyBaseAnswerVerdict?: "usable" | "usable_with_improvements" | "unusable" | "pending";
+  /** Final governed score band. `excellent` is provenance, not a new
+   * publication verdict; immutable base risk gates remain authoritative. */
+  policyBand?: "excellent" | "usable" | "improve" | "unusable" | "pending";
   skillId: string;
   version: string;
   status: "not_run" | "pending" | "completed" | "failed";

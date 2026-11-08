@@ -13,6 +13,10 @@ type Port=(...args:any[])=>any;
 export interface BrandKeywordPorts {
  agentOperations:CoreSqlTable<Operation>;agentTasks:CoreSqlTable<Task>;agentEvents:CoreSqlTable<Event>;artifacts:CoreSqlTable<Artifact>;localAssets:CoreSqlTable<LocalAsset>;
  ragStarterQuestionSets:BrandSchema["ragStarterQuestionSets"];knowledgeBaseSnapshots:BrandSchema["knowledgeBaseSnapshots"];
+ users:any;deliveryProjectAssignments:any;
+ enterpriseRagHumanReviews:any;enterpriseRagReviewCases:any;enterpriseRagReviewCaseEvents:any;
+ enterpriseRagEvaluationVersions:any;enterpriseRagEvaluationChannels:any;enterpriseRagOptimizationProposals:any;
+ enterpriseRagRegressionRuns:any;enterpriseRagRegressionResults:any;enterpriseRagReleaseEvents:any;
  assertActorAllowed(actor:BrandKeywordActor):void;lockAccountRecord(tx:any,userId:number):Promise<void>;
  getDecryptedCredentialForUser(userId:number):Promise<BrandKeywordCredential|null>;
  getDecryptedCredentialForAccountById(userId:number,id:string):Promise<BrandKeywordCredential|null>;

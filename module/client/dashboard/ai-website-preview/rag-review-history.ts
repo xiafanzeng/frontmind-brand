@@ -41,6 +41,37 @@ export type RagReviewHistoryRead = {
   discarded: number;
 };
 
+function reviewSnapshotKey(record: RagReviewRecord) {
+  return JSON.stringify([
+    record.question,
+    record.answer,
+    record.need,
+    record.reviewer,
+    record.time,
+    record.ruleVersion,
+    record.knowledgeVersion,
+    record.dimensions,
+    record.gates,
+  ]);
+}
+
+/** Prefer earlier entries while retaining legacy rows that were never migrated. */
+export function dedupeRagReviewViews<T>(
+  entries: T[],
+  recordOf: (entry: T) => RagReviewRecord,
+) {
+  const ids = new Set<string>();
+  const snapshots = new Set<string>();
+  return entries.filter((entry) => {
+    const record = recordOf(entry);
+    const snapshot = reviewSnapshotKey(record);
+    if (ids.has(record.id) || snapshots.has(snapshot)) return false;
+    ids.add(record.id);
+    snapshots.add(snapshot);
+    return true;
+  });
+}
+
 export function readRagReviewHistory(storageKey: string): RagReviewHistoryRead {
   let raw: string | null;
   try { raw = localStorage.getItem(storageKey); }

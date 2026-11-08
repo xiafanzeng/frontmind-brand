@@ -2257,7 +2257,284 @@ const responseLogicEvaluations = mysqlTable(
   ],
 );
 
-return { brandIntentWorkspaces, jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, ragStarterQuestionSets, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles, responseLogicEntries, responseLogicEvaluations };
+/** Append-only formal human review of one immutable enterprise-RAG report. */
+const enterpriseRagHumanReviews = mysqlTable(
+  "enterprise_rag_human_reviews",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).notNull(),
+    accountUserId: int("accountUserId").notNull(),
+    operationId: varchar("operationId", { length: 36 }).notNull(),
+    reportId: varchar("reportId", { length: 36 }).notNull(),
+    reviewerUserId: int("reviewerUserId").notNull(),
+    reviewerDisplayName: varchar("reviewerDisplayName", { length: 128 }).notNull(),
+    clientRequestId: varchar("clientRequestId", { length: 36 }).notNull(),
+    requestHash: varchar("requestHash", { length: 64 }).notNull(),
+    contentHash: varchar("contentHash", { length: 64 }).notNull(),
+    supersedesReviewId: varchar("supersedesReviewId", { length: 36 }),
+    questionSnapshot: longtext("questionSnapshot").notNull(),
+    answerSnapshot: longtext("answerSnapshot").notNull(),
+    knowledgeSnapshot: json("knowledgeSnapshot").$type<Record<string, unknown>>().notNull(),
+    aiReportSnapshot: json("aiReportSnapshot").$type<Record<string, unknown>>().notNull(),
+    evaluationVersionId: varchar("evaluationVersionId", { length: 96 }).notNull(),
+    promptVersion: varchar("promptVersion", { length: 96 }).notNull(),
+    promptHash: varchar("promptHash", { length: 64 }).notNull(),
+    promptTemplateFrozen: boolean("promptTemplateFrozen").default(false).notNull(),
+    sourceBundleHash: varchar("sourceBundleHash", { length: 64 }).notNull(),
+    ruleVersion: varchar("ruleVersion", { length: 96 }).notNull(),
+    skillVersion: varchar("skillVersion", { length: 96 }).notNull(),
+    judgeVersion: varchar("judgeVersion", { length: 96 }).notNull(),
+    modelVersion: varchar("modelVersion", { length: 191 }).notNull(),
+    humanScoringVersion: varchar("humanScoringVersion", { length: 96 }).notNull(),
+    humanScoringHash: varchar("humanScoringHash", { length: 64 }).notNull(),
+    humanVerdict: mysqlEnum("humanVerdict", ["excellent", "usable", "improve", "unusable", "pending"]).notNull(),
+    humanScore: decimal("humanScore", { precision: 6, scale: 2 }),
+    alignment: mysqlEnum("alignment", ["aligned", "human_more_positive", "human_more_negative", "mixed", "insufficient_information"]).notNull(),
+    caseStatus: mysqlEnum("caseStatus", ["aligned", "pending_analysis", "needs_reconciliation", "included_in_proposal", "insufficient_information", "not_adopted", "resolved_by_version"]).notNull(),
+    dimensions: json("dimensions").$type<Array<Record<string, unknown>>>().notNull(),
+    gates: json("gates").$type<Array<Record<string, unknown>>>().notNull(),
+    diff: json("diff").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("enterprise_rag_reviews_request_uq").on(table.enterpriseProjectId, table.reviewerUserId, table.clientRequestId),
+    uniqueIndex("enterprise_rag_reviews_content_uq").on(table.enterpriseProjectId, table.reportId, table.reviewerUserId, table.contentHash),
+    index("enterprise_rag_reviews_report_created_idx").on(table.enterpriseProjectId, table.reportId, table.createdAt),
+    index("enterprise_rag_reviews_reviewer_created_idx").on(table.reviewerUserId, table.createdAt),
+    foreignKey({
+      name: "enterprise_rag_reviews_owner_fk",
+      columns: [table.accountUserId],
+      foreignColumns: [core.users.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "enterprise_rag_reviews_reviewer_fk",
+      columns: [table.reviewerUserId],
+      foreignColumns: [core.users.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+/** Aggregate state for all append-only reviews of one automatic report. */
+const enterpriseRagReviewCases = mysqlTable(
+  "enterprise_rag_review_cases",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).notNull(),
+    accountUserId: int("accountUserId").notNull(),
+    operationId: varchar("operationId", { length: 36 }).notNull(),
+    reportId: varchar("reportId", { length: 36 }).notNull(),
+    status: mysqlEnum("status", ["aligned", "pending_analysis", "needs_reconciliation", "included_in_proposal", "insufficient_information", "not_adopted", "resolved_by_version"]).notNull(),
+    revision: int("revision", { unsigned: true }).default(1).notNull(),
+    resolvedEvaluationVersionId: varchar("resolvedEvaluationVersionId", { length: 96 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("enterprise_rag_review_cases_report_uq").on(table.enterpriseProjectId, table.reportId),
+    index("enterprise_rag_review_cases_status_idx").on(table.enterpriseProjectId, table.status, table.updatedAt),
+    foreignKey({
+      name: "enterprise_rag_review_cases_owner_fk",
+      columns: [table.accountUserId],
+      foreignColumns: [core.users.id],
+    }).onDelete("cascade"),
+  ],
+);
+
+const enterpriseRagReviewCaseEvents = mysqlTable(
+  "enterprise_rag_review_case_events",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    caseId: varchar("caseId", { length: 36 }).notNull(),
+    actorUserId: int("actorUserId"),
+    clientRequestId: varchar("clientRequestId", { length: 36 }),
+    requestHash: varchar("requestHash", { length: 64 }),
+    eventType: mysqlEnum("eventType", ["review_appended", "conflict_detected", "reconciled", "included_in_proposal", "marked_insufficient", "not_adopted", "resolved_by_version"]).notNull(),
+    payload: json("payload").$type<Record<string, unknown>>().default({}).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    index("enterprise_rag_review_case_events_case_idx").on(table.caseId, table.createdAt),
+    uniqueIndex("enterprise_rag_review_case_events_request_uq").on(table.caseId, table.actorUserId, table.clientRequestId),
+    foreignKey({
+      name: "enterprise_rag_review_case_events_case_fk",
+      columns: [table.caseId],
+      foreignColumns: [enterpriseRagReviewCases.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "enterprise_rag_review_case_events_actor_fk",
+      columns: [table.actorUserId],
+      foreignColumns: [core.users.id],
+    }).onDelete("set null"),
+  ],
+);
+
+/** Immutable evaluator manifest. A system admin explicitly registers legacy v1.4. */
+const enterpriseRagEvaluationVersions = mysqlTable(
+  "enterprise_rag_evaluation_versions",
+  {
+    id: varchar("id", { length: 96 }).primaryKey(),
+    status: mysqlEnum("status", ["built_in", "candidate", "released", "retired"]).notNull(),
+    manifest: json("manifest").$type<Record<string, unknown>>().notNull(),
+    manifestHash: varchar("manifestHash", { length: 64 }).notNull(),
+    sourceProposalId: varchar("sourceProposalId", { length: 36 }),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("enterprise_rag_evaluation_versions_hash_uq").on(table.manifestHash),
+    foreignKey({
+      name: "enterprise_rag_evaluation_versions_creator_fk",
+      columns: [table.createdByUserId],
+      foreignColumns: [core.users.id],
+    }).onDelete("set null"),
+  ],
+);
+
+const enterpriseRagEvaluationChannels = mysqlTable(
+  "enterprise_rag_evaluation_channels",
+  {
+    id: varchar("id", { length: 96 }).primaryKey(),
+    scope: mysqlEnum("scope", ["global", "workspace"]).notNull(),
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }),
+    activeVersionId: varchar("activeVersionId", { length: 96 }).notNull(),
+    revision: int("revision", { unsigned: true }).default(1).notNull(),
+    updatedByUserId: int("updatedByUserId"),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    index("enterprise_rag_evaluation_channels_scope_idx").on(table.scope, table.enterpriseProjectId),
+    check("enterprise_rag_evaluation_channels_scope_ck", sql`((${table.scope} = 'global' AND ${table.enterpriseProjectId} IS NULL) OR (${table.scope} = 'workspace' AND ${table.enterpriseProjectId} IS NOT NULL))`),
+    foreignKey({
+      name: "enterprise_rag_evaluation_channels_version_fk",
+      columns: [table.activeVersionId],
+      foreignColumns: [enterpriseRagEvaluationVersions.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "enterprise_rag_evaluation_channels_updater_fk",
+      columns: [table.updatedByUserId],
+      foreignColumns: [core.users.id],
+    }).onDelete("set null"),
+  ],
+);
+
+const enterpriseRagOptimizationProposals = mysqlTable(
+  "enterprise_rag_optimization_proposals",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }),
+    scope: mysqlEnum("scope", ["workspace", "cross_workspace"]).notNull(),
+    clientRequestId: varchar("clientRequestId", { length: 36 }).notNull(),
+    requestHash: varchar("requestHash", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["reserved", "running", "completed", "failed", "rejected", "attention_required"]).default("reserved").notNull(),
+    caseIds: json("caseIds").$type<string[]>().notNull(),
+    frozenCaseSnapshots: json("frozenCaseSnapshots").$type<Array<Record<string, unknown>>>().notNull(),
+    redactedInputHash: varchar("redactedInputHash", { length: 64 }).notNull(),
+    policyPack: json("policyPack").$type<Record<string, unknown>>(),
+    citedCaseIds: json("citedCaseIds").$type<string[]>().default([]).notNull(),
+    createdByUserId: int("createdByUserId").notNull(),
+    errorCode: varchar("errorCode", { length: 96 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("enterprise_rag_optimization_request_uq").on(table.createdByUserId, table.clientRequestId),
+    index("enterprise_rag_optimization_status_idx").on(table.enterpriseProjectId, table.status, table.createdAt),
+    foreignKey({
+      name: "enterprise_rag_optimization_creator_fk",
+      columns: [table.createdByUserId],
+      foreignColumns: [core.users.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+const enterpriseRagRegressionRuns = mysqlTable(
+  "enterprise_rag_regression_runs",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    proposalId: varchar("proposalId", { length: 36 }).notNull(),
+    clientRequestId: varchar("clientRequestId", { length: 36 }).notNull(),
+    requestHash: varchar("requestHash", { length: 64 }).notNull(),
+    baselineVersionId: varchar("baselineVersionId", { length: 96 }).notNull(),
+    candidateVersionId: varchar("candidateVersionId", { length: 96 }).notNull(),
+    datasetHash: varchar("datasetHash", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["reserved", "running", "completed", "failed", "attention_required"]).default("reserved").notNull(),
+    gateStatus: mysqlEnum("gateStatus", ["pending", "passed", "failed"]).default("pending").notNull(),
+    metrics: json("metrics").$type<Record<string, unknown>>(),
+    createdByUserId: int("createdByUserId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    completedAt: timestamp("completedAt"),
+  },
+  (table) => [
+    uniqueIndex("enterprise_rag_regression_request_uq").on(table.createdByUserId, table.clientRequestId),
+    foreignKey({
+      name: "enterprise_rag_regression_proposal_fk",
+      columns: [table.proposalId],
+      foreignColumns: [enterpriseRagOptimizationProposals.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "enterprise_rag_regression_creator_fk",
+      columns: [table.createdByUserId],
+      foreignColumns: [core.users.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+const enterpriseRagRegressionResults = mysqlTable(
+  "enterprise_rag_regression_results",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    runId: varchar("runId", { length: 36 }).notNull(),
+    caseKey: varchar("caseKey", { length: 191 }).notNull(),
+    result: json("result").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("enterprise_rag_regression_results_case_uq").on(table.runId, table.caseKey),
+    foreignKey({
+      name: "enterprise_rag_regression_results_run_fk",
+      columns: [table.runId],
+      foreignColumns: [enterpriseRagRegressionRuns.id],
+    }).onDelete("cascade"),
+  ],
+);
+
+const enterpriseRagReleaseEvents = mysqlTable(
+  "enterprise_rag_release_events",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    channelId: varchar("channelId", { length: 96 }).notNull(),
+    action: mysqlEnum("action", ["canary", "global", "rollback"]).notNull(),
+    clientRequestId: varchar("clientRequestId", { length: 36 }).notNull(),
+    requestHash: varchar("requestHash", { length: 64 }).notNull(),
+    fromVersionId: varchar("fromVersionId", { length: 96 }),
+    toVersionId: varchar("toVersionId", { length: 96 }).notNull(),
+    regressionRunId: varchar("regressionRunId", { length: 36 }),
+    actorUserId: int("actorUserId").notNull(),
+    reason: text("reason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("enterprise_rag_release_events_request_uq").on(table.actorUserId, table.clientRequestId),
+    index("enterprise_rag_release_events_channel_idx").on(table.channelId, table.createdAt),
+    foreignKey({
+      name: "enterprise_rag_release_events_channel_fk",
+      columns: [table.channelId],
+      foreignColumns: [enterpriseRagEvaluationChannels.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "enterprise_rag_release_events_regression_fk",
+      columns: [table.regressionRunId],
+      foreignColumns: [enterpriseRagRegressionRuns.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "enterprise_rag_release_events_actor_fk",
+      columns: [table.actorUserId],
+      foreignColumns: [core.users.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+return { brandIntentWorkspaces, jenovaBrandTrackingCredentials, jenovaBrandTrackingAssignments, jenovaBrandTrackingPolicies, jenovaBrandTrackingSessions, jenovaBrandTrackingTurns, websiteStyleWorkflows, websiteStyleSampleBatches, websiteStyleSamples, workspaceSiteProfiles, workspaceSiteChecks, knowledgeImportReceipts, knowledgeBaseSnapshots, ragStarterQuestionSets, knowledgeBaseBuilds, knowledgeBaseBuildNodes, knowledgeBaseExecutions, knowledgeBaseWorkingSets, knowledgeBaseResetRequests, knowledgeBaseResetStates, knowledgeBaseConversationTombstones, knowledgeBaseConversationRetentionTombstones, knowledgeBaseResetCleanupJobs, siteProjects, siteBuilds, siteBuildInputAssets, siteOperations, visualCandidatePools, visualCandidatePoolPages, visualCandidatePoolItems, siteDeployments, socialPackages, siteProviderConnections, siteDnsRecords, enterpriseProjectSiteProfiles, responseLogicEntries, responseLogicEvaluations, enterpriseRagHumanReviews, enterpriseRagReviewCases, enterpriseRagReviewCaseEvents, enterpriseRagEvaluationVersions, enterpriseRagEvaluationChannels, enterpriseRagOptimizationProposals, enterpriseRagRegressionRuns, enterpriseRagRegressionResults, enterpriseRagReleaseEvents };
 }
 export type BrandSchema = ReturnType<typeof createBrandSchema>;
 
