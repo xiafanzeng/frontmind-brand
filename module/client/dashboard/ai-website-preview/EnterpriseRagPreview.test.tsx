@@ -1750,9 +1750,9 @@ describe("enterprise RAG evidence-based review UI", () => {
     await waitFor(() => expect(liveEnterpriseRagHumanReviewApi.context).toHaveBeenCalledWith("evaluation-operation-1"));
     openReview();
     const reviewer = screen.getByRole("textbox", { name: "评审人" }) as HTMLInputElement;
-    expect(reviewer.value).toBe("评审人甲");
+    await waitFor(() => expect(reviewer.value).toBe("评审人甲"));
     expect(reviewer.readOnly).toBe(true);
-    confirmReview();
+    await act(async () => { confirmReview(); });
     await waitFor(() => expect(liveEnterpriseRagHumanReviewApi.submit).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "人工评审与计算" })).toBeNull());
 
