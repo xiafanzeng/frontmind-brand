@@ -2541,7 +2541,7 @@ describe("rag-eval-1.4 checklist and radar presentation", () => {
     const evidenceRadar = within(evidence.getByTestId("rag-evidence-radar"));
     fireEvent.click(evidenceRadar.getByRole("button", { name: /引用与时效 不适用/ }));
     const citationDetail = within(evidenceRadar.getByRole("region", { name: "引用与时效详情" }));
-    expect(citationDetail.getByText("不适用")).toBeTruthy();
+    expect(citationDetail.getByLabelText("不适用")).toBeTruthy();
     expect(citationDetail.queryByText("待判定")).toBeNull();
   });
 });
