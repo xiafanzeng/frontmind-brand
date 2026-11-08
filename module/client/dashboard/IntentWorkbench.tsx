@@ -149,6 +149,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [evaluationReturnView, setEvaluationReturnView] = useState<"universe" | "list">("list");
   const [pending, setPending] = useState(false);
   const [dismissedCompletionIds, setDismissedCompletionIds] = useState<string[]>([]);
+  const [dismissedFailureId, setDismissedFailureId] = useState<string>();
   const [submittingIds, setSubmittingIds] = useState<string[]>([]);
   const [savingQuestionId, setSavingQuestionId] = useState<string>();
   const [savingDrafts, setSavingDrafts] = useState(false);
@@ -767,7 +768,13 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         openTaskDetails(activeJob.id, "list");
       }}>查看当前任务</button></>}
     </div>}
-    {!pending && !error && view !== "progress" && workspace?.state.jobs?.at(-1)?.status === "failed" && <div className="iw-error" role="alert">{workspace.state.jobs.at(-1)?.error}</div>}
+    {!pending && !error && view !== "progress" && workspace?.state.jobs?.at(-1)?.status === "failed" &&
+      workspace.state.jobs.at(-1)!.id !== dismissedFailureId && <div className="iw-error" role="alert">{workspace.state.jobs.at(-1)!.error}
+      <button disabled={pending} onClick={() => {const failed = workspace.state.jobs?.at(-1);
+        if (!failed) return;
+        if (failed.kind === "plan") void plan(true, failed.questionIds); else void evaluate(failed.questionIds, true);}}>重试本次任务</button>
+      <button disabled={pending} onClick={() => {const failed = workspace.state.jobs?.at(-1);
+        if (failed) setDismissedFailureId(failed.id);}}>知道了</button></div>}
     {retainKeywordPage && <div className="iw-enter" hidden={view !== "universe"}><header className="iw-header iw-universe-header"><div><h1>词条生成</h1></div></header><ManagedKeywordTables {...keywordProps} onUseQuestion={selection => addToCatalog([selection])} onUseQuestions={items => addToCatalog(items)}
       onOptimizationSavingChange={saving => setIntakeFeedback(state => saving ? "saving" : state === "saving" ? null : state)}
       optimizationState={workspace?.state} onViewEvaluation={id => void evaluate([id])}

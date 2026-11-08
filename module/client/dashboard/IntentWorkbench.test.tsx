@@ -1234,3 +1234,34 @@ it("评估完成但旧方案只有待办时，点击生成会真正派发新方�
  await act(async()=>finish(completed));
  expect(await screen.findByRole("textbox",{name:"更新正文修改后"})).toHaveProperty("value","修改后的正文");
 });
+
+it("失败任务横幅显示错误并可关闭，不再遮挡页面",async()=>{
+ const failed=workspace("failed");
+ failed.state.jobs![0].error="模型执行异常，未写入评分；请查看该任务的执行错误后重试";
+ const api:IntentWorkbenchApi={observe:vi.fn(async()=>failed),command:vi.fn(),execute:vi.fn(),rollback:vi.fn()};
+ render(<IntentWorkbench keywordProps={{} as any} api={api}/>);
+ expect(await screen.findByText("模型执行异常，未写入评分；请查看该任务的执行错误后重试")).toBeTruthy();
+ fireEvent.click(screen.getByRole("button",{name:"重新读取"}));
+ fireEvent.click(await screen.findByRole("button",{name:"知道了"}));
+ expect(screen.queryByText("模型执行异常，未写入评分；请查看该任务的执行错误后重试")).toBeNull();
+});
+it("失败任务横幅可一键重试同一组问题",async()=>{
+ const failed=workspace("failed");
+ failed.state.jobs![0].error="模型执行异常，未写入评分；请查看该任务的执行错误后重试";
+ const api:IntentWorkbenchApi={observe:vi.fn(async()=>failed),command:vi.fn(async()=>workspace("running")),
+  execute:vi.fn(),rollback:vi.fn(),waitForJob:vi.fn(()=>new Promise<IntentWorkspace>(()=>{}))};
+ render(<IntentWorkbench keywordProps={{} as any} api={api}/>);
+ fireEvent.click(await screen.findByRole("button",{name:"重新读取"}));
+ fireEvent.click(await screen.findByRole("button",{name:"重试本次任务"}));
+ await waitFor(()=>expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind:"evaluate",questionIds:["q1"]})));
+});
+it("方案失败任务横幅重试派发 plan 而不是评估",async()=>{
+ const failed=workspace("failed","plan");
+ failed.state.jobs![0].error="模型执行异常，未写入评分；请查看该任务的执行错误后重试";
+ const api:IntentWorkbenchApi={observe:vi.fn(async()=>failed),command:vi.fn(async()=>workspace("running","plan")),
+  execute:vi.fn(),rollback:vi.fn(),waitForJob:vi.fn(()=>new Promise<IntentWorkspace>(()=>{}))};
+ render(<IntentWorkbench keywordProps={{} as any} api={api}/>);
+ fireEvent.click(await screen.findByRole("button",{name:"重新读取"}));
+ fireEvent.click(await screen.findByRole("button",{name:"重试本次任务"}));
+ await waitFor(()=>expect(api.command).toHaveBeenCalledWith(expect.objectContaining({kind:"plan",questionIds:["q1"]})));
+});
