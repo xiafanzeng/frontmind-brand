@@ -50,9 +50,19 @@ Copy the application-provided `skillContentHash` byte-for-byte into
 physical SHA-256 of the attached Skill ZIP. Never calculate, replace or infer
 this value.
 
-Do not emit a first-leaf-only response, progress envelope, presentation
-envelope, confirmation question or later-turn instruction. The complete ZIP is
-the sole business result.
+Do not emit a first-leaf-only business result, presentation envelope, confirmation
+question or later-turn instruction. The complete ZIP is the sole business result.
+Separately, emit user-facing progress messages at meaningful stage boundaries,
+source disagreements and completed node batches. Each progress message is a JSON
+object: {"type":"public_progress","title":"中文标题","phase":"reading_knowledge_sources",
+"body":"完整的中文公开说明，可分段","sources":[{"title":"资料名称","url":"公开来源网址"}]}.
+Allowed phase values: reading_knowledge_sources, researching,
+writing_knowledge_nodes, validating_knowledge_output. Describe actual material
+read, supported findings, source dates/scope and observed results. Do not narrate
+private thinking, quote system instructions or include secrets, commands or sandbox
+paths. The application displays these messages only in the execution timeline.
+Do not add new claims or report a planned action as completed. Final output remains
+the one validated ZIP and the exact final sentence below.
 
 Alongside the one validated ZIP, the final response text must be exactly
 `已完成，知识库 ZIP 已附上。`. After sending that attachment and fixed sentence,
@@ -198,104 +208,40 @@ facts. Mark affected research dimensions as gap and use source_limited or
 budget_reached as appropriate. Do not report coverage_complete from search
 snippets or count repeated leaf copies as separately visited official pages.
 
-For new v6 bundles, ordinary leaf bodies target 600–1,200 Chinese characters,
-core product/service/capability leaves target 800–1,800, and branch overviews
-target 1,200–2,500. These are evidence-adaptive drafting targets. Develop the
-supported scope, capabilities, delivery or usage, concrete examples and limits
-as applicable. Do not replace a chapter with a one-paragraph stage summary.
-When the evidence base is one annual report, prefer 30–40 complete business
-themes within the existing 30–115 node contract. Combine related facts instead
-of fragmenting them into many short summaries. The actual count follows the
-evidence and this preference adds no hard node-count restriction. Do not add
-inferences or repetitive prose to meet a character target.
+## Factual Chinese prose and final editing
 
-Write nodes in batches of five to eight, completing and checking each batch
-before moving on. Never use one script to produce a short summary for every node
-in the full package. Freeze each batch's
-source passages, page locators and numeric excerpts before expanding its nodes.
-First make a leaf-specific fact inventory: concrete entities, facts, procedures,
-conditions, examples and boundaries, each paired with its original source
-passage. Write each leaf independently from that inventory. Scripts may package
-already drafted content; never generate node prose through a loop that inserts
-a title or topic into shared template paragraphs. If the inventory cannot
-support the topic, record its concrete gap instead of expanding generic advice.
-Do not shorten every node to fit the entire package into one script or response.
+Write a factual Chinese encyclopedia. Length follows the supported facts: there
+is no minimum character count and no obligation to add uses, advice, cautions,
+limitations or a concluding paragraph to every node. Keep the existing stable
+30–115 leaf tree and combine closely related facts into useful topics.
 
-Treat each declared overview as a customer node with a clear overview title;
-keep its prose distinct from the detailed leaves. Store every body in the
-existing leaf/node contract, without inventing new manifest fields.
+Read the corresponding sources, make a leaf-specific inventory of supported
+facts, then write each complete node independently. Preserve dates, units,
+statistical populations, attribution, real negation and uncertainty. A necessary
+source/date qualification belongs next to the fact, once. Do not infer quality
+from size or make causal claims unsupported by the sources.
 
-Never pad sparse evidence, reuse unrelated facts, manufacture examples or
-repeat a disclaimer to reach a length target. A short, honest node is valid
-when relevant evidence is insufficient. Retain the specific gap in evidence.
+Remove generic reader instructions, “本节点适合用于”, invented objections,
+repeated “不能据此推断”, and blanket “仍应以…为准” disclaimers when they add no
+source-supported information. Do not treat individual words as banned: genuine
+negative facts and material qualifications remain. Never pad a short topic.
+Specific missing facts belong in the evidence coverage record.
 
-Always pass `--expected-skill-version 6` to the initial bundle validator.
-Every newly pinned ordinary node must contain at least 600 effective visible
-body characters. The type-specific drafting targets above remain applicable.
-This minimum is checked even when the writer retained only a short excerpt.
-Shared sentences and continuous text of at least 40 characters appearing in
-at least five nodes and three branches do not count toward body depth. The
-validator strips literal leaf titles, punctuation and layout before comparing
-text, and counts overlapping matches only once. Fewer than 600 remaining
-substantive characters produces BODY_TEMPLATE_REUSED when shared text was
-deducted. Shared enterprise names or facts do not invalidate a node that still
-has sufficient independent content. Move a genuinely shared usage or date disclaimer into the
-package-level explanation. Keep each node's supported facts, explanation,
-examples and boundaries specific to its own subject.
+Write and check complete nodes in batches of five to eight. Scripts may package
+already written content, but must not generate paragraphs by filling a template.
+An overview synthesizes the actual branch facts rather than repeating the leaves.
 
-A truly sparse topic may use a reviewable exception after the corresponding
-source chapter and available official material have been read. Global
-source_limited alone never exempts a node. All of these conditions are required:
+The application runs one separate, tool-disabled Low editorial pass per complete
+node before activation, preserves the source evidence, rebuilds hashes and
+validates the edited package. Your own output must already follow these prose
+rules. Do not launch editorial sessions or change any pinned coordinates yourself.
 
-- researchCoverage.stopReason is source_limited and limitationReason explains
-  the specific exhausted sources and missing material.
-- A researchCoverage.dimensions entry has status gap and explicitly includes
-  this leafId. Preserve the actual gap instead of marking every dimension covered.
-- Append the fixed section below to this node's own hash-bound evidence file.
-  Use its exact leafId, a missing-fact description containing the node title,
-  the sourceUrl from this file's evidenceLedger entry, a concrete page/section
-  locator and a source-specific limitation. Both detail descriptions need at
-  least 20 visible characters. The validator checks declaration completeness,
-  while the saved source remains available for review.
-- Include a short visible paragraph beginning 资料不足： in the node body, with
-  the exact missing-fact description. This notice does not count toward body
-  depth. Preserve the supported facts and avoid speculative padding.
-
-```markdown
-## 节点资料缺口
-节点：<exact leafId>
-缺失事实：<node title and specific missing facts>
-已读来源：<this evidence file's exact sourceUrl>
-已读定位：<printed page and section or table>
-来源局限：<what the read source omits and which relevant source is unavailable>
-```
-
-Keep this section last in the evidence file. It is excluded from source size,
-source reuse and numeric-support checks. Unexplained short nodes produce
-SUBSTANTIVE_BODY_TOO_SHORT. Inserting a leaf title, joining paragraphs, changing
-line breaks or punctuation, or paraphrasing generic disclaimers does not add
-substantive content. Do not use these transformations to evade the correction
-list. Shared text is deducted regardless of paragraph layout. Supply distinct supported facts, process details and applicability for
-each node, or use the documented leaf-specific sparse-evidence exception. Both insufficient depth and repeated templates must
-be fixed together in the single permitted correction pass. If the supported
-material remains inadequate and the exception cannot be established, stop with
-an explicit incomplete result. Previously frozen Skill revisions retain their
-original read contracts.
-
-The same correction list identifies copied or incorrectly shared evidence. Correct that evidence
-from the already captured source passages first, then assess body depth. Do
-not paraphrase a copied evidence file just to evade the independence check.
-
-On that result, perform exactly one concentrated correction pass over the
-listed nodes. Reread their existing evidence files and expand only supported
-content toward the appropriate target. Reuse all valid research and other
-node bodies. Do not repeat web collection, add new model tasks, change IDs,
-delete evidence to evade the check or change unrelated nodes. Update exact
-body hashes and run the same validator again. Its hidden local state file
-records the one-pass budget and must remain outside the output ZIP. Do not
-remove or overwrite that state. `DEPTH_REWRITE_EXHAUSTED` requires stopping
-without submitting an invalid ZIP. Dashboard independently repeats the depth
-check against the server-frozen Skill version and rejects an unrepaired bundle.
+Always pass `--expected-skill-version 6`. The validator checks original evidence,
+numeric support, references, meaningful independent content and repeated templates.
+It does not require expansion to a character target. Fix concrete evidence or
+reference problems in the single allowed correction pass. Do not replace original
+evidence with a rewritten digest or delete it to bypass validation. Previously
+frozen Skill archives retain their original generation instructions.
 
 If a long evidence file is irrelevant, resolve its leaf association during the
 initial evidence review. The correction pass cannot silently remove supporting
@@ -348,13 +294,15 @@ invent sources, facts, images or completeness values.
 - Alongside it, return exactly `已完成，知识库 ZIP 已附上。`, then end the task
   immediately with no later tool call, plan update, prose, confirmation, wait
   or second attachment.
-- Do not return bare JSON, fenced JSON, a prose substitute or a second archive.
+- The final business response must not be bare JSON, fenced JSON, a prose substitute or a second archive. Earlier typed `public_progress` messages remain allowed.
 - Use safe relative POSIX paths; forbid absolute paths, `..`, backslashes,
   symlinks, encrypted entries and undeclared files.
 - Hash every declared file from its exact bytes with lowercase SHA-256.
 - Treat `references/working-set-policy.json` as the machine-readable authority
   for ZIP limits, text-evidence extensions/MIME, hard gates, soft drops and
-  warning codes. Do not duplicate or override those values in prose.
+  warning codes. With `depth.factAdaptive: true`, legacy numeric body-length fields
+  are compatibility metadata, not writing targets or acceptance thresholds.
+  Do not duplicate or override other values in prose.
 - Write `evidence/` as non-empty UTF-8 text using a policy-listed extension
   (`.md`, `.markdown` or `.txt`). Never copy customer PDF,
   Office, image, archive or other binary upload bytes into the result ZIP;

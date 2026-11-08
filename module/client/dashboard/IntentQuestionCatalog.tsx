@@ -1,5 +1,6 @@
 import {type CSSProperties, type ReactNode} from "react";
 import {Search, ChevronRight, ArrowDown, ArrowDownUp} from "lucide-react";
+import {keywordCategoryLabel} from "@frontmind/module-ui/keyword-categories";
 import type {IntentQuestion, IntentEvaluation, IntentSkillJob} from "../../contracts/intent-workbench";
 import type {IntentCatalogSort} from "./intent-catalog-view";
 
@@ -16,8 +17,8 @@ export const answerStatusLabel = (status?: string) => status === "published" ? "
 function CatalogCell({children, secondary}: {children: ReactNode; secondary?: ReactNode}) {
   return <div className="iw-catalog-cell"><div className="iw-catalog-primary">{children}</div><div className={`iw-catalog-secondary${secondary ? "" : " iw-catalog-secondary-empty"}`}>{secondary}</div></div>;
 }
-export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, activeJobs, received, integration, search, sort = "newest", onSort, selected, pending, page, pageCount, savedPlanIds,
-  onSearch, onToggle, onSelectPage, onEvaluate, onViewPlan, onGeneratePlan, onPage, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle}: {
+export default function IntentQuestionCatalog({questions, visible, evaluations, activeJob, activeJobs, received, integration, search, sort = "newest", onSort, selected, pending, page, pageCount, total, savedPlanIds,
+  onSearch, onToggle, onSelectPage, onEvaluate, onViewPlan, onGeneratePlan, onPage, headerStatus, taskFeedback, mutationBlockedIds = [], expandedGaps = [], onGapToggle, category = "all", status = "all", onCategory, onStatus}: {
   questions: IntentQuestion[]; visible: IntentQuestion[]; integration?: IntentCatalogIntegration;
   evaluations: IntentEvaluation[]; activeJob?: IntentSkillJob; activeJobs?: IntentSkillJob[]; received: string[];
   search: string; selected: string[]; pending: boolean;
@@ -30,6 +31,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
   headerStatus?: ReactNode; taskFeedback?: ReactNode;
   mutationBlockedIds?: string[];
   expandedGaps?: string[]; onGapToggle?: (id: string, open: boolean) => void;
+  category?: string; status?: string; onCategory?: (value: string) => void; onStatus?: (value: string) => void;
 }) {
   const jobs = activeJobs ?? (activeJob ? [activeJob] : []);
   const scoreHeader = (field: "value" | "support", label: string) => <th aria-sort={sort === field ? "ascending" : "none"}>
@@ -44,6 +46,10 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
       <div>{headerStatus ? <div className="iw-catalog-title-row"><h1>优化问题</h1>{headerStatus}</div> : <h1>优化问题</h1>}</div>
       <div className="iw-header-tools">
         <label className="iw-search"><Search size={17}/><input aria-label="搜索优化问题" placeholder="搜索问题" value={search} onChange={event => onSearch(event.target.value)}/></label>
+        {integration?.answerStatuses && <>
+          <select aria-label="问题分类" value={category} onChange={event => onCategory?.(event.target.value)}><option value="all">全部类别</option>{[...new Set(questions.map(question => question.category))].map(value => <option key={value} value={value}>{keywordCategoryLabel(value) || value}</option>)}</select>
+          <select aria-label="问题状态" value={status} onChange={event => onStatus?.(event.target.value)}><option value="all">全部状态</option><option value="unevaluated">待评估</option><option value="supported">充分支撑</option><option value="partial">部分支撑</option><option value="missing">未支撑</option><option value="published">已有正式应答</option><option value="pending">待制作应答</option><option value="unknown">暂未同步</option></select>
+        </>}
         {integration?.onAddQuestion && <button className="iw-primary" onClick={integration.onAddQuestion}>新增问题</button>}
       </div>
     </header>
@@ -70,7 +76,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
             onToggle(question.id);
           }}>
         <td><CatalogCell><input type="checkbox" aria-label={`选择${question.question}`} checked={selected.includes(question.id)} onChange={() => onToggle(question.id)}/></CatalogCell></td>
-        <td><CatalogCell><b>{question.question}</b></CatalogCell></td>
+        <td><CatalogCell secondary={integration?.answerStatuses ? answerStatusLabel(integration.answerStatuses[question.id]) : undefined}><b>{question.question}</b></CatalogCell></td>
         <td><CatalogCell>{evaluating ? "评估中…" : evaluation ? <button className={`iw-score-link ${evaluation.value >= 70 ? "hi" : "lo"}`} aria-label={`查看评估：${question.question}`} onClick={() => onEvaluate([question.id])}><span className="iw-score-num"><strong>{evaluation.value}</strong><small>/100</small></span><i className="iw-score-bar" aria-hidden="true"><em style={{width: `${evaluation.value}%`}}/></i></button> : "待评估"}</CatalogCell></td>
         <td><CatalogCell>{evaluating ? "评估中…" : evaluation ? <button className={`iw-score-link ${evaluation.support >= 70 ? "hi" : "lo"}`} aria-label={`查看知识支撑：${question.question}`} onClick={() => onEvaluate([question.id])}><span className="iw-score-num"><strong>{evaluation.support}</strong><small>/100</small></span><i className="iw-score-bar" aria-hidden="true"><em style={{width: `${evaluation.support}%`}}/></i></button> : "待评估"}</CatalogCell></td>
         <td><CatalogCell>{evaluating ? "正在检查知识依据" : !gaps ? "评估后显示" : gaps.length ? <details className="iw-catalog-gaps" open={onGapToggle ? expandedGaps.includes(question.id) : undefined} onToggle={event => onGapToggle?.(question.id, event.currentTarget.open)}>
@@ -87,6 +93,7 @@ export default function IntentQuestionCatalog({questions, visible, evaluations, 
         </div></td>
       </tr>;})}</tbody>
     </table>{!visible.length && <div className="iw-empty">{questions.length ? "没有匹配问题，请调整筛选条件。" : "从推荐问题或已保存词库中选择词条，加入优化清单。"}</div>}</section>
+    {integration?.answerStatuses && <div className="iw-pagination"><span>共 {total} 项</span></div>}
     {pageCount > 1 && <div className="iw-pagination"><button disabled={page === 0} onClick={() => onPage(page - 1)}>上一页</button><span>{page + 1} / {pageCount}</span><button disabled={page + 1 >= pageCount} onClick={() => onPage(page + 1)}>下一页</button></div>}
 
   </>;

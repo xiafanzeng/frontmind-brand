@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { knowledgeProseSaveRecoveryCandidate } from "../contracts/knowledge-prose-recovery.js";
 import { and, asc, eq } from "drizzle-orm";
 import {
   generalExecutionActivity,
   type GeneralExecutionDto,
   type GeneralExecutionEntry,
+  type ExecutionTurnState,
   type BusinessExecutionPhase,
   businessExecutionLabels,
   orderExecutionTimeline,
 } from "@frontmind/module-contracts/execution";
-import type { BrandSchema } from "../schema/index.js";
+import type { BrandSchema, KnowledgeBaseBuild } from "../schema/index.js";
 import type { CoreSqlTable } from "../contracts/sql-table.js";
 import type { ConversationTurn, Message } from "../contracts/core-records.js";
 import type { AnyMySqlTable } from "drizzle-orm/mysql-core";
@@ -29,6 +31,75 @@ let loadGeneralExecutions: KnowledgeExecutionCore["loadGeneralExecutions"];
 export function configureKnowledgeBaseExecutions(core: KnowledgeExecutionCore) { ({ agentEvents, conversationTurns, knowledgeBaseBuilds, messages, getDb, enterpriseOwnerPredicate, loadGeneralExecutions } = core); }
 
 type ManusV2MessageEvent = Record<string, unknown> & {id:string;type:string;timestamp:number;providerOriginalRank?:number};
+
+const record = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+type ExecutionTurn = Pick<ConversationTurn, "id" | "userId" | "buildId" | "buildGeneration" | "expectedRevision" | "upstreamTaskId" | "errorCode" | "status" | "createdAt" | "startedAt" | "completedAt" | "metadata" | "operationType">;
+
+/** The accepted business turn owns completion. A provider idle or a successful
+ * tool result only describes activity inside that turn. */
+export function knowledgeExecutionTurnState(input: {
+  build: KnowledgeBaseBuild;
+  turn: ExecutionTurn;
+  latestTurnId?: string;
+  timeline: readonly GeneralExecutionEntry[];
+  observedAt: number;
+}): ExecutionTurnState {
+  const { build, turn, observedAt } = input;
+  const metadata = turn.metadata ?? {};
+  const prose = record(metadata.proseEditing);
+  const nodes = Object.values(record(prose.nodes)).map(record);
+  const ownsBuild = build.activeTurnId === turn.id || (!build.activeTurnId && input.latestTurnId === turn.id);
+  const phaseEvent = orderExecutionTimeline(input.timeline.filter(entry => entry.turnId === turn.id))
+    .reverse().find(entry => entry.phase || (entry.kind === "status" && entry.publicSummaryPhase));
+  const phase = phaseEvent?.phase ?? (phaseEvent?.kind === "status" ? phaseEvent.publicSummaryPhase : undefined) ?? "researching";
+  const base: ExecutionTurnState = {
+    buildId: build.id,
+    state: "unknown", phase, label: "正在同步状态",
+    startedAt: turn.createdAt.getTime(),
+    observedAt, generation: build.generation, stateEpoch: build.stateEpoch,
+    ...(nodes.length ? { totalNodes: nodes.length, processedNodes: nodes.filter(node => node.state === "ready").length } : {}),
+  };
+  const state = (next: Partial<ExecutionTurnState>): ExecutionTurnState => ({ ...base, ...next });
+  if (ownsBuild && knowledgeProseSaveRecoveryCandidate({build, turn}))
+    return state({ state: "waiting", phase: "saving_knowledge_nodes", label: "内容保存待重试", proseRetryable: true, completedAt: turn.completedAt?.getTime() });
+  if (turn.status === "cancelled") return state({ state: "cancelled", label: "已停止", completedAt: turn.completedAt?.getTime() });
+  if (turn.status === "failed") return state({ state: "failed", label: "执行失败", completedAt: turn.completedAt?.getTime() });
+  if (turn.status === "completed") {
+    if (ownsBuild && ["preparing", "retrying"].includes(build.packageStatus))
+      return state({ state: "running", phase: "publishing_knowledge", label: "正在发布" });
+    if (ownsBuild && build.packageStatus === "attention_required")
+      return state({ state: "waiting", phase: "publishing_knowledge", label: "发布待重试", completedAt: turn.completedAt?.getTime() });
+    if (ownsBuild && build.status === "published" && build.publishedSnapshotId && build.packageStatus === "ready")
+      return state({ state: "completed", phase: "knowledge_published", label: "已发布", completedAt: Math.max(turn.completedAt?.getTime() ?? 0, build.publishedAt?.getTime() ?? 0) || undefined });
+    if (ownsBuild && ["confirming", "ready_to_publish"].includes(build.status))
+      return state({ state: "completed", phase: turn.operationType === "revise" ? "knowledge_revision_saved" : "awaiting_knowledge_review", label: turn.operationType === "revise" ? "修改已保存，待更新" : "已生成，待确认", completedAt: turn.completedAt?.getTime() });
+    return state({ state: "completed", phase: "saving_knowledge_nodes", label: "本轮已保存", completedAt: turn.completedAt?.getTime() });
+  }
+  if (!ownsBuild) return base;
+  if (["AI_BALANCE_PAUSED", "AI_COST_PENDING"].includes(build.protocolErrorCode ?? ""))
+    return state({ state: "waiting", label: build.protocolErrorCode === "AI_BALANCE_PAUSED" ? "等待补充额度" : "等待用量结算" });
+  if (prose.state === "failed") return state({ state: "waiting", phase: "editing_knowledge_prose", label: nodes.some(node => /BALANCE|INSUFFICIENT/i.test(String(node.errorCode ?? ""))) ? "余额不足，充值后继续文字整理" : "文字整理待重试", proseRetryable: true });
+  if (record(metadata.nodeEditRecovery).state === "pending")
+    return state({ state: "waiting", phase: prose.state === "ready" ? "saving_knowledge_nodes" : "editing_knowledge_prose", label: prose.state === "ready" ? "文字已整理，等待恢复保存" : "文字整理结果待确认，正在恢复" });
+  if (nodes.some(node => node.state === "submitted" && Boolean(node.errorCode)))
+    return state({ state: "waiting", phase: "editing_knowledge_prose", label: nodes.some(node => node.state === "submitted" && /UNCERTAIN/.test(String(node.errorCode ?? "")) && !node.sessionId) ? "整理请求结果待确认，正在核对原请求" : "文字整理结果待确认，正在恢复" });
+  if (record(metadata.materializedResultRead).lastErrorKind === "knowledge_prose_pending" && nodes.length > 0 && nodes.every(node => node.state === "ready"))
+    return state({ state: "waiting", phase: "saving_knowledge_nodes", label: "文字已整理，等待恢复保存" });
+  if (["pending", "running"].includes(String(prose.state)))
+    return state({ state: "running", phase: "editing_knowledge_prose", label: "正在整理文字" });
+  if (record(metadata.recovery).nodeEditMode === "low_v1" && prose.state !== "ready")
+    return state({ state: "running", phase: "editing_knowledge_prose", label: "正在整理节点文字" });
+  if (metadata.awaitingClientAttachments === true)
+    return state({ state: "waiting", phase: "uploading", label: "等待资料上传" });
+  const recovery = String(metadata.recoveryAction ?? "");
+  if (["awaiting_input", "top_up", "update_credential", "retry_request", "contact_support"].includes(recovery))
+    return state({ state: "waiting", label: ({ awaiting_input: "等待补充输入", top_up: "等待补充额度", update_credential: "等待更新连接", retry_request: "等待重试", contact_support: "需要处理" } as Record<string, string>)[recovery]! });
+  if (prose.state === "ready" || record(metadata.materializedResultDiagnostics).resultProcessingStage)
+    return state({ state: "running", phase: "validating_knowledge_output", label: "正在校验并保存内容" });
+  if (turn.status === "queued") return state({ state: "running", phase: "dispatching", label: "等待执行" });
+  return state({ state: "running", label: businessExecutionLabels[phase] });
+}
 
 export async function loadCompletedKnowledgeBaseSummaryTurn(input: {
   userId: number;
@@ -112,7 +183,9 @@ export async function persistKnowledgeBaseExecution(input: {
     for (const [index, event] of input.events.entries()) {
       const activity = generalExecutionActivity(event.executionActivity);
       if (!activity) continue;
-      if (input.completedSummaryTaskId && (activity.kind !== "status" || activity.status !== "thinking" || !activity.publicSummarySourceHash)) continue;
+      if (input.completedSummaryTaskId && (activity.kind !== "status" || activity.status !== "thinking" ||
+        (!activity.publicSummarySourceHash && !(activity.publicSummaryOrigin === "provider_native" && activity.publicSummaryProvider === "kimi" &&
+          ["analysis", "operation"].includes(activity.publicSummaryKind ?? ""))))) continue;
       const timestamp = Number(event.timestamp);
       if (!Number.isFinite(timestamp) || timestamp < 0) continue;
       const normalizedPayload = {
@@ -178,11 +251,12 @@ export function collectKnowledgeBaseSummaryTail(input: {
   return work;
 }
 
-/** Recover saved summaries after a Dashboard restart without dispatching inference.
- * Older completed turns receive one read. Only the remaining completion window
- * can restart background reads; explicit historical backfill owns its longer tail. */
+/** Recover saved public records after a Dashboard restart. Kimi may resume its
+ * already journalled translation intents; it never reconstructs private reasoning.
+ * Other providers retain their original, bounded summary completion window. */
 export async function restoreKnowledgeBaseSummaryTail(input: {
   userId: number; buildId: string; generation: number; turnId: string;
+  resumePending?: boolean;
   read: (taskId: string) => Promise<SavedProcessSummaries>;
 }, dependencies: {
   loadTurn?: typeof loadCompletedKnowledgeBaseSummaryTurn;
@@ -198,7 +272,7 @@ export async function restoreKnowledgeBaseSummaryTail(input: {
   const persist = dependencies.persist ?? persistKnowledgeBaseExecution;
   await persist({ ...input, completedSummaryTaskId: taskId, events: saved.events });
   const elapsed = (dependencies.now ?? Date.now)() - Number(turn.completedAt);
-  const remaining = Number.isFinite(elapsed) && elapsed >= 0 ? Math.max(0, 75_000 - elapsed) : 0;
+  const remaining = input.resumePending ? 1_250_000 : Number.isFinite(elapsed) && elapsed >= 0 ? Math.max(0, 75_000 - elapsed) : 0;
   if (saved.pending && remaining > 0) {
     void collectKnowledgeBaseSummaryTail({ ...input, taskId, read, persist, durationMs: remaining });
   }
@@ -212,6 +286,7 @@ export async function loadKnowledgeBaseExecution(input: {
   generation: number;
   phase?: string | null;
   executor?: any;
+  includeFullHistory?: boolean;
 }): Promise<GeneralExecutionDto | undefined> {
   const db = input.executor ?? (await getDb());
   if (!db) return undefined;
@@ -230,6 +305,11 @@ export async function loadKnowledgeBaseExecution(input: {
   const turns = await db
     .select({
       id: conversationTurns.id,
+      userId: conversationTurns.userId,
+      buildId: conversationTurns.buildId,
+      buildGeneration: conversationTurns.buildGeneration,
+      expectedRevision: conversationTurns.expectedRevision,
+      errorCode: conversationTurns.errorCode,
       sequence: messages.sequence,
       messageId: messages.id,
       status: conversationTurns.status,
@@ -238,6 +318,7 @@ export async function loadKnowledgeBaseExecution(input: {
       completedAt: conversationTurns.completedAt,
       upstreamTaskId: conversationTurns.upstreamTaskId,
       metadata: conversationTurns.metadata,
+      operationType: conversationTurns.operationType,
     })
     .from(conversationTurns)
     .innerJoin(
@@ -259,7 +340,14 @@ export async function loadKnowledgeBaseExecution(input: {
   const timeline = execution.timeline.filter((entry) =>
     ownedTurns.has(entry.turnId),
   );
+  const observedAt = Date.now();
+  // Local confirmations are hidden from the execution transcript. Keep the
+  // current build outcome on the latest visible AI turn after confirmation.
+  const latestTurnId = [...turns].reverse().find(turn => turn.operationType !== "local_confirm")?.id;
+  const turnStates: NonNullable<GeneralExecutionDto["turnStates"]> = {};
   for (const turn of turns) {
+    const authority = knowledgeExecutionTurnState({ build, turn, latestTurnId, timeline, observedAt });
+    turnStates[turn.id] = authority;
     const base = {
       turnId: turn.id,
       userMessageId: turn.messageId,
@@ -317,11 +405,11 @@ export async function loadKnowledgeBaseExecution(input: {
         rank: Number.MAX_SAFE_INTEGER,
         kind: "status",
         runId: build.id,
-        ...(turn.status === "completed" ? (turn.metadata?.nativeKnowledgeProvider as { provider?: string } | undefined)?.provider === "tencent_wma"
-          ? { phase: "awaiting_knowledge_review" as const, label: businessExecutionLabels.awaiting_knowledge_review }
-          : { phase: "published" as const, label: businessExecutionLabels.published } : {}),
+        ...(turn.status === "completed" || authority.proseRetryable ? { phase: authority.phase, label: authority.label } : {}),
         status:
-          turn.status === "completed"
+          authority.proseRetryable
+            ? "waiting"
+            : turn.status === "completed"
             ? "ended"
             : turn.status === "cancelled"
               ? "cancelled"
@@ -350,8 +438,21 @@ export async function loadKnowledgeBaseExecution(input: {
       item.finishedAt = Math.max(item.timestamp, next.timestamp);
     }
   }
+  // Long public paragraphs stay intact; the progress poll only transports the
+  // latest bounded window. Authority above was derived from the full turn.
+  const readable = ordered.filter(entry => entry.kind !== "status" || entry.status !== "thinking" || Boolean(entry.publicSummary));
+  const turnHistory: NonNullable<GeneralExecutionDto["turnHistory"]> = {};
+  const retained = new Set<string>();
+  for (const turn of turns) {
+    const entries = readable.filter(entry => entry.turnId === turn.id && entry.kind !== "message");
+    const page = input.includeFullHistory ? entries : entries.slice(-48);
+    for (const entry of page) retained.add(entry.id);
+    turnHistory[turn.id] = {totalEntries:entries.length,hasMore:page.length < entries.length,oldestEntryId:page[0]?.id,
+      pendingPublicRecords:entries.filter(entry => entry.kind === "status" && entry.publicSummaryTranslation === "pending").length};
+  }
   return {
     ...execution,
+    turnStates,
     runId: build.id,
     phase: input.phase ?? undefined,
     coverage:
@@ -360,8 +461,24 @@ export async function loadKnowledgeBaseExecution(input: {
         : timeline.length
           ? "partial"
           : "unavailable",
-    timeline: ordered,
+    timeline: readable.filter(entry => entry.kind === "message" || retained.has(entry.id)),
+    turnHistory,
   };
+}
+
+export async function loadKnowledgeBaseExecutionHistory(input: {
+  userId:number;buildId:string;generation:number;turnId:string;beforeId?:string;
+}) {
+  const execution = await loadKnowledgeBaseExecution({...input,includeFullHistory:true});
+  const authority = execution?.turnStates?.[input.turnId];
+  if (!execution || !authority) return null;
+  const entries = execution.timeline.filter(entry => entry.turnId === input.turnId && entry.kind !== "message");
+  const end = input.beforeId ? entries.findIndex(entry => entry.id === input.beforeId) : entries.length;
+  if (end < 0) throw new Error("EXECUTION_HISTORY_CURSOR_EXPIRED");
+  const start = Math.max(0,end - 48);
+  const page = entries.slice(start,end);
+  return {buildId:input.buildId,turnId:input.turnId,generation:authority.generation,stateEpoch:authority.stateEpoch,
+    entries:page,totalEntries:entries.length,hasMore:start>0,oldestEntryId:page[0]?.id};
 }
 
 /** First occurrence of a real local stage, under the worker's existing lease. */

@@ -279,6 +279,13 @@
 .knowledge-node-workspace__status.is-current { color: var(--knowledge-accent); }
 .knowledge-node-workspace__status.is-needs_verification { color: #8a641e; }
 .knowledge-node-workspace__status.is-pending { color: #667085; }
+.knowledge-node-workspace__draft-source { display: block; color: #667085; font-size: 0.6875rem; line-height: 1.25rem; font-weight: 400; }
+.knowledge-node-workspace__draft-labels { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.knowledge-node-workspace__draft-labels > span { padding: 3px 8px; background: #f4f5f7; border-radius: 5px; color: #667085; font-size: 0.75rem; }
+.knowledge-node-workspace [data-draft-state="ready"] { color: #256b53; }
+.knowledge-node-workspace [data-draft-state="processing"] { color: var(--knowledge-accent); }
+.knowledge-node-workspace [data-draft-state="needs_retry"], .knowledge-node-workspace [data-draft-state="awaiting_confirmation"] { color: #8a641e; }
+.knowledge-node-workspace [data-draft-state="pending"] { color: #667085; }
 .knowledge-node-workspace-drawer {
   width: min(760px, 90vw);
   max-width: none;

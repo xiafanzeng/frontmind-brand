@@ -1,3 +1,4 @@
+import { knowledgeBaseDocumentMaxBytes } from "../contracts/knowledge-base-upload-limits.js";
 import { createHash } from "node:crypto";
 
 import type {KnowledgeCredential as DecryptedCredential} from "./knowledge-http-ports.js";
@@ -19,23 +20,25 @@ import {
   type KnowledgeBaseManusV2AttachmentMapping,
   type KnowledgeBaseRecoveryClaim,
 } from "./knowledge-base-turn-service.js";
-import type {Readable} from "node:stream";
-export interface DashboardAgentClient {fileDetail(id:string):Promise<ManusV2ProviderFileDetail>;uploadFile(input:{filename:string;bytes:Buffer;contentType:string;minimumUsableSeconds:number;confirmationPolicy:"strict"|"kb_frozen_source_advisory"}):Promise<ManusV2CreatedFile & {detail:ManusV2ProviderFileDetail}>;}
+import {Readable} from "node:stream";
+export interface DashboardAgentClient {fileDetail(id:string):Promise<ManusV2ProviderFileDetail>;uploadFile(input:{filename:string;contentType:string;minimumUsableSeconds:number;confirmationPolicy:"strict"|"kb_frozen_source_advisory"} & ({bytes:Buffer;createReadStream?:never;byteLength?:never}|{bytes?:never;createReadStream():Readable;byteLength:number})):Promise<ManusV2CreatedFile & {detail:ManusV2ProviderFileDetail}>;}
 import type {createKnowledgeBaseLocalSourceStore} from "./knowledge-base-local-source-store.js";
 import type {createKnowledgeBaseSkillRuntime} from "./knowledge-base-skill-runtime.js";
 
 export interface KnowledgeAttachmentProviderCore extends Pick<ReturnType<typeof createKnowledgeBaseLocalSourceStore>, "persistKnowledgeBaseBuildSource"|"readKnowledgeBaseLocalSource">,Pick<ReturnType<typeof createKnowledgeBaseSkillRuntime>, "readKnowledgeBasePinnedSkillArchiveAttachment"> {
+ streamKnowledgeBaseLocalSource?: ReturnType<typeof createKnowledgeBaseLocalSourceStore>["streamKnowledgeBaseLocalSource"];
  ManusV2ApiError:new(...args:any[])=>ProviderError;
  createDashboardAgentClient(input:DashboardAgentClientOptions):DashboardAgentClient;
  readStoredPresalesFile(id:string):Promise<{filename:string;mimeType:string;sizeBytes:number;sha256:string|null;createReadStream():Readable}|null>;
 }
 let persistKnowledgeBaseBuildSource: KnowledgeAttachmentProviderCore["persistKnowledgeBaseBuildSource"];
+let streamKnowledgeBaseLocalSource: KnowledgeAttachmentProviderCore["streamKnowledgeBaseLocalSource"];
 let readKnowledgeBaseLocalSource: KnowledgeAttachmentProviderCore["readKnowledgeBaseLocalSource"];
 let readKnowledgeBasePinnedSkillArchiveAttachment: KnowledgeAttachmentProviderCore["readKnowledgeBasePinnedSkillArchiveAttachment"];
 let ManusV2ApiError: KnowledgeAttachmentProviderCore["ManusV2ApiError"];
 let createDashboardAgentClient: KnowledgeAttachmentProviderCore["createDashboardAgentClient"];
 let readStoredPresalesFile: KnowledgeAttachmentProviderCore["readStoredPresalesFile"];
-export function configureKnowledgeBaseAttachmentProvider(core: KnowledgeAttachmentProviderCore) { ({ persistKnowledgeBaseBuildSource, readKnowledgeBaseLocalSource, readKnowledgeBasePinnedSkillArchiveAttachment, ManusV2ApiError, createDashboardAgentClient, readStoredPresalesFile } = core); }
+export function configureKnowledgeBaseAttachmentProvider(core: KnowledgeAttachmentProviderCore) { ({ persistKnowledgeBaseBuildSource, streamKnowledgeBaseLocalSource, readKnowledgeBaseLocalSource, readKnowledgeBasePinnedSkillArchiveAttachment, ManusV2ApiError, createDashboardAgentClient, readStoredPresalesFile } = core); }
 
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -55,7 +58,8 @@ type LocalAttachmentSource = {
   sizeBytes: number;
   filename: string;
   mimeType: string;
-  bytes: Buffer;
+  bytes?: Buffer;
+  createReadStream?: () => Readable;
 };
 
 function localPreparationError(message: string, cause?: unknown) {
@@ -315,6 +319,28 @@ async function customerLocalSource(input: {
       `客户附件“${input.filename}”缺少完整的本地 size/SHA 证明`,
     );
   }
+  if (expectedSize > MAX_SOURCE_BYTES) {
+    const frozenProvider = (input.claim.recoveryMetadata.frozenAgentCredential as { provider?: string } | undefined)?.provider;
+    if (input.claim.turn.operationType !== "start" || frozenProvider !== "zhipu" || expectedSize > knowledgeBaseDocumentMaxBytes(input.filename, expectedMimeType))
+      throw localPreparationError("知识库附件超过冻结提供方允许的大小");
+    if (localStorageKey && streamKnowledgeBaseLocalSource) {
+      const proof = { storageKey: localStorageKey, contentSha256: expectedSha, sizeBytes: expectedSize };
+      const stream = () => Readable.from(streamKnowledgeBaseLocalSource!(proof));
+      for await (const _ of stream()) { /* verify before any provider mutation */ }
+      return { sourceFileId: input.sourceFileId, localStorageKey, contentSha256: expectedSha, sizeBytes: expectedSize,
+        filename: input.filename, mimeType: expectedMimeType, createReadStream: stream };
+    }
+    const stored = await readStoredPresalesFile(input.sourceFileId);
+    if (!stored || stored.sizeBytes !== expectedSize || stored.sha256?.toLowerCase() !== expectedSha)
+      throw localPreparationError("知识库原件的本地字节证明不可用");
+    const retained = await persistKnowledgeBaseBuildSource({ userId: input.claim.turn.userId, buildId: input.claim.turn.buildId,
+      generation: input.claim.turn.buildGeneration, permanentOriginal: true,
+      createReadStream: stored.createReadStream, sizeBytes: expectedSize, contentSha256: expectedSha });
+    if (!streamKnowledgeBaseLocalSource) throw localPreparationError("知识库流式源文件读取不可用");
+    const stream = () => Readable.from(streamKnowledgeBaseLocalSource!({ ...retained }));
+    return { sourceFileId: input.sourceFileId, localStorageKey: retained.storageKey, contentSha256: expectedSha, sizeBytes: expectedSize,
+      filename: input.filename, mimeType: expectedMimeType, createReadStream: stream };
+  }
   let bytes: Buffer;
   if (localStorageKey) {
     try {
@@ -443,7 +469,7 @@ function inlineGeneratedAttachment(input: {
   attachmentIndex: number;
 }): KnowledgeBaseManusV2ResolvedAttachment {
   return {
-    file_data: `data:${input.source.mimeType};base64,${input.source.bytes.toString("base64")}`,
+    file_data: `data:${input.source.mimeType};base64,${input.source.bytes!.toString("base64")}`,
     filename: input.source.filename,
     mime_type: input.source.mimeType,
   };
@@ -1018,7 +1044,9 @@ export async function ensureKnowledgeBaseZhipuMapping(input: {
   try {
     const uploaded = await input.clientForGeneration(generation).uploadFile({
       filename: input.source.filename,
-      bytes: input.source.bytes,
+      ...(input.source.bytes ? { bytes: input.source.bytes } : {
+        createReadStream: input.source.createReadStream!, byteLength: input.source.sizeBytes,
+      }),
       contentType: input.source.mimeType,
       minimumUsableSeconds: ENSURE_MINIMUM_USABLE_SECONDS,
       confirmationPolicy: "kb_frozen_source_advisory",
@@ -1159,7 +1187,7 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
       "FrontMind 附件映射的用户、credential 或 frozen turn 所有权不一致",
     );
   }
-  if (input.credential.provider !== "zhipu" && input.credential.provider !== "xty_codex") {
+  if (input.credential.provider !== "zhipu" && input.credential.provider !== "kimi" && input.credential.provider !== "xty_codex") {
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",
       "请联系管理员完成智能服务配置，重置后重新上传资料并开始新构建",

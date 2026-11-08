@@ -49,12 +49,14 @@ import {
 } from "@frontmind/module-ui/components/ui/sheet";
 import MarkdownRenderer from "@frontmind/module-ui/components/MarkdownRenderer";
 import KnowledgeNodeLocalActions from "./KnowledgeNodeLocalActions";
+import KnowledgeDraftNodeWorkspace from "./KnowledgeDraftNodeWorkspace";
 import "./knowledge-node-workspace.css";
 
 export type KnowledgeNodeEditTarget = {
   leafId: string;
   title: string;
   mode: "direct" | "ai";
+  instruction?: string;
 };
 
 export interface KnowledgeNodeWorkspaceProps {
@@ -126,6 +128,13 @@ export default function KnowledgeNodeWorkspace(
   const effectiveGeneration =
     generation ?? previewDetails?.[0]?.coordinates.generation;
   const sessionKey = `${props.conversationId}:${props.progress?.build.id ?? "empty"}:${effectiveGeneration ?? "unknown"}:${props.resetRevision ?? "unknown"}`;
+  const draftPreview = props.progress?.draftPreview;
+  if (draftPreview && !props.progress?.branches.some((branch) => branch.leaves.length > 0)) {
+    return <KnowledgeDraftNodeWorkspace key={`${sessionKey}:draft:${draftPreview.turnId}`}
+      preview={draftPreview} className={props.className}
+      detailPresentation={props.detailPresentation} detailContainer={props.detailContainer}
+      onDetailsOpenChange={props.onDetailsOpenChange} onNodeOpen={props.onNodeOpen} />;
+  }
   return (
     <KnowledgeNodeWorkspaceSession
       key={sessionKey}
@@ -1333,11 +1342,12 @@ function KnowledgeNodeWorkspaceSession({
                   onBusyChange={setLocalActionPending}
                   onDirtyChange={setImageDirty}
                   onImagesSaved={() => setReload((value) => value + 1)}
-                  onEditTargetSelected={() => {
+                  onEditTargetSelected={(instruction) => {
                     callbacks.current.onEditTargetChange?.({
                       leafId: currentDetails.node.leafId,
                       title: currentDetails.node.title,
                       mode: "ai",
+                      ...(instruction ? { instruction } : {}),
                     });
                     if (!detailContainer && !modalDetails) {
                       returnToComposer.current = true;

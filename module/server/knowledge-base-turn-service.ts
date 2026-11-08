@@ -1,3 +1,7 @@
+import { KNOWLEDGE_NODE_PROSE_HASH, knowledgeProseRetryCorrection } from "../contracts/knowledge-node-prose.js";
+import { knowledgeProseSaveRecoveryCandidate, type CompleteKnowledgeProseCheckpoint } from "../contracts/knowledge-prose-recovery.js";
+import JSZip from "jszip";
+import { ZHIPU_KNOWLEDGE_DOCUMENT_MAX_BYTES, knowledgeBaseDocumentMaxBytes } from "../contracts/knowledge-base-upload-limits.js";
 import { matchesWmaKnowledgeCosSource, type WmaKnowledgeCosSource } from "../contracts/wma-knowledge-upload.js";
 import {knowledgeBaseBuildSkillPinSupported} from "./knowledge-base-tree-policy-rollout.js";
 import { uploadMetadataVersion, projectKnowledgeBaseUploadStatus } from "./knowledge-base-upload-state.js";
@@ -3635,6 +3639,7 @@ export async function reserveKnowledgeBaseTurnInTransaction(
   );
   const traceId = safeKnowledgeBaseTraceId(sanitizedRecovery.traceId);
   const metadata: KnowledgeBaseTurnMetadata = {
+    ...(["start", "revise"].includes(input.operationType) && sanitizedRecovery.nodeEditMode !== "manual_v1" ? { proseEditingPolicy: KNOWLEDGE_NODE_PROSE_HASH } : {}),
     ...(input.operationType === "start" ? { knowledgeWorkbench: {
       schemaVersion: 1, generation: build.generation,
       originalAttachmentManifest: {
@@ -4666,6 +4671,7 @@ type StageKnowledgeBaseDeferredTurnAttachmentInput = {
    * row and deferred turn coordinate are locked by the staging transaction.
    */
   managedUploadBytes?: Buffer;
+  managedUploadStream?: () => Readable;
   /** Host-only proof, checked against the durable verified COS ledger under the turn lock. */
   cosSource?: WmaKnowledgeCosSource;
   /**
@@ -4774,6 +4780,7 @@ export type KnowledgeBaseLocalUploadCoordinateAssertion = {
 
 export type KnowledgeBaseDeferredAttachmentReservationSnapshot = {
   wmaInitial?: boolean;
+  zhipuInitial?: boolean;
   verifiedCosSources?: WmaKnowledgeCosSource[];
   verifiedCosItemIds?: Record<string, string>;
   buildId: string;
@@ -4875,6 +4882,7 @@ export async function inspectKnowledgeBaseDeferredAttachmentReservation(
     return {
       buildId: build.id,
       turn: turnRecord(turn),
+      zhipuInitial: turn.operationType === "start" && (recovery.frozenAgentCredential as any)?.provider === "zhipu",
       wmaInitial: turn.operationType === "start" && (recovery.frozenAgentCredential as any)?.provider === "tencent_wma",
       verifiedCosItemIds: Object.fromEntries(Object.values((metadata as any).wmaDirectUploads ?? {}).flatMap((value: any) =>
         value?.state === "verified" && typeof value.itemId === "string" ? [[value.itemId, value.fileId]] : [])),
@@ -5014,7 +5022,7 @@ export async function assertKnowledgeBaseLocalUploadCoordinate(
   assertInteger(input.expectedResetRevision, "expectedResetRevision", 0);
   assertInteger(input.ordinal, "attachment ordinal", 1);
   assertInteger(input.sizeBytes, "attachment size", 1);
-  if (input.sizeBytes > 100 * 1024 * 1024) {
+  if (input.sizeBytes > ZHIPU_KNOWLEDGE_DOCUMENT_MAX_BYTES) {
     throw new KnowledgeBaseTurnReservationError(
       "INVALID_REQUEST",
       "Attachment size exceeds the local upload limit",
@@ -5127,6 +5135,9 @@ export async function assertKnowledgeBaseLocalUploadCoordinate(
         "The upload coordinate does not match the frozen attachment manifest",
       );
     }
+    const initialZhipu = turn.operationType === "start" && (recovery.frozenAgentCredential as any)?.provider === "zhipu";
+    if (input.sizeBytes > (initialZhipu ? knowledgeBaseDocumentMaxBytes(filename, mimeType) : 100 * 1024 ** 2))
+      throw new KnowledgeBaseTurnReservationError("INVALID_REQUEST", "Attachment exceeds its frozen provider upload limit");
     const rawEntry = clientManifest[input.ordinal - 1];
     const entry =
       rawEntry && typeof rawEntry === "object" && !Array.isArray(rawEntry)
@@ -5660,6 +5671,12 @@ async function prepareKnowledgeBaseDeferredStageRetainedSource(
   // Missing rows fall through: the locked path raises the canonical error.
   if (!turnRow?.buildId || !turnRow.buildGeneration) return undefined;
   const permanentOriginal = turnRow.operationType === "start";
+  if (input.managedUploadStream) {
+    const retained = await persistKnowledgeBaseBuildSource({ userId: input.userId, buildId: turnRow.buildId,
+      generation: turnRow.buildGeneration, permanentOriginal, createReadStream: input.managedUploadStream,
+      sizeBytes: input.managedUploadProof.sizeBytes, contentSha256: input.managedUploadProof.contentSha256 });
+    return { storageKey: retained.storageKey };
+  }
   const originalBytes =
     input.managedUploadBytes !== undefined
       ? input.managedUploadBytes
@@ -7691,6 +7708,31 @@ export async function failKnowledgeNodeEdit(input: { userId: number; turnId: str
     await tx.update(conversationTurns).set({ status: "failed", errorCode: "KNOWLEDGE_NODE_EDIT_FAILED", errorMessage: input.message, completedAt: now, leaseExpiresAt: null, metadata: { ...metadata, dispatchState: "failed", failureClass: "terminal_nonregenerable", recoveryAction: "stopped", canRegenerate: false, nodeEditFailure: true }, updatedAt: now }).where(eq(conversationTurns.id, turn.id));
     await tx.update(knowledgeBaseBuilds).set({ activeTurnId: null, upstreamTaskId: null, awaitingResponseSince: null, stateEpoch: build.stateEpoch + 1, protocolErrorCode: null, protocolError: null, handoffProvenance: { ...(build.handoffProvenance ?? {}), nodeEditFailure: { schemaVersion: 1, stateEpoch: build.stateEpoch + 1, message: input.message, turnId: turn.id, createdAt: now.getTime() } }, updatedAt: now }).where(eq(knowledgeBaseBuilds.id, build.id));
     await markKnowledgeBaseConversationAwaitingInputInTransaction({ tx, userId: input.userId, conversationId: turn.conversationId, authoritativeTaskId: null, updatedAt: now });
+  });
+}
+
+/** Unknown Low editor results retain their exact durable intent/Session. The
+ * ordinary recovery worker may read it again after backoff, never resubmit it. */
+export async function deferKnowledgeNodeEditResult(input: {
+  userId: number; turnId: string; leaseToken: string; lastErrorKind: string;
+}) {
+  const db = await requireDb();
+  return db.transaction(async (tx: any) => {
+    const { turn } = await lockedOwnedTurnAndBuild(tx, input);
+    assertLease(turn, input.leaseToken);
+    const metadata = metadataOf(turn);
+    if (metadata.recovery?.nodeEditMode !== "low_v1" || turn.operationType !== "revise")
+      throw new KnowledgeBaseTurnReservationError("CONFLICT", "当前修改不是 AI 节点编辑");
+    const now = new Date();
+    const previous = metadata.materializedResultRead;
+    const attempt = (Number.isSafeInteger(previous?.attempt) ? previous!.attempt : 0) + 1;
+    const nextRetryAt = new Date(now.getTime() + MATERIALIZED_RESULT_READ_BACKOFF_MS[Math.min(attempt - 1, MATERIALIZED_RESULT_READ_BACKOFF_MS.length - 1)]!);
+    await tx.update(conversationTurns).set({
+      metadata: {...metadata, dispatchState:"recovering", failureClass:"recoverable_same_turn", recoveryAction:"wait", canRegenerate:false,
+        nodeEditRecovery: {state:"pending", sessionId:turn.upstreamTaskId, updatedAt:now.getTime()},
+        materializedResultRead: {firstObservedAt:previous?.firstObservedAt ?? now.toISOString(),attempt,nextRetryAt:nextRetryAt.toISOString(),lastErrorKind:input.lastErrorKind.slice(0,128)},
+      }, leaseExpiresAt:nextRetryAt, updatedAt:now,
+    }).where(eq(conversationTurns.id, turn.id));
   });
 }
 
@@ -11535,6 +11577,7 @@ export async function findRecoverableKnowledgeBaseTurnIds(
         sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${conversationTurns.metadata}, '$.repairKind')), '') = ''`,
         sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${conversationTurns.metadata}, '$.awaitingClientAttachments')), 'false') <> 'true'`,
         sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${conversationTurns.metadata}, '$.manusV2Lifecycle.attentionCode')), '') = ''`,
+        sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${conversationTurns.metadata}, '$.proseEditing.state')), '') <> 'failed'`,
       ),
     )
 
@@ -11874,4 +11917,171 @@ export async function claimKnowledgeBaseTurnForRecovery(
       preparedDispatch: metadata.preparedDispatch ?? null,
     };
   });
+}
+
+/** Prose work shares the build/turn lock and never replaces the collection session. */
+export async function updateKnowledgeBaseProseCheckpoint(input: {
+  userId: number; turnId: string; leaseToken: string;
+  update(current: Record<string, any> | null): Record<string, any>;
+  grants?: Array<{leafId: string; contentSha256: string}>;
+}) {
+  const db = await requireDb();
+  return db.transaction(async (tx: any) => {
+    const {turn, build} = await lockedOwnedTurnAndBuild(tx, input);
+    assertLease(turn, input.leaseToken);
+    const metadata = metadataOf(turn);
+    const next = input.update((metadata.proseEditing as Record<string, any>) ?? null);
+    await tx.update(conversationTurns).set({metadata: {...metadata, proseEditing: next}, updatedAt: new Date()}).where(eq(conversationTurns.id, turn.id));
+    if (input.grants?.length) {
+      const provenance = (build.handoffProvenance ?? {}) as Record<string, any>;
+      const grants: Record<string,string[]> = {...(provenance.proseContentGrants ?? {})};
+      for (const grant of input.grants) {
+        if (!/^[a-f0-9]{64}$/.test(grant.contentSha256)) throw new Error("PROSE_GRANT_INVALID");
+        grants[grant.leafId] = [...new Set([...(grants[grant.leafId] ?? []), grant.contentSha256])];
+      }
+      await tx.update(knowledgeBaseBuilds).set({handoffProvenance: {...provenance, proseContentGrants: grants}, updatedAt: new Date()}).where(eq(knowledgeBaseBuilds.id, build.id));
+    }
+    return next;
+  });
+}
+
+/** Read every immutable proof before reopening a local save. The normal result
+ * pipeline still repeats the complete archive contract before activation. */
+async function assertKnowledgeProseRecoveryArtifacts(input: {
+  tx: any; turn: ConversationTurn; build: KnowledgeBaseBuild; checkpoint: CompleteKnowledgeProseCheckpoint;
+}) {
+  const { tx, turn, build, checkpoint } = input;
+  const source = await readKnowledgeBaseLocalSource(checkpoint.sourceArchive);
+  const zip = await JSZip.loadAsync(source, { checkCRC32: true });
+  const initial = turn.operationType === "start";
+  const manifestFile = zip.file(initial ? "BUNDLE.json" : "PATCH.json");
+  if (!manifestFile) throw new Error("PROSE_RECOVERY_SOURCE_INVALID");
+  const manifest = JSON.parse(await manifestFile.async("string")) as Record<string, any>;
+  if (manifest.buildId !== build.id || manifest.generation !== build.generation || manifest.operationId !== turn.operationKey)
+    throw new Error("PROSE_RECOVERY_SOURCE_COORDINATES_CHANGED");
+  let leaves: Array<{leafId: string; contentPath: string; contentSha256: string}>;
+  if (initial) {
+    if (build.contentVersion !== 0 || manifest.contentVersion !== 1 || manifest.skill?.contentHash !== build.skillContentHash || !Array.isArray(manifest.leaves))
+      throw new Error("PROSE_RECOVERY_SOURCE_VERSION_CHANGED");
+    leaves = manifest.leaves;
+  } else {
+    if (manifest.baseContentVersion !== build.contentVersion || manifest.targetLeafId !== turn.expectedLeafId || !build.activeWorkingSetId)
+      throw new Error("PROSE_RECOVERY_SOURCE_VERSION_CHANGED");
+    const [base] = await tx.select({ hash: knowledgeBaseWorkingSets.packageSha256, status: knowledgeBaseWorkingSets.status })
+      .from(knowledgeBaseWorkingSets).where(and(eq(knowledgeBaseWorkingSets.id, build.activeWorkingSetId),
+        eq(knowledgeBaseWorkingSets.buildId, build.id), eq(knowledgeBaseWorkingSets.generation, build.generation))).limit(1).for("update");
+    if (!base || base.status !== "active" || base.hash !== manifest.baseWorkingSetSha256)
+      throw new Error("PROSE_RECOVERY_SOURCE_VERSION_CHANGED");
+    leaves = [{ leafId: manifest.targetLeafId, contentPath: manifest.contentPath, contentSha256: manifest.contentSha256 }];
+  }
+  if (leaves.length !== Object.keys(checkpoint.nodes).length || new Set(leaves.map(leaf => leaf.leafId)).size !== leaves.length)
+    throw new Error("PROSE_RECOVERY_NODE_SET_CHANGED");
+  const grants = ((build.handoffProvenance ?? {}) as Record<string, any>).proseContentGrants ?? {};
+  for (const leaf of leaves) {
+    const node = checkpoint.nodes[leaf.leafId];
+    const original = zip.file(leaf.contentPath);
+    if (!node || !original || node.inputSha256 !== leaf.contentSha256 ||
+        createHash("sha256").update(await original.async("nodebuffer")).digest("hex") !== node.inputSha256 ||
+        !Array.isArray(grants[leaf.leafId]) || !grants[leaf.leafId].includes(node.output.contentSha256))
+      throw new Error("PROSE_RECOVERY_NODE_PROOF_CHANGED");
+    await readKnowledgeBaseLocalSource(node.output);
+  }
+  if (checkpoint.outputArchive) await readKnowledgeBaseLocalSource(checkpoint.outputArchive);
+}
+
+/** Explicit retry retains the exact collection/Low Sessions and all completed
+ * edits. A local packaging failure restores only the original save authority. */
+export async function retryKnowledgeBaseProse(input: {userId: number; buildId: string; turnId: string}) {
+  const db = await requireDb();
+  return db.transaction(async (tx: any) => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
+    // Match reservation/reset order: project admission -> reset epoch -> build -> turn.
+    const [resetState] = await tx.select({ revision: enterpriseResetStateTable().revision })
+      .from(enterpriseResetStateTable()).where(enterpriseResetStateOwnerPredicate(input.userId)).limit(1).for("update");
+    const {turn, build} = await lockedOwnedTurnAndBuild(tx, input, {allowInactiveTurn:true});
+    if (build.id !== input.buildId || build.userId !== input.userId || build.enterpriseProjectId !== turn.enterpriseProjectId)
+      throw new Error("PROSE_BUILD_MISMATCH");
+    const metadata = metadataOf(turn);
+    assertDeferredResetRevisionCoordinate({turn,metadata,expectedResetRevision:resetState?.revision});
+    if (build.executionMode !== "materialized_bundle_v1" || !knowledgeBaseBuildSkillPinSupported(build) ||
+        build.providerProtocol !== "manus_v2" || metadata.providerProtocol !== "manus_v2" ||
+        metadata.materializedRecoveryContractVersion !== 1 || knowledgeBaseMaterializedRecoveryContractVersion(build) !== 1 ||
+        build.revision !== turn.expectedRevision || metadata.proseEditingPolicy !== KNOWLEDGE_NODE_PROSE_HASH ||
+        metadata.createAttemptState !== "acknowledged" || !turn.upstreamTaskId || build.upstreamTaskId !== turn.upstreamTaskId ||
+        (build.canonicalTaskId !== null && build.canonicalTaskId !== turn.upstreamTaskId) ||
+        (build.activeTurnId !== null && build.activeTurnId !== turn.id))
+      throw new Error("PROSE_RECOVERY_AUTHORITY_CHANGED");
+    const prose = metadata.proseEditing as Record<string, any> | undefined;
+    const saving = knowledgeProseSaveRecoveryCandidate({build,turn});
+    if (!saving && (!prose || prose.state !== "failed")) {
+      if (build.activeTurnId === turn.id && ["queued","running"].includes(turn.status))
+        return {mode:metadata.proseSaveRecovery ? "saving" as const : "editing" as const,alreadyRequested:true};
+      throw new Error("PROSE_RECOVERY_UNAVAILABLE");
+    }
+    if (!saving && (build.activeTurnId !== turn.id || !["queued","running"].includes(turn.status) ||
+        !["researching","confirming"].includes(build.status))) throw new Error("PROSE_RECOVERY_AUTHORITY_CHANGED");
+    const [newer] = await tx.select({id:conversationTurns.id}).from(conversationTurns).where(and(
+      eq(conversationTurns.buildId,build.id),eq(conversationTurns.buildGeneration,build.generation),
+      sql`${conversationTurns.id} <> ${turn.id}`,or(gt(conversationTurns.createdAt,turn.createdAt),eq(conversationTurns.createdAt,turn.createdAt)),
+    )).limit(1).for("update");
+    if (newer) throw new Error("PROSE_RECOVERY_SUPERSEDED");
+    if (saving?.terminal && (metadata.manusV2Lifecycle?.attentionCode !== turn.errorCode ||
+        !materializedResultSettlementIsExact({turn,build,metadata,code:"KNOWLEDGE_BASE_MATERIALIZED_CONTRACT_INVALID"})))
+      throw new Error("PROSE_RECOVERY_AUTHORITY_CHANGED");
+    if (!saving?.terminal && metadata.manusV2Lifecycle?.attentionCode)
+      throw new Error("PROSE_RECOVERY_AUTHORITY_CHANGED");
+    // A failed checkpoint may be observed just before the worker releases its
+    // lease into backoff. Retry may skip that backoff, never steal live work.
+    if (!saving?.terminal && turn.leaseExpiresAt && turn.leaseExpiresAt.getTime() > Date.now() &&
+        !(metadata.materializedResultRead?.lastErrorKind === "knowledge_prose_pending" &&
+          Math.floor(Date.parse(metadata.materializedResultRead.nextRetryAt ?? "") / 1000) === Math.floor(turn.leaseExpiresAt.getTime() / 1000)))
+      throw new Error("PROSE_RECOVERY_BUSY");
+    if (saving) await assertKnowledgeProseRecoveryArtifacts({tx,turn,build,checkpoint:saving.checkpoint});
+    const [conversation] = await tx.select().from(conversations).where(and(
+      eq(conversations.id,turn.conversationId),enterpriseOwnerPredicate(conversations,input.userId),
+    )).limit(1).for("update");
+    if (!conversation || conversation.deletedAt || conversation.projectAssignmentId !== null ||
+        conversation.status === "archived" || conversation.enterpriseProjectId !== build.enterpriseProjectId)
+      throw new Error("PROSE_RECOVERY_CONVERSATION_CHANGED");
+    const now = new Date();
+    const currentProse = prose!;
+    const nodes = Object.fromEntries(Object.entries(currentProse.nodes ?? {}).map(([id, value]) => {
+      const node = value as Record<string, any>;
+      return [id, !saving && node.state === "failed" ? {...node, state:"pending", retryEpoch: Number(node.retryEpoch ?? 0) + 1,
+        correction:knowledgeProseRetryCorrection(node.correction,node.errorCode),errorCode: null} : node];
+    }));
+    const {attentionCode: _attention, ...lifecycle} = metadata.manusV2Lifecycle ?? {};
+    const nextMetadata:KnowledgeBaseTurnMetadata = {
+      ...metadata,...uploadMetadataVersion(metadata,now),leaseOwnerHash:undefined,
+      dispatchState:"recovering",providerAttemptState:"output_pending",failureClass:"recoverable_same_turn",recoveryAction:"wait",canRegenerate:false,
+      manusV2Lifecycle:lifecycle,materializedResultRead:undefined,
+      proseEditing:{...currentProse,nodes,state:saving?(currentProse.outputArchive?"ready":"running"):"pending",finalizationFailure:undefined,updatedAt:now.getTime()},
+      ...(saving ? {proseSaveRecovery:{schemaVersion:1,requestedAt:now.toISOString(),sourceArchiveSha256:saving.checkpoint.sourceArchive.contentSha256,
+        outputArchiveSha256:saving.checkpoint.outputArchive?.contentSha256,previousErrorCode:turn.errorCode,
+        previousFinalizationFailure:currentProse.finalizationFailure}} : {}),
+    };
+    const buildUpdated = await tx.update(knowledgeBaseBuilds).set({
+      activeTurnId:turn.id,status:turn.operationType==="start"?"researching":"confirming",
+      protocolErrorCode:null,protocolError:null,canonicalTaskState:build.canonicalTaskId?"running":"unbound",
+      stateEpoch:build.stateEpoch+1,recoveryLeaseOwnerHash:null,recoveryLeaseExpiresAt:null,awaitingResponseSince:now,updatedAt:now,
+    }).where(and(eq(knowledgeBaseBuilds.id,build.id),enterpriseOwnerPredicate(knowledgeBaseBuilds,input.userId),
+      eq(knowledgeBaseBuilds.generation,build.generation),eq(knowledgeBaseBuilds.stateEpoch,build.stateEpoch),
+      build.activeTurnId===null?isNull(knowledgeBaseBuilds.activeTurnId):eq(knowledgeBaseBuilds.activeTurnId,turn.id)));
+    if (!buildUpdated[0]?.affectedRows) throw new Error("PROSE_RECOVERY_AUTHORITY_CHANGED");
+    const turnUpdated = await tx.update(conversationTurns).set({status:"running",errorCode:null,errorMessage:null,completedAt:null,
+      metadata:nextMetadata,leaseExpiresAt:now,updatedAt:now}).where(and(eq(conversationTurns.id,turn.id),
+      eq(conversationTurns.status,turn.status),eq(conversationTurns.buildId,build.id),eq(conversationTurns.buildGeneration,build.generation)));
+    if (!turnUpdated[0]?.affectedRows) throw new Error("PROSE_RECOVERY_AUTHORITY_CHANGED");
+    const conversationUpdated = await tx.update(conversations).set({status:"running",upstreamTaskId:turn.upstreamTaskId,completedAt:null,
+      version:conversation.version+1,updatedAt:now}).where(and(eq(conversations.id,conversation.id),eq(conversations.version,conversation.version)));
+    if (!conversationUpdated[0]?.affectedRows) throw new Error("PROSE_RECOVERY_CONVERSATION_CHANGED");
+    return {mode:saving?"saving" as const:"editing" as const,alreadyRequested:false};
+  });
+}
+
+export async function knowledgeBaseProsePolicyForTurn(input: {userId:number;turnId:string}) {
+  const db=await requireDb();
+  const [turn]=await db.select({metadata:conversationTurns.metadata}).from(conversationTurns)
+    .where(and(eq(conversationTurns.id,input.turnId),enterpriseOwnerPredicate(conversationTurns,input.userId))).limit(1);
+  return turn?.metadata?.proseEditingPolicy === KNOWLEDGE_NODE_PROSE_HASH;
 }

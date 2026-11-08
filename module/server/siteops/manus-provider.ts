@@ -5268,7 +5268,7 @@ export function nativeSourcePrompt(input: {
 
 frontmind-siteops-source-dossier-v1.json 是唯一事实源；源码 ZIP 是唯一视觉/组件基线，baseSourceSha256=${input.baseSourceSha256}。禁用附件外事实、媒体、依赖及外部资源。
 
-${input.templateCoordinateInstruction ?? ""}
+${input.hasRevisionBaseline ? "" : input.templateCoordinateInstruction ?? ""}
 
 ${input.hasCustomerFeedback ? "客户要求见 frontmind-customer-feedback-v1.json；严守事实/样式边界。" : ""}
 

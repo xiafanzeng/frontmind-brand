@@ -115,6 +115,12 @@ function publicNoticeCreatedAt(value: unknown) {
 }
 
 function publicNotice(value: Record<string, unknown>): Record<string, unknown> {
+  if (value.code === "KNOWLEDGE_PROSE_SAVE_RETRY" && value.recoveryAction === "wait") {
+    return { key: `frontmind-kb:prose-save:${publicNoticeCreatedAt(value.createdAt)}`, code: "KNOWLEDGE_PROSE_SAVE_RETRY",
+      severity: "warning", message: "节点文字已整理完成，保存尚未完成。请在执行过程卡片中重试保存，已整理内容将直接复用。",
+      retryable: false, failureClass: "recoverable_same_turn", recoveryAction: "wait", recoveryToken: null,
+      canRegenerate: false, turnId: null, createdAt: value.createdAt ?? null };
+  }
   if (value.code === "PACKAGE_REBIND_REQUIRED" || ["retry_request", "start_new_generation", "create_new_canonical_from_snapshot", "regenerate_turn", "resume_start_from_retained_sources", "reselect_start_sources"].includes(String(value.recoveryAction))) {
     return { key: `frontmind-kb:reset:${publicNoticeCreatedAt(value.createdAt)}`, code: "FRONTMIND_KB_RESET_REQUIRED",
       severity: "warning", message: "当前任务已失效，请批准重置后重新上传完整资料。", retryable: false,

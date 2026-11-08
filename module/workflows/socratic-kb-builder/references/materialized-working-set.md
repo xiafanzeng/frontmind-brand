@@ -269,4 +269,4 @@ frozen coordinates is invalid.
 
 ## Depth validation
 
-Use the v6 targets and one correction pass in SKILL.md. A server-frozen v6 bundle with at least 1,500 retained evidence characters for a node and fewer than 300 body characters is rejected. Page/query counters are producer declarations. Retained evidence file identities and hashes are verifiable package facts; they do not certify the truth of the source claims.
+Use the fact-adaptive writing rules and one correction pass in SKILL.md. Short factual nodes are accepted; body length alone is not a rejection criterion. Page/query counters are producer declarations. Retained evidence file identities and hashes are verifiable package facts; they do not certify the truth of the source claims.

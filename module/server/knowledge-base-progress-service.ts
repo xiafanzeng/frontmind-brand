@@ -3,7 +3,10 @@ import type {ConversationTurn} from "@frontmind/module-brand/contracts/core-reco
 import type {KnowledgeBaseBuild,KnowledgeBaseBuildNode} from "@frontmind/module-brand/schema";
 import { knowledgeBaseRunPhase, knowledgeBaseHasNormalizingResult } from "../contracts/knowledge-base-upload-state.js";
 import { loadKnowledgeBaseExecution } from "./knowledge-base-execution.js";
+import { knowledgeProseSaveRecoveryCandidate } from "../contracts/knowledge-prose-recovery.js";
 import { createHash, randomUUID } from "node:crypto";
+import { createKnowledgeBaseDraftPreview } from "./knowledge-base-draft-preview.js";
+import type { createKnowledgeBaseLocalSourceStore } from "./knowledge-base-local-source-store.js";
 
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import type {
@@ -103,7 +106,7 @@ import type {createKnowledgeBasePublicResources} from "./knowledge-base-public-r
 import type {createKnowledgeBaseConversationMessages} from "./knowledge-base-conversation-messages.js";
 import type {createKnowledgeBaseAuthoritativeMessages} from "./knowledge-base-authoritative-message.js";
 
-export interface KnowledgeProgressCore extends Pick<ReturnType<typeof createKnowledgeImagePresentation>, "projectKnowledgeImagePresentation">,Pick<ReturnType<typeof createKnowledgeWorkbenchStages>, "knowledgeWorkbenchStart"|"knowledgeWorkbenchStage">,Pick<ReturnType<typeof createKnowledgeBaseSourceLifecycle>, "markKnowledgeBaseBuildSourceGenerationTerminal">,Pick<ReturnType<typeof createKnowledgeBaseMaterializedAssets>, "projectKnowledgeBaseWorkingSetLeafResources"|"readValidatedActiveKnowledgeBaseWorkingSet">,Pick<ReturnType<typeof createKnowledgeBasePublicResources>, "knowledgeBaseOfficialLogoInternalIdentity"|"knowledgeBasePublicResource">,Pick<ReturnType<typeof createKnowledgeBaseConversationMessages>, "markKnowledgeBaseConversationCompletedInTransaction"|"markKnowledgeBaseConversationFailedInTransaction"|"persistKnowledgeBaseCompletionInTransaction"|"persistKnowledgeBasePresentationInTransaction">,Pick<ReturnType<typeof createKnowledgeBaseAuthoritativeMessages>, "matchesAuthoritativeKnowledgeBaseMessageTuple"|"parsedKnowledgeBaseMessageMetadata"> {
+export interface KnowledgeProgressCore extends Pick<ReturnType<typeof createKnowledgeBaseLocalSourceStore>, "readKnowledgeBaseLocalSource">,Pick<ReturnType<typeof createKnowledgeImagePresentation>, "projectKnowledgeImagePresentation">,Pick<ReturnType<typeof createKnowledgeWorkbenchStages>, "knowledgeWorkbenchStart"|"knowledgeWorkbenchStage">,Pick<ReturnType<typeof createKnowledgeBaseSourceLifecycle>, "markKnowledgeBaseBuildSourceGenerationTerminal">,Pick<ReturnType<typeof createKnowledgeBaseMaterializedAssets>, "projectKnowledgeBaseWorkingSetLeafResources"|"readValidatedActiveKnowledgeBaseWorkingSet">,Pick<ReturnType<typeof createKnowledgeBasePublicResources>, "knowledgeBaseOfficialLogoInternalIdentity"|"knowledgeBasePublicResource">,Pick<ReturnType<typeof createKnowledgeBaseConversationMessages>, "markKnowledgeBaseConversationCompletedInTransaction"|"markKnowledgeBaseConversationFailedInTransaction"|"persistKnowledgeBaseCompletionInTransaction"|"persistKnowledgeBasePresentationInTransaction">,Pick<ReturnType<typeof createKnowledgeBaseAuthoritativeMessages>, "matchesAuthoritativeKnowledgeBaseMessageTuple"|"parsedKnowledgeBaseMessageMetadata"> {
  conversations:CoreSqlTable<Conversation>; conversationTurns:CoreSqlTable<ConversationTurn>; messages:CoreSqlTable<Message>;
  knowledgeBaseBuildNodes:BrandSchema["knowledgeBaseBuildNodes"]; knowledgeBaseBuilds:BrandSchema["knowledgeBaseBuilds"]; knowledgeBaseConversationRetentionTombstones:BrandSchema["knowledgeBaseConversationRetentionTombstones"];
  getDb():Promise<MySql2Database<any>|null>; enterpriseOwnerPredicate(table:any,userId:number):SQL;
@@ -137,7 +140,8 @@ let persistKnowledgeBaseCompletionInTransaction: KnowledgeProgressCore["persistK
 let persistKnowledgeBasePresentationInTransaction: KnowledgeProgressCore["persistKnowledgeBasePresentationInTransaction"];
 let matchesAuthoritativeKnowledgeBaseMessageTuple: KnowledgeProgressCore["matchesAuthoritativeKnowledgeBaseMessageTuple"];
 let parsedKnowledgeBaseMessageMetadata: KnowledgeProgressCore["parsedKnowledgeBaseMessageMetadata"];
-export function configureKnowledgeBaseProgress(core: KnowledgeProgressCore) { ({ projectKnowledgeImagePresentation, lockCustomerProjectBusinessWrite, knowledgeWorkbenchStart, knowledgeWorkbenchStage, knowledgeBaseSessionStorageId, enterpriseConversationStoragePrefix, enterpriseOwnerPredicate, conversations, conversationTurns, knowledgeBaseBuildNodes, knowledgeBaseBuilds, knowledgeBaseConversationRetentionTombstones, messages, AuthServiceError, getDb, markKnowledgeBaseBuildSourceGenerationTerminal, projectKnowledgeBaseWorkingSetLeafResources, readValidatedActiveKnowledgeBaseWorkingSet, knowledgeBaseOfficialLogoInternalIdentity, knowledgeBasePublicResource, markKnowledgeBaseConversationCompletedInTransaction, markKnowledgeBaseConversationFailedInTransaction, persistKnowledgeBaseCompletionInTransaction, persistKnowledgeBasePresentationInTransaction, matchesAuthoritativeKnowledgeBaseMessageTuple, parsedKnowledgeBaseMessageMetadata } = core); }
+let loadKnowledgeBaseDraftPreview: ReturnType<typeof createKnowledgeBaseDraftPreview>;
+export function configureKnowledgeBaseProgress(core: KnowledgeProgressCore) { loadKnowledgeBaseDraftPreview = createKnowledgeBaseDraftPreview(core); ({ projectKnowledgeImagePresentation, lockCustomerProjectBusinessWrite, knowledgeWorkbenchStart, knowledgeWorkbenchStage, knowledgeBaseSessionStorageId, enterpriseConversationStoragePrefix, enterpriseOwnerPredicate, conversations, conversationTurns, knowledgeBaseBuildNodes, knowledgeBaseBuilds, knowledgeBaseConversationRetentionTombstones, messages, AuthServiceError, getDb, markKnowledgeBaseBuildSourceGenerationTerminal, projectKnowledgeBaseWorkingSetLeafResources, readValidatedActiveKnowledgeBaseWorkingSet, knowledgeBaseOfficialLogoInternalIdentity, knowledgeBasePublicResource, markKnowledgeBaseConversationCompletedInTransaction, markKnowledgeBaseConversationFailedInTransaction, persistKnowledgeBaseCompletionInTransaction, persistKnowledgeBasePresentationInTransaction, matchesAuthoritativeKnowledgeBaseMessageTuple, parsedKnowledgeBaseMessageMetadata } = core); }
 
 
 export type KnowledgeBaseUserAction =
@@ -1924,6 +1928,8 @@ function knowledgeBaseTaskLifecycleFields(
  */
 export function knowledgeBaseMaterializedBusinessProjection(input: {
   progress: KnowledgeBaseProgressDto;
+  /** Server-proved local save retry; never inferred from Provider status. */
+  proseSaveRetry?: boolean;
   activeTurn?: Pick<
     typeof conversationTurns.$inferSelect,
     "metadata" | "upstreamTaskId" | "completedAt"
@@ -1939,6 +1945,16 @@ export function knowledgeBaseMaterializedBusinessProjection(input: {
   const metadata = isRecord(lifecycleTurn?.metadata)
     ? lifecycleTurn.metadata
     : {};
+  if (input.proseSaveRetry) return {
+    ...progress,
+    build: {...progress.build, protocolError: null},
+    operationState: "normalizing" as const,
+    resetAllowed: false,
+    warningCodes: [...(progress.warningCodes ?? []).filter(code => code !== "FRONTMIND_KB_RESET_REQUIRED"), "KNOWLEDGE_PROSE_SAVE_RETRY"],
+    ...knowledgeBaseTaskLifecycleFields(lifecycleTurn),
+    failureStage: null,
+    settledAt: null,
+  };
   const createAttemptState = metadata.createAttemptState;
   const providerAttemptState = metadata.providerAttemptState;
   const resetRequired =
@@ -2277,11 +2293,7 @@ export async function getKnowledgeBaseProgress(input: {
   }
   const activeRows = build.activeTurnId
     ? await db
-        .select({
-          upstreamTaskId: conversationTurns.upstreamTaskId,
-          metadata: conversationTurns.metadata,
-          completedAt: conversationTurns.completedAt,
-        })
+        .select()
         .from(conversationTurns)
         .where(
           and(
@@ -2296,11 +2308,7 @@ export async function getKnowledgeBaseProgress(input: {
   const terminalRows =
     !build.activeTurnId && progress.operationState === "reset_required"
       ? await db
-          .select({
-            upstreamTaskId: conversationTurns.upstreamTaskId,
-            metadata: conversationTurns.metadata,
-            completedAt: conversationTurns.completedAt,
-          })
+          .select()
           .from(conversationTurns)
           .where(
             and(
@@ -2317,8 +2325,11 @@ export async function getKnowledgeBaseProgress(input: {
           )
           .limit(1)
       : [];
+  const recoveryTurn = activeRows[0] || terminalRows[0];
+  progress.draftPreview = await loadKnowledgeBaseDraftPreview({build, turn: recoveryTurn, hasFormalNodes: progress.branches.some(branch => branch.leaves.length > 0)});
   return knowledgeBaseMaterializedBusinessProjection({
     progress,
+    proseSaveRetry: Boolean(recoveryTurn && knowledgeProseSaveRecoveryCandidate({build,turn:recoveryTurn}) && progress.execution?.turnStates?.[recoveryTurn.id]?.proseRetryable),
     activeTurn: activeRows[0] || null,
     lifecycleTurn: activeRows[0] || terminalRows[0] || null,
   });
@@ -2734,6 +2745,8 @@ async function readKnowledgeBaseObservationProjection(
           )
       : [];
 
+  progress.draftPreview = await loadKnowledgeBaseDraftPreview({build, turn: activeTurnRow || terminalFailedTurnRow, hasFormalNodes: rows.length > 0});
+
   const verifiedBuild = await loadBuild(db, input.userId, conversationId);
   if (
     !verifiedBuild ||
@@ -2940,10 +2953,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     typeof conversationTurns.$inferSelect,
     "id" | "clientRequestId" | "status" | "operationKey" | "operationType"
   > | null;
-  terminalFailedTurnRow: Pick<
-    typeof conversationTurns.$inferSelect,
-    "id" | "metadata" | "upstreamTaskId" | "completedAt" | "updatedAt"
-  > | null;
+  terminalFailedTurnRow: typeof conversationTurns.$inferSelect | null;
   customerUploadResources: KnowledgeBaseApprovedPresentationDto["resources"];
   materializedResources: KnowledgeBaseApprovedPresentationDto["resources"];
   conversationRow: { version: number } | null;
@@ -2986,8 +2996,11 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     !Array.isArray(activeTurnRow.metadata)
       ? (activeTurnRow.metadata as Record<string, unknown>)
       : {};
+  const recoveryTurn = activeTurnRow || terminalFailedTurnRow;
+  const proseSaveRetry = Boolean(recoveryTurn && knowledgeProseSaveRecoveryCandidate({build,turn:recoveryTurn}) && progress.execution?.turnStates?.[recoveryTurn.id]?.proseRetryable);
   const businessProgress = knowledgeBaseMaterializedBusinessProjection({
     progress,
+    proseSaveRetry,
     activeTurn: activeTurnRow,
     lifecycleTurn: activeTurnRow || terminalFailedTurnRow,
   });
@@ -3342,7 +3355,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
       ? knowledgeBasePublicTerminalRecovery(build)
       : null;
   const materializedResultFailureNotice =
-    knowledgeBaseMaterializedResultFailureNotice(build);
+    proseSaveRetry ? null : knowledgeBaseMaterializedResultFailureNotice(build);
 
   let notice: KnowledgeBaseNoticeDto | null = null;
   const activeTraceId =
@@ -3373,6 +3386,14 @@ function projectKnowledgeBaseObservationSnapshot(input: {
       canRegenerate: false,
       turnId: null,
       createdAt: build.updatedAt.getTime(),
+    };
+  } else if (proseSaveRetry) {
+    notice = {
+      key: `${build.id}:${build.generation}:${build.stateEpoch}:prose-save-retry`,
+      code: "KNOWLEDGE_PROSE_SAVE_RETRY", severity: "warning",
+      message: "节点文字已整理完成，保存尚未完成。请在执行过程卡片中重试保存，已整理内容将直接复用。",
+      retryable: false, failureClass: "recoverable_same_turn", recoveryAction: "wait", canRegenerate: false,
+      turnId: recoveryTurn?.id ?? null, createdAt: build.updatedAt.getTime(),
     };
   } else if (materializedResultFailureNotice) {
     notice = materializedResultFailureNotice;

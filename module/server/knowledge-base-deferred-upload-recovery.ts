@@ -1,3 +1,4 @@
+import { knowledgeBaseDocumentMaxBytes } from "../contracts/knowledge-base-upload-limits.js";
 import type {ConversationTurn} from "@frontmind/module-brand/contracts/core-records";
 import type {KnowledgeBaseBuild,KnowledgeBaseBuildNode} from "@frontmind/module-brand/schema";
 import { createHash } from "node:crypto";
@@ -36,7 +37,7 @@ let readStoredPresalesFile: KnowledgeServiceCore["readStoredPresalesFile"];
 export function configureKnowledgeDeferredUploadRecovery(core: KnowledgeServiceCore) { ({ enterpriseAccountOwnerPredicate, localAssets, getDb, readStoredPresalesFile } = core); }
 
 
-const MAX_RECOVERABLE_LOCAL_ASSET_BYTES = 100 * 1024 * 1024;
+const MAX_BUFFERED_RECOVERY_BYTES = 100 * 1024 * 1024;
 
 type FrozenRecoveryManifestItem = KnowledgeBaseClientAttachmentManifestItem & {
   itemId: string;
@@ -66,6 +67,7 @@ type RetainedKnowledgeBaseLocalAsset = {
   localAssetId: string;
   contentSha256: string;
   bytes?: Buffer;
+  createReadStream?: () => Readable;
 };
 
 type ResumeInput = {
@@ -96,8 +98,8 @@ type RetainedAssetFinderDependencies = {
   readStoredFile?: typeof readStoredPresalesFile;
 };
 
-function frozenRecoveryManifest(value: unknown, wmaInitial = false): FrozenRecoveryManifestItem[] {
-  const manifest = normalizeKnowledgeBaseClientAttachmentManifest(value, { wmaInitial });
+function frozenRecoveryManifest(value: unknown, wmaInitial = false, zhipuInitial = false): FrozenRecoveryManifestItem[] {
+  const manifest = normalizeKnowledgeBaseClientAttachmentManifest(value, { wmaInitial, zhipuInitial });
   if (
     manifest.some(
       (item, index) =>
@@ -223,13 +225,13 @@ export async function findRetainedKnowledgeBaseLocalAsset(
     );
   }
 
-  const chunks: Buffer[] | null = input.includeBytes === false ? null : [];
+  const chunks: Buffer[] | null = input.includeBytes === false || input.sizeBytes > MAX_BUFFERED_RECOVERY_BYTES ? null : [];
   const hash = createHash("sha256");
   let total = 0;
   for await (const chunk of stored.createReadStream()) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += bytes.length;
-    if (total > input.sizeBytes || total > MAX_RECOVERABLE_LOCAL_ASSET_BYTES) {
+    if (total > input.sizeBytes || total > knowledgeBaseDocumentMaxBytes(input.filename, input.mimeType)) {
       throw new KnowledgeBaseTurnReservationError(
         "CONFLICT",
         `附件“${input.filename}”未通过 Dashboard 本地字节校验`,
@@ -253,7 +255,7 @@ export async function findRetainedKnowledgeBaseLocalAsset(
   return {
     localAssetId: asset.id,
     contentSha256,
-    ...(chunks ? { bytes: Buffer.concat(chunks, total) } : {}),
+    ...(chunks ? { bytes: Buffer.concat(chunks, total) } : input.includeBytes !== false ? { createReadStream: stored.createReadStream } : {}),
   };
 }
 
@@ -291,7 +293,7 @@ export async function resumeKnowledgeBaseDeferredTurnAttachments(
     conversationId: input.conversationId,
   });
   const attachmentManifest = frozenRecoveryManifest(
-    snapshot.clientAttachmentManifest, snapshot.wmaInitial,
+    snapshot.clientAttachmentManifest, snapshot.wmaInitial, snapshot.zhipuInitial,
   );
   let finalTurn: KnowledgeBaseTurnRecord = snapshot.turn;
   const initialStagedCount = snapshot.turn.stagedUserAttachmentCount;
@@ -329,7 +331,7 @@ export async function resumeKnowledgeBaseDeferredTurnAttachments(
           sizeBytes: item.sizeBytes, contentSha256: remote.sha256 } });
       continue;
     }
-    if (item.sizeBytes > MAX_RECOVERABLE_LOCAL_ASSET_BYTES) {
+    if (item.sizeBytes > knowledgeBaseDocumentMaxBytes(item.filename, item.mimeType)) {
       missingCustomerAttachments.push(missingDescriptor(item)); contiguousPrefixRetained = false; continue;
     }
     const coordinate: KnowledgeBaseLocalUploadCoordinate = {
@@ -366,7 +368,7 @@ export async function resumeKnowledgeBaseDeferredTurnAttachments(
     // After the first true gap, hash later retained assets for the status
     // response but do not materialize their bodies or stage past the gap.
     if (!contiguousPrefixRetained) continue;
-    if (!retained.bytes) {
+    if (!retained.bytes && !retained.createReadStream) {
       throw new KnowledgeBaseTurnReservationError(
         "CONFLICT",
         `附件“${item.filename}”的 Dashboard 本地字节不可读`,
@@ -417,6 +419,7 @@ export async function resumeKnowledgeBaseDeferredTurnAttachments(
         contentSha256: retained.contentSha256,
       },
       managedUploadBytes: retained.bytes,
+      managedUploadStream: retained.createReadStream,
       projectAssignmentId: input.projectAssignmentId,
     });
   }

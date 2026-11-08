@@ -180,6 +180,8 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   const [index, setIndex] = useState(0);
   const [singleQueue, setSingleQueue] = useState<string[]>([]);
   const [search, setSearch] = useState(initialCatalogState?.search ?? "");
+  const [category, setCategory] = useState("all");
+  const [answerStatus, setAnswerStatus] = useState("all");
   const [sort, setSort] = useState<IntentCatalogSort>(initialCatalogState?.sort ?? "newest");
   const [page, setPage] = useState(initialCatalogState?.page ?? 0);
   const [expandedGaps, setExpandedGaps] = useState<string[]>(initialCatalogState?.expandedGaps ?? []);
@@ -460,7 +462,16 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
   // The ledger appends newly added questions; reverse that order for newest first.
   const newestOrder = new Map(questions.map((question, position) => [question.id, position]));
   const scoreByQuestion = new Map(evaluations.map(item => [item.questionId, item]));
-  const filtered = questions.filter(question => question.question.toLowerCase().includes(search.toLowerCase()))
+  const filtered = questions.filter(question => {
+    if (!question.question.toLowerCase().includes(search.toLowerCase())) return false;
+    if (!catalogIntegration?.answerStatuses) return true;
+    if (category !== "all" && question.category !== category) return false;
+    if (answerStatus === "all") return true;
+    const evaluation = evaluations.find(item => item.questionId === question.id);
+    if (answerStatus === "unevaluated") return !evaluation;
+    if (["supported", "partial", "missing"].includes(answerStatus)) return Boolean(evaluation && (evaluation.support >= 80 ? "supported" : evaluation.support >= 50 ? "partial" : "missing") === answerStatus);
+    return (catalogIntegration.answerStatuses[question.id] ?? "unknown") === answerStatus;
+  })
     .sort((a, b) => {
       const newestFirst = newestOrder.get(b.id)! - newestOrder.get(a.id)!;
       if (sort === "newest") return newestFirst;
@@ -912,6 +923,7 @@ export default function IntentWorkbench({keywordProps, initialView = "universe",
         search={search} sort={sort} onSort={value => {setSort(value); setPage(0);}} selected={selected} pending={pending && !pendingRead}
         mutationBlockedIds={savingQuestionId ? [savingQuestionId] : []}
         page={currentPage} pageCount={pageCount} total={filtered.length}
+        category={category} status={answerStatus} onCategory={value => {setCategory(value);setPage(0);}} onStatus={value => {setAnswerStatus(value);setPage(0);}}
         onSearch={value => {setSearch(value); setPage(0);}}
         onToggle={toggle} onClear={() => setSelected([])} onEvaluate={ids => void evaluate(ids)} onPage={setPage}
         onSelectPage={checked => setSelected(ids => checked ? [...new Set([...ids, ...visible.map(item => item.id)])] : ids.filter(id => !visible.some(item => item.id === id)))}/>

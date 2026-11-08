@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ImageIcon, Pencil } from "lucide-react";
+import { ImageIcon, Pencil, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import {
   captureWorkspaceRestOperation,
@@ -86,7 +86,7 @@ export interface KnowledgeNodeLocalActionsProps {
   editDisabled?: boolean;
   imagesDisabled?: boolean;
   editLabel?: string;
-  onEditTargetSelected?: () => void;
+  onEditTargetSelected?: (instruction?: string) => void;
   onImagesSaved?: () => void;
   onBusyChange?: (busy: boolean) => void;
   onDirtyChange?: (dirty: boolean) => void;
@@ -206,7 +206,7 @@ function KnowledgeNodeLocalActionsInner({
       throw new Error("节点版本已变化，请重新读取后再修改");
     return result.observation as KnowledgeBaseObservationDto;
   };
-  const edit = async () => {
+  const edit = async (polish = false) => {
     if (editDisabled) return;
     const rest = beginOperation();
     if (!rest) return;
@@ -215,8 +215,8 @@ function KnowledgeNodeLocalActionsInner({
         rest,
         await selectNode(rest, await readLibrary(rest), crypto.randomUUID()),
       );
-      onEditTargetSelected?.();
-      toast.success("已选择该节点，请填写本次修改要求");
+      onEditTargetSelected?.(polish ? "整理当前节点的文字：按客观知识条目直接陈述已有事实，删除重复的用途建议、泛化提醒、自我辩护和空泛收尾，保留真实否定、年份、统计口径、数字、专名和引用。不添加新事实，不为字数补写内容。返回整理后的完整节点。" : undefined);
+      toast.success(polish ? "已选择文字整理，可在对话中发送" : "已选择该节点，请填写本次修改要求");
     } catch (error) {
       if (!rest.signal.aborted)
         toast.error(error instanceof Error ? error.message : "无法选择节点");
@@ -439,6 +439,15 @@ function KnowledgeNodeLocalActionsInner({
         >
           <Pencil className="mr-1 h-3.5 w-3.5" />
           {editLabel}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void edit(true)}
+          disabled={disabled || editDisabled || busy}
+        >
+          <Sparkles className="mr-1 h-3.5 w-3.5" />
+          整理文字
         </Button>
         <Button
           ref={imageButton}

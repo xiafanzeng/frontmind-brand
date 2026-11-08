@@ -202,6 +202,27 @@ export interface KnowledgeBaseProgressBranchDto {
   leaves: KnowledgeBaseProgressLeafDto[];
 }
 
+/** Read-only retained output; never contributes to official review/publication. */
+export interface KnowledgeBaseDraftLeafDto {
+  id: string;
+  title: string;
+  branchId: string;
+  branchTitle: string;
+  ordinal: number;
+  contentMarkdown: string;
+  contentSource: "original" | "edited";
+  editingState: "pending" | "processing" | "ready" | "needs_retry" | "awaiting_confirmation";
+}
+
+export interface KnowledgeBaseDraftPreviewDto {
+  status: "available" | "unavailable";
+  turnId: string;
+  updatedAt: number;
+  totalNodes: number;
+  processedNodes: number;
+  branches: Array<{ id: string; title: string; leaves: KnowledgeBaseDraftLeafDto[] }>;
+}
+
 export interface KnowledgeBaseProgressSummaryDto {
   total: number;
   handled: number;
@@ -274,6 +295,8 @@ export interface KnowledgeBaseResultQualityDto {
 
 export interface KnowledgeBaseProgressDto {
   execution?: GeneralExecutionDto;
+  /** Initial validated bundle while prose editing/final activation is pending. */
+  draftPreview?: KnowledgeBaseDraftPreviewDto;
   workbench?: { generation: number; stateEpoch: number; phase: "initial" | "editing"; acceptedAt: string | null; legacyPublished: boolean };
   build: {
     id: string;

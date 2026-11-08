@@ -479,6 +479,9 @@ export default function ManagedKeywordTables({
               </div>
             )}
           </div>
+          <p className="keyword-filter-summary" role="status">
+            当前显示 {visibleTables.reduce((count, table) => count + table.rows.length, 0)} 条
+          </p>
           <div className="saas-content-area">
             {displayTables.map((table) => {
               const tableQuestionColumnIndex = questionColumnIndex(

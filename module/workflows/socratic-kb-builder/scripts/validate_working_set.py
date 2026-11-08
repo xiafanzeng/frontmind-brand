@@ -349,11 +349,11 @@ def depth_issues(archive: zipfile.ZipFile, manifest: dict, skill_version: str) -
             effective = (leaf_fragments["characters"] if leaf_fragments else sum(len(paragraph) for paragraph in leaf_paragraphs)) - template
             substantive_issue = {**issue, "minimumBodyCharacters": substance["minimumBodyCharacters"],
                                  "effectiveBodyCharacters": effective, "templateCharacters": template}
-            if template and (not leaf_fragments or effective < substance["minimumBodyCharacters"]):
+            if template and (effective <= 0 if policy.get("factAdaptive") else (not leaf_fragments or effective < substance["minimumBodyCharacters"])):
                 issues.append({**substantive_issue, "reason": "BODY_TEMPLATE_REUSED"})
-            elif effective < substance["minimumBodyCharacters"] and not has_sparse_evidence_exception(manifest, leaf, unique, evidence_sources, markdown):
+            elif not policy.get("factAdaptive") and effective < substance["minimumBodyCharacters"] and not has_sparse_evidence_exception(manifest, leaf, unique, evidence_sources, markdown):
                 issues.append({**substantive_issue, "reason": "SUBSTANTIVE_BODY_TOO_SHORT"})
-        elif evidence >= policy["evidenceThreshold"] and body < minimum:
+        elif not policy.get("factAdaptive") and evidence >= policy["evidenceThreshold"] and body < minimum:
             issues.append(issue)
     return issues
 

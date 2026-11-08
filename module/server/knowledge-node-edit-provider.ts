@@ -64,7 +64,7 @@ export async function findKnowledgeNodeEditorResources(
     .where(
       and(
         eq(agentOperations.scope, "managed_user"),
-        eq(agentOperations.provider, "zhipu"),
+        eq(agentOperations.provider, identity.provider),
         eq(agentOperations.accountUserId, identity.accountUserId),
         eq(agentOperations.apiCredentialId, identity.credentialId),
         eq(agentOperations.credentialVersion, identity.credentialVersion),
@@ -80,6 +80,7 @@ export async function findKnowledgeNodeEditorResources(
       | undefined;
     if (
       runtime?.revision === 1 &&
+      !runtime.sharedDefinitions &&
       runtime.model === "glm-5.3" &&
       runtime.effort === "low" &&
       runtime.agentId &&
@@ -102,6 +103,16 @@ function eventText(value: unknown): string {
     : "";
 }
 
+/** Unknown outcomes remain bound to the original intent and Session. */
+export function isKnowledgeNodeEditPending(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as {message?:string;code?:string;outcomeUnknown?:boolean};
+  return candidate.outcomeUnknown === true || /UNCERTAIN|TIMEOUT|PENDING/.test(`${candidate.code ?? ""} ${candidate.message ?? ""}`);
+}
+function pendingError(message: "KNOWLEDGE_NODE_EDIT_SEND_UNCERTAIN" | "KNOWLEDGE_NODE_EDIT_PENDING", cause?: unknown) {
+  return Object.assign(new Error(message), { code: message, cause });
+}
+
 /** A fresh, text-only Low session. Every POST is journalled before send, and
  * uncertain mutations are never replayed or upgraded to another model. */
 export class KnowledgeNodeEditProvider {
@@ -119,10 +130,22 @@ export class KnowledgeNodeEditProvider {
       pollMs?: number;
       deadlineMs?: number;
       reusableResources?: { agentId: string; environmentId: string } | null;
+      sharedDefinitions?: { agentId: string; environmentId: string };
     },
   ) {
     this.api = options.api;
     this.store = options.store ?? dashboardAgentRuntimeStore;
+  }
+  private async read<T>(action: () => Promise<T>): Promise<T> {
+    try { return await action(); }
+    catch (error) {
+      const failure = error as { status?: number | null; outcomeUnknown?: boolean; code?: string };
+      if (isKnowledgeNodeEditPending(error) || failure?.status === null ||
+        [408, 425, 429].includes(failure?.status ?? 0) || (failure?.status ?? 0) >= 500 ||
+        /ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|NETWORK|FETCH_FAILED/.test(failure?.code ?? ""))
+        throw pendingError("KNOWLEDGE_NODE_EDIT_PENDING", error);
+      throw error;
+    }
   }
   private async once(
     record: DashboardRuntimeRecord,
@@ -162,7 +185,8 @@ export class KnowledgeNodeEditProvider {
     );
     const old = record.runtime.mutations[key]!;
     if (old.state === "acknowledged" && old.resourceId) return old.resourceId;
-    if (!permission) throw new Error("KNOWLEDGE_NODE_EDIT_SEND_UNCERTAIN");
+    if (old.state === "rejected") throw new Error("KNOWLEDGE_NODE_EDIT_REQUEST_REJECTED");
+    if (!permission) throw pendingError("KNOWLEDGE_NODE_EDIT_SEND_UNCERTAIN");
     try {
       const resourceId = await action();
       await this.store.mutate(
@@ -200,7 +224,13 @@ export class KnowledgeNodeEditProvider {
             },
           },
         }),
-      );
+      ).catch(persistenceError => {
+        // The pre-send journal still fences this request when storing its
+        // acknowledgement fails. Preserve that uncertainty for recovery.
+        if (!rejected) throw pendingError("KNOWLEDGE_NODE_EDIT_SEND_UNCERTAIN", persistenceError);
+        throw error;
+      });
+      if (!rejected) throw pendingError("KNOWLEDGE_NODE_EDIT_SEND_UNCERTAIN", error);
       throw error;
     }
   }
@@ -208,22 +238,32 @@ export class KnowledgeNodeEditProvider {
     intentId: string;
     prompt: string;
     onSession: (sessionId: string) => Promise<void>;
+    context?: NonNullable<DashboardManagedRuntime["editorContext"]>;
   }) {
+    const model = this.options.identity.provider === "kimi" ? { id: "kimi-k3.1-pro", effort: "low" } : KNOWLEDGE_NODE_EDIT_MODEL;
     const record = await this.store.reserve({
       identity: this.options.identity,
       intentId: input.intentId,
-      model: KNOWLEDGE_NODE_EDIT_MODEL.id,
+      model: model.id,
       effort: "low",
     });
+    // Freeze purpose and parent attribution alongside the same mutation journal.
+    // An existing Session cannot acquire a different billing/business identity.
+    if (input.context) record.runtime = (await this.store.mutate(this.options.identity, record.localTaskId, runtime => {
+      if (runtime.editorContext && (["purpose","parentTurnId","nodeId","policyHash"] as const).some(key => runtime.editorContext![key] !== input.context![key]))
+        throw new Error("KNOWLEDGE_NODE_EDIT_CONTEXT_CONFLICT");
+      return runtime.editorContext ? runtime : {...runtime, editorContext: input.context};
+    })).runtime;
+    const context = record.runtime.editorContext;
     const agentBody = {
       name: `FrontMind node editor ${record.operationId}`,
-      model: KNOWLEDGE_NODE_EDIT_MODEL,
+      model,
       system: KNOWLEDGE_NODE_EDIT_SYSTEM,
       tools: [],
       skills: [],
       mcp_servers: [],
     };
-    const reusable = this.options.reusableResources;
+    const reusable = this.options.sharedDefinitions ?? this.options.reusableResources;
     if (
       reusable &&
       !record.runtime.agentId &&
@@ -235,10 +275,11 @@ export class KnowledgeNodeEditProvider {
         await this.store.mutate(
           this.options.identity,
           record.localTaskId,
-          (runtime) => ({
+          (runtime) => runtime.agentId || runtime.environmentId || runtime.mutations.agent || runtime.mutations.environment ? runtime : ({
             ...runtime,
             agentId: reusable.agentId,
             environmentId: reusable.environmentId,
+            ...(this.options.sharedDefinitions ? { sharedDefinitions: true as const } : {}),
           }),
         )
       ).runtime;
@@ -278,9 +319,12 @@ export class KnowledgeNodeEditProvider {
         (runtime, id) => ({ ...runtime, environmentId: id }),
       ));
     const sessionBody = {
-      agent: { type: "agent", id: agentId, version: 1 },
+      agent: record.runtime.sharedDefinitions ? {
+        type: "agent_with_overrides", id: agentId, model: agentBody.model, system: agentBody.system,
+        tools: [], skills: [], mcp_servers: [],
+      } : { type: "agent", id: agentId, version: 1 },
       environment_id: environmentId,
-      title: "知识节点文字修改 · Low",
+      title: context?.purpose === "node_prose" ? "知识节点文字整理" : context?.purpose === "progress_translation" ? "公开进展中文整理" : "知识节点文字修改",
       metadata: {
         frontmind_operation: record.operationId,
         frontmind_node_edit: "low_v1",
@@ -330,10 +374,10 @@ export class KnowledgeNodeEditProvider {
     );
     if (!current.runtime.commands[0]!.eventId) {
       // A lost send acknowledgement is reconciled by its exact text hash.
-      const events = await this.api.listAll(
+      const events = await this.read(() => this.api.listAll(
         `/v1/sessions/${sessionId}/events`,
         { order: "asc" },
-      );
+      ));
       const matches = events.filter(
         (event) =>
           event.type === "user.message" &&
@@ -352,7 +396,7 @@ export class KnowledgeNodeEditProvider {
             operationId: record.operationId,
             sessionId,
             commandKey,
-            model: "glm-5.3",
+            model: model.id,
             effort: "low",
           });
         try {
@@ -381,11 +425,7 @@ export class KnowledgeNodeEditProvider {
           // Reconciliation below may still see an acknowledged event after a
           // transport failure. It never sends the command a second time.
           if (
-            !(error instanceof ZhipuManagedError && error.outcomeUnknown) &&
-            !(
-              error instanceof Error &&
-              error.message === "KNOWLEDGE_NODE_EDIT_SEND_UNCERTAIN"
-            )
+            !isKnowledgeNodeEditPending(error)
           )
             throw error;
         }
@@ -405,10 +445,10 @@ export class KnowledgeNodeEditProvider {
     }
     const deadline = Date.now() + (this.options.deadlineMs ?? 10 * 60_000);
     do {
-      const [session, events] = await Promise.all([
+      const [session, events] = await this.read(() => Promise.all([
         this.api.request("GET", `/v1/sessions/${sessionId}`),
         this.api.listAll(`/v1/sessions/${sessionId}/events`, { order: "asc" }),
-      ]);
+      ]));
       const accepted = events.filter(
         (event) =>
           event.type === "user.message" &&
@@ -435,7 +475,7 @@ export class KnowledgeNodeEditProvider {
         localTaskId: record.localTaskId,
         operationId: record.operationId,
         sessionId,
-        model: "glm-5.3",
+        model: model.id,
         commands: current.runtime.commands,
         events,
         session,
@@ -468,16 +508,34 @@ export class KnowledgeNodeEditProvider {
               .slice(sentAt + 1)
               .filter((event) => event.type === "agent.message")
           : [];
-      if (events.some((event) => event.type === "session.error"))
+      if (this.options.identity.provider !== "kimi" && events.some((event) => event.type === "session.error"))
         throw new Error("KNOWLEDGE_NODE_EDIT_PROVIDER_FAILED");
+      if (this.options.identity.provider === "kimi" && session.status === "idle") {
+        const lifecycle = sentAt < 0 ? undefined : [...events.slice(sentAt + 1)].reverse()
+          .find(event => String(event.type).startsWith("session.status_"));
+        const reason = lifecycle?.stop_reason as {type?:string} | undefined;
+        if (lifecycle?.type !== "session.status_idle" || !reason?.type)
+          throw pendingError("KNOWLEDGE_NODE_EDIT_PENDING");
+        if (["interrupted", "user_interrupt", "canceled", "cancelled"].includes(reason.type))
+          throw new Error("KNOWLEDGE_NODE_EDIT_TERMINATED");
+        if (reason.type === "requires_action")
+          throw new Error("KNOWLEDGE_NODE_EDIT_TOOLS_FORBIDDEN");
+        if (["error", "failed", "provider_error"].includes(reason.type))
+          throw new Error("KNOWLEDGE_NODE_EDIT_PROVIDER_FAILED");
+        if (["max_tokens", "max_output_tokens", "token_limit", "length"].includes(reason.type))
+          throw new Error("KNOWLEDGE_NODE_EDIT_OUTPUT_INVALID");
+        if (reason.type !== "end_turn")
+          throw pendingError("KNOWLEDGE_NODE_EDIT_PENDING");
+      }
       if (session.status === "idle" && output.length) {
         if (output.length !== 1)
           throw new Error("KNOWLEDGE_NODE_EDIT_OUTPUT_INVALID");
+        let contentMarkdown: string;
+        try { contentMarkdown = parseKnowledgeNodeEditOutput(eventText(output[0]!.content)); }
+        catch (cause) { throw Object.assign(new Error("KNOWLEDGE_NODE_EDIT_OUTPUT_INVALID"), {cause}); }
         return {
           sessionId,
-          contentMarkdown: parseKnowledgeNodeEditOutput(
-            eventText(output[0]!.content),
-          ),
+          contentMarkdown,
         };
       }
       if (session.status === "terminated")
@@ -486,12 +544,8 @@ export class KnowledgeNodeEditProvider {
         setTimeout(resolve, this.options.pollMs ?? 2_000),
       );
     } while (Date.now() < deadline);
-    await this.once(record, "interrupt", { sessionId }, async () => {
-      await this.api.request("POST", `/v1/sessions/${sessionId}/events`, {
-        events: [{ type: "user.interrupt" }],
-      });
-      return sessionId;
-    });
-    throw new Error("KNOWLEDGE_NODE_EDIT_TIMEOUT");
+    // A polling budget is not a provider failure. Leave the Session running;
+    // the lease holder can resume this exact intent without another send.
+    throw pendingError("KNOWLEDGE_NODE_EDIT_PENDING");
   }
 }
