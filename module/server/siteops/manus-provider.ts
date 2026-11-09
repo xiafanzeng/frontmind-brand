@@ -720,6 +720,9 @@ const nativeSourceRepairInputSchema = z
             file: z.string().min(1).max(500).nullable(),
             line: z.number().int().positive().nullable(),
             column: z.number().int().positive().nullable(),
+            // Free-form validator wording (e.g. audit issue detail) so the
+            // provider learns the exact contract expectation, not just a code.
+            detail: z.string().min(1).max(2000).nullable().optional(),
           })
           .strict(),
       )
@@ -5069,7 +5072,7 @@ export function nativeSourceSystemPromptForWorkflow(workflowVersion: string) {
 2. ${SITEOPS_CONTENT_PLAN_V2_FILENAME} 冻结 route/内容坐标；按 routes.path 生成。事实只用 dossier、计划、客户反馈与验证媒体；删除模板品牌、演示/占位内容和外链，不编造。
 3. 导航和有目标 CTA 使用计划内规范路径的真实 <a href>，可见链接文字必须包含计划 cta.label。普通无修饰键的鼠标主键点击按第 7 条打开文档并 preventDefault；Ctrl/Meta/Shift/Alt 修饰键、中键或新窗口语义仍保留 href 的浏览器行为。计划图片使用可信 publicUrl 和非空 alt。
 4. 不得加入认证、支付、数据库、后台、统计、webhook、外部脚本、远程请求、远程资源、动态执行或动态 import。
-5. 输出 FrontMind Vite SPA；保留 execution shell，${NATIVE_RUNTIME_ROUTE_MODULE} 用 eager static import 导出 ${NATIVE_RUNTIME_ROUTE_MANIFEST_EXPORT}。初始化/popstate 优先 window.canonicalSitePathname()，否则 window.location.pathname；JSX 模块显式绑定/import React。
+5. 输出 FrontMind Vite SPA；保留 execution shell，${NATIVE_RUNTIME_ROUTE_MODULE} 用 eager static import 导出 ${NATIVE_RUNTIME_ROUTE_MANIFEST_EXPORT}。初始化/popstate 一律优先 window.canonicalSitePathname?.() ?? window.location.pathname（宿主桥函数不存在才回退）；JSX 模块显式绑定/import React。
 6. 站内搜索必须覆盖全站：匹配全部 routes 的 section 标题/正文与 userQuestions，不得只过滤当前页面；按栏目分组并链接 route/hash，无结果提示 AI 助手或联系 CTA。
 7. 逐项读取 frontmind-site-document-view-plan-v1.json，不得猜测按钮映射。对 branchIds 非空的 route/section，每一个可点击的内容元素都设 data-frontmind-document-branches=英文逗号连接的 branchIds；区块根设 data-frontmind-section=sectionId，导航/页脚用目标 route 绑定，其他用所在 section 绑定。branchIds=[] 时不得设置空属性、编造文档或弹层。使用 document-level 委托点击处理；普通主键点击打开完整文档模态弹层，不得以页面跳转代替文档打开，<a href> 仅此时 preventDefault，修饰键/中键/新窗口保留。模态根用 role="dialog"+data-frontmind-document-dialog，分支/节点/关闭控件分别用 data-frontmind-document-branch/data-frontmind-document-node/data-frontmind-document-close；多分支同一 dialog 完整展示且可关闭再打开。严禁为了承载文档入口而新增聚合模块或聚合区块；route manifest、路由路径与页面结构必须与冻结内容计划完全一致，不得为对齐知识分支而增删或改名路由，禁止新增 route manifest 路由。文档大标题用 branch.title，按合同顺序完整展示 nodes，不得只展示被引用的节点，不得摘要化、改写或省略任何节点，也不得追加来源外文字。按 plan.branches[].nodes[].id 与 nodeContentSource/splitDossierRule 从 dossier/parts 拼接完整 content，节点只含 title+content，dossier 是弹层正文的唯一来源。文中网址去掉 http(s):// 前缀，禁止完整 URL 或 // 地址。
 “查看文档原文”入口也必须遵守第 7 条。
@@ -5208,7 +5211,7 @@ function siteContentPlanAttachment(plan: SiteContentPlanV2) {
 const NATIVE_RUNTIME_DIAGNOSTICS_FILENAME =
   "frontmind-native-runtime-diagnostics-v1.json" as const;
 
-function nativeRuntimeDiagnosticsAttachment(repair: NativeSourceRepairInput) {
+export function nativeRuntimeDiagnosticsAttachment(repair: NativeSourceRepairInput) {
   const bytes = Buffer.from(
     `${canonicalJson({
       schemaVersion: 1,
@@ -5231,7 +5234,7 @@ export function nativeSourceRepairSystemPromptForWorkflow(
   if (workflowVersion === SITEOPS_MATERIALIZER_V2_9.frontMindVersion) {
     return `继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不重新设计；原任务的视觉、冻结计划、内容和事实边界继续有效。一次修完诊断附件全部问题。全局导航和有目标 CTA 必须是真实规范 <a href>，可见链接文字须包含计划标签且允许保留不改变含义的模板装饰。
 必须重新逐项读取 frontmind-site-document-view-plan-v1.json 并保持文档按钮合同：触发元素 data-frontmind-document-branches，区块根 data-frontmind-section，dialog 的 role=dialog 与 data-frontmind-document-dialog，分支 data-frontmind-document-branch，节点 data-frontmind-document-node，关闭 data-frontmind-document-close。使用 document-level 委托；<a href> 仅在普通无修饰键主键点击时 preventDefault 并打开对应完整文档，修饰键、中键和新窗口语义保留。文档绑定仅适用于合同 branchIds 非空的 route/section；branchIds=[] 时不得设置空 data-frontmind-document-branches，不得编造文档或弹层。按 nodes.id 与 nodeContentSource/splitDossierRule 从 dossier/parts 拼接完整 content；节点只含 title+content，不得追加来源外文字。不得新增聚合区块或路由。
-多页初始化与 popstate 必须优先调用宿主 canonicalSitePathname，函数不存在时才回退 window.location.pathname。`;
+多页初始化与 popstate 必须优先调用宿主 canonicalSitePathname，函数不存在时才回退 window.location.pathname；合规写法如 const pathname = window.canonicalSitePathname?.() ?? window.location.pathname;（先读取该属性存入局部再判断调用同样合规），不得绕过该桥直接读 pathname。`;
   }
   return "继续同一 FrontMind AI 建站任务。本轮只修复上一份源码，不是重新设计；原任务中的视觉、内容和事实边界继续有效。";
 }
@@ -8906,6 +8909,7 @@ async function handleNativeReactSiteBuild(input: {
               file: issue.path,
               line: null,
               column: null,
+              detail: issue.detail,
             }))
           : [{ code: error.code, file: null, line: null, column: null }];
       const signature = createHash("sha256")

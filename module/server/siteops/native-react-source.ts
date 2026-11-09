@@ -1903,12 +1903,17 @@ export function auditNativeRuntimeContractV1(input: {
     if (
       input.requireCanonicalSitePathname &&
       routeManifest?.some((route) => route !== "/") &&
-      !/\bcanonicalSitePathname\s*(?:\?\.)?\s*\(/u.test(routes)
+      // Reading the bridge into a local (typeof-checked, then called) is as
+      // compliant as calling it directly; a type-only mention has no leading
+      // dot and still fails this pattern.
+      !/(?:\bcanonicalSitePathname\s*(?:\?\.)?\s*\(|\.canonicalSitePathname\b)/u.test(
+        routes,
+      )
     ) {
       add(
         "CANONICAL_PATHNAME_REQUIRED",
         contract.entrypoints.routes,
-        "workflow 2.9 multi-page routing must call the host canonicalSitePathname bridge",
+        "workflow 2.9 multi-page routing must reference the host bridge, e.g. window.canonicalSitePathname?.() ?? window.location.pathname",
       );
     }
   }
