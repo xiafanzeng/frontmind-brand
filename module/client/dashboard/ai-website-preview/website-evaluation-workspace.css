@@ -72,6 +72,7 @@
 .wev-evaluation-overview { margin-top: 0; width: 100%; }
 .wev-score-card .rag-evaluation-gauge-card .rag-evaluation-gauge-graphic .rag-gauge-marker-control { height: 44px; width: 44px; }
 .wev-score-card .rag-verdict.is-positive { --rag-status-color:#30b56f; --rag-status-glow:rgba(48,181,111,.2); }
+.wev-score-card.is-empty .rag-verdict.is-neutral p { color: #6e6e73; }
 .wev-score-card .rag-evaluation-status-title { color:var(--sfp-ink,#1e2130); }
 .wev-legacy-badge { background: #f4f1f6; border-radius: 999px; color: #6c6473; font-size: var(--sfp-type-sm); grid-column: 1 / -1; justify-self: start; padding: 5px 8px; }
 

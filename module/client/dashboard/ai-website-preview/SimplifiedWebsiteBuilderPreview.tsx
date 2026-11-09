@@ -2363,7 +2363,7 @@ export function SimplifiedWebsiteBuilderPreview({
     && (!siteOps || (latestBuild && authoritativeWebsiteEvaluation.buildId === latestBuild.id))
     ? authoritativeWebsiteEvaluation
     : null;
-  const websiteEvaluationRunStatus: WebsiteEvaluationRunStatus = siteOps && !websiteEvaluationVisible
+  const websiteEvaluationRunStatus: WebsiteEvaluationRunStatus = !websiteEvaluationVisible
     ? "disabled"
     : ["failed", "attention_required", "cancelled"].includes(liveBuildStatus)
     ? "build_failed"
@@ -2611,7 +2611,6 @@ export function SimplifiedWebsiteBuilderPreview({
   const completedEvaluationAvailable = websiteEvaluationRunStatus === "completed"
     && Boolean(currentWebsiteEvaluation?.reportId);
   const designPrimaryMode: "generate" | "regenerate" | "evaluate" = highestUnlockedStep === BUILD_STEP_INDEX.evaluation
-    && completedEvaluationAvailable
     ? "evaluate"
     : siteOps
       ? templateSelectionOpen
@@ -2628,11 +2627,9 @@ export function SimplifiedWebsiteBuilderPreview({
       ? "完成发布"
       : designActionRunning
         ? "正在生成"
-        : designPrimaryMode === "generate"
-          ? "开始评估"
-          : designPrimaryMode === "regenerate"
-            ? "重新生成"
-            : "查看评估";
+        : designPrimaryMode === "evaluate"
+          ? "查看评估"
+          : "开始评估";
   const workflowPrimaryDisabled = activeStep === "template"
     ? !templateReady || Boolean(siteOps && liveInteractionPending)
     : activeStep === "evaluation"

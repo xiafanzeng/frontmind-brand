@@ -199,18 +199,24 @@ const ACTIVE_STATUSES = new Set<WebsiteEvaluationRunStatus>([
   "result_pending",
 ]);
 
+const INITIAL_STATUSES = new Set<WebsiteEvaluationRunStatus>([
+  "disabled",
+  "idle",
+  "not_evaluated",
+]);
+
 const STATUS_COPY: Record<WebsiteEvaluationRunStatus, { title: string; detail: string }> = {
   disabled: {
-    title: "建设评估当前未启用或不展示",
+    title: "暂无评估",
     detail: "当前项目继续使用原有建站与技术发布门禁，不会生成浏览器评分。",
   },
   idle: {
-    title: "尚无权威评估",
-    detail: "生成一个完整网站版本后，系统会自动开始建设评估。",
+    title: "暂无评估",
+    detail: "尚无可评估的网站版本。完成网站生成后，系统会自动开始评估。",
   },
   not_evaluated: {
-    title: "此构建无权威评估",
-    detail: "历史构建不会补评；确认修改并重新生成后，新构建会自动评估。",
+    title: "暂无评估",
+    detail: "当前网站版本没有评估记录。生成新版本后，系统会自动开始评估。",
   },
   restoring: {
     title: "正在恢复建设评估",
@@ -334,10 +340,26 @@ const WEBSITE_RADAR_PRESENTATION: EvaluationRadarPresentation = {
   labels: {
     root: "网站建设六维评分雷达图",
     title: "网站建设六维评分雷达图",
-    description: ({ complete, axes }) => `${axes.map((axis) => `${axis.label} ${axis.valueLabel}`).join("，")}。${complete ? "已绘制六维完整评分区域。" : "当前报告维度不完整，不绘制评分区域。"}`,
-    control: (axis) => `${axis.label} ${axis.valueLabel}，查看详情`,
+    description: ({ complete, empty, axes }) => `${axes.map((axis) => `${axis.label} ${axis.valueLabel}`).join("，")}。${empty ? "暂无评分。" : complete ? "已绘制六维完整评分区域。" : "当前报告维度不完整，不绘制评分区域。"}`,
+    control: (axis) => `${axis.label} ${axis.valueLabel}${axis.disabled ? "" : "，查看详情"}`,
   },
 };
+
+const WEBSITE_EMPTY_RADAR_AXES: readonly EvaluationRadarAxis[] = [
+  ["visitor_task", "访客任务完成度"],
+  ["brand_consistency", "品牌一致性"],
+  ["facts_evidence", "事实与证据"],
+  ["information_architecture", "信息架构"],
+  ["visual_usability", "视觉与可用性"],
+  ["assistant_boundary", "助手集成与边界"],
+].map(([id, label]) => ({
+  id,
+  label,
+  normalizedScore: null,
+  valueLabel: "暂无评分",
+  state: "empty",
+  disabled: true,
+}));
 
 function isWebsiteNormalizedScore(score: number | null): score is number {
   return typeof score === "number" && Number.isFinite(score) && score >= 0 && score <= 100;
@@ -377,17 +399,18 @@ function WaitingState({ status }: { status: WebsiteEvaluationRunStatus }) {
 }
 
 function WebsiteEvaluationGauge({ score, reportId, reveal }: {
-  score: number;
+  score: number | null;
   reportId?: string | null;
   reveal: boolean;
 }) {
+  const valid = isWebsiteNormalizedScore(score);
   const gaugeInstanceId = useId().replace(/:/g, "");
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const markerActive = hovered || focused;
   const { ref, progress, finish } = useDataReveal<HTMLOutputElement>(
-    reveal,
-    `${reportId ?? "local"}:${score}:website-gauge`,
+    valid && reveal,
+    `${reportId ?? "local"}:${score ?? "empty"}:website-gauge`,
   );
 
   useEffect(() => {
@@ -396,15 +419,16 @@ function WebsiteEvaluationGauge({ score, reportId, reveal }: {
   }, [reportId, score]);
 
   return <EvaluationGauge
-    state={{ kind: "score", score, preciseScore: score }}
+    state={valid ? { kind: "score", score, preciseScore: score } : { kind: "pending" }}
     presentation={WEBSITE_GAUGE_PRESENTATION}
-    rootAriaLabel={`网站建设评估最终分 ${score} 分`}
+    rootAriaLabel={valid ? `网站建设评估最终分 ${score} 分` : "网站建设评估暂无评分"}
     progress={progress}
     reportRevealKey={reportId ?? ""}
     rootRef={ref}
     maskId={`website-evaluation-gauge-mask-${gaugeInstanceId}`}
     tooltipId={`website-evaluation-gauge-tooltip-${gaugeInstanceId}`}
     markerActive={markerActive}
+    interactive={valid}
     onMarkerPointerEnter={(event) => {
       if (event.pointerType !== "touch") {
         finish();
@@ -431,6 +455,23 @@ function WebsiteEvaluationGauge({ score, reportId, reveal }: {
       }
     }}
   />;
+}
+
+function WebsiteEvaluationInitialConclusion({ detail }: { detail: string }) {
+  return <section
+    className="rag-verdict is-neutral"
+    data-evaluation-state="lifecycle"
+    aria-label="当前网站评估状态"
+    data-testid="website-evaluation-conclusion"
+  >
+    <div className="rag-evaluation-summary-flow">
+      <h3 className="rag-evaluation-status-title" aria-label="暂无评估">
+        <i className="rag-evaluation-status-orb" aria-hidden="true" />
+        <span className="rag-evaluation-status-title-text" role="status">暂无评估</span>
+      </h3>
+      <p className="rag-evaluation-summary-copy">{detail}</p>
+    </div>
+  </section>;
 }
 
 function WebsiteEvaluationConclusion({ score, verdict, summary, judgmentCoverage, risks, reportId, reveal }: {
@@ -487,28 +528,31 @@ function WebsiteEvaluationConclusion({ score, verdict, summary, judgmentCoverage
   </section>;
 }
 
-function WebsiteEvaluationRadar({ dimensions, reportId, reveal }: {
+function WebsiteEvaluationRadar({ dimensions, reportId, reveal, empty = false }: {
   dimensions: readonly WebsiteEvaluationDimensionView[];
   reportId?: string | null;
   reveal: boolean;
+  empty?: boolean;
 }) {
   const [selectedDimensionId, setSelectedDimensionId] = useState<string | null>(null);
   const [renderedDimensionId, setRenderedDimensionId] = useState<string | null>(null);
   const radarInstanceId = useId();
   const detailId = `${radarInstanceId}-website-detail`;
-  const axes = dimensions.flatMap<EvaluationRadarAxis>((dimension) => {
-    if (!isWebsiteNormalizedScore(dimension.score)) return [];
-    return [{
-      id: dimension.id,
-      label: dimension.label,
-      normalizedScore: dimension.score,
-      valueLabel: `${formatWebsiteScore(dimension.score)}%`,
-      state: dimension.score === 0 ? "zero" : "known",
-    }];
-  });
+  const axes = empty
+    ? WEBSITE_EMPTY_RADAR_AXES
+    : dimensions.flatMap<EvaluationRadarAxis>((dimension) => {
+      if (!isWebsiteNormalizedScore(dimension.score)) return [];
+      return [{
+        id: dimension.id,
+        label: dimension.label,
+        normalizedScore: dimension.score,
+        valueLabel: `${formatWebsiteScore(dimension.score)}%`,
+        state: dimension.score === 0 ? "zero" : "known",
+      }];
+    });
   const dimensionKey = axes.map((axis) => `${axis.id}:${axis.normalizedScore}`).join("|");
   const { ref: radarRevealRef, progress: radarProgress, finish: finishRadarReveal } = useDataReveal<HTMLElement>(
-    reveal,
+    !empty && reveal,
     `${reportId ?? "local"}:${dimensionKey}:website-radar`,
   );
   const detail = dimensions.find((dimension) => dimension.id === renderedDimensionId) ?? null;
@@ -613,7 +657,7 @@ function WebsiteEvaluationRadar({ dimensions, reportId, reveal }: {
       setRenderedDimensionId(dimensionId);
       setSelectedDimensionId(dimensionId);
     }}
-    details={details}
+    details={empty ? undefined : details}
   />;
 }
 
@@ -890,6 +934,7 @@ export function WebsiteEvaluationWorkspace(props: WebsiteEvaluationWorkspaceProp
   const completedScore = props.status === "completed" && isWebsiteNormalizedScore(props.score) ? props.score : null;
   const completed = completedScore !== null;
   const waiting = ACTIVE_STATUSES.has(props.status);
+  const initial = INITIAL_STATUSES.has(props.status);
   const copy = STATUS_COPY[props.status];
   const failureDetail = (props.status === "failed" || props.status === "build_failed") && props.summary.trim()
     ? props.summary
@@ -984,7 +1029,23 @@ export function WebsiteEvaluationWorkspace(props: WebsiteEvaluationWorkspaceProp
         <div className="wev-column wev-column--decision">
           <section className="sfp-panel wev-card wev-decision-card" aria-label="评估结论">
             {waiting && <WaitingState status={props.status} />}
-            {!waiting && !completed && (
+            {initial && (
+              <div className="wev-score-card is-empty" data-testid="website-evaluation-initial-state">
+                <header><span><span className="wev-title-icon"><FileText size={18} /></span><strong>评估结论</strong></span></header>
+                <div
+                  ref={overviewRef}
+                  className="rag-evaluation-overview wev-evaluation-overview"
+                  data-testid="website-evaluation-overview"
+                  data-layout={overviewStacked ? "stacked" : "side-by-side"}
+                  data-two-lines={summaryTwoLines ? "true" : "false"}
+                >
+                  <WebsiteEvaluationGauge score={null} reveal={false} />
+                  <WebsiteEvaluationInitialConclusion detail={copy.detail} />
+                </div>
+                <WebsiteEvaluationRadar dimensions={[]} reveal={false} empty />
+              </div>
+            )}
+            {!waiting && !completed && !initial && (
               <div className={`wev-no-score is-${props.status}`} role="status">
                 <span className="wev-title-icon"><CircleAlert size={18} /></span>
                 <span><strong>{copy.title}</strong><small>{failureDetail}</small></span>

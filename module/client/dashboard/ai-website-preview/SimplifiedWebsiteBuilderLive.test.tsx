@@ -1749,7 +1749,7 @@ describe("redesigned live website builder setup", () => {
     await waitFor(() => expect((screen.getByLabelText("网站名称") as HTMLInputElement).value).toBe("已构建的网站"));
     const input = change === "design" ? screen.getByLabelText("网站名称") : screen.getByRole("textbox", { name: "补充修改要求" });
     fireEvent.change(input, { target: { value: "尚未提交的修改内容" } });
-    expect(screen.getByRole("button", { name: "重新生成" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "开始评估" })).toBeTruthy();
 
     const evaluationStep = within(screen.getByRole("list", { name: "网站建设流程" })).getByRole("button", { name: /建设评估/ }) as HTMLButtonElement;
     expect(evaluationStep.disabled).toBe(true);
@@ -2351,7 +2351,14 @@ describe("redesigned live website builder setup", () => {
         storageScope="live:7:evaluation-mode-off-publish"
       />,
     );
-    expect(screen.getAllByText("建设评估当前未启用或不展示")).toHaveLength(1);
+    expect(screen.queryByText("建设评估当前未启用或不展示")).toBeNull();
+    expect(screen.getByText("当前项目继续使用原有建站与技术发布门禁，不会生成浏览器评分。")).toBeTruthy();
+    expect(within(screen.getByTestId("website-evaluation-conclusion"))
+      .getByRole("status").textContent).toBe("暂无评估");
+    expect(screen.getByTestId("website-evaluation-score").classList.contains("is-empty")).toBe(true);
+    expect(screen.queryByTestId("website-evaluation-gauge-value")).toBeNull();
+    expect(screen.getAllByTestId("website-evaluation-radar-marker")
+      .every((marker) => marker.classList.contains("is-empty"))).toBe(true);
     expect(screen.queryByTestId("website-evaluation-waiting")).toBeNull();
     openDomainPublishConfirmation();
     expect(screen.queryByLabelText(/确认风险/)).toBeNull();
@@ -2584,7 +2591,7 @@ describe("redesigned live website builder setup", () => {
       expect((screen.getByLabelText("网站名称") as HTMLInputElement).value)
         .toBe(failureMode === "newer-edit" ? "保存期间的新设计 B" : "保存中的设计 A");
       expect(screen.queryByRole("link", { name: "查看网站" })).toBeNull();
-      expect(screen.getByTestId("website-revision-submit").textContent).toBe("重新生成");
+      expect(screen.getByTestId("website-revision-submit").textContent).toBe("开始评估");
       expect((screen.getByTestId("website-publish-request") as HTMLButtonElement).disabled).toBe(true);
       expect(onSubmitRevision).toHaveBeenCalledTimes(failureMode === "newer-edit" ? 0 : 1);
       expect(onAction).not.toHaveBeenCalled();
@@ -3012,11 +3019,13 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    expect(screen.getByRole("status").textContent).toContain("此构建无权威评估");
+    expect(within(screen.getByTestId("website-evaluation-conclusion"))
+      .getByRole("status").textContent).toBe("暂无评估");
     expect(screen.queryByTestId("website-evaluation-waiting")).toBeNull();
-    expect(screen.getByText(/历史构建不会补评/)).toBeTruthy();
-    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
-    expect(screen.queryByLabelText("网站建设六维评分雷达图")).toBeNull();
+    expect(screen.queryByText(/历史构建不会补评/)).toBeNull();
+    expect(screen.getByTestId("website-evaluation-score").classList.contains("is-empty")).toBe(true);
+    expect(screen.getByTestId("website-evaluation-radar")).toBeTruthy();
+    expect(screen.queryByTestId("website-evaluation-radar-area")).toBeNull();
     expect(listEvaluationReports(auditStorage)).toEqual([]);
 
     first.unmount();
@@ -3028,7 +3037,8 @@ describe("redesigned live website builder setup", () => {
       />,
     );
 
-    expect(screen.getByRole("status").textContent).toContain("此构建无权威评估");
+    expect(within(screen.getByTestId("website-evaluation-conclusion"))
+      .getByRole("status").textContent).toBe("暂无评估");
     expect(listEvaluationReports(auditStorage)).toEqual([]);
   });
 
@@ -3095,10 +3105,10 @@ describe("redesigned live website builder setup", () => {
         />,
       );
 
-      expect(screen.getByRole("status").textContent)
-        .toContain("此构建无权威评估");
+      expect(within(screen.getByTestId("website-evaluation-conclusion"))
+        .getByRole("status").textContent).toBe("暂无评估");
       expect(screen.queryByTestId("website-evaluation-report-id")).toBeNull();
-      expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
+      expect(screen.getByTestId("website-evaluation-score").classList.contains("is-empty")).toBe(true);
       expect(listEvaluationReports(auditStorage)).toEqual([]);
     } finally {
       setItem.mockRestore();

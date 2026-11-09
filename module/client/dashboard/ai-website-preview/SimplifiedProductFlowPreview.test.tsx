@@ -80,10 +80,28 @@ describe("simplified AI website preview", () => {
       /\.sfp-root\[data-step\][^{]+\.sfp-steps[^{}]+button\s*\{[^}]*-webkit-tap-highlight-color:\s*transparent;/s,
     );
     expect(simplifiedProductPreviewStyles).toMatch(
+      /\.sfp-root\[data-step\][^{]+\.sfp-steps[^{}]+button\s*\{[^}]*background-color\s+300ms[^}]*box-shadow\s+300ms/s,
+    );
+    expect(simplifiedProductPreviewStyles).toMatch(
+      /\.sfp-root\[data-step\][^{]+\.sfp-steps[^{}]+\.is-active[^{}]+button\s*>\s*\.sfp-step-label\s*\{[^}]*background:\s*transparent;/s,
+    );
+    expect(simplifiedProductPreviewStyles).toMatch(
       /\.sfp-root\[data-step\][^{]+\.sfp-steps[^{}]+button:focus:not\(:focus-visible\)\s*\{[^}]*outline:\s*0;/s,
     );
     expect(simplifiedProductPreviewStyles).toMatch(
       /\.sfp-root\[data-step\][^{]+\.sfp-steps[^{}]+button:focus-visible\s*\{[^}]*box-shadow:[^}]+outline:\s*0;/s,
+    );
+  });
+
+  it("keeps the template and both design cards aligned with the evaluation card system", () => {
+    expect(simplifiedProductPreviewStyles).toMatch(
+      /\.sfp-workflow-row\s*\{[^}]*margin:\s*0 auto 56px;/s,
+    );
+    expect(simplifiedProductPreviewStyles).toMatch(
+      /\.fm-brand-theme\[data-brand-page="website"\][^{]+\.sfp-template-step\.sfp-panel,\s*\.fm-brand-theme\[data-brand-page="website"\][^{]+:is\(\.sfp-builder-config-panel--design, \.sfp-builder-tools-panel\)\s*\{[^}]*border:\s*0\.5px solid var\(--fm-brand-line\);[^}]*border-radius:\s*var\(--fm-brand-radius-card\);[^}]*box-shadow:\s*var\(--fm-brand-shadow-sm\);/s,
+    );
+    expect(simplifiedProductPreviewStyles).toMatch(
+      /\.sfp-root\[data-step="template"\][^{]+\.sfp-template-step\.sfp-panel,\s*\.sfp-root\[data-step="design"\][^{]+:is\(\.sfp-builder-config-panel--design, \.sfp-builder-tools-panel\)\s*\{[^}]*border-color:\s*#e5e5ea;[^}]*border-radius:\s*20px;[^}]*box-shadow:\s*0 4px 12px rgba\(0, 0, 0, 0\.08\);/s,
     );
   });
 
@@ -112,6 +130,8 @@ describe("simplified AI website preview", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "进入设计" }));
     expect(screen.getByRole("heading", { name: "网站设计" })).toBeTruthy();
+    expect(within(journey).getAllByRole("button", { current: "step" })).toHaveLength(1);
+    expect(within(journey).getByRole("button", { name: /网站设计$/, current: "step" })).toBeTruthy();
     expect(designStep.disabled).toBe(false);
     expect(evaluationStep.disabled).toBe(true);
   });
@@ -573,12 +593,17 @@ describe("simplified AI website preview", () => {
     expect(document.querySelector(".sfp-actions")).toBeNull();
   });
 
-  it("shows an unassessed website without a fake score, empty radar, or RAG scoring group", () => {
+  it("shows an unassessed website as a neutral gauge, status, and six-axis radar without a fake score", () => {
     render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
 
-    expect(screen.getByRole("status").textContent).toContain("尚无权威评估");
-    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
-    expect(screen.queryByLabelText("网站建设六维评分雷达图")).toBeNull();
+    expect(within(screen.getByTestId("website-evaluation-conclusion"))
+      .getByRole("status").textContent).toBe("暂无评估");
+    expect(screen.getByTestId("website-evaluation-score").classList.contains("is-empty")).toBe(true);
+    expect(screen.queryByTestId("website-evaluation-gauge-value")).toBeNull();
+    expect(screen.getByTestId("website-evaluation-radar")).toBeTruthy();
+    expect(screen.queryByTestId("website-evaluation-radar-area")).toBeNull();
+    expect(screen.getAllByTestId("website-evaluation-radar-marker")
+      .every((marker) => marker.classList.contains("is-empty"))).toBe(true);
     expect(screen.queryByText(/\/100/)).toBeNull();
     expect(screen.queryByText("网站质量")).toBeNull();
     expect(screen.queryByRole("heading", { name: "RAG 回答质量" })).toBeNull();
@@ -623,10 +648,10 @@ describe("simplified AI website preview", () => {
     })).toBe(true);
 
     render(<SimplifiedWebsiteBuilderPreview initialStep="evaluation" />);
-    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
+    expect(screen.getByTestId("website-evaluation-score").classList.contains("is-empty")).toBe(true);
     expect(screen.queryByLabelText("RAG 参考")).toBeNull();
     expect(screen.queryByRole("button", { name: /查找 RAG 评估/ })).toBeNull();
-    expect(screen.queryByTestId("website-evaluation-score")).toBeNull();
+    expect(screen.queryByTestId("website-evaluation-gauge-value")).toBeNull();
   });
 
   it("keeps direct answer details in the RAG workspace without restoring removed website shortcuts", async () => {

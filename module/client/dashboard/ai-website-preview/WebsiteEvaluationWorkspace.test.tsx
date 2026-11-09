@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -5,6 +6,11 @@ import {
   type WebsiteEvaluationRunStatus,
   type WebsiteEvaluationWorkspaceProps,
 } from "./WebsiteEvaluationWorkspace";
+
+const websiteEvaluationStyles = readFileSync(
+  "client/dashboard/ai-website-preview/website-evaluation-workspace.css",
+  "utf8",
+);
 
 const dimensions: WebsiteEvaluationWorkspaceProps["dimensions"] = [
   ["visitor-task", "访客任务", 20],
@@ -212,6 +218,47 @@ describe("WebsiteEvaluationWorkspace", () => {
       expect(screen.getByTestId("website-evaluation-waiting").textContent).not.toContain("0/100");
     },
   );
+
+  it.each<[WebsiteEvaluationRunStatus, string]>([
+    ["disabled", "当前项目继续使用原有建站与技术发布门禁，不会生成浏览器评分。"],
+    ["idle", "尚无可评估的网站版本。完成网站生成后，系统会自动开始评估。"],
+    ["not_evaluated", "当前网站版本没有评估记录。生成新版本后，系统会自动开始评估。"],
+  ])(
+    "shows the complete neutral RAG-style initial evaluation surface while %s",
+    (status, detail) => {
+      const view = render(<WebsiteEvaluationWorkspace {...props({ status, score: null, reportId: null })} />);
+
+      expect(screen.queryByText("建设评估当前未启用或不展示")).toBeNull();
+      expect(screen.getByTestId("website-evaluation-initial-state")).toBeTruthy();
+      expect(within(screen.getByTestId("website-evaluation-conclusion"))
+        .getByRole("status").textContent).toBe("暂无评估");
+      expect(screen.getByText(detail)).toBeTruthy();
+      expect(screen.queryByText("当前网站还没有评估结果。")).toBeNull();
+
+      const gauge = screen.getByTestId("website-evaluation-score");
+      expect(gauge.classList.contains("is-empty")).toBe(true);
+      expect(gauge.getAttribute("aria-label")).toBe("网站建设评估暂无评分");
+      expect(screen.queryByTestId("website-evaluation-gauge-value")).toBeNull();
+      expect(screen.getByTestId("website-evaluation-gauge-marker").classList.contains("is-pending")).toBe(true);
+      expect(screen.queryByRole("button", { name: /网站建设评估精确分值/ })).toBeNull();
+
+      expect(screen.getByTestId("website-evaluation-radar")).toBeTruthy();
+      expect(screen.queryByTestId("website-evaluation-radar-area")).toBeNull();
+      expect(screen.getAllByText("暂无评分")).toHaveLength(6);
+      expect(screen.getAllByTestId("website-evaluation-radar-marker")
+        .every((marker) => marker.classList.contains("is-empty"))).toBe(true);
+      expect(screen.getAllByTestId("website-evaluation-radar-point")
+        .every((point) => (point as HTMLButtonElement).disabled)).toBe(true);
+      expect(view.container.querySelector(".wev-score-card.is-empty .rag-verdict.is-neutral")).toBeTruthy();
+      expect(screen.getByTestId("website-evaluation-initial-state").textContent).not.toContain("—");
+    },
+  );
+
+  it("keeps the neutral conclusion transparent inside the shared overview card", () => {
+    expect(websiteEvaluationStyles).not.toMatch(
+      /\.wev-score-card\.is-empty \.rag-verdict\.is-neutral\s*\{[^}]*\b(?:background|border-color)\s*:/,
+    );
+  });
 
   it("shows no score for a failed build and routes back to build editing", () => {
     const onRepairTarget = vi.fn();
