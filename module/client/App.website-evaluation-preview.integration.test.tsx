@@ -66,6 +66,27 @@ describe("standalone website evaluation preview", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("shows the disabled local review state as a neutral gauge, status, and radar", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=website&step=evaluation&evaluationStage=disabled",
+    );
+
+    render(<App preview />);
+
+    expect(screen.queryByText("建设评估当前未启用或不展示")).toBeNull();
+    expect(screen.getByTestId("website-evaluation-score").classList.contains("is-empty")).toBe(true);
+    expect(screen.queryByTestId("website-evaluation-gauge-value")).toBeNull();
+    expect(within(screen.getByTestId("website-evaluation-conclusion"))
+      .getByRole("status").textContent).toBe("暂无评估");
+    expect(screen.getByTestId("website-evaluation-radar")).toBeTruthy();
+    expect(screen.queryByTestId("website-evaluation-radar-area")).toBeNull();
+    expect(screen.getAllByTestId("website-evaluation-radar-marker")
+      .every((marker) => marker.classList.contains("is-empty"))).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("keeps preview review feedback in memory and scoped to the selected repair item", async () => {
     render(<App preview />);
 

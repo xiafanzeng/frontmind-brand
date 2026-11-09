@@ -80,7 +80,7 @@
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(200px, 1fr) minmax(0, 900px) minmax(200px, 1fr);
-  margin: 0 auto 34px;
+  margin: 0 auto 56px;
   max-width: 1480px;
   width: 100%;
 }
@@ -332,6 +332,12 @@
   box-shadow: 0 2px 7px rgba(111, 53, 165, 0.24);
 }
 
+/* The legacy website theme used the first child span as a numbered badge.
+   Step numbers no longer exist, so keep the current text label transparent. */
+.sfp-root[data-step] .sfp-workspace-bar > .sfp-steps > .is-active > button > .sfp-step-label {
+  background: transparent;
+}
+
 .sfp-root[data-step] .sfp-workspace-bar > .sfp-steps > .is-active > button:hover:not(:disabled) {
   background: var(--sfp-accent);
   box-shadow: 0 2px 7px rgba(111, 53, 165, 0.24);
@@ -442,10 +448,6 @@
 
 .sfp-root[data-step="evaluation"] .sfp-workspace-bar {
   margin-bottom: 0;
-}
-
-.sfp-root[data-step="evaluation"] .sfp-workflow-row {
-  margin-bottom: 56px;
 }
 
 .sfp-panel,
@@ -4417,6 +4419,22 @@
   gap: 20px;
   line-height: 1.6;
   padding: 22px;
+}
+
+/* Keep the template and both design columns in the same neutral card system
+   as the evaluation cards; purple remains reserved for selection and actions. */
+.fm-brand-theme[data-brand-page="website"] .sfp-root[data-step="template"] .sfp-template-step.sfp-panel,
+.fm-brand-theme[data-brand-page="website"] .sfp-root[data-step="design"] :is(.sfp-builder-config-panel--design, .sfp-builder-tools-panel) {
+  border: 0.5px solid var(--fm-brand-line);
+  border-radius: var(--fm-brand-radius-card);
+  box-shadow: var(--fm-brand-shadow-sm);
+}
+
+.sfp-root[data-step="template"] .sfp-template-step.sfp-panel,
+.sfp-root[data-step="design"] :is(.sfp-builder-config-panel--design, .sfp-builder-tools-panel) {
+  border-color: #e5e5ea;
+  border-radius: 20px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .fm-brand-theme[data-brand-page="website"] .sfp-root[data-step="design"] :is(.sfp-builder-config-panel--design, .sfp-builder-tools-panel) > .sfp-section-heading,
