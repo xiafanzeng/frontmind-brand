@@ -405,7 +405,7 @@ try {
     );
   }
   await expectVisible(
-    page.getByRole("region", { name: "回答质量评估" }),
+    page.getByRole("region", { name: "本轮回答质量" }),
     "The redesigned Enterprise RAG evaluation panel is missing",
   );
   if (
